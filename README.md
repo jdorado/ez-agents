@@ -1,12 +1,14 @@
 # ezenciel-agents
 
-**Beta 0.1.0-beta.1 — for testing on a trusted machine.** Offline and Docker
+**Beta 0.1.0-beta.2 — for testing on a trusted machine.** Offline and Docker
 fixtures are verified. Live account onboarding and reboot acceptance for this
 release are deferred; this is not a production-readiness claim.
 
-Download the exact tarball and SHA256SUMS from
-[GitHub prereleases](https://github.com/jdorado/ez-agents/releases/tag/v0.1.0-beta.1).
-npm publication is separate; do not install the unrelated unscoped ez-whatsapp package.
+The npm package is `@jc_stack/ez-agents` (channel `beta`). Download a pinned
+release with `npm pack @jc_stack/ez-agents@0.1.0-beta.2`, or get the tarball and SHA256SUMS from
+[GitHub prereleases](https://github.com/jdorado/ez-agents/releases/tag/v0.1.0-beta.2).
+GitHub remains under `jdorado`; npm uses `jc_stack`. Do not install the unrelated
+unscoped `ez-whatsapp` package.
 
 
 Installed runtime operation uses Docker Compose. Read
@@ -58,10 +60,9 @@ catalogs for its name. Build/run its Docker image; Docker and Compose are
 required on the host and the installing LLM makes them ready if needed. The
 image supplies relay dependencies; the existing host CLI supplies execution.
 
-The package is not on public npm yet. A supplied path/URL is the source of
-truth. A bare product name cannot reliably discover an unpublished artifact.
-If the source is unclear, check an explicitly supplied local workspace for the
-archive, then ask for the exact source rather than guessing another product.
+Use the exact scoped npm name and version above, or the supplied tarball/path.
+A bare product name is not a package identity. Inspect the artifact before setup;
+do not substitute a similarly named package.
 
 ### Installer tools
 

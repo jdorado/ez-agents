@@ -6,15 +6,16 @@ Keep that host CLI and login for every agent; do not request another CLI login.
 
 ## Install the supplied release artifact
 
-The candidate is not public yet. Use the exact tarball supplied by the maintainer;
-verify its SHA-256 against the release receipt. Do not guess an npm name or URL.
+Use `npm pack @jc_stack/ez-agents@0.1.0-beta.2` or the exact GitHub release
+tarball. Verify its SHA-256 against the release receipt when using GitHub.
+Do not guess an npm name or substitute an unscoped package.
 Choose a permanent package directory and a separate private deployment directory.
 
 ```sh
 mkdir -p /absolute/ez-package
 # Inspect before extracting; the archive should contain only package/ entries.
-tar -tzf /absolute/jdorado-ez-agents-0.1.0-beta.1.tgz
-tar -xzf /absolute/jdorado-ez-agents-0.1.0-beta.1.tgz -C /absolute/ez-package
+tar -tzf /absolute/jc_stack-ez-agents-0.1.0-beta.2.tgz
+tar -xzf /absolute/jc_stack-ez-agents-0.1.0-beta.2.tgz -C /absolute/ez-package
 cd /absolute/ez-package/package
 cp docker/pnpm-lock.yaml pnpm-lock.yaml
 pnpm install --frozen-lockfile
