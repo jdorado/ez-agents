@@ -69,3 +69,8 @@ Compose health and an actual Telegram reply.
 
 Linux and macOS are documented host paths. Windows and GUI executor acceptance
 are not certified by these instructions or the headless Docker tests.
+
+## Agent-owned upgrades
+
+The beta.3 development candidate adds owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Local VM QA remains pending; do not claim this candidate is published.

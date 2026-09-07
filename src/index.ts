@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { access } from 'node:fs/promises'
+import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -89,6 +91,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
       if (shuttingDown || activeChild) return
+      if (await access(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
       if (await runs.running()) return
       const owner = (await control.status()).owner
@@ -197,6 +200,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (shuttingDown) return
       const owner = (await control.status()).owner
       if (!owner) return
+      await queueUpdateAttention(config.controlDir,owner,runs,await control.captureChoice(aiMenu.initial))
       for (const source of await sources.available(owner)) {
         try {
           const batch = await sources.batch(source)

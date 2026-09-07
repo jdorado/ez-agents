@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.3 — candidate, not published
+
+- Agent-owned main/plugin upgrades from exact npm versions or local tarballs.
+- Stable-default per-target policy, serialized maintenance wakeups, and a host
+  supervisor that survives replacement of the requesting runtime.
+- Private backups, matching schema/deployment gates and failed-health code rollback.
+- Automated fixtures cover recovery; VM and live-provider acceptance are pending.
+
 ## 0.1.0-beta.2 — npm distribution
 
 - Publish under `@jc_stack/ez-agents`; GitHub remains `jdorado/ez-agents`.

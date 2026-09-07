@@ -1,6 +1,6 @@
 {
   "name": "@jc_stack/ez-agents",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.3",
   "private": false,
   "type": "module",
   "description": "A minimal Telegram-to-CLI executor relay.",
@@ -95,5 +95,11 @@
   "homepage": "https://github.com/jdorado/ez-agents#readme",
   "bugs": {
     "url": "https://github.com/jdorado/ez-agents/issues"
+  },
+  "ezRelease": {
+    "protocol": 1,
+    "kind": "main",
+    "stateSchema": 1,
+    "mainProtocol": 1
   }
 }

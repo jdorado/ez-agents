@@ -155,3 +155,8 @@ Sanitize logs before sharing. Back up mind/control and private profiles before
 upgrades. Stop the exact Compose project and host service to remove execution;
 retain state unless deletion was requested. Revoke a Telegram bot token through
 BotFather and a WhatsApp device on the phone separately from removing software.
+
+## Agent-owned upgrades
+
+The beta.3 development candidate adds owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Local VM QA remains pending; do not claim this candidate is published.

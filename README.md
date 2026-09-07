@@ -115,3 +115,8 @@ without authorization. Local registry rehearsal uses `pnpm publish:local`.
 - [Contributing](CONTRIBUTING.md) and [releasing](docs/releasing.md)
 - [First plugin and extension contract](docs/plugins.md)
 - [License and dependency notices](THIRD_PARTY_NOTICES.md)
+
+## Agent-owned upgrades
+
+The beta.3 development candidate adds owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](docs/upgrades.md). Local VM QA remains pending; do not claim this candidate is published.

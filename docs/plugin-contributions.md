@@ -27,3 +27,8 @@ Do not copy private QA, company policy, proposed features or unsupported claims.
 Public instructions must work without the maintainer's parent workspace. Use
 reviewed local source and its inspected content hash; registry installation is
 inert. Installation is complete only after account onboarding and verified use.
+
+## Agent-owned upgrades
+
+The beta.3 development candidate adds owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Local VM QA remains pending; do not claim this candidate is published.

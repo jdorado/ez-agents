@@ -103,9 +103,9 @@ The manager does not send messages, link accounts, or implement onboarding flows
 Other commands: `plugins list`, `status <id>`, `logs <id>` (last 100 lines),
 `stop <id>`, `uninstall <id>`. Uninstall stops/removes only that Compose deployment
 and unregisters its aliases; it retains named data volumes and reviewed source
-snapshots. Reinstallation reuses that data. No implicit upgrades: a different
-release fails until explicit uninstall/reinstall; back up data first when a
-provider changes schema. This does not promise schema rollback.
+snapshots. Reinstallation reuses that data. Plain install does not replace a different release. Use `ez updates` for
+compatible upgrades under saved policy; see [upgrades](upgrades.md). Manual
+uninstall/reinstall remains available but does not promise schema rollback.
 
 For another reviewed local package, inspect with `plugins inspect <id> --source
 /absolute/source`, then install with that source and the returned `--revision
@@ -172,3 +172,8 @@ relay. The manager sends only a whitelist of Docker client environment variables
 synthetic transport in an isolated snapshot and tests installation, start,
 registered CLI, literal file paths, idempotency, restart persistence and
 non-destructive uninstall. No live account or recipient is used.
+
+## Agent-owned upgrades
+
+The beta.3 development candidate adds owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Local VM QA remains pending; do not claim this candidate is published.
