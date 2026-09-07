@@ -35,7 +35,8 @@ No automatic dependency updates, release bot or credentials in pull-request CI.
 7. Obtain maintainer release approval for the exact commit, tarball SHA-256,
    license/third-party obligations and known limits. Only then push the approved
    public tree, tag `v<version>`, and publish that tarball:
-   `npm publish /absolute/candidate.tgz --access public --registry https://registry.npmjs.org/`.
+   `npm publish /absolute/candidate.tgz --access public --tag beta --registry https://registry.npmjs.org/`
+   for prereleases (use `--tag latest` only for an approved stable release).
    Use interactive npm authentication with 2FA; never paste tokens into CI or docs.
 8. Create the GitHub release from CHANGELOG.md, attach artifact/checksum, and
    install the registry version on a clean host. Verify metadata and the same
@@ -54,5 +55,10 @@ Use SemVer prereleases (`0.1.0-beta.1`), GitHub's prerelease flag and npm's
 explicitly deferred real account/reboot acceptance. Keep that limitation in the
 README and release notes. Source/tarball publication is permitted after the
 automated gates; deferred live checks remain required for stable release.
-GitHub is the initial distribution channel; npm needs its own authenticated
-publisher. A GitHub username does not prove ownership of the same npm scope.
+GitHub repositories use `jdorado`; npm packages use `jc_stack`. Verify
+`npm whoami --registry https://registry.npmjs.org/` returns `jc_stack` before
+publishing. Never infer npm scope ownership from a GitHub login. After publishing,
+read back `npm view @jc_stack/ez-agents@0.1.0-beta.2 name version dist-tags --json`
+(using the release being published), download it with `npm pack`, and verify its
+contents/checksum against the reviewed artifact. Keep the npm artifact and
+GitHub tag on the same reviewed commit. Do not create a new token to bypass 2FA.
