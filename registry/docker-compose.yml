@@ -1,0 +1,19 @@
+services:
+  verdaccio:
+    image: verdaccio/verdaccio:6
+    container_name: ez-npm
+    ports:
+      - '4873:4873'
+    environment:
+      VERDACCIO_PORT: 4873
+    volumes:
+      - ez-npm-storage:/verdaccio/storage
+      - ./conf/config.yaml:/verdaccio/conf/config.yaml:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:4873/-/ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  ez-npm-storage:

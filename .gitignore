@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.private/
+*.log
+.npmrc
+registry/storage/
+agent/*
+!agent/AGENT.md
+!agent/.gitkeep
+
+# Deployment bindings and credentials belong outside the checkout.
+docker.env
+relay.env
+
+# Local release artifacts and operator state
+*.tgz
+.private/
+.npmrc
+*.log

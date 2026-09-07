@@ -1,0 +1,46 @@
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pnpm verify
+      - run: npm run release:check
+      - run: git diff --check
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the exact npm package in isolation
+        run: |
+          release_dir="$(mktemp -d)"
+          npm pack --ignore-scripts --pack-destination "$release_dir"
+          tar -xzf "$release_dir"/*.tgz -C "$release_dir"
+          docker build --target test -t ezenciel-agents-tests "$release_dir/package"
+          docker build --target runtime -t ezenciel-agents:local "$release_dir/package"
+      - run: node docker/smoke.mjs

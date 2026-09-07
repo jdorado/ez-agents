@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+root=$(node -e 'const fs=require("node:fs"),path=require("node:path");process.stdout.write(path.dirname(path.dirname(fs.realpathSync(process.argv[1]))))' "$0")
+: "${EZ_DEPLOYMENT_DIR:?Set EZ_DEPLOYMENT_DIR to the absolute deployment directory containing docker.env}"
+case "$EZ_DEPLOYMENT_DIR" in /*) ;; *) echo 'EZ_DEPLOYMENT_DIR must be absolute' >&2; exit 1;; esac
+exec docker compose --project-directory "$root" --env-file "$EZ_DEPLOYMENT_DIR/docker.env" "$@"

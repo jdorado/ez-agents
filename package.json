@@ -1,0 +1,99 @@
+{
+  "name": "@jdorado/ez-agents",
+  "version": "0.1.0-beta.1",
+  "private": false,
+  "type": "module",
+  "description": "A minimal Telegram-to-CLI executor relay.",
+  "packageManager": "pnpm@10.30.3",
+  "bin": {
+    "ezenciel-agents": "bin/ezenciel-agents.mjs",
+    "ezenciel-agents-owner": "bin/ezenciel-agents-owner.mjs",
+    "ezenciel-agents-message": "bin/ezenciel-agents-message.mjs",
+    "ezenciel-agents-react": "bin/ezenciel-agents-react.mjs",
+    "ezenciel-agents-approval": "bin/ezenciel-agents-approval.mjs",
+    "ezenciel-agents-setup": "bin/ezenciel-agents-setup.mjs",
+    "ezenciel-agents-source": "bin/ezenciel-agents-source.mjs",
+    "ezenciel-agents-docker": "bin/ezenciel-agents-docker",
+    "ezenciel-agents-create": "bin/ezenciel-agents-create",
+    "ezenciel-agents-host": "bin/ezenciel-agents-host",
+    "ezenciel-agents-tools": "bin/ezenciel-agents-tools.mjs",
+    "ezenciel-agents-ai": "bin/ezenciel-agents-ai.mjs"
+  },
+  "files": [
+    "default-plugins.json",
+    "bin",
+    "src",
+    "docs",
+    "templates",
+    ".env.example",
+    "AGENTS.md",
+    "README.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "Dockerfile",
+    "compose.yaml",
+    "docker",
+    "compose.whatsapp.yaml",
+    "scripts/smoke.ts",
+    "LICENSE",
+    "CHANGELOG.md",
+    "THIRD_PARTY_NOTICES.md",
+    "scripts/release-check.mjs",
+    "test",
+    "tsconfig.json",
+    "scripts/assert-local-registry.mjs",
+    ".dockerignore"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "beta"
+  },
+  "scripts": {
+    "setup": "tsx --env-file-if-exists=.env src/setup.ts",
+    "dev": "EZ_DEVELOPMENT=1 tsx watch --clear-screen=false --exclude 'agent/**' --exclude 'test/**' --env-file=.env src/index.ts",
+    "start": "./bin/ezenciel-agents-docker up -d --wait relay",
+    "owner": "tsx --env-file=.env src/owner.ts",
+    "message": "tsx src/message.ts",
+    "react": "tsx src/react.ts",
+    "build": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts test/*.test.mjs",
+    "verify": "pnpm test && pnpm build",
+    "smoke": "./bin/ezenciel-agents-docker run --rm --no-deps relay smoke",
+    "prepublishOnly": "npm run verify",
+    "registry:up": "docker compose -f registry/docker-compose.yml up -d",
+    "registry:down": "docker compose -f registry/docker-compose.yml down",
+    "publish:local": "node scripts/publish-local.mjs",
+    "publish:watch": "node scripts/publish-local.mjs --watch",
+    "smoke:docker": "node docker/smoke.mjs",
+    "host:executor": "tsx src/host-executor.ts",
+    "smoke:plugins": "node docker/plugin-smoke.mjs",
+    "release:check": "node scripts/release-check.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "grammy": "^1.39.3",
+    "tsx": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  },
+  "license": "MIT",
+  "keywords": [
+    "ai-agent",
+    "cli",
+    "docker",
+    "telegram",
+    "automation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jdorado/ez-agents.git"
+  },
+  "homepage": "https://github.com/jdorado/ez-agents#readme",
+  "bugs": {
+    "url": "https://github.com/jdorado/ez-agents/issues"
+  }
+}

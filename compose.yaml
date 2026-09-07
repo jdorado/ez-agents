@@ -1,0 +1,40 @@
+services:
+  relay:
+    image: ${EZ_RELAY_IMAGE:-ezenciel-agents:local}
+    build:
+      context: .
+      target: runtime
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SETPCAP]
+    environment:
+      EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md
+      EZ_EXECUTOR_TRANSPORT: host
+      EZ_AGENT_WORKSPACE: ${EZ_AGENT_WORKSPACE:?Set this agent workspace}
+      EZ_CONTROL_DIR: ${EZ_CONTROL_DIR:?Set this agent control directory}
+      EZ_EXECUTOR_CLI: ${EZ_EXECUTOR_CLI:?Set the host installation CLI}
+      EZ_EXECUTOR_TIMEOUT_SECONDS: ${EZ_EXECUTOR_TIMEOUT_SECONDS:-300}
+    secrets: [relay_env]
+    configs:
+      - source: agent_purpose
+        target: /run/agent-purpose.md
+    volumes:
+      - ${EZ_AGENT_WORKSPACE}:/workspace
+      - ${EZ_AGENT_WORKSPACE}:${EZ_AGENT_WORKSPACE}
+      - ${EZ_CONTROL_DIR}:/state/control
+      - ${EZ_CONTROL_DIR}:${EZ_CONTROL_DIR}
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, node, /app/docker/healthcheck.mjs]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+configs:
+  agent_purpose:
+    file: ${EZ_AGENT_PURPOSE_FILE:-./templates/agent/SOUL.md}
+secrets:
+  relay_env:
+    file: ${EZ_RELAY_ENV_FILE:?Set EZ_RELAY_ENV_FILE to the private relay env file}

@@ -1,0 +1,12 @@
+services:
+  relay:
+    volumes:
+      - whatsapp-ipc:/plugins/whatsapp:ro
+      - whatsapp-client:/opt/plugins/whatsapp:ro
+volumes:
+  whatsapp-ipc:
+    external: true
+    name: ${EZ_WHATSAPP_IPC_VOLUME:?Set the registered WhatsApp IPC volume}
+  whatsapp-client:
+    external: true
+    name: ${EZ_WHATSAPP_CLIENT_VOLUME:?Set the registered WhatsApp client volume}
