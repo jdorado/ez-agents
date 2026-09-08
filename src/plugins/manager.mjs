@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
-const reserved = new Set(['updates','plugins','tools','message','owner','approval','react','setup','help','version']);
+const reserved = new Set(['status','updates','plugins','tools','message','owner','approval','react','setup','help','version']);
 const id = value => { if(typeof value !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(value)) throw Error('Invalid identifier'); return value; };
 const hash = data => createHash('sha256').update(data).digest('hex');
 const json = async file => JSON.parse(await fs.readFile(file,'utf8'));
@@ -220,8 +220,9 @@ export async function main(args) {
   const config=await json(path.join(home,'config.json'));
   if(config.schemaVersion!==1 || !path.isAbsolute(config.workspace)) throw Error('Invalid binding');
   const [group,action,...rest]=args;
+  if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
-  if(group==='--help'||!group) return emit({commands:['updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list','<registered CLI> ...'],scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
@@ -252,7 +253,7 @@ export async function main(args) {
     }
     if(args.length)throw Error('Unknown lifecycle arguments');
     if(action==='logs') return emit({plugin:name,logs:await checked([...composeArgs(record),'logs','--tail','100','--no-color'])});
-    if(action==='status') {const output=await checked([...composeArgs(record),'ps','--all','--format','json']);return emit({plugin:name,containers:output});}
+    if(action==='status') {const output=await checked([...composeArgs(record),'ps','--all','--format','json']);return emit({plugin:name,installedVersion:record.manifest.version,containers:output});}
     if(!['start','stop','uninstall'].includes(action))throw Error('Unknown lifecycle command');
     return locked(home,async()=>{
       const current=await registry(home);if(current.plugins[name]?.revision!==record.revision)throw Error('Plugin changed during lifecycle request');

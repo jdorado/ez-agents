@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { isHostRunId } from '../src/host-executor-protocol.js'
 import { EXECUTOR_REGISTRY } from '../src/executor.js'
+import { packageVersion } from '../src/version.js'
 
 test('one installed CLI executes two agent bindings with separate minds and sanitized environment', async () => {
   const root=await mkdtemp(path.join(tmpdir(),'ez-host-'))
@@ -36,6 +37,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     for(const agent of agents){
       const dir=path.join(agent.controlDir,'host-executor')
       for(let n=0;n<100;n++){try{await readFile(path.join(dir,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+      assert.equal(JSON.parse(await readFile(path.join(dir,'heartbeat.json'),'utf8')).version,packageVersion)
       await writeFile(path.join(dir,`r_${agent.name}.request.json`),JSON.stringify({texts:['test'],options:{workspace:'/wrong',controlDir:'/wrong',toolsHome:'/wrong',cli:'grok',timeoutMs:5000}}))
     }
     for(const agent of agents){

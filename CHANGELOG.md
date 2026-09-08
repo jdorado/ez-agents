@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Telegram `/status` includes the running relay/host versions and installed plugin
+  versions, shared through the existing host heartbeat without private registry access.
+
+- `ez status` and `ez updates status` show installed/running relay versions, host
+  transport version, plugin versions and runtime states, plus upgrade jobs.
+- Missing, stale or unverifiable runtime evidence reports an unknown running
+  version instead of presenting the installed candidate as live.
+
 ## 0.1.0-beta.3 — candidate, not published
 
 - Agent-owned main/plugin upgrades from exact npm versions or local tarballs.

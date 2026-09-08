@@ -41,6 +41,36 @@ files require migration to one canonical deployment per service first.
 
 ## Agent interface
 
+Telegram `/status` shows the relay's loaded version, fresh host version and
+installed plugin versions alongside work/queue health. The host heartbeat carries
+only plugin IDs/versions; the relay gets no plugin registry or Docker access.
+Plugin versions in Telegram are explicitly installed versions, not live-provider
+verification. Stale or legacy host metadata is shown as unavailable/unknown.
+
+Use `ez status` (also `ez updates status`) for `{main, plugins, jobs}`. Status now
+returns an object; the previous bare job array is under `jobs`. It is read-only
+and does not contact npm, start services or require an upgrade job to exist.
+
+`main.installedVersion` comes from the active package binding. `runningVersion`
+comes from a fresh polling heartbeat written by the running relay; `main.host`
+reports the host transport separately. Versions are captured when each process
+loads, so an older running process is not relabeled by a newer installation.
+Old releases without heartbeat versions, stale/offline services and unreadable
+evidence report `runningVersion: null`; never infer a running version from the
+installed version alone.
+
+Each plugin includes `installedVersion`, runtime state and service health.
+`runningVersion` is the registered plugin version only when all declared services
+are running with image IDs matching the registered deployment's expected images.
+This is deployment-image evidence, not a provider account/delivery check. Stopped,
+partial or mismatched deployments report a null running version; Docker failures
+report unknown while keeping installed versions visible. Plugins need not be Node
+packages inside their containers: status does not execute commands inside them.
+`ez plugins status <id>` also includes its registered `installedVersion`.
+
+Check both installed and running versions after an upgrade before reporting it as
+live. A healthy container alone does not prove a Telegram or plugin reply.
+
 ```sh
 ez updates check
 ez updates policy main                 # defaults: automatic, stable

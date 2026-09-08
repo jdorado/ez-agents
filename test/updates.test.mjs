@@ -11,6 +11,7 @@ import { prepare, submit, command, read, jobPath, eligibility } from '../src/upd
 import { perform, environment } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
+import { status as runtimeStatus } from '../src/updates/status.mjs';
 const exec=promisify(execFile);
 const contract=kind=>({protocol:1,kind,stateSchema:1,mainProtocol:1});
 function tar(entries) {
@@ -69,6 +70,37 @@ async function queued(f) {
  return submit(f.home,job.id,false);
 }
 
+test('status distinguishes installed, running, legacy and stale main versions without update jobs',async t=>{
+ const f=await fixture(t),relay=path.join(f.agent.controlDir,'heartbeat.json'),host=path.join(f.agent.controlDir,'host-executor/heartbeat.json');
+ await fs.mkdir(path.dirname(host),{recursive:true});
+ await atomic(relay,{at:Date.now(),polling:true,version:'0.0.9'});await atomic(host,{at:Date.now(),version:'0.0.8'});
+ let s=await command(f.home,['status']);
+ assert.equal(s.main.installedVersion,'0.1.0');assert.equal(s.main.runningVersion,'0.0.9');assert.equal(s.main.host.runningVersion,'0.0.8');
+ assert.deepEqual(s.plugins,[]);assert.deepEqual(s.jobs,[]);
+ for(const value of [{at:Date.now()-60000,polling:true,version:'0.0.9'},{at:Date.now()+60000,polling:true,version:'0.0.9'},{at:Date.now(),polling:false,version:'0.0.9'},{at:Date.now(),polling:true}]) {
+  await atomic(relay,value);s=await command(f.home,['status']);assert.equal(s.main.runningVersion,null);
+ }
+ await fs.writeFile(relay,'broken');s=await command(f.home,['status']);assert.equal(s.main.state,'unknown');
+ await fs.rm(relay);s=await command(f.home,['status']);assert.equal(s.main.state,'offline');
+ const result=await exec(process.execPath,[new URL('../bin/ezenciel-agents-tools.mjs',import.meta.url).pathname,'--home',f.home,'status']);
+ assert.equal(JSON.parse(result.stdout).main.installedVersion,'0.1.0');
+});
+test('plugin status verifies images and reports stopped, mismatched and unreachable runtimes honestly',async t=>{
+ const f=await fixture(t,'plugin'),id='a'.repeat(64),image='sha256:'+'b'.repeat(64);
+ for(const mode of ['running','ndjson','stopped','missing','mismatched','offline']) {
+  const calls=[];
+  const run=async(c,args)=>{
+   calls.push([c,...args]);assert.equal(c,'docker');
+   if(mode==='offline')throw Error('synthetic secret must not escape');
+   if(args.includes('ps')) {const rows=mode==='missing'?[]:[{Service:'sample',State:mode==='stopped'?'exited':'running',Health:'healthy',ID:id}];return mode==='ndjson'?rows.map(r=>JSON.stringify(r)).join('\n'):JSON.stringify(rows);}
+   assert(args.includes('inspect'));return mode==='mismatched'&&args[0]==='image'?'sha256:'+'c'.repeat(64):image;
+  };
+  const s=await runtimeStatus(f.home,run),p=s.plugins[0];
+  assert.equal(p.installedVersion,'0.1.0');assert.equal(p.runningVersion,['running','ndjson'].includes(mode)?'0.1.0':null);
+  assert.equal(p.state,mode==='offline'?'unknown':['stopped','missing'].includes(mode)?'stopped':'running');
+  assert(!JSON.stringify(s).includes('synthetic secret'));assert(calls.every(c=>!c.includes('exec')&&!c.includes('start')&&!c.includes('up')));
+ }
+});
 test('SemVer ordering and compatibility reject ranges, malformed values and downgrades',()=>{
  for(const s of ['latest','../1','1.0','01.0.0','1.0.0-01'])assert.throws(()=>version(s));
  assert(newer('0.1.0-beta.10','0.1.0-beta.2'));assert(newer('0.1.0','0.1.0-beta.10'));assert(!newer('0.1.0-beta.2','0.1.0'));assert(!newer('1.0.0','1.0.0'));
@@ -108,7 +140,7 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.notEqual(await fs.readFile(path.join(active,'bin/example.mjs'),'utf8'),'tampered');
  assert(r.calls.findIndex(c=>c.includes('build'))<r.calls.findIndex(c=>c[0]==='stopHost'));
- const status=await command(f.home,['status']);assert(!JSON.stringify(status).includes('private-test-token'));assert(!('rollback'in status[0]));
+ const status=await command(f.home,['status']);assert(!JSON.stringify(status).includes('private-test-token'));assert(!('rollback'in status.jobs[0]));
  assert.equal((await fs.stat(path.join(jobPath(f.home,job.id),'job.json'))).mode&0o777,0o600);
 });
 test('failed preparation never stops runtime; failed activation rolls back code without rewinding state',async t=>{
