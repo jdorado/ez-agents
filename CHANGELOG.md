@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Complete main Telegram onboarding before any plugin setup; the installed agent
+  owns plugin preparation and QR onboarding in the owner's Telegram conversation.
+- Add host preflight, installation status and artifact-specific build diagnostics.
+- Preserve the built relay image in each deployment and reject duplicate builds.
+
 ## 0.1.0-beta.2 — npm distribution
 
 - Publish under `@jc_stack/ez-agents`; GitHub remains `jdorado/ez-agents`.

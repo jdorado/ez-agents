@@ -1,0 +1,2 @@
+#!/usr/bin/env node
+import('../src/install-tools.mjs').then(m=>m.main(process.argv.slice(2))).catch(e=>{console.error(JSON.stringify({ok:false,error:e.message}));process.exitCode=1;});

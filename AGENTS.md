@@ -15,6 +15,12 @@ developer commands or an uninitialized bot. At a required user step, give one
 concrete action with its exact link; continue after their answer. The coding
 standards below apply when developing the relay.
 
+Main-first onboarding is mandatory: initialize an empty registry, complete owner
+pairing and verify an agent-produced Telegram reply before plugin preparation or
+QR onboarding. A supplied plugin archive is deferred input. After main setup,
+plugin requests and onboarding run through the installed agent's Telegram chat,
+not the original installer CLI. Read docs/setup.md for the handoff and diagnostics.
+
 This package will be published as an open-source, lightweight Telegram-to-CLI relay. All code added to this package must adhere to these strict invariants to prevent bloat, credential leaks, and rewrites.
 
 ---
