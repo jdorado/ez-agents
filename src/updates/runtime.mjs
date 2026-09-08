@@ -27,6 +27,20 @@ export async function textAtomic(file,text) {
   const tmp=file+'.update.tmp';await fs.writeFile(tmp,text,{mode:0o600});await fs.rename(tmp,file);
 }
 export const pluginArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
+export async function packageManager(root,run=execute) {
+  const {packageManager:required}=await read(path.join(root,'package.json'));
+  if(typeof required!=='string'||!/^pnpm@\d+\.\d+\.\d+$/.test(required))throw Error('Upgrade requires an exact pnpm version in package.json');
+  const expected=required.slice(5),failures=[];
+  // Corepack can run the pinned manager directly without a global pnpm shim.
+  for(const [command,args] of [['pnpm',[]],['corepack',[required]]]) {
+    try {
+      const actual=(await run(command,[...args,'--version'],{cwd:root,timeout:120000})).trim();
+      if(actual!==expected)throw Error(`expected ${expected}, received ${actual}`);
+      return {command,args,version:actual};
+    }catch(error){failures.push(`${command}: ${error.message}`);}
+  }
+  throw Error(`Upgrade prerequisite unavailable: ${required}. ${failures.join('; ')}. Check the host supervisor service PATH (shell aliases do not count). Reuse its installed pnpm or Corepack; expose the launcher directory to that service and restart it after the current turn. If neither exists, provision the pinned manager first. Do not substitute npm install or reinstall the agent. After repair, prepare/apply a new job when status is failed; recover is only for recovery-required.`);
+}
 export const relayArgs = config => ['compose','--env-file',path.join(config.deploymentDir,'docker.env')];
 function envValue(text,key,value) {
   if(/[\r\n\0']/.test(value))throw Error('Unsafe deployment value');
@@ -62,8 +76,9 @@ export async function perform(home,job,hooks) {
   job.status='applying';job.root=root;job.startedAt=new Date().toISOString();await save();
   try {
     if(job.target==='main') {
+      job.packageManager=await packageManager(root,run);await save();
       await fs.copyFile(path.join(root,'docker/pnpm-lock.yaml'),path.join(root,'pnpm-lock.yaml'));
-      await run('pnpm',['install','--frozen-lockfile','--ignore-scripts'],{cwd:root});
+      await run(job.packageManager.command,[...job.packageManager.args,'install','--frozen-lockfile','--ignore-scripts'],{cwd:root});
       await run(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'bin/ezenciel-agents.mjs'),'--version'],{cwd:root});
       const image=`ez-upgrade-${job.sha256.slice(0,24)}`;
       await run('docker',['build','--target','runtime','-t',image,root]);

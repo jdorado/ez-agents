@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Preflight the candidate's exact pnpm version in the supervisor environment;
+  reuse installed Corepack when the pnpm launcher is unavailable or incompatible.
+- Report actionable service-PATH repair guidance before changing the live runtime.
+
 ## 0.1.0-beta.3 — candidate, not published
 
 - Agent-owned main/plugin upgrades from exact npm versions or local tarballs.

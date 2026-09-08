@@ -33,3 +33,10 @@ recovery-required result needs inspection before more upgrades. After fixing the
 reported infrastructure failure, `ez updates recover <job-id>` queues another
 attempt to restore the saved previous installation; finish the turn again. Never delete
 volumes, replay uncertain operations, or silently restore stale provider state.
+
+For missing package-manager errors, inspect the supervisor service PATH and reuse
+its installed pnpm or Corepack before provisioning anything. Shell aliases do not
+work for services. Follow the active package's docs/upgrades.md repair guidance;
+keep the pinned pnpm lockfile and never substitute npm install on the candidate.
+After fixing a failed job's prerequisite, prepare/apply a new job; recover only
+handles recovery-required. Restart a service only after the requesting turn ends.

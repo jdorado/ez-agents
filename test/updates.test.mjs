@@ -8,7 +8,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility } from '../src/updates/control.mjs';
-import { perform, environment } from '../src/updates/runtime.mjs';
+import { perform, environment, packageManager } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 const exec=promisify(execFile);
@@ -25,7 +25,7 @@ async function fixture(t,kind='main') {
  const root=await fs.realpath(await fs.mkdtemp(path.join(tmpdir(),'ez-update-')));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const deployment=path.join(root,'agent'),home=path.join(deployment,'tools'),old=path.join(root,'old'),source=path.join(root,'candidate');
  for(const d of [home,old,source,path.join(home,'bin'),path.join(home,'updates'),path.join(deployment,'mind'),path.join(deployment,'control')])await fs.mkdir(d,{recursive:true});
- const pkg={name:'@ez-test/example',version:'0.1.0',type:'module',files:['bin','src','docker','compose.yaml','compose.whatsapp.yaml','.dockerignore','Dockerfile'],bin:{example:'bin/example.mjs'},ezRelease:contract(kind)};
+ const pkg={name:'@ez-test/example',version:'0.1.0',packageManager:'pnpm@10.30.3',type:'module',files:['bin','src','docker','compose.yaml','compose.whatsapp.yaml','.dockerignore','Dockerfile'],bin:{example:'bin/example.mjs'},ezRelease:contract(kind)};
  const files={'package.json':JSON.stringify(pkg),'compose.yaml':'services: {}\n','compose.whatsapp.yaml':'services: {}\n','.dockerignore':'','Dockerfile':'FROM scratch AS runtime','docker/pnpm-lock.yaml':'lockfileVersion: 9.0\n','src/host-executor.ts':'','bin/example.mjs':'#!/usr/bin/env node\nconsole.log("example")','bin/ezenciel-agents.mjs':'console.log("0.1.1")'};
  let record,target='main';
  if(kind==='plugin') {
@@ -55,6 +55,7 @@ function runtime(f,{fail,stopped=false}={}) {
  const calls=[];let failed=false;
  const execute=async(command,args,opts)=>{
   calls.push([command,...args]);if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
+  if(args.at(-1)==='--version')return '10.30.3';
   if(args.includes('ps'))return stopped?'':'container-id';
   if(args[0]==='inspect')return 'sha256:'+'a'.repeat(64);
   if(args[0]==='volume'&&args[1]==='ls')return 'existing';
@@ -162,7 +163,37 @@ test('upgrade subprocess environment never inherits relay/provider secrets',()=>
  try {assert.equal(environment().TELEGRAM_BOT_TOKEN,undefined);assert.equal(environment().OPENAI_API_KEY,undefined);}finally{delete process.env.TELEGRAM_BOT_TOKEN;delete process.env.OPENAI_API_KEY;}
 });
 
-test('supervisor outlives requesting process, drains work, switches host PID and resumes after service restart',async t=>{
+test('package manager selection reuses pnpm, then exact Corepack; never substitutes npm',async t=>{
+ const f=await fixture(t);
+ for(const unavailable of ['none','missing','wrong-version']) {
+  const calls=[];
+  const chosen=await packageManager(f.source,async(c,a)=>{
+   calls.push([c,...a]);
+   if(c==='pnpm'&&unavailable==='missing')throw Object.assign(Error('spawn pnpm ENOENT'),{code:'ENOENT'});
+   return c==='pnpm'&&unavailable==='wrong-version'?'9.0.0':'10.30.3';
+  });
+  assert.equal(chosen.command,unavailable==='none'?'pnpm':'corepack');
+  assert.deepEqual(calls,unavailable==='none'?[['pnpm','--version']]:[['pnpm','--version'],['corepack','pnpm@10.30.3','--version']]);
+ }
+ const p=await read(path.join(f.source,'package.json'));
+ for(const value of ['npm@10.0.0','pnpm@latest','pnpm@https://example.invalid/x',undefined]) {
+  await atomic(path.join(f.source,'package.json'),{...p,packageManager:value});
+  await assert.rejects(packageManager(f.source,async()=>assert.fail('must not execute')),/exact pnpm/);
+ }
+});
+test('missing or broken managers fail with repair guidance before installing or stopping anything',async t=>{
+ for(const reason of ['ENOENT','signature verification failed','wrong-version']) {
+  const f=await fixture(t),job=await queued(f),r=runtime(f);
+  r.execute=async(c,a)=>{r.calls.push([c,...a]);assert(['pnpm','corepack'].includes(c));assert.equal(a.at(-1),'--version');if(reason==='wrong-version')return '9.0.0';throw Error(reason);};
+  const result=await perform(f.home,job,r);
+  assert.equal(result.status,'failed');assert.equal(result.rollback,undefined);
+  assert.match(result.error,/service PATH/);assert.match(result.error,/prepare\/apply a new job/);
+  assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
+  assert.equal(r.calls.length,2);assert(!r.calls.some(c=>c.includes('install')||c[0]==='stopHost'));
+ }
+});
+
+for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider} drains work, replaces host PID and recovers after restart`,async t=>{
  const f=await fixture(t),fake=path.join(f.root,'fake');await fs.mkdir(fake);
  const hostCode=`import fs from 'node:fs';import path from 'node:path';const c=JSON.parse(fs.readFileSync(process.argv[2])).agents[0];const d=path.join(c.controlDir,'host-executor');fs.mkdirSync(d,{recursive:true});const beat=()=>{fs.writeFileSync(path.join(d,'heartbeat.json'),JSON.stringify({pid:process.pid,at:Date.now()}));};beat();const timer=setInterval(()=>{try{process.kill(Number(process.env.EZ_HOST_SUPERVISOR_PID),0)}catch{process.exit(0)}beat()},100);process.on('SIGTERM',()=>{clearInterval(timer);process.exit(0)});`;
  for(const dir of [f.old,f.source]) {
@@ -172,11 +203,11 @@ test('supervisor outlives requesting process, drains work, switches host PID and
  // Package archives never contain node_modules; the fake pnpm below provisions the fixture loader.
  await fs.rm(path.join(f.source,'node_modules'),{recursive:true});
  const log=path.join(f.root,'commands.jsonl');
- await fs.writeFile(path.join(fake,'pnpm'),`#!${process.execPath}\nconst fs=require('fs');fs.mkdirSync('node_modules/tsx/dist',{recursive:true});fs.writeFileSync('node_modules/tsx/dist/loader.mjs','');`,{mode:0o755});
+ await fs.writeFile(path.join(fake,provider),`#!${process.execPath}\nif(${JSON.stringify(provider)}==='corepack'&&process.argv[2]!=='pnpm@10.30.3')throw Error('Unpinned manager');if(process.argv.includes('--version')){console.log('10.30.3');process.exit(0)}const fs=require('fs');fs.mkdirSync('node_modules/tsx/dist',{recursive:true});fs.writeFileSync('node_modules/tsx/dist/loader.mjs','');`,{mode:0o755});
  await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nconst fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a.includes('ps'))console.log('cid');if(a[0]==='inspect')console.log('sha256:'+'a'.repeat(64));`,{mode:0o755});
  const wrapper=path.join(f.root,'supervisor.mjs'),module=new URL('../src/updates/supervisor.mjs',import.meta.url).href;
  await fs.writeFile(wrapper,`import {supervise} from ${JSON.stringify(module)};const a=new AbortController();process.on('SIGTERM',()=>a.abort());await supervise(${JSON.stringify(f.config.deploymentDir)},a.signal,{discover:async()=>[]});`);
- const start=()=>{const p=spawn(process.execPath,[wrapper],{env:{...process.env,PATH:fake+path.delimiter+process.env.PATH},stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);return {p,output:()=>output};};
+ const start=()=>{const p=spawn(process.execPath,[wrapper],{env:{...process.env,PATH:fake},stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);return {p,output:()=>output};};
  const wait=async fn=>{for(let i=0;i<150;i++){const result=await fn();if(result)return result;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out');};
  const first=start();t.after(()=>{first.p.kill('SIGTERM');});
  const heartbeat=()=>read(path.join(f.agent.controlDir,'host-executor/heartbeat.json')).catch(()=>null);
@@ -192,6 +223,7 @@ test('supervisor outlives requesting process, drains work, switches host PID and
  assert((await read(path.join(f.agent.controlDir,'update-attention.json'))).id);
  const closed=new Promise(r=>first.p.once('close',r));first.p.kill('SIGTERM');await closed;
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
+ assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).packageManager.command,provider);
  const second=start();t.after(()=>second.p.kill('SIGTERM'));
  await wait(async()=>{const h=await heartbeat();return h?.pid!==newBeat.pid&&h?.at>newBeat.at;});
  const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';await atomic(path.join(jobPath(f.home,job.id),'job.json'),interrupted);

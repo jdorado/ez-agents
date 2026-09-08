@@ -20,7 +20,7 @@ Use normal setup and initialize the registry with this deployment's
 `host-executor.json`. This binds `ez updates`, the active package root and the
 Software updates guidance in TOOLS.md. Start `ezenciel-agents-host` using the
 normal OS service template. The host service must use the existing user's Node,
-pnpm and Docker access. Never put tokens in its environment. Keep the original
+pnpm (or Corepack) and Docker access. Never put tokens in its environment. Keep the original
 package directory: its small bootstrap remains the service entry point and loads
 the active supervisor on each restart. It must not be moved or garbage-collected.
 
@@ -38,6 +38,41 @@ Point the host service and relay Compose source/image at the candidate, then
 restart and verify. Do not recreate the agent or its registry. Subsequent
 compatible upgrades are agent-owned. Noncanonical/multi-agent host configuration
 files require migration to one canonical deployment per service first.
+
+## Package-manager preflight and repair
+
+Before installing candidate dependencies or stopping services, the supervisor
+checks `pnpm --version` in its own service environment. It requires the exact
+`packageManager` version declared by the candidate. If that launcher is missing,
+broken or reports another version, it tries `corepack pnpm@<exact-version>`
+directly and verifies the result. Corepack may download/cache that pinned version;
+it does not need a global pnpm shim. The selected command/version is in the job
+receipt. Both routes retain `--frozen-lockfile --ignore-scripts`.
+
+If neither route works, the job fails before dependency installation or service
+replacement, with both errors and repair guidance. The agent should inspect the
+host service's PATH and existing launchers first, including the Node installation
+and any known pnpm installation directory. Reuse them; do not install a second
+manager just because the interactive shell sees a different PATH. If provisioning
+is actually necessary, install the pinned pnpm version using an available package
+manager (npm can provision pnpm). Do not run `npm install` on the Ez candidate:
+that would replace the pnpm lockfile contract. Do not source arbitrary shell
+profiles or copy secrets into the service environment.
+
+For an existing beta.3 supervisor reporting `spawn pnpm ENOENT`, a newer candidate
+cannot repair the updater that must install it. The VM agent must first expose a
+real pnpm launcher in that supervisor's PATH. With working Corepack it can use
+`corepack enable pnpm --install-directory /absolute/user-owned/bin` and include
+that directory in the service PATH. Verify the pinned version under the same user,
+PATH and working directory as the service. Schedule any needed service restart
+after the requesting turn ends, then verify its fresh heartbeat and Telegram reply.
+Keep the deployment, accounts, images and job receipts intact.
+
+Read `ez updates status` after repair. For `failed` or `rolled-back`, prepare the
+same candidate again and apply the new job; do not edit the old receipt. Only
+`recovery-required` uses `ez updates recover <job-id>` to restore the prior runtime.
+Finish the requesting turn after queuing either operation. Verify the main relay
+before requesting a separate plugin upgrade.
 
 ## Agent interface
 
