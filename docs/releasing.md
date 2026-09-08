@@ -5,7 +5,7 @@ independently with SemVer: patch for compatible fixes, minor for new capabilitie
 before 1.0, breaking CLI/state changes require a minor bump and migration notes.
 No automatic dependency updates, release bot or credentials in pull-request CI.
 
-1. Merge a reviewed PR with green CI. Finalize package version and CHANGELOG.md;
+1. In an isolated release worktree/PR, finalize package version and CHANGELOG.md;
    update plugin manifest version when present. After lockfile changes, copy
    `pnpm-lock.yaml` to `docker/pnpm-lock.yaml` (npm omits the root lockfile; CI
    checks this shipping copy is identical). Never overwrite a published version.
@@ -32,9 +32,11 @@ No automatic dependency updates, release bot or credentials in pull-request CI.
    fill package.json repository, homepage and bugs with the actual public URLs.
    Enable GitHub private vulnerability reporting; verify the route. Protect main
    with CI and independent PR review. Maintainers use the same process.
-7. Obtain maintainer release approval for the exact commit, tarball SHA-256,
-   license/third-party obligations and known limits. Only then push the approved
-   public tree, tag `v<version>`, and publish that tarball:
+7. Record independent review and green CI for the final release PR, then obtain
+   maintainer merge/release authorization for the exact commit, tarball SHA-256,
+   license/third-party obligations and known limits. Merge the release PR and
+   verify its tree matches the reviewed source before tagging `v<version>` and
+   publishing that tarball:
    `npm publish /absolute/candidate.tgz --access public --tag beta --registry https://registry.npmjs.org/`
    for prereleases (use `--tag latest` only for an approved stable release).
    Use interactive npm authentication with 2FA; never paste tokens into CI or docs.
