@@ -2,7 +2,9 @@
 
 Register one service per deployment after initializing its tools. Substitute the
 exact absolute paths below. Use the existing authenticated host user and include
-its Node 22+ and CLI directories in PATH. No bot token goes in these service files.
+its Node 22+, pnpm (or Corepack), Docker and CLI directories in PATH. Resolve the
+actual installed launchers first; shell aliases and interactive shell startup
+files are not available to services. No bot token goes in these service files.
 Docker Compose owns the relay/plugins; this service only runs the host transport.
 
 ## Linux
@@ -16,7 +18,7 @@ Description=Ez family host CLI transport
 [Service]
 Type=simple
 Environment=EZ_DEPLOYMENT_DIR=/absolute/private/agents/family
-Environment=PATH=/absolute/node/bin:/absolute/cli/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/absolute/node/bin:/absolute/package-manager/bin:/absolute/cli/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/absolute/ez-package/package/bin/ezenciel-agents-host
 Restart=on-failure
 RestartSec=5
@@ -48,7 +50,7 @@ Save `~/Library/LaunchAgents/local.ez.family.plist` with a unique agent label:
 <key>ProgramArguments</key><array><string>/absolute/ez-package/package/bin/ezenciel-agents-host</string></array>
 <key>EnvironmentVariables</key><dict>
 <key>EZ_DEPLOYMENT_DIR</key><string>/absolute/private/agents/family</string>
-<key>PATH</key><string>/absolute/node/bin:/absolute/cli/bin:/usr/local/bin:/usr/bin:/bin</string>
+<key>PATH</key><string>/absolute/node/bin:/absolute/package-manager/bin:/absolute/cli/bin:/usr/local/bin:/usr/bin:/bin</string>
 </dict>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
