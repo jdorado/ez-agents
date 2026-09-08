@@ -4,6 +4,8 @@ Register one service per deployment after initializing its tools. Substitute the
 exact absolute paths below. Use the existing authenticated host user and include
 its Node 22+ and CLI directories in PATH. No bot token goes in these service files.
 Docker Compose owns the relay/plugins; this service only runs the host transport.
+`ezenciel-agents-setup service` starts only the Docker relay; it does not register
+or start this host service.
 
 ## Linux
 

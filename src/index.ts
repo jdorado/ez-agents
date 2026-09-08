@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { access } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
 import { dirname, join, basename } from 'node:path'
@@ -91,7 +91,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
       if (shuttingDown || activeChild) return
-      if (await access(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
+      // stat uses the effective UID; access uses the relay's isolated real UID.
+      if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
       if (await runs.running()) return
       const owner = (await control.status()).owner

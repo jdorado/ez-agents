@@ -113,7 +113,7 @@ export const runCli = async (): Promise<void> => {
   const envFilePath = path.resolve(process.cwd(), '.env')
 
   if (args[0] === '--help' || args[0] === '-h') {
-    console.log('Usage: ezenciel-agents-setup configure <executor> [--token-stdin] | service | init | status | <executor>\nconfigure writes private .env paths and seeds missing mind files; it does not start or pair the bot.\n--token-stdin accepts the BotFather token without putting it in command arguments or output.\nservice starts the Docker Compose deployment bound by docker.env; it does not pair the owner.\nFollow docs/setup.md through a real Telegram reply; package installation alone is incomplete.')
+    console.log('Usage: ezenciel-agents-setup configure <executor> [--token-stdin] | service | init | status | <executor>\nconfigure writes private .env paths and seeds missing mind files; it does not start or pair the bot.\n--token-stdin accepts the BotFather token without putting it in command arguments or output.\nservice starts only the Docker Compose relay bound by docker.env in the current directory. It does not install the host-executor service; follow docs/host-service.md. It does not pair the owner.\nFollow docs/setup.md through a real Telegram reply; package installation alone is incomplete.')
     return
   }
 

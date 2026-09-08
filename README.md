@@ -76,7 +76,7 @@ credentials, startup, and verified pairing; never present this as human homework
 | `ezenciel-agents-host` | Invoke the existing shared host CLI for this deployment |
 | `ezenciel-agents-setup configure <executor>` | Private configuration and missing starter files; preserves personal files |
 | `ezenciel-agents-setup configure <executor> --token-stdin` | Same, with the BotFather token supplied privately through stdin |
-| `ezenciel-agents-setup service` | Start the Docker deployment bound by `docker.env` |
+| `ezenciel-agents-setup service` | Start only the Docker relay bound by `docker.env` in the current directory; register the [host service](docs/host-service.md) separately |
 | `ezenciel-agents-owner status` | Inspect the owner and pending pairing requests |
 | `ezenciel-agents-owner approve <telegram-user-id>` | Approve the verified owner; never an arbitrary first sender |
 | `ezenciel-agents-setup status` | Inspect installed executor choices |

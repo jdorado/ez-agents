@@ -59,6 +59,8 @@ copy of an existing bot token. Continue with the per-agent configuration below.
    the precise prerequisite and keep installation pending.
 2. Obtain a separate BotFather token for the new agent. Pass it through stdin
    to the creator; keep it out of argv, logs, images and Markdown.
+   `ezenciel-agents-create` reads the token from stdin by default and does not
+   accept `--token-stdin`. That flag belongs to `ezenciel-agents-setup configure`.
 3. Create its deployment with the host installation's selected CLI:
 
 ```sh
@@ -109,6 +111,12 @@ Never silently reuse a global `ez` from the old sandbox runtime.
    paths. This generic transport is the only host execution bridge. Do not start
    another host relay or install another CLI. Verify its heartbeat, then run
    `bin/ezenciel-agents-docker up -d --wait`.
+
+   `ezenciel-agents-setup service` is Docker-only startup: run it from the
+   deployment directory containing `docker.env`. It starts the relay and does
+   not install or start the host-executor user service. Complete the host
+   registration above separately.
+
 5. Ask the owner to message the exact bot. Verify the pending numeric identity,
    approve it, and verify a real CLI-produced Telegram reply. Check restart
    persistence and two agents running concurrently with separate state.
