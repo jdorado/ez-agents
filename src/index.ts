@@ -24,6 +24,7 @@ import { downloadTelegramFile } from './read-request.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
 import { presetLabel } from './ai.js'
 import { initializeWorkspace } from './workspace.js'
+import { softwareStatus } from './software-status.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
@@ -431,6 +432,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const ai = await control.aiState(aiMenu.initial)
     const selected = ai.presets.find((p) => p.id === ai.selectedId)!
     return [
+      ...await softwareStatus(config.controlDir),
       `AI: ${selected.name} (${presetLabel(selected)})`,
       `Default: ${ai.presets.find((p) => p.id === ai.defaultId)!.name}`,
       `Session: ${session?.sessionId.slice(0, 8) || 'none'}`,

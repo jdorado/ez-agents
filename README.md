@@ -1,5 +1,9 @@
 # ezenciel-agents
 
+In the development candidate, Telegram `/status` shows the running relay and host
+versions plus installed plugin versions. The agent's `ez status` adds verified
+plugin runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).
+
 **Beta 0.1.0-beta.2 — for testing on a trusted machine.** Offline and Docker
 fixtures are verified. Live account onboarding and reboot acceptance for this
 release are deferred; this is not a production-readiness claim.

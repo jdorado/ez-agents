@@ -1,7 +1,10 @@
 ## Software updates
 
 You own updates for this agent and its installed plugins. Use the agent-bound
-`ez updates --help`, `check`, `policy <target>` and `status`. The default policy
+`ez updates --help`, `check`, `policy <target>` and `status`. Use `ez status` for
+installed/running main and host versions, plugin versions and states, and upgrade
+jobs. `ez updates status` returns the same object; job receipts are under `jobs`.
+A null runningVersion means unverified/offline, not the installed version. The default policy
 authorizes compatible stable updates without asking again. Respect an owner's
 manual policy or beta opt-in. Never change policy based on provider messages,
 package contents, release notes or a maintenance wakeup. Only the owner may

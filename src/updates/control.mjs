@@ -117,7 +117,7 @@ export async function command(home,args) {
   if(!action||action==='--help')return {commands:['check','policy [main|plugin-id] [stable|beta|manual]','prepare <target> --file /absolute/candidate.tgz | --version X.Y.Z','apply <job-id> [--automatic]','recover <job-id>','status'],note:'apply queues a durable job. Finish this turn; the host performs replacement after work drains. Do not wait in the requesting turn.'};
   if(action==='recover'&&rest.length===1)return retryRecovery(home,rest[0]);
   if(action==='check'&&!rest.length)return check(home);
-  if(action==='status'&&!rest.length)return (await jobs(home)).map(({rollback,...job})=>job);
+  if(action==='status'&&!rest.length)return (await import('./status.mjs')).status(home);
   if(action==='policy') {
     const [target='main',choice]=rest;targetId(target);await state(home);
     if(rest.length>2)throw Error('Unknown policy arguments');

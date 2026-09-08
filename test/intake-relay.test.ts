@@ -11,6 +11,7 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { InboxStore } from '../src/inbox.js'
 import { ApprovalStore } from '../src/approval.js'
+import { packageVersion } from '../src/version.js'
 
 const message = (id: number, text = 'hello'): Update => ({
   update_id: id,
@@ -187,6 +188,7 @@ test('slow voice normalization preserves instruction order and leaves controls r
     await downloading
     await f.relay.bot.handleUpdate(message(3, '/status'))
     assert.ok(f.replies.some((text) => text.includes('2 incoming messages')))
+    assert.ok(f.replies.some((text) => text.includes(`Ez relay: ${packageVersion} (running)`)))
     await f.relay.bot.handleUpdate(message(4, 'Next instruction'))
     assert.equal(f.launched.length, 0)
     release()
