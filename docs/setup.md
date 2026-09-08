@@ -53,7 +53,7 @@ harmless tool-call check below. Retry preflight after fixing failed checks.
 
 ## Install the supplied release artifact
 
-Use `npm pack @jc_stack/ez-agents@0.1.0-beta.2` or the exact GitHub release
+Use `npm pack @jc_stack/ez-agents@0.1.0-beta.12` or the exact GitHub release
 tarball. Verify its SHA-256 against the release receipt when using GitHub.
 Do not guess an npm name or substitute an unscoped package.
 Choose a permanent package directory and a separate private deployment directory.
@@ -61,8 +61,8 @@ Choose a permanent package directory and a separate private deployment directory
 ```sh
 mkdir -p /absolute/ez-package
 # Inspect before extracting; the archive should contain only package/ entries.
-tar -tzf /absolute/jc_stack-ez-agents-0.1.0-beta.2.tgz
-tar -xzf /absolute/jc_stack-ez-agents-0.1.0-beta.2.tgz -C /absolute/ez-package
+tar -tzf /absolute/jc_stack-ez-agents-0.1.0-beta.12.tgz
+tar -xzf /absolute/jc_stack-ez-agents-0.1.0-beta.12.tgz -C /absolute/ez-package
 cd /absolute/ez-package/package
 cp docker/pnpm-lock.yaml pnpm-lock.yaml
 pnpm install --frozen-lockfile
@@ -230,5 +230,5 @@ BotFather and a WhatsApp device on the phone separately from removing software.
 
 ## Agent-owned upgrades
 
-The beta.3 development candidate adds owner-policy release checks and durable
-main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Local VM QA remains pending; do not claim this candidate is published.
+This beta includes owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.

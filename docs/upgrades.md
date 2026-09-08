@@ -1,6 +1,7 @@
 # Agent-owned software upgrades
 
-Available in the beta.3 development candidate; VM acceptance is pending. npm
+Available in this beta. Earlier main upgrade/rollback VM QA passed; final-release
+fresh-host/reboot and live plugin upgrade acceptance remain pending. npm
 publication is not required to test this feature. Stable releases are the default
 automatic channel. The existing owner may select beta or manual policy per target.
 The main target and installed plugins version independently.

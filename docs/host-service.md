@@ -76,5 +76,5 @@ are not certified by these instructions or the headless Docker tests.
 
 ## Agent-owned upgrades
 
-The beta.3 development candidate adds owner-policy release checks and durable
-main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Local VM QA remains pending; do not claim this candidate is published.
+This beta includes owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.

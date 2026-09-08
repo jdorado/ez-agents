@@ -1,31 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.12 — self-upgrade beta
 
-- Preflight the candidate's exact pnpm version in the supervisor environment;
-  reuse installed Corepack when the pnpm launcher is unavailable or incompatible.
-- Report actionable service-PATH repair guidance before changing the live runtime.
-- Telegram `/status` includes the running relay/host versions and installed plugin
-  versions, shared through the existing host heartbeat without private registry access.
+- Agent-owned main/plugin upgrades with stable-default policy, queued maintenance,
+  pinned package-manager preflight, private backups and code/config rollback.
+- Main Telegram onboarding before plugin installation, reusable build/preflight tools,
+  executor and private-pause fixes, and installed/running version diagnostics.
+- Isolated worktree/PR contribution process and explicit independent review.
+- User-reported VM QA passed main beta.3 to beta.4 upgrade and deliberate beta.11
+  activation failure with rollback to beta.4 and a post-recovery Telegram reply.
+- That VM evidence covers earlier candidates. Final beta.12 fresh-host/reboot and
+  live WhatsApp upgrade acceptance remain pending; this is a testing beta.
 
-- `ez status` and `ez updates status` show installed/running relay versions, host
-  transport version, plugin versions and runtime states, plus upgrade jobs.
-- Missing, stale or unverifiable runtime evidence reports an unknown running
-  version instead of presenting the installed candidate as live.
+Private QA versions beta.3 through beta.11 were not public releases; some were
+deliberately broken rollback fixtures and must never be published.
 
-## 0.1.0-beta.3 — candidate, not published
-
-- Agent-owned main/plugin upgrades from exact npm versions or local tarballs.
-- Stable-default per-target policy, serialized maintenance wakeups, and a host
-  supervisor that survives replacement of the requesting runtime.
-- Private backups, matching schema/deployment gates and failed-health code rollback.
-- Automated fixtures cover recovery; VM and live-provider acceptance are pending.
-- Complete main Telegram onboarding before any plugin setup; the installed agent
-  owns plugin preparation and QR onboarding in the owner's Telegram conversation.
-- Add host preflight, installation status and artifact-specific build diagnostics.
-- Preserve the built relay image in each deployment and reject duplicate builds.
-
-## 0.1.0-beta.2 — npm distribution
+## 0.1.0-beta.2 — distribution preparation (not published)
 
 - Publish under `@jc_stack/ez-agents`; GitHub remains `jdorado/ez-agents`.
 - Document pinned npm downloads and retain the beta-only distribution channel.

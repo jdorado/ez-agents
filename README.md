@@ -1,16 +1,16 @@
 # ezenciel-agents
 
-In the development candidate, Telegram `/status` shows the running relay and host
+Telegram `/status` shows the running relay and host
 versions plus installed plugin versions. The agent's `ez status` adds verified
 plugin runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).
 
-**Beta 0.1.0-beta.2 — for testing on a trusted machine.** Offline and Docker
+**Beta 0.1.0-beta.12 — for testing on a trusted machine.** Offline and Docker
 fixtures are verified. Live account onboarding and reboot acceptance for this
 release are deferred; this is not a production-readiness claim.
 
 The npm package is `@jc_stack/ez-agents` (channel `beta`). Download a pinned
-release with `npm pack @jc_stack/ez-agents@0.1.0-beta.2`, or get the tarball and SHA256SUMS from
-[GitHub prereleases](https://github.com/jdorado/ez-agents/releases/tag/v0.1.0-beta.2).
+release with `npm pack @jc_stack/ez-agents@0.1.0-beta.12`, or get the tarball and SHA256SUMS from
+[GitHub prereleases](https://github.com/jdorado/ez-agents/releases/tag/v0.1.0-beta.12).
 GitHub remains under `jdorado`; npm uses `jc_stack`. Do not install the unrelated
 unscoped `ez-whatsapp` package.
 
@@ -130,5 +130,5 @@ without authorization. Local registry rehearsal uses `pnpm publish:local`.
 
 ## Agent-owned upgrades
 
-The beta.3 development candidate adds owner-policy release checks and durable
-main/plugin replacement. See [upgrade setup, tools and recovery](docs/upgrades.md). Local VM QA remains pending; do not claim this candidate is published.
+This beta includes owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](docs/upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.
