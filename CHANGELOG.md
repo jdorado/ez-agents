@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.1.0-beta.2 — npm distribution
+## 0.1.0-beta.12 — self-upgrade beta
+
+- Agent-owned main/plugin upgrades with stable-default policy, queued maintenance,
+  pinned package-manager preflight, private backups and code/config rollback.
+- Main Telegram onboarding before plugin installation, reusable build/preflight tools,
+  executor and private-pause fixes, and installed/running version diagnostics.
+- Isolated worktree/PR contribution process and explicit independent review.
+- User-reported VM QA passed main beta.3 to beta.4 upgrade and deliberate beta.11
+  activation failure with rollback to beta.4 and a post-recovery Telegram reply.
+- That VM evidence covers earlier candidates. Final beta.12 fresh-host/reboot and
+  live WhatsApp upgrade acceptance remain pending; this is a testing beta.
+
+Private QA versions beta.3 through beta.11 were not public releases; some were
+deliberately broken rollback fixtures and must never be published.
+
+## 0.1.0-beta.2 — distribution preparation (not published)
 
 - Publish under `@jc_stack/ez-agents`; GitHub remains `jdorado/ez-agents`.
 - Document pinned npm downloads and retain the beta-only distribution channel.

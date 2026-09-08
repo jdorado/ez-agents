@@ -6,6 +6,7 @@ import { writeFile, rm } from 'node:fs/promises'
 import { loadConfig } from '../src/config.js'
 import { recoverInterruptedRuns } from './recovery.js'
 import { createRelay } from '../src/index.js'
+import { packageVersion } from '../src/version.js'
 
 // Provider errors can contain credential-bearing URLs; never dump error causes.
 process.on('uncaughtException', (error) => {
@@ -31,7 +32,7 @@ if (command === 'start') {
   const heartbeat = '/state/control/heartbeat.json'
   await rm(heartbeat, { force: true })
   const timer = setInterval(() => {
-    if (relay.bot.isRunning()) void writeFile(heartbeat, JSON.stringify({ at: Date.now(), polling: true }), { mode: 0o600 })
+    if (relay.bot.isRunning()) void writeFile(heartbeat, JSON.stringify({ at: Date.now(), polling: true, version: packageVersion }), { mode: 0o600 })
   }, 5000)
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { clearInterval(timer); void relay.stop() })
   try { await relay.start() } finally { clearInterval(timer); await rm(heartbeat, { force: true }) }

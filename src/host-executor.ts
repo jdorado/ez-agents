@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { startExecutorJob, terminateJob, resolveExecutor, type ExecutorOptions } from './executor.js'
 import { readModels, validateSelection } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
+import { packageVersion } from './version.js'
+import { installedPluginVersions } from './software-status.js'
 
 export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
@@ -49,6 +51,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     }
     let catalogAt=Date.now()
     while (!signal.aborted) {
+      const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
+      if(parent) { try { process.kill(parent,0) } catch { break } }
       if(Date.now()-catalogAt>30000){
         const models=JSON.stringify(await readModels())
         for(const agent of installation.agents){
@@ -59,7 +63,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       }
       for (const agent of installation.agents) {
         const directory=path.join(agent.controlDir,'host-executor')
-        await writeFile(path.join(directory,'heartbeat.tmp'),JSON.stringify({at:Date.now()}),{mode:0o600})
+        await writeFile(path.join(directory,'heartbeat.tmp'),JSON.stringify({at:Date.now(),pid:process.pid,version:packageVersion,plugins:await installedPluginVersions(agent.toolsHome)}),{mode:0o600})
         await rename(path.join(directory,'heartbeat.tmp'),path.join(directory,'heartbeat.json'))
         for (const file of await readdir(directory)) {
           if ((!file.endsWith('.request.json') || !isHostRunId(file.slice(0,-13))) || busy.has(agent.name)) continue

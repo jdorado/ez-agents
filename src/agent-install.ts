@@ -30,7 +30,7 @@ export const installationCli = async (root: string, installerCli?: string): Prom
 }
 
 export const createAgent = async (options: {
-  root: string; hostRoot: string; composeFile: string; name: string; purpose: string; token: string; cli?: string
+  root: string; hostRoot: string; composeFile: string; name: string; purpose: string; token: string; cli?: string; image?: string
 }) => {
   const { root, hostRoot, composeFile, name, purpose, token } = options
   if (!/^[a-z][a-z0-9-]{0,39}$/.test(name)) throw new Error('Use an agent name of 1–40 lowercase letters, digits or hyphens, starting with a letter.')
@@ -38,6 +38,8 @@ export const createAgent = async (options: {
     throw new Error('Installation paths must be absolute and contain no newline or single quote.')
   if (!purpose.trim() || purpose.length > 12000) throw new Error('Supply a purpose of 1–12000 characters.')
   if (!/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(token)) throw new Error('Supply the BotFather token through stdin.')
+  const image=options.image||'ezenciel-agents:local'
+  if(!/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(image))throw new Error('Invalid relay image reference')
   await mkdir(root, {recursive:true, mode:0o700})
   const cli = await installationCli(root, options.cli)
   const directory = join(root, name), deploymentDir = join(hostRoot, name)
@@ -48,6 +50,7 @@ export const createAgent = async (options: {
     const values = {
       COMPOSE_PROJECT_NAME: project,
       COMPOSE_FILE: composeFile,
+      EZ_RELAY_IMAGE: image,
       EZ_RELAY_ENV_FILE: join(deploymentDir, 'relay.env'),
       EZ_AGENT_PURPOSE_FILE: join(deploymentDir, 'purpose.md'),
       EZ_EXECUTOR_CLI: cli,
@@ -81,13 +84,13 @@ export const listAgents = async (root: string) => {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const {values:v} = parseArgs({options:{name:{type:'string'},purpose:{type:'string'},'host-root':{type:'string'},'compose-file':{type:'string'},list:{type:'boolean'},cli:{type:'string'},'register-cli':{type:'string'}}})
+    const {values:v} = parseArgs({options:{name:{type:'string'},purpose:{type:'string'},'host-root':{type:'string'},'compose-file':{type:'string'},'relay-image':{type:'string'},list:{type:'boolean'},cli:{type:'string'},'register-cli':{type:'string'}}})
     if (v['register-cli']) console.log(JSON.stringify({cli:await installationCli('/installations',v['register-cli'])}))
     else if (v.list) console.log(JSON.stringify(await listAgents('/installations')))
     else {
       let token=''
       for await (const chunk of process.stdin) { token+=chunk; if(token.length>512) throw new Error('Token input is too long.') }
-      console.log(JSON.stringify(await createAgent({root:'/installations',hostRoot:v['host-root']||'',composeFile:v['compose-file']||'',name:v.name||'',purpose:v.purpose||'',token:token.trim(),cli:v.cli||''})))
+      console.log(JSON.stringify(await createAgent({root:'/installations',hostRoot:v['host-root']||'',composeFile:v['compose-file']||'',name:v.name||'',purpose:v.purpose||'',token:token.trim(),cli:v.cli||'',image:v['relay-image']})))
     }
   } catch (error) { console.error((error as Error).message); process.exitCode=1 }
 }

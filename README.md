@@ -1,12 +1,16 @@
 # ezenciel-agents
 
-**Beta 0.1.0-beta.2 — for testing on a trusted machine.** Offline and Docker
+Telegram `/status` shows the running relay and host
+versions plus installed plugin versions. The agent's `ez status` adds verified
+plugin runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).
+
+**Beta 0.1.0-beta.12 — for testing on a trusted machine.** Offline and Docker
 fixtures are verified. Live account onboarding and reboot acceptance for this
 release are deferred; this is not a production-readiness claim.
 
 The npm package is `@jc_stack/ez-agents` (channel `beta`). Download a pinned
-release with `npm pack @jc_stack/ez-agents@0.1.0-beta.2`, or get the tarball and SHA256SUMS from
-[GitHub prereleases](https://github.com/jdorado/ez-agents/releases/tag/v0.1.0-beta.2).
+release with `npm pack @jc_stack/ez-agents@0.1.0-beta.12`, or get the tarball and SHA256SUMS from
+[GitHub prereleases](https://github.com/jdorado/ez-agents/releases/tag/v0.1.0-beta.12).
 GitHub remains under `jdorado`; npm uses `jc_stack`. Do not install the unrelated
 unscoped `ez-whatsapp` package.
 
@@ -25,6 +29,11 @@ repository are addressed to you, the LLM with computer access, not the human.
 
 **Your finish line is a working Telegram reply and automatic startup.** Adding
 npm dependencies, printing `--help`, or creating files is not completion.
+Install the main runtime alone first, with an empty plugin catalog. Even when
+WhatsApp is supplied or requested alongside it, defer plugin setup and QR scanning
+until owner pairing and a real agent reply are verified. Then the owner requests
+the plugin in Telegram and the installed agent handles onboarding there. The
+initial host CLI must not install the plugin on that agent's behalf.
 Do not hand the human terminal commands, ask them to start the relay, leave a
 terminal open, read logs, find their numeric Telegram ID, or approve pairing
 from another terminal. You own those steps and their verification.
@@ -71,12 +80,15 @@ credentials, startup, and verified pairing; never present this as human homework
 
 | Tool | Purpose |
 |---|---|
+| `ezenciel-agents-install preflight --executor <path-or-name>` | Check prerequisites, disk and executor identity hints before setup |
+| `ezenciel-agents-install build` | Build once per artifact, with a private log and duplicate-build detection |
+| `ezenciel-agents-install status --deployment <path>` | Distinguish runtime/configuration, pairing and Telegram reply evidence |
 | `ezenciel-agents-create --register-cli <current-cli>` | Record the CLI that installs the initial package |
 | `ezenciel-agents-create --name <name> --purpose <purpose>` | Create an agent inheriting the installation CLI; token via stdin |
 | `ezenciel-agents-host` | Invoke the existing shared host CLI for this deployment |
 | `ezenciel-agents-setup configure <executor>` | Private configuration and missing starter files; preserves personal files |
 | `ezenciel-agents-setup configure <executor> --token-stdin` | Same, with the BotFather token supplied privately through stdin |
-| `ezenciel-agents-setup service` | Start the Docker deployment bound by `docker.env` |
+| `ezenciel-agents-setup service` | Start only the Docker relay bound by `docker.env` in the current directory; register the [host service](docs/host-service.md) separately |
 | `ezenciel-agents-owner status` | Inspect the owner and pending pairing requests |
 | `ezenciel-agents-owner approve <telegram-user-id>` | Approve the verified owner; never an arbitrary first sender |
 | `ezenciel-agents-setup status` | Inspect installed executor choices |
@@ -115,3 +127,8 @@ without authorization. Local registry rehearsal uses `pnpm publish:local`.
 - [Contributing](CONTRIBUTING.md) and [releasing](docs/releasing.md)
 - [First plugin and extension contract](docs/plugins.md)
 - [License and dependency notices](THIRD_PARTY_NOTICES.md)
+
+## Agent-owned upgrades
+
+This beta includes owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](docs/upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.

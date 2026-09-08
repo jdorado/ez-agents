@@ -44,3 +44,4 @@ jobs:
           docker build --target test -t ezenciel-agents-tests "$release_dir/package"
           docker build --target runtime -t ezenciel-agents:local "$release_dir/package"
       - run: node docker/smoke.mjs
+      - run: node docker/status-smoke.mjs

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { stat } from 'node:fs/promises'
+import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +24,7 @@ import { downloadTelegramFile } from './read-request.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
 import { presetLabel } from './ai.js'
 import { initializeWorkspace } from './workspace.js'
+import { softwareStatus } from './software-status.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
@@ -89,6 +92,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
       if (shuttingDown || activeChild) return
+      // stat uses the effective UID; access uses the relay's isolated real UID.
+      if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
       if (await runs.running()) return
       const owner = (await control.status()).owner
@@ -197,6 +202,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (shuttingDown) return
       const owner = (await control.status()).owner
       if (!owner) return
+      await queueUpdateAttention(config.controlDir,owner,runs,await control.captureChoice(aiMenu.initial))
       for (const source of await sources.available(owner)) {
         try {
           const batch = await sources.batch(source)
@@ -426,6 +432,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const ai = await control.aiState(aiMenu.initial)
     const selected = ai.presets.find((p) => p.id === ai.selectedId)!
     return [
+      ...await softwareStatus(config.controlDir),
       `AI: ${selected.name} (${presetLabel(selected)})`,
       `Default: ${ai.presets.find((p) => p.id === ai.defaultId)!.name}`,
       `Session: ${session?.sessionId.slice(0, 8) || 'none'}`,

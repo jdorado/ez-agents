@@ -9,4 +9,4 @@ exec docker run --rm -i --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt
   --mount "type=bind,src=$EZ_AGENTS_HOME,dst=/installations" \
   --entrypoint node "${EZ_RELAY_IMAGE:-ezenciel-agents:local}" \
   --import /app/node_modules/tsx/dist/loader.mjs /app/src/agent-install.ts \
-  --host-root "$EZ_AGENTS_HOME" --compose-file "$root/compose.yaml" "$@"
+  --host-root "$EZ_AGENTS_HOME" --compose-file "$root/compose.yaml" --relay-image "${EZ_RELAY_IMAGE:-ezenciel-agents:local}" "$@"

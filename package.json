@@ -1,11 +1,12 @@
 {
   "name": "@jc_stack/ez-agents",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0-beta.12",
   "private": false,
   "type": "module",
   "description": "A minimal Telegram-to-CLI executor relay.",
   "packageManager": "pnpm@10.30.3",
   "bin": {
+    "ezenciel-agents-install": "bin/ezenciel-agents-install",
     "ezenciel-agents": "bin/ezenciel-agents.mjs",
     "ezenciel-agents-owner": "bin/ezenciel-agents-owner.mjs",
     "ezenciel-agents-message": "bin/ezenciel-agents-message.mjs",
@@ -95,5 +96,11 @@
   "homepage": "https://github.com/jdorado/ez-agents#readme",
   "bugs": {
     "url": "https://github.com/jdorado/ez-agents/issues"
+  },
+  "ezRelease": {
+    "protocol": 1,
+    "kind": "main",
+    "stateSchema": 1,
+    "mainProtocol": 1
   }
 }

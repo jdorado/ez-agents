@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 
-const reserved = new Set(['plugins','tools','message','owner','approval','react','setup','help','version']);
+const reserved = new Set(['status','updates','plugins','tools','message','owner','approval','react','setup','help','version']);
 const id = value => { if(typeof value !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(value)) throw Error('Invalid identifier'); return value; };
 const hash = data => createHash('sha256').update(data).digest('hex');
 const json = async file => JSON.parse(await fs.readFile(file,'utf8'));
@@ -173,6 +173,7 @@ export async function init(home,workspace,catalogFile,hostConfig) {
   const index=path.join(workspace,'TOOLS.md');
   const prior=await fs.readFile(index,'utf8').catch(e=>{if(e.code==='ENOENT')return fs.readFile(new URL('../../templates/agent/TOOLS.md',import.meta.url),'utf8');throw e;});
   await fs.writeFile(index,prior+'\n## Registered plugins\n\nUse `'+path.join(home,'bin','ez')+'` for this agent only.\nDiscover reviewed packages with `ez plugins available`; inspect with `ez plugins inspect <id>`.\nOn an authorized installation request, run `ez plugins install <id>`, then `ez plugins start <id>`.\nRead the installed skill paths from `ez plugins list` before onboarding or provider operations.\nUse `ez tools list` for aliases and `ez <alias> --help` for native commands.\nInstallation does not grant send authority. The registry is the only plugin installation, command and lifecycle authority. Do not create standalone provider launchers or deployments.\n',{mode:0o600});
+  if(hostConfig && path.basename(hostConfig)==='host-executor.json') await (await import('../updates/binding.mjs')).bindUpdates(home,hostConfig);
   return {ok:true,launcher:path.join(home,'bin','ez'),workspace};
 }
 export async function install(home,config,name,source,revision) {
@@ -212,13 +213,16 @@ export async function main(args) {
   const take=flag=>{const n=args.indexOf(flag);if(n<0)return undefined;if(!args[n+1])throw Error(`Missing ${flag}`);return args.splice(n,2)[1];};
   // Only the fixed launcher may supply the leading home binding. Never consume plugin arguments here.
   let home;if(args[0]==='--home') {home=args[1];args=args.slice(2);}
+  if(args[0]==='enable-updates') {args.shift();const h=take('--home'),host=take('--host-config');if(args.length||!h||!host)throw Error('Supply --home and --host-config');return emit(await (await import('../updates/binding.mjs')).bindUpdates(h,host));}
   if(args[0]==='init') {args.shift();const options=[take('--home'),take('--workspace'),take('--catalog'),take('--host-config')];if(args.length)throw Error('Unknown init arguments');return emit(await init(...options));}
   if(!home || !path.isAbsolute(home)) throw Error('Use the agent-bound launcher, or init --home /absolute/tools --workspace /absolute/mind --catalog /absolute/catalog.json');
   home=await fs.realpath(home);
   const config=await json(path.join(home,'config.json'));
   if(config.schemaVersion!==1 || !path.isAbsolute(config.workspace)) throw Error('Invalid binding');
   const [group,action,...rest]=args;
-  if(group==='--help'||!group) return emit({commands:['plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list','<registered CLI> ...'],scope:home});
+  if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');return emit(await (await import('../updates/status.mjs')).status(home));}
+  if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
@@ -249,7 +253,7 @@ export async function main(args) {
     }
     if(args.length)throw Error('Unknown lifecycle arguments');
     if(action==='logs') return emit({plugin:name,logs:await checked([...composeArgs(record),'logs','--tail','100','--no-color'])});
-    if(action==='status') {const output=await checked([...composeArgs(record),'ps','--all','--format','json']);return emit({plugin:name,containers:output});}
+    if(action==='status') {const output=await checked([...composeArgs(record),'ps','--all','--format','json']);return emit({plugin:name,installedVersion:record.manifest.version,containers:output});}
     if(!['start','stop','uninstall'].includes(action))throw Error('Unknown lifecycle command');
     return locked(home,async()=>{
       const current=await registry(home);if(current.plugins[name]?.revision!==record.revision)throw Error('Plugin changed during lifecycle request');

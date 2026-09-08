@@ -15,17 +15,10 @@ node /absolute/ezenciel_agents/bin/ezenciel-agents-tools.mjs init \
   --host-config /private/agent/host-executor.json
 ```
 
-Without `--catalog`, init loads an empty packaged catalog. No sibling repository,
-broker or provider account is needed. For the first plugin, unpack the reviewed
-WhatsApp release source into a permanent local directory and write:
-
-```json
-{"whatsapp":"/absolute/ez-whatsapp-release/package"}
-```
-
-Pass that file with `--catalog /absolute/reviewed-catalog.json` on the init command
-above. Relative source paths resolve from the catalog file. Init pins their
-packaged content hashes, creates a private registry and `tools/bin/ez`, adds a
+Without `--catalog`, init loads an empty packaged catalog. Keep it empty for
+initial main onboarding; no sibling repository, broker or provider account is
+needed. Finish owner pairing and verify an actual Telegram agent reply first.
+Init creates a private registry and `tools/bin/ez`, adds a
 TOOLS.md discovery entry, and binds the matching host executor to that bin
 folder. Native binaries are linked through; an existing `ez` collision fails.
 Run before starting the host executor. For an already running installation,
@@ -47,6 +40,15 @@ Job requests cannot override this host binding. Filesystem access remains
 host administration under the existing trusted-host model, not OS isolation.
 
 ## Installation completion contract
+
+For initial Ez onboarding, plugin requests happen in the working Telegram
+conversation after the main owner exchange is verified. The original host CLI
+must not perform plugin setup instead. The installed agent inspects the supplied
+tarball/checksum, extracts it inside its writable tools directory, and uses
+`ez plugins inspect <id> --source <path>` and `catalog-add` with the returned hash.
+It then handles install/start and QR onboarding in that same conversation. A
+plugin tarball supplied with the main artifact is deferred input, not permission
+to skip the main-first handoff.
 
 When the user says install or set up a plugin, the agent owns completion through
 usable capability, unless the user explicitly requests package files only.
@@ -103,9 +105,9 @@ The manager does not send messages, link accounts, or implement onboarding flows
 Other commands: `plugins list`, `status <id>`, `logs <id>` (last 100 lines),
 `stop <id>`, `uninstall <id>`. Uninstall stops/removes only that Compose deployment
 and unregisters its aliases; it retains named data volumes and reviewed source
-snapshots. Reinstallation reuses that data. No implicit upgrades: a different
-release fails until explicit uninstall/reinstall; back up data first when a
-provider changes schema. This does not promise schema rollback.
+snapshots. Reinstallation reuses that data. Plain install does not replace a different release. Use `ez updates` for
+compatible upgrades under saved policy; see [upgrades](upgrades.md). Manual
+uninstall/reinstall remains available but does not promise schema rollback.
 
 For another reviewed local package, inspect with `plugins inspect <id> --source
 /absolute/source`, then install with that source and the returned `--revision
@@ -172,3 +174,8 @@ relay. The manager sends only a whitelist of Docker client environment variables
 synthetic transport in an isolated snapshot and tests installation, start,
 registered CLI, literal file paths, idempotency, restart persistence and
 non-destructive uninstall. No live account or recipient is used.
+
+## Agent-owned upgrades
+
+This beta includes owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.

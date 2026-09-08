@@ -5,7 +5,7 @@ independently with SemVer: patch for compatible fixes, minor for new capabilitie
 before 1.0, breaking CLI/state changes require a minor bump and migration notes.
 No automatic dependency updates, release bot or credentials in pull-request CI.
 
-1. Merge a reviewed PR with green CI. Finalize package version and CHANGELOG.md;
+1. In an isolated release worktree/PR, finalize package version and CHANGELOG.md;
    update plugin manifest version when present. After lockfile changes, copy
    `pnpm-lock.yaml` to `docker/pnpm-lock.yaml` (npm omits the root lockfile; CI
    checks this shipping copy is identical). Never overwrite a published version.
@@ -31,10 +31,12 @@ No automatic dependency updates, release bot or credentials in pull-request CI.
 6. Confirm repository owner/URLs, package-name availability and publisher access;
    fill package.json repository, homepage and bugs with the actual public URLs.
    Enable GitHub private vulnerability reporting; verify the route. Protect main
-   with CI and PR review (a sole maintainer may self-review explicitly).
-7. Obtain maintainer release approval for the exact commit, tarball SHA-256,
-   license/third-party obligations and known limits. Only then push the approved
-   public tree, tag `v<version>`, and publish that tarball:
+   with CI and independent PR review. Maintainers use the same process.
+7. Record independent review and green CI for the final release PR, then obtain
+   maintainer merge/release authorization for the exact commit, tarball SHA-256,
+   license/third-party obligations and known limits. Merge the release PR and
+   verify its tree matches the reviewed source before tagging `v<version>` and
+   publishing that tarball:
    `npm publish /absolute/candidate.tgz --access public --tag beta --registry https://registry.npmjs.org/`
    for prereleases (use `--tag latest` only for an approved stable release).
    Use interactive npm authentication with 2FA; never paste tokens into CI or docs.
@@ -58,7 +60,12 @@ automated gates; deferred live checks remain required for stable release.
 GitHub repositories use `jdorado`; npm packages use `jc_stack`. Verify
 `npm whoami --registry https://registry.npmjs.org/` returns `jc_stack` before
 publishing. Never infer npm scope ownership from a GitHub login. After publishing,
-read back `npm view @jc_stack/ez-agents@0.1.0-beta.2 name version dist-tags --json`
+read back `npm view @jc_stack/ez-agents@0.1.0-beta.12 name version dist-tags --json`
 (using the release being published), download it with `npm pack`, and verify its
 contents/checksum against the reviewed artifact. Keep the npm artifact and
 GitHub tag on the same reviewed commit. Do not create a new token to bypass 2FA.
+
+## Agent-owned upgrades
+
+This beta includes owner-policy release checks and durable
+main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.

@@ -2,4 +2,4 @@
 set -eu
 root=$(node -e 'const fs=require("node:fs"),path=require("node:path");process.stdout.write(path.dirname(path.dirname(fs.realpathSync(process.argv[1]))))' "$0")
 : "${EZ_DEPLOYMENT_DIR:?Set EZ_DEPLOYMENT_DIR to this agent deployment}"
-exec node --import "$root/node_modules/tsx/dist/loader.mjs" "$root/src/host-executor.ts" "$EZ_DEPLOYMENT_DIR/host-executor.json"
+exec node "$root/src/updates/launch.mjs" "$EZ_DEPLOYMENT_DIR"
