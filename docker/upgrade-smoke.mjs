@@ -9,6 +9,7 @@ import {snapshot,init,atomic} from '../src/plugins/manager.mjs';
 import {bindUpdates} from '../src/updates/binding.mjs';
 import {prepare,submit,jobPath,read} from '../src/updates/control.mjs';
 import {perform} from '../src/updates/runtime.mjs';
+import {version} from '../src/updates/artifact.mjs';
 const exec=promisify(execFile),root=await fs.realpath(await fs.mkdtemp(path.join(tmpdir(),'ez-upgrade-docker-')));
 const source=path.join(root,'source'),home=path.join(root,'tools'),mind=path.join(root,'mind'),control=path.join(root,'control');
 const input=path.resolve(process.env.EZ_WHATSAPP_SOURCE||new URL('../../ez_whatsapp',import.meta.url).pathname);
@@ -18,6 +19,8 @@ let record;
 try {
  for(const dir of [source,mind,control])await fs.mkdir(dir);
  const original=await snapshot(input);
+ const [major,minor,patch]=version(original.manifest.version).numbers;
+ const upgradedVersion=`${major}.${minor}.${patch+1}-qa.1`,brokenVersion=`${major}.${minor}.${patch+2}-qa.1`;
  for(const [name,f]of original.files){await fs.mkdir(path.dirname(path.join(source,name)),{recursive:true});await fs.writeFile(path.join(source,name),f.data,{mode:f.mode});}
  await fs.copyFile(path.join(input,'docker/fixture.mjs'),path.join(source,'src/transport.mjs'));
  await init(home,mind);await atomic(path.join(root,'host-executor.json'),{cli:'grok',agents:[{name:'qa',workspace:mind,controlDir:control,toolsHome:home,binDir:path.join(home,'bin')}]});
@@ -37,15 +40,15 @@ try {
   await atomic(path.join(home,'updates/supervisor.json'),{at:Date.now()});await submit(home,job.id,false);
   return perform(home,await read(path.join(jobPath(home,job.id),'job.json')),{startHost:()=>{throw Error('Plugin touched host');},stopHost:()=>{throw Error('Plugin touched host');}});
  };
- assert.equal((await build('0.1.0-beta.4')).status,'completed');
+ assert.equal((await build(upgradedVersion)).status,'completed');
  assert.equal((await call('whatsapp','doctor')).data.connected,identity.data.connected);
  assert.equal((await call('whatsapp','inbox')).data.nextCursor,before.data.nextCursor);
  assert.equal((await call('whatsapp','operation','--idempotency-key','upgrade:fixture')).data.providerMessageId,sent.data.providerMessageId);
- assert.equal((await build('0.1.0-beta.5',true)).status,'rolled-back');
+ assert.equal((await build(brokenVersion,true)).status,'rolled-back');
  assert.equal((await call('whatsapp','doctor')).data.connected,true);
  assert.equal((await call('whatsapp','operation','--idempotency-key','upgrade:fixture')).data.providerMessageId,sent.data.providerMessageId);
  const current=(await read(path.join(home,'registry.json'))).plugins.whatsapp;
- assert.equal(current.project,record.project);assert.equal(current.manifest.version,'0.1.0-beta.4');
+ assert.equal(current.project,record.project);assert.equal(current.manifest.version,upgradedVersion);
  console.log('PASS: Docker plugin upgrade, private volume backup, retained identity/cursor/operation receipt, failed-health rollback. Synthetic provider only.');
 } finally {
  if(record)await exec('docker',['compose','-p',record.project,'-f',record.compose,'down','--volumes']).catch(()=>{});
