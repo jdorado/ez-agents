@@ -76,3 +76,9 @@ Every pull request modifying authority, execution, or routing must include negat
 Read CONTRIBUTING.md before edits and docs/releasing.md before a release.
 Maintainers and external agents use the same PR, tests and documentation standard.
 Keep internal plans and private evidence outside this repository.
+
+Before edits, follow CONTRIBUTING.md's isolated-work rules: one task per dedicated
+worktree/branch/PR, starting from fetched origin/main. Do not switch or mix work in
+another task's checkout. Stage only this task's changes. Keep its worktree through
+review and QA; independent review and green CI precede an authorized merge.
+Never treat task completion as permission to merge or publish.
