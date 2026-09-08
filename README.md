@@ -29,6 +29,11 @@ repository are addressed to you, the LLM with computer access, not the human.
 
 **Your finish line is a working Telegram reply and automatic startup.** Adding
 npm dependencies, printing `--help`, or creating files is not completion.
+Install the main runtime alone first, with an empty plugin catalog. Even when
+WhatsApp is supplied or requested alongside it, defer plugin setup and QR scanning
+until owner pairing and a real agent reply are verified. Then the owner requests
+the plugin in Telegram and the installed agent handles onboarding there. The
+initial host CLI must not install the plugin on that agent's behalf.
 Do not hand the human terminal commands, ask them to start the relay, leave a
 terminal open, read logs, find their numeric Telegram ID, or approve pairing
 from another terminal. You own those steps and their verification.
@@ -75,6 +80,9 @@ credentials, startup, and verified pairing; never present this as human homework
 
 | Tool | Purpose |
 |---|---|
+| `ezenciel-agents-install preflight --executor <path-or-name>` | Check prerequisites, disk and executor identity hints before setup |
+| `ezenciel-agents-install build` | Build once per artifact, with a private log and duplicate-build detection |
+| `ezenciel-agents-install status --deployment <path>` | Distinguish runtime/configuration, pairing and Telegram reply evidence |
 | `ezenciel-agents-create --register-cli <current-cli>` | Record the CLI that installs the initial package |
 | `ezenciel-agents-create --name <name> --purpose <purpose>` | Create an agent inheriting the installation CLI; token via stdin |
 | `ezenciel-agents-host` | Invoke the existing shared host CLI for this deployment |

@@ -20,6 +20,10 @@
   supervisor that survives replacement of the requesting runtime.
 - Private backups, matching schema/deployment gates and failed-health code rollback.
 - Automated fixtures cover recovery; VM and live-provider acceptance are pending.
+- Complete main Telegram onboarding before any plugin setup; the installed agent
+  owns plugin preparation and QR onboarding in the owner's Telegram conversation.
+- Add host preflight, installation status and artifact-specific build diagnostics.
+- Preserve the built relay image in each deployment and reject duplicate builds.
 
 ## 0.1.0-beta.2 — npm distribution
 

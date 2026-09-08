@@ -6,6 +6,7 @@
   "description": "A minimal Telegram-to-CLI executor relay.",
   "packageManager": "pnpm@10.30.3",
   "bin": {
+    "ezenciel-agents-install": "bin/ezenciel-agents-install",
     "ezenciel-agents": "bin/ezenciel-agents.mjs",
     "ezenciel-agents-owner": "bin/ezenciel-agents-owner.mjs",
     "ezenciel-agents-message": "bin/ezenciel-agents-message.mjs",

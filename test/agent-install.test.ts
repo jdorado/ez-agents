@@ -10,7 +10,7 @@ test('new agents receive independent projects, secrets and plugin bindings; dupl
   const root = await mkdtemp(join(tmpdir(),'ez-agents-'))
   const base = {cli:'grok',root,hostRoot:'/private/agents',composeFile:'/opt/ez/compose.yaml',purpose:'Household shopper',token:'123456789:'+'a'.repeat(30)}
   try {
-    const one=await createAgent({...base,name:'family'})
+    const one=await createAgent({...base,name:'family',image:'ezenciel-agents:install-candidate'})
     const two=await createAgent({...base,cli:undefined,name:'work',token:'987654321:'+'b'.repeat(30)})
     assert.notEqual(one.project,two.project)
     assert.equal(two.executor,'grok')
@@ -20,6 +20,9 @@ test('new agents receive independent projects, secrets and plugin bindings; dupl
     assert.equal(host.agents[0].workspace,'/private/agents/family/mind')
     const a=parseEnv(await readFile(join(root,'family/docker.env'),'utf8'))
     const b=parseEnv(await readFile(join(root,'work/docker.env'),'utf8'))
+    assert.equal(a.EZ_RELAY_IMAGE,'ezenciel-agents:install-candidate')
+    assert.equal(b.EZ_RELAY_IMAGE,'ezenciel-agents:local')
+    await assert.rejects(createAgent({...base,name:'bad-image',image:"bad'\nINJECT=yes"}),/Invalid relay image/)
     for(const key of ['COMPOSE_PROJECT_NAME','EZ_RELAY_ENV_FILE','EZ_AGENT_PURPOSE_FILE','EZ_AGENT_WORKSPACE','EZ_CONTROL_DIR','EZ_WHATSAPP_IPC_VOLUME','EZ_WHATSAPP_CLIENT_VOLUME'])assert.notEqual(a[key],b[key])
     assert.equal((await stat(join(root,'family/relay.env'))).mode & 0o777,0o600)
     assert.equal((await stat(join(root,'family'))).mode & 0o777,0o700)
