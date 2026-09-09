@@ -35,6 +35,13 @@ plugin when a missing integration earns the maintenance. Ez keeps the surroundin
 runtime small, so your files, tools and business knowledge remain useful as AI
 clients improve.
 
+## Plugin catalog
+
+Browse the [available plugins](docs/plugin-catalog.md) for capabilities you can
+add to your assistant. The first released plugin is
+[WhatsApp](https://github.com/jdorado/ez-whatsapp), which connects an existing
+WhatsApp account. Ask your working Ez assistant to set it up in Telegram.
+
 ## Start with one useful job
 
 Ask an AI agent with computer access to install Ez for a concrete purpose:

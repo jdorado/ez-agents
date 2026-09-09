@@ -1,5 +1,7 @@
 # Native plugin manager
 
+Looking for an integration? See the [available plugin catalog](plugin-catalog.md).
+
 Built-in host-side CLI registry and Docker lifecycle manager in the main Ez package. Native Node 22+
 only; no relay imports, provider libraries, model loops or global `ez` install.
 The existing host executor uses an agent-bound launcher. This is the narrow host
