@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile, mkdir, symlink } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { processSnapshot, matchingProcessIds } from './process-tree.js'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { DESKTOP_UNAVAILABLE, desktopJobPrompt } from './desktop-bridge.js'
@@ -324,15 +325,37 @@ export const nativeSessionId = (cli: string, line: string): string | undefined =
   } catch {}
 }
 
-export const terminateJob = (child: ChildProcess): void => {
-  const signal = (name: NodeJS.Signals) => {
-    if (!child.pid) return
-    try {
-      process.kill(process.platform === 'win32' ? child.pid : -child.pid, name)
-    } catch {}
-  }
-  signal('SIGTERM')
-  const escalation = setTimeout(() => signal('SIGKILL'), 3000)
-  escalation.unref()
-  child.once('close', () => clearTimeout(escalation))
+const terminating = new WeakSet<ChildProcess>()
+export const terminateJob = (child: ChildProcess, inspect = processSnapshot): void => {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null || terminating.has(child)) return
+  terminating.add(child)
+  void (async () => {
+    const targets = new Set([child.pid!])
+    // Native tool terminals can start separate process groups. Capture ancestry
+    // before stopping the CLI, while those children still have their parent.
+    let snapshot: Awaited<ReturnType<typeof processSnapshot>>
+    try { snapshot = await inspect() }
+    catch (error) { console.error('Cannot inspect executor descendants for cancellation', error); snapshot = new Map() }
+    let count = 0
+    while (count !== targets.size) {
+      count = targets.size
+      for (const [pid, info] of snapshot) if (targets.has(info.parent)) targets.add(pid)
+    }
+    if (child.exitCode !== null || child.signalCode !== null) targets.delete(child.pid!)
+    const identities = new Map([...snapshot].filter(([pid]) => targets.has(pid)))
+    const signal = (pids: number[], name: NodeJS.Signals) => {
+      for (const pid of pids.reverse()) {
+        if (process.platform !== 'win32') { try { process.kill(-pid, name) } catch {} }
+        try { process.kill(pid, name) } catch {}
+      }
+    }
+    signal([...targets], 'SIGTERM')
+    // Recheck birth identities before escalation: exited PIDs may be reused.
+    // Root closure must not cancel cleanup of its detached tools.
+    setTimeout(() => {
+      if (!identities.size && child.exitCode === null && child.signalCode === null) signal([child.pid!], 'SIGKILL')
+      void processSnapshot().then(current => signal(matchingProcessIds(identities, current), 'SIGKILL'))
+        .catch(error => console.error('Cannot inspect executor descendants for escalation', error))
+    }, 3000)
+  })()
 }
