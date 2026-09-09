@@ -142,3 +142,27 @@ test('approved initial task crosses the real host file client and uses a fresh r
     assert.ok(!result.args.includes('owner-session')); assert.ok(!JSON.stringify(result.args).includes('Must not reach task prompt'))
   } finally { abort.abort(); await host; process.env.PATH = priorPath }
 })
+
+test('incoming-only grant waits without an opener, wakes for its contact, and cannot authorize a forged initial run', async t => {
+  const f = await fixture(t)
+  const proposal: any = await f.tasks.ownerCall('owner', 'propose', { sourceId: 'generic', conversationId: 'contact-a', purpose: 'Conversational replies only', context: 'No private facts or commitments', hours: 1, waitForIncoming: true })
+  const approvals = new ApprovalStore(f.dir)
+  assert.match((await approvals.getDecision(proposal.id))!.prompt, /Wait for incoming messages/)
+  await approvals.recordDecision(proposal.id, 'approved', 101)
+  await f.tasks.decide(proposal.id); await f.tasks.decide(proposal.id)
+  assert.equal((await f.runs.list()).filter(r => r.taskId).length, 0)
+  assert.equal(f.sends.length, 0); assert.equal(f.watches.length, 1)
+  const task = (await f.tasks.get(proposal.id))!
+  assert.equal(task.version, 2)
+  const forged = await f.runs.create({ id: 'event_forged', taskId: task.id, chatId: 101, telegramUserId: 101, texts: [] })
+  await f.runs.patch(forged.id, { status: 'running' })
+  await assert.rejects(f.tasks.workerCall(forged.id, 'send', { text: 'Opening message', key: 'open' }), /inactive/)
+  const row = { id: '1', conversationId: 'contact-a', text: 'Hello', receivedAt: Date.now() }
+  f.rows([row]); assert.equal((await f.tasks.match('generic', task.bindingId, [row]))?.id, task.id)
+  const reply = await f.runs.create({ id: 'event_reply', taskId: task.id, chatId: 101, telegramUserId: 101, texts: [], external: { sourceId: 'generic', bindingId: task.bindingId, eventIds: ['1'] } })
+  await f.runs.patch(reply.id, { status: 'running' })
+  await f.tasks.workerCall(reply.id, 'send', { text: 'Hello back', key: 'reply' })
+  assert.equal(f.sends.length, 1)
+  await f.tasks.ownerCall('owner', 'revoke', { taskId: task.id })
+  await assert.rejects(f.tasks.workerCall(reply.id, 'send', { text: 'No longer allowed', key: 'later' }), /inactive/)
+})

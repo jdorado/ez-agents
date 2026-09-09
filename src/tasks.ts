@@ -8,7 +8,7 @@ import { RunStore, type RunRecord } from './runs.js'
 import { requireOwnerExecution } from './execution-authority.js'
 
 export type Task = {
-  version: 1; id: string; runId: string; owner: Owner
+  version: 1 | 2; waitForIncoming?: true; id: string; runId: string; owner: Owner
   sourceId: string; bindingId: string; accountId: string; conversationId: string
   purpose: string; context: string; createdAt: number; expiresAt: number
   state: 'pending' | 'active' | 'revoked' | 'completed'
@@ -32,7 +32,7 @@ export class Tasks {
     if (!idOK(id)) throw new Error('Invalid task ID')
     try {
       const task: Task = JSON.parse(await readFile(join(this.directory, `${id}.json`), 'utf8'))
-      if (task.version !== 1 || task.id !== id || !bounded(task.sourceId, 100) || !bounded(task.bindingId, 100) ||
+      if (!((task.version === 1 && task.waitForIncoming === undefined) || (task.version === 2 && task.waitForIncoming === true)) || task.id !== id || !bounded(task.sourceId, 100) || !bounded(task.bindingId, 100) ||
         !bounded(task.accountId, 200) || !bounded(task.conversationId, 200) || !bounded(task.purpose, 1000) ||
         !bounded(task.context, 6000) || !Number.isFinite(task.createdAt) || !Number.isFinite(task.expiresAt) ||
         !['pending', 'active', 'revoked', 'completed'].includes(task.state) || !Array.isArray(task.notes) ||
@@ -64,7 +64,7 @@ export class Tasks {
   }
   async authorize(run: RunRecord, checkProvider = true): Promise<Task> {
     const task = run.taskId ? await this.get(run.taskId) : null
-    if (!task || task.state !== 'active' || task.expiresAt <= Date.now() || run.version !== 2 ||
+    if (!task || (task.waitForIncoming && !run.external) || task.state !== 'active' || task.expiresAt <= Date.now() || run.version !== 2 ||
       run.chatId !== task.owner.telegramChatId || run.telegramUserId !== task.owner.telegramUserId)
       throw new Error('Task is inactive or expired')
     const owner = (await new ControlStore(this.controlDir, 900000).status()).owner
@@ -101,14 +101,14 @@ export class Tasks {
         }
         await this.save(task)
       }
-      if (task.state === 'active' && task.expiresAt > Date.now()) await new RunStore(this.controlDir).create({
+      if (task.state === 'active' && !task.waitForIncoming && task.expiresAt > Date.now()) await new RunStore(this.controlDir).create({
         id: `event_${createHash('sha256').update(task.id).digest('hex')}`, taskId: task.id, chatId: task.owner.telegramChatId, telegramUserId: task.owner.telegramUserId, texts: [],
       })
       return true
     })
   }
   private prompt(task: Task) {
-    return `Allow this messaging task?\nSource: ${task.sourceId}\nAccount: ${task.accountId}\nContact: ${task.conversationId}\nPurpose: ${task.purpose}\nShared context (all may be disclosed to this contact):\n${task.context}\nExpires: ${new Date(task.expiresAt).toISOString()}\nText messages only. No payments, files, other contacts, or settings changes.`
+    return `Allow this messaging task?${task.waitForIncoming ? '\nWait for incoming messages; do not initiate contact.' : ''}\nSource: ${task.sourceId}\nAccount: ${task.accountId}\nContact: ${task.conversationId}\nPurpose: ${task.purpose}\nShared context (all may be disclosed to this contact):\n${task.context}\nExpires: ${new Date(task.expiresAt).toISOString()}\nText messages only. No payments, files, other contacts, or settings changes.`
   }
   async ownerCall(runId: string, command: string, args: Record<string, unknown>) {
     return this.serial(async () => {
@@ -121,6 +121,7 @@ export class Tasks {
         task.state = 'revoked'; await this.save(task); return { id: task.id, state: task.state }
       }
       if (command !== 'propose') throw new Error('Unknown owner task command')
+      if (args.waitForIncoming !== undefined && typeof args.waitForIncoming !== 'boolean') throw new Error('Invalid incoming-only option')
       if (!bounded(args.sourceId, 100) || !bounded(args.conversationId, 200) || !bounded(args.purpose, 1000) || !bounded(args.context, 6000) ||
         typeof args.hours !== 'number' || !Number.isFinite(args.hours) || args.hours <= 0 || args.hours > 72) throw new Error('Invalid task proposal (maximum 72 hours)')
       const owner = (await new ControlStore(this.controlDir, 900000).status()).owner!
@@ -130,7 +131,7 @@ export class Tasks {
       if (head.taskProtocol !== 'message-v1' || !bounded(head.accountId, 200)) throw new Error('Source does not support task messaging')
       if ((await this.list()).some(t => ['active', 'pending'].includes(t.state) && t.expiresAt > Date.now() && t.sourceId === source.id && t.conversationId === args.conversationId))
         throw new Error('This contact already has a task; complete or revoke it first')
-      const task: Task = { version: 1, id: `task_${randomUUID().replaceAll('-', '')}`, runId, owner, sourceId: source.id,
+      const task: Task = { version: args.waitForIncoming ? 2 : 1, ...(args.waitForIncoming ? { waitForIncoming: true as const } : {}), id: `task_${randomUUID().replaceAll('-', '')}`, runId, owner, sourceId: source.id,
         bindingId: source.bindingId, accountId: head.accountId, conversationId: args.conversationId, purpose: args.purpose,
         context: args.context, createdAt: Date.now(), expiresAt: Date.now() + args.hours * 3600000, state: 'pending', notes: [], operations: {} }
       if (this.prompt(task).length > 3500) throw new Error('Proposal is too long for owner review; shorten the shared context')

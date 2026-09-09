@@ -15,7 +15,8 @@ to the verified owner, current source registration, and connected account. The
 owner does not edit JSON. The agent uses `list` and `revoke` when asked.
 
 After approval the relay starts a restricted task, including the initial outgoing
-message. Matching new correspondence resumes that task in a fresh native session.
+message. Incoming-only tasks instead wait for new correspondence and never create
+an opening run. Their task records use version 2 so older task readers fail closed. Matching new correspondence resumes that task in a fresh native session.
 Other contacts remain blocked. Each task has at most 30 distinct text sends;
 there are no payments, attachments, extra recipients, plugin installation,
 settings changes, or access to owner memory. A contact can have one active or
@@ -105,3 +106,6 @@ actual pinned native tool inventory and executes a synthetic model/broker/provid
 conversation without real credentials or external sends. Real Telegram-owner to
 WhatsApp-correspondent acceptance remains separate live QA requiring an
 authorized account/contact.
+
+For plain-language intent, onboarding defaults and source setup see
+[selective monitoring](../selective-monitoring.md).

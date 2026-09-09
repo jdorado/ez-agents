@@ -5,7 +5,7 @@ import { EventSources } from './event-sources.js'
 
 async function main() {
   const { values } = parseArgs({ options: { name: { type: 'string' }, socket: { type: 'string' }, remove: { type: 'boolean' }, list: { type: 'boolean' }, help: { type: 'boolean' } } })
-  if (values.help) { console.log('ezenciel-agents-source --list | --name NAME --socket /absolute/service.sock | --name NAME --remove'); return }
+  if (values.help) { console.log('ezenciel-agents-source --list | --name NAME --socket /absolute/service.sock | --name NAME --remove'); console.log('Run registration inside the relay where the source socket is mounted. For setup and monitoring guidance: ezenciel-agents-task --help'); return }
   const config = loadControlConfig()
   const sources = new EventSources(config.controlDir)
   if (values.list) { console.log(JSON.stringify(await sources.list())); return }

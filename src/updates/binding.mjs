@@ -23,5 +23,6 @@ export async function bindUpdates(home,hostConfig,packageRoot=fileURLToPath(new 
   }
   const file=path.join(config.workspace,'TOOLS.md'),prior=await fs.readFile(file,'utf8');
   if(!prior.includes('## Software updates'))await fs.appendFile(file,'\n'+await fs.readFile(new URL('../../templates/updates.md',import.meta.url),'utf8'),{mode:0o600});
+  if(!prior.includes('## Core monitoring guidance'))await fs.appendFile(file,'\n## Core monitoring guidance\n\nFor monitor/reply requests, consult the CURRENT installed `ezenciel-agents-task --help`. It includes the core setup and verification contract; saved notes alone never activate monitoring.\n',{mode:0o600});
   return {ok:true,home,deploymentDir,packageRoot,policy:'Automatic compatible stable releases. Beta/local candidates require opt-in or an explicit owner request.'};
 }

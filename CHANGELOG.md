@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Support incoming-only reply tasks without an opening message; refresh installed
+  guidance for selective setup, implicit follow-up, and quiet account linking.
+
 - Add owner-approved, single-contact messaging tasks, core-bound sends and notes,
   fresh restricted Codex execution, revocation/expiry, and durable uncertain sends.
 - Task execution requires audited Codex 0.153.4 and a message-v1 event source.
