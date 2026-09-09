@@ -1,5 +1,12 @@
 # ezenciel-agents — Coding Standards & Architectural Invariants
 
+Ez supports two independent, composable uses: an autonomous Telegram agent and
+workspace-scoped plugins called by your existing local CLI/GUI executor.
+For CLI-only requests, follow [standalone setup](docs/standalone-cli.md): no Telegram
+pairing, relay or host executor is required. The main-first Telegram onboarding
+rules below apply only when installing the autonomous relay. When both are
+requested, keep each workspace's authority and registry explicit.
+
 Installed runtime operation uses Docker Compose. Read
 [Docker setup, state and QA](docs/docker-runtime.md). Docker owns relay/plugin services; the existing host CLI and login are shared
 through one generic transport, with separate agent workspaces and sessions.

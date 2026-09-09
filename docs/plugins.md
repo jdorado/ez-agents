@@ -1,5 +1,12 @@
 # Native plugin manager
 
+Ez supports two independent, composable uses: an autonomous Telegram agent and
+workspace-scoped plugins called by your existing local CLI/GUI executor.
+For CLI-only requests, follow [standalone setup](standalone-cli.md): no Telegram
+pairing, relay or host executor is required. The main-first Telegram onboarding
+rules below apply only when installing the autonomous relay. When both are
+requested, keep each workspace's authority and registry explicit.
+
 Built-in host-side CLI registry and Docker lifecycle manager in the main Ez package. Native Node 22+
 only; no relay imports, provider libraries, model loops or global `ez` install.
 The existing host executor uses an agent-bound launcher. This is the narrow host
