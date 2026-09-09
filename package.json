@@ -43,6 +43,7 @@
     "CHANGELOG.md",
     "THIRD_PARTY_NOTICES.md",
     "scripts/release-check.mjs",
+    "scripts/stage-qa.mjs",
     "test",
     "tsconfig.json",
     "scripts/assert-local-registry.mjs",

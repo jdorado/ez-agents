@@ -5,6 +5,10 @@ import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 
 export type IncomingItem = {
   text: string
+  attachment?: { path: string; type: string }
+  sentAt?: number
+  caption?: string
+  albumId?: string
   messageId?: number
   updateId: number
   chatId: number

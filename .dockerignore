@@ -21,4 +21,5 @@
 !CONTRIBUTING.md
 !CHANGELOG.md
 !scripts/release-check.mjs
+!scripts/stage-qa.mjs
 !default-plugins.json

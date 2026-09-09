@@ -11,7 +11,8 @@ services:
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SETPCAP]
     environment:
       EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md
-      EZ_EXECUTOR_TRANSPORT: host
+      EZ_EXECUTOR_TRANSPORT: ${EZ_EXECUTOR_TRANSPORT:-host}
+      EZ_CHANNEL_BACKEND_URL: ${EZ_CHANNEL_BACKEND_URL:-}
       EZ_AGENT_WORKSPACE: ${EZ_AGENT_WORKSPACE:?Set this agent workspace}
       EZ_CONTROL_DIR: ${EZ_CONTROL_DIR:?Set this agent control directory}
       EZ_EXECUTOR_CLI: ${EZ_EXECUTOR_CLI:?Set the host installation CLI}
