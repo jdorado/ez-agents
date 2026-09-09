@@ -1,11 +1,12 @@
 # Local event sources
 
-A plugin owns capture, authentication and eligibility. The relay owns execution.
+A plugin owns capture, authentication and subscription filtering. The core owns
+authority and execution; subscription filtering cannot grant permissions.
 Register through `ezenciel-agents-source --name NAME --socket /absolute/service.sock`;
 inspect with `--list`, remove with `--name NAME --remove`. Registration pins the
 paired owner, assigns a new binding ID and starts at the provider's current head.
-Same-user plugins are trusted installed code; private Unix sockets are the boundary,
-not a sandbox against other programs running as that user.
+Registered plugins are trusted installed code. Private Unix sockets bind a local
+transport, not an authorization claim from message content or an adversarial sandbox.
 
 POST JSON `{ "command": "...", "args": {} }` to `/` over the Unix socket.
 Return HTTP 200 with `{ "ok": true, "data": ... }`:
@@ -19,7 +20,8 @@ Return HTTP 200 with `{ "ok": true, "data": ... }`:
 Each event is `{id, conversationId, receivedAt, text}`. IDs are at most 100 ASCII
 letters/digits/underscore/hyphen; conversation IDs at most 200 characters;
 receivedAt is epoch milliseconds; text at most 16000 characters. Responses are
-bounded to 256 KiB and three seconds. Plugin-specific policy stays in the plugin.
+bounded to 256 KiB and three seconds. Provider capture/filtering stays in the plugin;
+execution authority stays in the core.
 
 The host polls each second and waits for two seconds of quiet, ten seconds of
 age, or ten events. It groups by conversation and persists the batch before
@@ -29,6 +31,9 @@ creation; it does not promise exactly-once external actions after executor failu
 
 Before starting queued work, recheck binding, owner and provider eligibility.
 Unavailable sources keep work queued; removed subscriptions cancel empty runs.
-No check can retract work already started. External observations use fresh executor
-sessions and explicitly carry no owner-instruction or send authority. They share
-the existing one-writer queue and secret whitelist. No provider SDK is imported.
+No check can retract work already started. Eligible external runs are now recorded
+as blocked (`external-execution-unavailable`), with no executor launch. They do
+not borrow the owner workspace, session or tools. The existing source cursor and
+deduplication remain intact; blocked work does not retry automatically. Work status
+shows the blocked count. No provider SDK or provider-specific authority is imported.
+See [authority boundaries](authority-boundaries.md).

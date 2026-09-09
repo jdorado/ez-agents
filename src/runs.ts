@@ -9,7 +9,8 @@ import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 export type RunRecord = {
-  version: 1
+  version: 1 | 2
+  taskId?: string
   id: string
   chatId: number
   telegramUserId: number
@@ -20,6 +21,7 @@ export type RunRecord = {
   startedAt?: string
   endedAt?: string
   pid?: number
+  blockReason?: string
   execution?: ExecutionChoice
   external?: ExternalOrigin
 }
@@ -46,7 +48,7 @@ const isRun = (value: unknown): value is RunRecord => {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<RunRecord>
   return (
-    candidate.version === 1 &&
+    ((candidate.version === 1 && candidate.taskId === undefined) || (candidate.version === 2 && typeof candidate.taskId === 'string' && /^task_[a-f0-9]{32}$/.test(candidate.taskId))) &&
     typeof candidate.id === 'string' &&
     /^[a-zA-Z0-9_-]+$/.test(candidate.id) &&
     Number.isSafeInteger(candidate.chatId) &&
@@ -57,6 +59,7 @@ const isRun = (value: unknown): value is RunRecord => {
     typeof candidate.createdAt === 'string' &&
     Number.isFinite(Date.parse(candidate.createdAt)) &&
     (candidate.pid === undefined || (Number.isSafeInteger(candidate.pid) && candidate.pid > 0)) &&
+    (candidate.blockReason === undefined || ['owner-mismatch', 'external-execution-unavailable'].includes(candidate.blockReason)) &&
     (candidate.external === undefined || validOrigin(candidate.external)) &&
     (candidate.execution === undefined || isExecutionChoice(candidate.execution))
   )
@@ -106,6 +109,7 @@ export class RunStore {
     messageId?: number
     execution?: ExecutionChoice
     external?: ExternalOrigin
+    taskId?: string
   }): Promise<RunRecord> {
     if (input.id) {
       const existing = await this.get(input.id)
@@ -116,7 +120,8 @@ export class RunStore {
       }
     }
     const run: RunRecord = {
-      version: 1,
+      version: input.taskId ? 2 : 1,
+      taskId: input.taskId,
       id: input.id ?? newRunId(),
       chatId: input.chatId,
       telegramUserId: input.telegramUserId,
@@ -144,7 +149,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'blockReason'>>,
   ): Promise<RunRecord> {
     const run = await this.get(id)
     if (!run) throw new Error(`Unknown run ${id}`)

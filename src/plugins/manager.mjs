@@ -1,3 +1,4 @@
+import { exposure, commandExposure } from './exposure.mjs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,7 +84,7 @@ export function validate(m,d,files) {
   if(JSON.stringify(Object.keys(m.commands).sort())!==JSON.stringify(Object.keys(d.commands).sort())) throw Error('Command bindings must match manifest');
   for(const [alias,c] of Object.entries(m.commands)) {
     id(alias); if(reserved.has(alias)) throw Error('Reserved alias');
-    keys(c,['executable','args']); strings(c.args);
+    keys(c,['executable','args','exposure']); strings(c.args); exposure(c.exposure);
     if(!files.has(c.executable)) throw Error('Missing package executable');
     const b=d.commands[alias];keys(b,['service','argv','suffix']);
     if(!d.services[b.service] || !strings(b.argv).length) throw Error('Invalid command service'); strings(b.suffix||[]);
@@ -222,14 +223,18 @@ export async function main(args) {
   const [group,action,...rest]=args;
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list','<registered CLI> ...'],scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list|exposure','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
     if(action==='available'&&group==='plugins') return emit(config.catalog);
     const r=await registry(home);
     if(action==='list') return emit(group==='tools'?r.commands:r.plugins);
-    if(group==='tools') throw Error('Only tools list is supported; installation registers CLI bindings');
+    if(group==='tools' && action==='exposure') {
+      if(args.length) throw Error('Use tools exposure without arguments');
+      return emit(Object.fromEntries(Object.entries(r.plugins).map(([name, record]) => [name, commandExposure(record.manifest)])));
+    }
+    if(group==='tools') throw Error('Use tools list or tools exposure; installation registers CLI bindings');
     const name=args.shift();id(name);
     if(action==='inspect'||action==='install'||action==='catalog-add') {
       const source=take('--source')||config.catalog[name]?.source,revision=take('--revision')||config.catalog[name]?.revision;
@@ -238,7 +243,7 @@ export async function main(args) {
         const p=await snapshot(source);if(p.manifest.id!==name||p.revision!==revision)throw Error('Inspect and pin the exact catalog package first');
         return locked(home,async()=>{const latest=await json(path.join(home,'config.json'));latest.catalog[name]={source:p.source,revision:p.revision};await atomic(path.join(home,'config.json'),latest);emit({ok:true,plugin:name,revision:p.revision,installed:false});});
       }
-      if(action==='inspect') {const p=await snapshot(source);return emit({id:p.manifest.id,source:p.source,revision:p.revision,catalogRevision:config.catalog[name]?.revision??null,catalogMatches:config.catalog[name]?.source===p.source&&config.catalog[name]?.revision===p.revision,inspection:'Read-only; does not update the catalog pin. After review, pass --revision to install or use catalog-add --source --revision.',manifest:p.manifest,deployment:p.deployment});}
+      if(action==='inspect') {const p=await snapshot(source);return emit({id:p.manifest.id,source:p.source,revision:p.revision,catalogRevision:config.catalog[name]?.revision??null,catalogMatches:config.catalog[name]?.source===p.source&&config.catalog[name]?.revision===p.revision,inspection:'Read-only; does not update the catalog pin. After review, pass --revision to install or use catalog-add --source --revision.',manifest:p.manifest,exposure:commandExposure(p.manifest),deployment:p.deployment});}
       return emit(await install(home,config,name,source,revision));
     }
     const record=r.plugins[name];if(!record)throw Error('Plugin not installed');

@@ -15,6 +15,9 @@ Before the first PR, provide:
 - `--help`, read-only doctor, explicit account binding, bounded reads and stable
   machine output/exit codes. For writes: operation key, readback and uncertainty
   handling; no blind retry. Provider content cannot grant execution authority.
+- Per-command exposure declarations for external reads, external sends, record
+  changes and requested review; see [plugin metadata](plugins.md#exposure-declarations).
+  These are self-reported capabilities, never permission grants or safety certificates.
 - Private state locations, start/stop/status, backup, migration/rollback limits,
   data-preserving uninstall and separate account revocation instructions.
 - Offline contract/negative tests and CI. Verify snapshot installation and CLI

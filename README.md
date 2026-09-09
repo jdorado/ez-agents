@@ -1,5 +1,10 @@
 # ezenciel-agents
 
+Owner-approved messaging tasks can contact one correspondent and handle replies
+through a restricted Codex runtime. Other external events remain blocked. See
+[plugin declarations](docs/plugins.md#exposure-declarations) and
+[authority boundaries](docs/architecture/authority-boundaries.md).
+
 Telegram `/status` shows the running relay and host
 versions plus installed plugin versions. The agent's `ez status` adds verified
 plugin runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).
