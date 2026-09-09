@@ -11,7 +11,11 @@ listed today.
 
 ## Set up a plugin
 
-Finish [Ez setup](setup.md) and verify an actual agent reply in Telegram first.
+For plugins used by an existing local CLI/GUI executor, follow
+[standalone setup](standalone-cli.md). Telegram is not required.
+
+For an autonomous Telegram assistant, finish [Ez setup](setup.md) and verify an
+actual agent reply in Telegram first.
 Then ask that assistant: **“Set up WhatsApp using
 https://github.com/jdorado/ez-whatsapp.”** The installed agent follows the plugin's
 README, handles package inspection and installation, delivers the linking QR,

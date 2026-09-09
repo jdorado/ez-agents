@@ -51,7 +51,6 @@ pairing, relay or host executor is required. The main-first Telegram onboarding
 rules below apply only when installing the autonomous relay. When both are
 requested, keep each workspace's authority and registry explicit.
 
-
 Ask an AI agent with computer access to install Ez for a concrete purpose:
 
 > Install Ez from https://github.com/jdorado/ez-agents for my business.
