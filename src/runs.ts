@@ -9,7 +9,8 @@ import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 export type RunRecord = {
-  version: 1
+  version: 1 | 2
+  taskId?: string
   id: string
   chatId: number
   telegramUserId: number
@@ -47,7 +48,7 @@ const isRun = (value: unknown): value is RunRecord => {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<RunRecord>
   return (
-    candidate.version === 1 &&
+    ((candidate.version === 1 && candidate.taskId === undefined) || (candidate.version === 2 && typeof candidate.taskId === 'string' && /^task_[a-f0-9]{32}$/.test(candidate.taskId))) &&
     typeof candidate.id === 'string' &&
     /^[a-zA-Z0-9_-]+$/.test(candidate.id) &&
     Number.isSafeInteger(candidate.chatId) &&
@@ -108,6 +109,7 @@ export class RunStore {
     messageId?: number
     execution?: ExecutionChoice
     external?: ExternalOrigin
+    taskId?: string
   }): Promise<RunRecord> {
     if (input.id) {
       const existing = await this.get(input.id)
@@ -118,7 +120,8 @@ export class RunStore {
       }
     }
     const run: RunRecord = {
-      version: 1,
+      version: input.taskId ? 2 : 1,
+      taskId: input.taskId,
       id: input.id ?? newRunId(),
       chatId: input.chatId,
       telegramUserId: input.telegramUserId,

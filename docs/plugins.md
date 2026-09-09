@@ -159,9 +159,9 @@ attention during setup/use; it does not enable an automated reviewer. Declaring
 false never grants permissions, disables core checks or certifies a plugin safe.
 The core owns authority; plugins own provider transport/authentication/receipts.
 
-Current adapters are trusted-owner executors. Registered external events are
-recorded as blocked and do not launch those adapters. These declarations do not
-enable autonomous external conversations or scoped task execution. See
+Owner adapters retain owner access. External correspondence can run only in an
+approved core messaging task through the restricted task runner. Declarations
+and monitoring subscriptions alone never grant task execution. See
 [authority boundaries](architecture/authority-boundaries.md).
 
 ## Deployment descriptors

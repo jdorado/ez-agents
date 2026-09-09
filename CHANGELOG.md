@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add owner-approved, single-contact messaging tasks, core-bound sends and notes,
+  fresh restricted Codex execution, revocation/expiry, and durable uncertain sends.
+- Task execution requires audited Codex 0.153.4 and a message-v1 event source.
+  Other external events remain blocked; live provider acceptance is pending.
+
+## Unreleased
+
 - Add optional per-command exposure declarations and `ez tools exposure` with
   conservative defaults. Declarations do not grant authority.
 - Block registered external events before owner-runtime execution; keep durable

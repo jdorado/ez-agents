@@ -1,40 +1,107 @@
 # Authority boundaries
 
-The relay pairs one verified Telegram owner before execution; foreign senders
-and groups do not acquire execution rights. Replies use the run-bound source
-chat. The core owns authority decisions across plugins; plugins provide provider
-transport, authentication and operation receipts.
+The core pairs one Telegram owner and owns authority across providers. Plugins
+provide transport, authentication, capture, and receipts. Their exposure metadata
+is discovery information, never a grant. A CRM can contain external text too;
+marking it internal does not confer owner authority.
 
-## External events
+## Messaging v1
 
-Registered events are durably recorded and deduplicated but blocked before
-executor launch with `external-execution-unavailable`. Work status reports the
-blocked count. These use the existing terminal `cancelled` status plus an
-additive `blockReason` field, preserving state-schema-1 rollback readability.
-Subscription permission does not grant permission to execute
-incoming demands. Unsubscription still cancels queued events; blocked runs do
-not retry automatically or prevent ordinary owner work.
+The owner asks the agent to contact one person for a bounded purpose. The owner
+agent prepares a proposal with `ezenciel-agents-task propose`: registered source,
+exact canonical contact, purpose, explicitly shareable context, and expiry (up to
+72 hours). Telegram displays that exact proposal for approval. The core binds it
+to the verified owner, current source registration, and connected account. The
+owner does not edit JSON. The agent uses `list` and `revoke` when asked.
 
-This deliberately stops the earlier behavior of running external events in a
-fresh session with the owner's workspace. Current adapters do not provide the
-required private-read, tool and network isolation. Autonomous correspondence is
-unavailable until an isolated runner and core-controlled tool access exist.
-Plugin exposure declarations do not override this boundary.
+After approval the relay starts a restricted task, including the initial outgoing
+message. Matching new correspondence resumes that task in a fresh native session.
+Other contacts remain blocked. Each task has at most 30 distinct text sends;
+there are no payments, attachments, extra recipients, plugin installation,
+settings changes, or access to owner memory. A contact can have one active or
+pending task at a time. Completed, revoked, expired, replaced-source, and changed-
+account grants cannot dispatch further messages.
 
-The local executor and host transport both require an active core run belonging
-to the paired owner. The host independently reads its bound control directory;
-request-supplied origin flags cannot promote an external run. Missing, corrupt,
-inactive and owner-mismatched records fail before spawning an executor.
+The worker receives only the approved dossier, its notes, its operation receipts,
+and rechecked correspondence for its contact. All dossier contents may be shared
+with that contact. The agent judges how to pursue the purpose; code does not prove
+that each sentence serves the booking or that a correspondent is truthful. A
+prompt injection can still derail a task or elicit its shared context. It cannot
+use the provided tools to read owner files or select another destination.
 
-## Supported trust scope
+## Native execution and core tools
 
-The host CLI runs as the trusted installing user. Its Markdown role, confirmation
-tools, environment filtering and private state layout do not create adversarial
-OS isolation. Owner runs can access the plugin manager and Docker administration.
-Local host users can modify their own state; a run ID is not authentication
-against them. Reading untrusted content during owner work still relies on the
-executor's judgment and native protections. This change does not claim to solve
-prompt injection inside owner-authorized work.
+V1 uses audited Codex CLI **0.153.4** for task work, regardless of the owner's
+selected executor. Missing or different versions fail closed; upgrading this pin
+requires repeating the native tool inventory test. Owner work retains its normal
+executor. The task runner creates a fresh ephemeral home/session, skips user
+config, rules and ancestor project instructions, and disables shell, file/image,
+browser, apps, hooks, memory and agent spawning tools. A native permissions
+profile denies general filesystem access and tool network access. No owner
+workspace or conversation is passed to this runner.
 
-See [SECURITY.md](../../SECURITY.md) for supported security scope and
-[Docker runtime](../docker-runtime.md) for the process/storage boundary.
+A core stdio MCP broker exposes `context`, `send`, `note`, `report`, and `complete`.
+The native client also lists resource helpers, but the broker serves no resources.
+Only these five tools have native approval bypass configured: the core rechecks
+the grant on each call. Broker requests cross host/relay through private atomic
+control files; only the relay dispatches provider writes. Model tool arguments
+never choose a recipient, account, control path, shell command, or permission.
+The native harness and broker are trusted processes; this is model-tool
+containment, not isolation from a malicious native executable or local host user.
+Native configuration reference: [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference).
+
+Task notes live under protected `control/tasks/`, separate from the owner mind.
+Reports go to the owner's Telegram outbox, visibly labelled as task reports;
+they are not inserted as owner instructions or trusted memory. The owner mind
+keeps its existing `inbox/` and `work/` organization. No database or general memory
+index is introduced.
+
+## Provider protocol
+
+A registered Unix event source advertises `taskProtocol: "message-v1"` and a
+stable string `accountId` in `events-head`. The core calls `task-watch` with that
+account, exact `conversationId`, and expiry to request bounded capture attention.
+The existing events/events-check protocol supplies incoming messages. This
+subscription grants attention only; execution still requires the core grant.
+
+For sends the core supplies `task-send` with those same bound IDs, text, and a
+core-prefixed idempotency key. The adapter checks account consistency immediately
+before provider dispatch and returns `{accountId, conversationId, key, state:
+"accepted", receiptId}`. Acceptance is not delivery or booking confirmation.
+The WhatsApp adapter implements this protocol for individual contacts. Another
+provider, including a Gmail/Composio adapter, can implement the same transport
+contract without implementing authority policy; those adapters are not supplied
+by this change.
+
+Before dispatch the core durably records an uncertain operation. A validated
+receipt changes it to accepted. Crashes, timeouts, malformed receipts and lost
+responses remain uncertain; replaying the same key does not send again, and a
+changed payload under the same key is rejected. The agent must report uncertainty
+for owner inspection. V1 has no automatic uncertain-send reconciliation. Core
+revocation and send acceptance are serialized; revocation cannot undo a message
+already dispatched. Expired task watches may still leave captured provider
+records, but cannot launch task work.
+
+## Compatibility and limits
+
+Unmatched events retain terminal `cancelled` plus
+`external-execution-unavailable`. Task runs use record version 2; older readers
+reject/skip them instead of executing them with owner access. Existing version-1
+owner runs remain readable. Package state schema stays 1, but rollback suspends
+task processing until a task-aware version returns; rollback does not replay
+messages or erase task receipts. Update host and relay together. A missing or
+outdated host fails task launch closed.
+
+The installing host user remains trusted and can modify local control state.
+Owner runs can use the plugin manager and Docker administration; content read
+inside owner work still depends on native protections and agent judgment. This
+is not a public multi-tenant execution service. Family delegation, payments,
+enterprise reviewer agents, arbitrary file sharing, and other restricted native
+executors are deferred.
+
+Verify with `pnpm verify`, Docker test/runtime targets and smoke fixtures.
+`EZ_TEST_NATIVE_TASKS=1 pnpm exec tsx --test test/task-native.test.ts` checks the
+actual pinned native tool inventory and executes a synthetic model/broker/provider
+conversation without real credentials or external sends. Real Telegram-owner to
+WhatsApp-correspondent acceptance remains separate live QA requiring an
+authorized account/contact.

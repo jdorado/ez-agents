@@ -9,7 +9,7 @@ export const EXTERNAL_EXECUTION_BLOCK = 'external-execution-unavailable' as cons
 export function executionBlockReason(run: RunRecord, owner: Owner | null): string | undefined {
   if (!owner || run.telegramUserId !== owner.telegramUserId || run.chatId !== owner.telegramChatId)
     return 'owner-mismatch'
-  if (run.external || run.id.startsWith('event_')) return EXTERNAL_EXECUTION_BLOCK
+  if (run.taskId || run.external || run.id.startsWith('event_')) return EXTERNAL_EXECUTION_BLOCK
 }
 
 // Re-read core state at both launch boundaries. Request metadata and EZ_RUN_ID

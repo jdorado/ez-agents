@@ -1,3 +1,6 @@
+import { Tasks } from './tasks.js'
+import { RunStore } from './runs.js'
+import { startTaskExecutor } from './task-executor.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { mkdtemp, rm, writeFile, mkdir, symlink } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
@@ -72,6 +75,7 @@ here so it survives new conversations and executor changes.
 
 Stdout is not sent to Telegram. To interact with the owner, directly execute these CLI commands:
 - Message: ezenciel-agents-message [--text "<text>" | --text-file ./note.md] [--reply-to <id>] [--document <path>] [--voice <text>]
+- Messaging task: ezenciel-agents-task --help (propose exact contact and shareable context for owner approval)
 - React: ezenciel-agents-react --emoji "👍"
 - Approval: ezenciel-agents-approval --prompt "Approve action?" --action-id "act_1"
 
@@ -239,8 +243,13 @@ export const startExecutorJob = async (
   texts: string[],
   options: ExecutorOptions,
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
-  await requireOwnerExecution(options.controlDir, options.runId)
-  if (options.eventSource !== undefined) throw new Error('Execution blocked: external-execution-unavailable')
+  const run = await new RunStore(options.controlDir).get(options.runId)
+  if (run?.taskId) {
+    if (run.status !== 'running') throw new Error('No active task run')
+    await new Tasks(options.controlDir).authorize(run, process.env.EZ_EXECUTOR_TRANSPORT === 'host')
+    if (process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
+  } else await requireOwnerExecution(options.controlDir, options.runId)
+  if (!run?.taskId && options.eventSource !== undefined) throw new Error('Execution blocked: external-execution-unavailable')
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'

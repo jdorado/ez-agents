@@ -1,7 +1,7 @@
 # ezenciel-agents
 
-Registered external events are currently recorded but blocked from executing in
-the trusted-owner runtime. Plugin commands can declare exposure metadata; see
+Owner-approved messaging tasks can contact one correspondent and handle replies
+through a restricted Codex runtime. Other external events remain blocked. See
 [plugin declarations](docs/plugins.md#exposure-declarations) and
 [authority boundaries](docs/architecture/authority-boundaries.md).
 

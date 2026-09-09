@@ -1,3 +1,5 @@
+import { RunStore } from './runs.js'
+import { Tasks } from './tasks.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
@@ -80,7 +82,11 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               try { await readFile(base+'.cancel'); throw new Error('Cancelled') } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
               const request=JSON.parse(await readFile(base+'.running.json','utf8'))
               if (!Array.isArray(request.texts) || request.texts.some((text:unknown)=>typeof text!=='string')) throw new Error('Invalid job')
-              await requireOwnerExecution(agent.controlDir, path.basename(base))
+              const run = await new RunStore(agent.controlDir).get(path.basename(base))
+              if (run?.taskId) {
+                if (run.status !== 'running') throw new Error('No active task run')
+                await new Tasks(agent.controlDir).authorize(run, false)
+              } else await requireOwnerExecution(agent.controlDir, path.basename(base))
               const opts=request.options as ExecutorOptions
               const cli = opts.cli || installation.cli
               resolveExecutor(cli)

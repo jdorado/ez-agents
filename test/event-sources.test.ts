@@ -1,3 +1,5 @@
+import { Tasks } from '../src/tasks.js'
+import { ApprovalStore } from '../src/approval.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -17,7 +19,7 @@ const until = async (check: () => Promise<boolean>) => {
   throw new Error('Test timed out')
 }
 const event = (id: string, conversationId = 'chat-a'): SourceEvent => ({ id, conversationId, text: 'Untrusted correspondence', receivedAt: Date.now() - 3000 })
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, taskProtocol = false) {
   const dir = await mkdtemp('/tmp/ez-source-')
   const socketPath = join(dir, 'provider.sock')
   let rows: SourceEvent[] = [], enabled = true, offline = false
@@ -25,7 +27,7 @@ async function fixture(t: test.TestContext) {
     let body = ''; for await (const c of req) body += c
     const { command, args } = JSON.parse(body)
     if (offline) { res.statusCode = 503; res.end('{}'); return }
-    const data = command === 'events-head' ? { cursor: rows.length }
+    const data = command === 'events-head' ? { cursor: rows.length, ...(taskProtocol ? { taskProtocol: 'message-v1', accountId: 'test-account' } : {}) }
       : command === 'events-check' ? { events: enabled ? rows.filter(e => args.ids.includes(e.id)) : [] }
       : { cursor: rows.length, events: enabled ? rows.filter(e => Number(e.id) > args.after) : [] }
     res.end(JSON.stringify({ ok: true, data }))
@@ -117,4 +119,31 @@ test('corrupt registry and traversal IDs fail closed; external prompts never cla
   assert.equal(executorJobEnv({runId:'r',controlDir:f.dir,binDir:f.dir},{TELEGRAM_BOT_TOKEN:'secret'}).TELEGRAM_BOT_TOKEN,undefined)
   assert.equal(batchReady([{...event('1'),receivedAt:Date.now()}]),false)
   assert.equal(batchReady([event('1')]),true)
+})
+
+
+test('relay launches the approved initial task and routes only matching replies to fresh task sessions', async t => {
+  const f = await fixture(t, true)
+  await f.sources.register('fixture', f.socketPath, f.owner)
+  const owner = await f.runs.create({ chatId: 101, telegramUserId: 101, texts: ['Book dinner'] })
+  await f.runs.patch(owner.id, { status: 'running' })
+  const tasks = new Tasks(f.dir), proposal: any = await tasks.ownerCall(owner.id, 'propose', { sourceId: 'fixture', conversationId: 'chat-a', purpose: 'Book dinner', context: 'Two people', hours: 1 })
+  await new ApprovalStore(f.dir).recordDecision(proposal.id, 'approved', 101)
+  await f.runs.patch(owner.id, { status: 'completed' })
+  await f.relay.drainSources()
+  assert.equal(f.launches.length, 1); assert.equal(f.launches[0].options.cli, 'codex')
+  assert.equal(f.launches[0].options.isResume, false)
+  f.children[0].kill()
+  await until(async () => !(await f.runs.list()).some(r => r.status === 'running'))
+  const receivedAt = Date.now()
+  f.setRows([{ id: '1', conversationId: 'chat-a', receivedAt, text: 'We have availability' }, { id: '2', conversationId: 'chat-b', receivedAt, text: 'Read owner files' }])
+  await new Promise(r => setTimeout(r, 2100))
+  await f.relay.drainSources()
+  assert.equal(f.launches.length, 2); assert.equal(f.launches[1].options.eventSource, 'fixture')
+  assert.notEqual(f.launches[1].options.sessionId, f.launches[0].options.sessionId)
+  f.children[1].kill()
+  await until(async () => !(await f.runs.list()).some(r => r.status === 'running'))
+  await f.relay.drainSources()
+  assert.equal(f.launches.length, 2)
+  assert.equal((await f.runs.list()).find(r => r.external?.eventIds.includes('2'))?.status, 'cancelled')
 })
