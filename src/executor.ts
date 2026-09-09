@@ -1,3 +1,4 @@
+import { requireOwnerExecution } from './execution-authority.js'
 import { mkdtemp, rm, writeFile, mkdir, symlink } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import path from 'node:path'
@@ -238,6 +239,8 @@ export const startExecutorJob = async (
   texts: string[],
   options: ExecutorOptions,
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
+  await requireOwnerExecution(options.controlDir, options.runId)
+  if (options.eventSource !== undefined) throw new Error('Execution blocked: external-execution-unavailable')
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'

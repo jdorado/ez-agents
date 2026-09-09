@@ -1,3 +1,4 @@
+import { executionBlockReason } from './execution-authority.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { queueUpdateAttention } from './update-attention.js'
@@ -111,6 +112,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           return
         }
         texts = events.map(event => JSON.stringify(event))
+      }
+      const blockReason = executionBlockReason(run, owner)
+      if (blockReason) {
+        await runs.patch(run.id, { status: 'blocked', blockReason, endedAt: new Date().toISOString() })
+        return
       }
       try {
         const started = await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
@@ -439,6 +445,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       `Work: ${running ? `running ${running.id}` : 'idle'}`,
       `Queue: ${all.filter((r) => r.status === 'queued').length} runs; ${incoming.pending} incoming messages`,
       `Failed: ${all.filter((r) => r.status === 'failed').length} runs; ${incoming.failed} incoming batches`,
+      `Blocked: ${all.filter((r) => r.status === 'blocked').length} external runs (isolated execution unavailable)`,
       `Delivery: ${delivery.failed} failed; ${delivery.unknown} unknown/in-flight (inspect before retrying)`,
       ...(unavailableSources.size ? [`Unavailable event sources: ${[...unavailableSources].join(', ')}`] : []),
       '/stop stops active work only. /cancel clears pending work only.',

@@ -52,20 +52,25 @@ async function fixture(t: test.TestContext) {
     setRows: (value: SourceEvent[]) => { rows = value }, setEnabled: (v: boolean) => { enabled = v }, setOffline: (v: boolean) => { offline = v } }
 }
 
-test('registered events use the single writer lane, fresh sessions, and durable deduplication', async t => {
+test('registered external events are durably blocked before any executor launch', async t => {
   const f = await fixture(t)
   await f.sources.register('fixture', f.socketPath, f.owner)
   f.setRows([event('1'), event('2')])
   await f.relay.drainSources(); await f.relay.drainSources()
-  assert.equal(f.launches.length, 1)
-  assert.equal((await f.runs.list()).length, 1)
-  assert.equal(f.launches[0].texts.length, 2)
-  assert.equal(f.launches[0].options.eventSource, 'fixture')
-  assert.equal(f.launches[0].options.isResume, false)
-  assert.equal(f.launches[0].options.onSession, undefined)
+  assert.equal(f.launches.length, 0)
+  const stored = await f.runs.list()
+  assert.equal(stored.length, 1)
+  assert.equal(stored[0].status, 'blocked')
+  assert.equal(stored[0].blockReason, 'external-execution-unavailable')
   f.setRows([event('1'), event('2'), event('3', 'chat-b')])
-  await f.relay.drainSources(); assert.equal(f.launches.length, 1)
-  f.children[0].kill('SIGTERM'); await until(async () => f.launches.length === 2)
+  await f.relay.drainSources()
+  assert.equal(f.launches.length, 0)
+  assert.equal((await f.runs.list()).length, 2)
+  // Blocked external work must not prevent the owner from using the agent.
+  await f.runs.create({chatId:101, telegramUserId:101, texts:['owner'], execution:await f.control.captureChoice(initialPreset('grok'))})
+  await f.relay.drainSources()
+  assert.equal(f.launches.length, 1)
+  assert.equal(f.launches[0].options.eventSource, undefined)
 })
 test('queued events are cancelled on unsubscribe and do not steal the owner session', async t => {
   const f = await fixture(t)

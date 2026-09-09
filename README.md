@@ -1,5 +1,10 @@
 # ezenciel-agents
 
+Registered external events are currently recorded but blocked from executing in
+the trusted-owner runtime. Plugin commands can declare exposure metadata; see
+[plugin declarations](docs/plugins.md#exposure-declarations) and
+[authority boundaries](docs/architecture/authority-boundaries.md).
+
 Telegram `/status` shows the running relay and host
 versions plus installed plugin versions. The agent's `ez status` adds verified
 plugin runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).

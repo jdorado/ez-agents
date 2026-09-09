@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add optional per-command exposure declarations and `ez tools exposure` with
+  conservative defaults. Declarations do not grant authority.
+- Block registered external events before owner-runtime execution; keep durable
+  blocked records visible in work status. This disables prior external wakeups
+  until an isolated runner exists. Recheck active paired-owner provenance at
+  the local and host launch boundaries.
+
 ## 0.1.0-beta.12 — self-upgrade beta
 
 - Agent-owned main/plugin upgrades with stable-default policy, queued maintenance,

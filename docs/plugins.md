@@ -130,6 +130,40 @@ and duplicate aliases fail. An interrupted manager leaves `registry.lock` with
 its PID: verify that process is gone before explicitly removing that one lock.
 Never remove an active lock or delete provider data to repair installation.
 
+## Exposure declarations
+
+Each command in `ez-plugin.json` can include an optional `exposure` object:
+
+```json
+{
+  "executable": "bin/client.mjs",
+  "args": [],
+  "exposure": {
+    "receivesExternalContent": true,
+    "sendsExternally": true,
+    "changesRecords": true,
+    "requiresReview": true
+  }
+}
+```
+
+These four fields are booleans. Unknown fields and invalid values are rejected.
+Each omitted field defaults to true; legacy manifests remain installable with
+conservative exposure. Declaration changes change the inspected content hash.
+Use `ez plugins inspect <id>` before installation and `ez tools exposure` afterward
+to see normalized declarations. Existing `ez tools list` output stays unchanged.
+
+Describe capabilities, not a trust rank: CRM notes can contain customer-authored
+text, while a channel can also modify records. `requiresReview` requests added
+attention during setup/use; it does not enable an automated reviewer. Declaring
+false never grants permissions, disables core checks or certifies a plugin safe.
+The core owns authority; plugins own provider transport/authentication/receipts.
+
+Current adapters are trusted-owner executors. Registered external events are
+recorded as blocked and do not launch those adapters. These declarations do not
+enable autonomous external conversations or scoped task execution. See
+[authority boundaries](architecture/authority-boundaries.md).
+
 ## Deployment descriptors
 
 `ez-plugin.json` retains its v1 executable/args/skills contract.

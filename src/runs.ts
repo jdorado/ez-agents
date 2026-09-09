@@ -6,7 +6,7 @@ import { normalizeReactionEmoji } from './reaction.js'
 import { assertId } from './identity.js'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 
-export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'blocked'
 
 export type RunRecord = {
   version: 1
@@ -20,6 +20,7 @@ export type RunRecord = {
   startedAt?: string
   endedAt?: string
   pid?: number
+  blockReason?: string
   execution?: ExecutionChoice
   external?: ExternalOrigin
 }
@@ -53,10 +54,11 @@ const isRun = (value: unknown): value is RunRecord => {
     Number.isSafeInteger(candidate.telegramUserId) &&
     Array.isArray(candidate.texts) &&
     candidate.texts.every((text) => typeof text === 'string') &&
-    ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') &&
+    ['queued', 'running', 'completed', 'failed', 'cancelled', 'blocked'].includes(candidate.status ?? '') &&
     typeof candidate.createdAt === 'string' &&
     Number.isFinite(Date.parse(candidate.createdAt)) &&
     (candidate.pid === undefined || (Number.isSafeInteger(candidate.pid) && candidate.pid > 0)) &&
+    (candidate.blockReason === undefined || ['owner-mismatch', 'external-execution-unavailable'].includes(candidate.blockReason)) &&
     (candidate.external === undefined || validOrigin(candidate.external)) &&
     (candidate.execution === undefined || isExecutionChoice(candidate.execution))
   )
@@ -144,7 +146,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'blockReason'>>,
   ): Promise<RunRecord> {
     const run = await this.get(id)
     if (!run) throw new Error(`Unknown run ${id}`)
