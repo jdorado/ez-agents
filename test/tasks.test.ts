@@ -127,7 +127,7 @@ test('approved initial task crosses the real host file client and uses a fresh r
   const { isHostRunId } = await import('../src/host-executor-protocol.js')
   const f = await fixture(t), { run } = await f.activate()
   assert.ok(isHostRunId(run.id))
-  await writeFile(join(f.dir, 'codex'), `#!${process.execPath}\nif(process.argv[2]==='--version')console.log('codex-cli 0.153.4');else console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),control:process.env.EZ_CONTROL_DIR}));`, { mode: 0o700 })
+  await writeFile(join(f.dir, 'codex'), `#!${process.execPath}\nif(process.argv[2]==='--version')console.log('codex-cli 0.153.4');else if(process.argv[2]==='debug')console.log(JSON.stringify({models:[{slug:'fixture',tool_mode:'code_mode_only',apply_patch_tool_type:'freeform',multi_agent_version:'v2'}]}));else console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),control:process.env.EZ_CONTROL_DIR}));`, { mode: 0o700 })
   const priorPath = process.env.PATH
   process.env.PATH = `${f.dir}:${priorPath}`
   const abort = new AbortController(), host = serveHostExecutor({ cli: 'codex', agents: [{ name: 'test', workspace: f.dir, controlDir: f.dir, binDir: f.dir }] }, abort.signal)
@@ -141,4 +141,39 @@ test('approved initial task crosses the real host file client and uses a fresh r
     assert.ok(result.args.includes('--ignore-user-config')); assert.ok(result.args.includes('--ephemeral'))
     assert.ok(!result.args.includes('owner-session')); assert.ok(!JSON.stringify(result.args).includes('Must not reach task prompt'))
   } finally { abort.abort(); await host; process.env.PATH = priorPath }
+})
+
+test('incoming-only grant waits without an opener, wakes for its contact, and cannot authorize a forged initial run', async t => {
+  const f = await fixture(t)
+  const proposal: any = await f.tasks.ownerCall('owner', 'propose', { sourceId: 'generic', conversationId: 'contact-a', purpose: 'Conversational replies only', context: 'No private facts or commitments', hours: 1, waitForIncoming: true })
+  const approvals = new ApprovalStore(f.dir)
+  assert.match((await approvals.getDecision(proposal.id))!.prompt, /Wait for incoming messages/)
+  await approvals.recordDecision(proposal.id, 'approved', 101)
+  await f.tasks.decide(proposal.id); await f.tasks.decide(proposal.id)
+  assert.equal((await f.runs.list()).filter(r => r.taskId).length, 0)
+  assert.equal(f.sends.length, 0); assert.equal(f.watches.length, 1)
+  const task = (await f.tasks.get(proposal.id))!
+  assert.equal(task.version, 2)
+  const forged = await f.runs.create({ id: 'event_forged', taskId: task.id, chatId: 101, telegramUserId: 101, texts: [] })
+  await f.runs.patch(forged.id, { status: 'running' })
+  await assert.rejects(f.tasks.workerCall(forged.id, 'send', { text: 'Opening message', key: 'open' }), /inactive/)
+  const row = { id: '1', conversationId: 'contact-a', text: 'Hello', receivedAt: Date.now() }
+  f.rows([row]); assert.equal((await f.tasks.match('generic', task.bindingId, [row]))?.id, task.id)
+  const reply = await f.runs.create({ id: 'event_reply', taskId: task.id, chatId: 101, telegramUserId: 101, texts: [], external: { sourceId: 'generic', bindingId: task.bindingId, eventIds: ['1'] } })
+  await f.runs.patch(reply.id, { status: 'running' })
+  await f.tasks.workerCall(reply.id, 'send', { text: 'Hello back', key: 'reply' })
+  assert.equal(f.sends.length, 1)
+  const replyContext = await f.tasks.workerCall(reply.id, 'context', {})
+  assert.ok('waitForIncoming' in replyContext && replyContext.waitForIncoming)
+  await assert.rejects(f.tasks.workerCall(reply.id, 'complete', { text: 'Replied once' }), /stays active/)
+  await f.tasks.workerCall(reply.id, 'note', { text: 'First reply sent; keep watching' })
+  await f.runs.patch(reply.id, { status: 'completed' })
+  const nextRow = { ...row, id: '2', text: 'Another question' }; f.rows([nextRow])
+  assert.equal((await f.tasks.match('generic', task.bindingId, [nextRow]))?.id, task.id)
+  const next = await f.runs.create({ id: 'event_reply_again', taskId: task.id, chatId: 101, telegramUserId: 101, texts: [], external: { sourceId: 'generic', bindingId: task.bindingId, eventIds: ['2'] } })
+  await f.runs.patch(next.id, { status: 'running' })
+  await f.tasks.workerCall(next.id, 'send', { text: 'Second reply', key: 'reply2' })
+  assert.equal(f.sends.length, 2)
+  await f.tasks.ownerCall('owner', 'revoke', { taskId: task.id })
+  await assert.rejects(f.tasks.workerCall(next.id, 'send', { text: 'No longer allowed', key: 'later' }), /inactive/)
 })

@@ -2,9 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import { taskArguments, TASK_CODEX_VERSION } from '../src/task-executor.js'
+import { taskArguments, taskModelCatalog, TASK_CODEX_VERSION } from '../src/task-executor.js'
 import { Tasks } from '../src/tasks.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { EventSources } from '../src/event-sources.js'
@@ -13,7 +14,8 @@ import { ApprovalStore } from '../src/approval.js'
 import { RunStore } from '../src/runs.js'
 import { taskRequests } from '../src/task-rpc.js'
 
-// Real native harness, synthetic model endpoint, no credentials or provider sends.
+// Real bundled model metadata plus native CLI, synthetic endpoint, no credentials or provider sends.
+// Unknown fixture model names miss model-driven tool overrides.
 // Run explicitly with EZ_TEST_NATIVE_TASKS=1 after installing the audited CLI.
 test('native restricted task has only bounded MCP tools, ignores private guidance, and executes broker calls', { skip: !process.env.EZ_TEST_NATIVE_TASKS, timeout: 30000 }, async () => {
   const root = await mkdtemp('/tmp/ez-native-task-'), directory = `${root}/task`, home = `${root}/home`
@@ -43,6 +45,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   ]
   const timer = setInterval(() => { void drain() }, 10)
   const server = createServer(async (req, res) => {
+    if (req.method !== 'POST') { res.end(JSON.stringify({ data: [] })); return; }
     let body = ''; for await (const c of req) body += c
     const input = JSON.parse(body); requests.push(input)
     res.setHeader('Content-Type', 'text/event-stream')
@@ -58,15 +61,17 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   let child: ReturnType<typeof spawn> | undefined
   try {
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('../src/task-mcp.ts', import.meta.url)), root, run.id]
+    const catalog = await promisify(execFile)('codex', ['debug', 'models', '--bundled'], { maxBuffer: 4 * 1024 * 1024 });
+    await writeFile(`${root}/models.json`, JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))));
     const args = taskArguments(directory, broker, 'Read task context.')
-    args.splice(-1, 0, '-c', 'model_provider="fixture"', '-c', `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${(server.address() as any).port}/v1",wire_api="responses",requires_openai_auth=false}`, '-m', 'fixture')
+    args.splice(-1, 0, '--disable', 'enable_request_compression', '-c', 'model_provider="fixture"', '-c', `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${(server.address() as any).port}/v1",wire_api="responses",requires_openai_auth=false}`, '-m', 'gpt-6-astra')
     child = spawn('codex', args, { cwd: directory, env: { PATH: process.env.PATH, HOME: home, CODEX_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] })
     let stderr = ''; child.stderr!.on('data', c => { stderr += c }); child.stdout!.resume()
     const code = await new Promise(r => child!.on('close', r))
     assert.equal(code, 0, `Requires audited Codex ${TASK_CODEX_VERSION}: ${stderr}`)
     assert.ok(requests.length === 6, 'Native tool call completed a second model turn')
     assert.ok(!JSON.stringify(requests).includes('PRIVATE_CANARY_DO_NOT_LOAD'))
-    const tools = requests[0].tools
+    const tools = requests[0].tools ?? requests[0].input.find((v: any) => v.type === 'additional_tools')?.tools
     assert.deepEqual(tools.filter((t: any) => t.type === 'function').map((t: any) => t.name).sort(), ['list_mcp_resource_templates', 'list_mcp_resources', 'read_mcp_resource', 'request_user_input'])
     const namespaces = tools.filter((t: any) => t.type === 'namespace')
     assert.equal(namespaces.length, 1); assert.equal(namespaces[0].name, 'mcp__ez')
