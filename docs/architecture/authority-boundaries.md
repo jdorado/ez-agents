@@ -39,7 +39,12 @@ executor. The task runner creates a fresh ephemeral home/session, skips user
 config, rules and ancestor project instructions, and disables shell, file/image,
 browser, apps, hooks, memory and agent spawning tools. A native permissions
 profile denies general filesystem access and tool network access. No owner
-workspace or conversation is passed to this runner.
+workspace or conversation is passed to this runner. The runner uses the pinned
+CLI's bundled model catalog with task-specific tool defaults: direct MCP calls,
+no model-added patch tools, experimental tools or collaboration, and no deferred
+tool discovery. Model metadata can override feature flags, so flags alone are
+insufficient. The native inventory test uses a real bundled model entry and must
+prove the five bounded task tools work without additional action tools.
 
 A core stdio MCP broker exposes `context`, `send`, `note`, `report`, and `complete`.
 The native client also lists resource helpers, but the broker serves no resources.

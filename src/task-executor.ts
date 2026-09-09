@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,9 +14,18 @@ export const TASK_CODEX_VERSION = '0.153.4'
 export const taskDisabledFeatures = ['apps', 'browser_use', 'computer_use', 'in_app_browser', 'image_generation',
   'memories', 'multi_agent', 'multi_agent_v2', 'hooks', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host',
   'skill_search', 'skill_mcp_dependency_install', 'tool_suggest', 'workspace_dependencies', 'view_image']
+// Model catalog defaults can override disabled feature flags (for example,
+// code-only tools and v2 collaboration). Use the audited direct-tool surface.
+export function taskModelCatalog(catalog: { models: Record<string, unknown>[] }) {
+  if (!Array.isArray(catalog.models) || !catalog.models.length) throw new Error('No audited model catalog');
+  return { models: catalog.models.map(model => ({ ...model, tool_mode: null,
+    apply_patch_tool_type: null, experimental_supported_tools: [], multi_agent_version: null,
+    supports_search_tool: false, use_responses_lite: false })) };
+}
 export function taskArguments(directory: string, broker: string[], prompt: string) {
   return ['exec', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--strict-config', '--json', '-C', directory,
     ...taskDisabledFeatures.flatMap(feature => ['--disable', feature]), '--enable', 'skip_host_skill_discovery',
+    '-c', `model_catalog_json=${JSON.stringify(join(directory, '..', 'models.json'))}`,
     '-c', 'web_search="disabled"', '-c', 'project_doc_max_bytes=0', '-c', 'approval_policy="never"',
     '-c', 'default_permissions="ez-task"',
     '-c', `permissions.ez-task.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(directory)}="write"}`,
@@ -36,6 +45,8 @@ export async function startTaskExecutor(options: ExecutorOptions) {
   try {
     const directory = join(temporary, 'workspace'), home = join(temporary, 'home')
     await mkdir(directory, { mode: 0o700 }); await mkdir(home, { mode: 0o700 })
+    const catalog = await promisify(execFile)('codex', ['debug', 'models', '--bundled'], { env: environment, maxBuffer: 4 * 1024 * 1024 })
+    await writeFile(join(temporary, 'models.json'), JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))), { mode: 0o600 })
     await symlink(join(homedir(), '.codex', 'auth.json'), join(home, 'auth.json'))
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
       fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId]
