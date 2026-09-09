@@ -97,7 +97,7 @@ test('owner stop terminates the writer and starts queued work without overlap', 
   }
 })
 
-test('real Telegram handlers never launch for first DM, another sender, an unpaired group sender, or forged callback', async () => {
+test('real Telegram handlers never launch for first DM, another sender, group, or forged callback', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-handler-'))
   let launched = 0
   const relay = createRelay(

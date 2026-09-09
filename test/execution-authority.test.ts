@@ -31,7 +31,6 @@ test('missing, corrupt, finished, unpaired and mismatched core runs fail closed'
   const owner = (await new ControlStore(dir,1000).status()).owner!
   assert.equal(executionBlockReason({...run,telegramUserId:202},owner),'owner-mismatch')
   assert.equal(executionBlockReason({...run,chatId:-101},owner),'owner-mismatch')
-  assert.equal(executionBlockReason({...run,chatId:-101,chatScope:'owner-group-checkin'},owner),undefined)
   await new RunStore(dir).patch(run.id,{status:'completed'})
   await assert.rejects(requireOwnerExecution(dir,run.id), /No active core run/)
   await new RunStore(dir).patch(run.id,{status:'running'})

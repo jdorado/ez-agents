@@ -23,17 +23,6 @@ const message = (id: number, text = 'hello'): Update => ({
     chat: { id: 101, type: 'private', first_name: 'Fixture' },
   },
 })
-
-const groupMessage = (id: number, text = 'hello', userId = 101): Update => ({
-  update_id: id,
-  message: {
-    message_id: id,
-    date: 0,
-    text,
-    from: { id: userId, is_bot: false, first_name: 'Fixture' },
-    chat: { id: -101, type: 'group', title: 'Fixture group' },
-  },
-})
 const fixture = async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-intake-relay-'))
   const launched: string[][] = []
@@ -105,20 +94,32 @@ const fixture = async () => {
   }
 }
 
-test('a paired owner group check-in reaches the PA with bounded group context', async () => {
+test('owner group discovery routes only to the private chat and rechecks identity', async () => {
   const f = await fixture()
+  const group = (id: number, sender = 101): Update => ({update_id: id, message: {
+    message_id: id, date: 0, text: 'Hi from the group',
+    from: {id: sender, is_bot: false, first_name: 'Fixture'},
+    chat: {id: -101, type: 'supergroup', title: 'Family'},
+  }})
   try {
-    await f.relay.bot.handleUpdate(groupMessage(1, 'Hi, I added you here.'))
+    await f.relay.bot.handleUpdate(group(1, 202))
+    const anonymous = group(2)
+    anonymous.message!.sender_chat = anonymous.message!.chat
+    await f.relay.bot.handleUpdate(anonymous)
+    assert.equal((await new InboxStore(f.dir).status()).pending, 0)
+    await f.relay.bot.handleUpdate(group(3))
+    await f.relay.drainInbox(true)
+    const run = (await new RunStore(f.dir).list())[0]
+    assert.equal(run.chatId, 101)
+    assert.equal(run.messageId, undefined)
+    assert.match(run.texts[0], /Reply privately/)
+    assert.match(run.texts[0], /"chatId":-101/)
+    assert.equal(f.launched.length, 1)
+    await f.relay.bot.handleUpdate(group(4))
+    await new ControlStore(f.dir, 1000).revokeOwner()
     await f.relay.drainInbox(true)
     assert.equal(f.launched.length, 1)
-    assert.match(f.launched[0][0], /Telegram owner group check-in/)
-    assert.match(f.launched[0][0], /Hi, I added you here\./)
-    const run = (await new RunStore(f.dir).list())[0]
-    assert.equal(run.chatId, -101)
-    assert.equal(run.chatScope, 'owner-group-checkin')
-  } finally {
-    await f.close()
-  }
+  } finally { await f.close() }
 })
 
 test('four-item menu is owner-only; saved AI buttons work and forged/stale buttons cannot change settings', async () => {

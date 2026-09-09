@@ -9,7 +9,6 @@ import { assertId } from './identity.js'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
-export type TelegramChatScope = 'owner-direct' | 'owner-group-checkin'
 
 export type RunRecord = {
   version: 1 | 2
@@ -17,7 +16,6 @@ export type RunRecord = {
   id: string
   chatId: number
   telegramUserId: number
-  chatScope?: TelegramChatScope
   messageId?: number
   items?: IncomingItem[]
   texts: string[]
@@ -62,7 +60,6 @@ const isRun = (value: unknown): value is RunRecord => {
     /^[a-zA-Z0-9_-]+$/.test(candidate.id) &&
     Number.isSafeInteger(candidate.chatId) &&
     Number.isSafeInteger(candidate.telegramUserId) &&
-    (candidate.chatScope === undefined || candidate.chatScope === 'owner-direct' || candidate.chatScope === 'owner-group-checkin') &&
     Array.isArray(candidate.texts) &&
     candidate.texts.every((text) => typeof text === 'string') &&
     ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') &&
@@ -118,7 +115,6 @@ export class RunStore {
     id?: string
     chatId: number
     telegramUserId: number
-    chatScope?: TelegramChatScope
     items?: IncomingItem[]
     texts: string[]
     messageId?: number
@@ -141,7 +137,6 @@ export class RunStore {
       id: input.id ?? newRunId(),
       chatId: input.chatId,
       telegramUserId: input.telegramUserId,
-      chatScope: input.chatScope,
       messageId: input.messageId,
       texts: input.texts,
       items: input.items,

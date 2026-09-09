@@ -7,9 +7,7 @@ export const EXTERNAL_EXECUTION_BLOCK = 'external-execution-unavailable' as cons
 // All current adapters run with the installing user's authority. A fresh
 // session or plugin declaration does not make that an isolated task runner.
 export function executionBlockReason(run: RunRecord, owner: Owner | null): string | undefined {
-  const direct = run.chatScope === undefined || run.chatScope === 'owner-direct'
-  const groupCheckIn = run.chatScope === 'owner-group-checkin' && !run.scheduled && !run.external && run.chatId < 0
-  if (!owner || run.telegramUserId !== owner.telegramUserId || !(direct && run.chatId === owner.telegramChatId || groupCheckIn))
+  if (!owner || run.telegramUserId !== owner.telegramUserId || run.chatId !== owner.telegramChatId)
     return 'owner-mismatch'
   if (run.taskId || run.external || run.id.startsWith('event_')) return EXTERNAL_EXECUTION_BLOCK
 }
