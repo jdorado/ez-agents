@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {execFile} from 'node:child_process';
+import {execFile,spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {promisify} from 'node:util';
 import {snapshot,init as initManager,validate,compose,locked} from '../src/plugins/manager.mjs';
 // Synthetic manager tests explicitly opt out of the product's default packages.
@@ -13,6 +14,20 @@ async function init(home,workspace,catalog,hostConfig) {
  return initManager(home,workspace,catalog||file,hostConfig);
 }
 const exec=promisify(execFile),bin=new URL('../bin/ezenciel-agents-tools.mjs',import.meta.url).pathname;
+for(const cleanup of ['success','failure','already-removed']) test(`cancel removes exact container and reports cleanup ${cleanup}`,async t=>{
+ const root=await fs.mkdtemp(path.join(tmpdir(),'ez-cancel-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const log=path.join(root,'calls.jsonl');
+ await fs.writeFile(path.join(root,'docker'),`#!${process.execPath}\nconst fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a[0]==='container'){${cleanup==='failure'?"console.error('daemon unavailable');process.exit(19)":cleanup==='already-removed'?"console.error('No such container: exact-test-container');process.exit(1)":"process.exit(0)"}}else{process.on('SIGTERM',()=>{});console.log('ready');setInterval(()=>{},1000)}\n`,{mode:0o700});
+ const script=`import {run} from ${JSON.stringify(new URL('../src/plugins/manager.mjs',import.meta.url).href)};try {const r=await run(['run'],{container:'exact-test-container'});process.exitCode=r.code}catch(e){console.error(e.message);process.exitCode=1}`;
+ const child=spawn(process.execPath,['--input-type=module','-e',script],{env:{...process.env,PATH:root+path.delimiter+process.env.PATH},stdio:['ignore','pipe','pipe']});
+ let stderr='';child.stderr.on('data',b=>stderr+=b);
+ t.after(()=>child.kill('SIGKILL'));
+ await once(child.stdout,'data');child.kill('SIGTERM');
+ const [code]=await once(child,'close');
+ assert.equal(code,cleanup==='failure'?1:130);
+ if(cleanup==='failure')assert.match(stderr,/cleanup failed/);
+ assert.deepEqual((await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse),[['run'],['container','rm','--force','exact-test-container']]);
+});
 async function fixture(t) {
  const root=await fs.mkdtemp(path.join(tmpdir(),'ez-tools-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const source=path.join(root,'source'),home=path.join(root,'tools'),workspace=path.join(root,'mind'),fake=path.join(root,'fake');
