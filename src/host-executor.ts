@@ -106,7 +106,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,model:opts.model,effort:opts.effort},await readModels())
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,cli,
                 runId:path.basename(base),timeoutMs:0,
-                sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort}
+                sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort,codexAutoCompactTokens:opts.codexAutoCompactTokens}
               job=await startExecutorJob(request.texts,options)
               active.set(lane,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})

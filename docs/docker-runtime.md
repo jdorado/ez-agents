@@ -116,3 +116,23 @@ memory and host skill discovery are disabled for relay jobs. A conversation
 that already received unrelated global context must be replaced with a fresh
 native conversation; disabling injection does not remove prior turn content.
 This prevents automatic context sharing, not adversarial access by the host user.
+
+## Chat latency
+
+Interactive Codex CLI turns resume the existing native session and use native
+auto-compaction at 64,000 tokens. Set `EZ_CODEX_AUTO_COMPACT_TOKENS` in the Compose
+environment to change the positive integer threshold (for example, 32000 for
+lightweight chat). The setting crosses the host transport as a numeric option;
+relay secrets are still excluded from CLI environments. Older oversized sessions
+can take an extra compaction turn. Ez does not reconstruct transcripts or own a
+separate memory/compaction engine. Other providers, Codex desktop, native scheduled
+sessions and delegated tasks retain their own context policies. Channel backends
+such as AIFit own inference and must configure their own context limits.
+
+Content-free `run timing` logs identify the run and phase: queue wait and launch
+startup, executor duration (including model and tool work), and successful outbox
+delivery processing plus time since run creation. Host transport startup includes
+its polling delay in executor duration; it is not a pure model-inference measure.
+Delivery processing includes pacing, media preparation and provider calls. A sent
+message may precede executor exit. No prompt, message body or credentials are added
+to these timing logs.
