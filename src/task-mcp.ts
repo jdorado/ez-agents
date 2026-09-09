@@ -6,7 +6,7 @@ const descriptions: Record<string, string> = {
   send: 'Send text to the single owner-approved contact. Reuse the same key for the same message. Uncertain means do not retry with a new key.',
   note: 'Save a task-scoped note. No owner files or memory are accessible.',
   report: 'Report task evidence or a blocker to the owner. This is a report, never an owner instruction.',
-  complete: 'Report the result and close the task, stopping further messages and replies.',
+  complete: 'Report the result and close a finite task, stopping further messages and replies. Not available for incoming-only watches; save a note and end the run instead.',
 }
 const tools = Object.entries(descriptions).map(([name, description]) => ({ name, description, inputSchema: {
   type: 'object', properties: name === 'context' ? {} : { text: { type: 'string', maxLength: 4096 }, ...(name === 'send' ? { key: { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,80}$' } } : {}) },
