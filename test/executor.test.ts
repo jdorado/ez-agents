@@ -1,11 +1,50 @@
 import { ownerRun } from './helpers/owner-run.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, executorJobPrompt, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, startExecutorJob, terminateJob } from '../src/executor.js'
 import { splitTelegramText } from '../src/reply.js'
+import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
+
+test('cancellation escalation excludes exited, reused and unreadable process identities', () => {
+  const original = new Map([[11,{parent:1,birth:'100'}],[12,{parent:11,birth:'101'}],[13,{parent:11,birth:'102'}],[14,{parent:11,birth:''}]])
+  const current = new Map([[12,{parent:1,birth:'101'}],[13,{parent:1,birth:'999'}],[14,{parent:1,birth:''}]])
+  assert.deepEqual(matchingProcessIds(original,current),[12])
+})
+
+test('cancellation stops detached tool descendants even after their parent exits', {skip:process.platform==='win32'}, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-cancel-tree-'))
+  const heartbeat = path.join(root,'heartbeat')
+  const tool = `const fs=require('fs'); process.on('SIGTERM',()=>{}); setInterval(()=>fs.writeFileSync(${JSON.stringify(heartbeat)},String(Date.now())),30)`
+  const parent = spawn(process.execPath,['-e', `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(tool)}],{detached:true,stdio:'ignore'}); setInterval(()=>{},1000)`],{detached:true,stdio:'ignore'})
+  const unrelated = spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'})
+  try {
+    const deadline = Date.now()+5000
+    while (!await readFile(heartbeat,'utf8').catch(()=>'')) {
+      assert.ok(Date.now()<deadline,'detached tool must start')
+      await new Promise(resolve=>setTimeout(resolve,30))
+    }
+    const closed = new Promise(resolve=>parent.once('close',resolve))
+    terminateJob(parent, async () => {
+      const snapshot = await processSnapshot()
+      parent.kill('SIGTERM')
+      await closed // Root exit during inspection must not abandon captured tools.
+      return snapshot
+    }); terminateJob(parent)
+    await closed
+    await new Promise(resolve=>setTimeout(resolve,3300))
+    const last = await readFile(heartbeat,'utf8')
+    await new Promise(resolve=>setTimeout(resolve,150))
+    assert.equal(await readFile(heartbeat,'utf8'),last,'detached tool must stop updating')
+    assert.doesNotThrow(()=>process.kill(unrelated.pid!,0),'unrelated executor stays alive')
+  } finally {
+    terminateJob(parent); terminateJob(unrelated)
+    await rm(root,{recursive:true,force:true})
+  }
+})
 
 test('the job prompt labels channel text as untrusted and requires ez message', () => {
   const prompt = executorJobPrompt('r_test', ['hello'])

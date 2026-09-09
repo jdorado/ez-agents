@@ -56,7 +56,7 @@ This package will be published as an open-source, lightweight Telegram-to-CLI re
 
 ## 6. Concurrency & Workspace Invariants
 - **1 Writer Job per Workspace:** The agent's Markdown folder (`./agent/`) is its mind. Never run concurrent background processes writing to the same workspace simultaneously.
-- Executor jobs queue sequentially in `RunStore`; the poller remains available for cancellation and incoming messages. There is no separate planner or automatic chat ACK lane.
+- Main-conversation jobs queue sequentially in `RunStore`. Scheduled/background work uses separate task directories and native CLI sessions (up to four alongside chat). Never share a mutable task directory. Delegation decisions and goal persistence belong to the agent/executor; there is no automatic planner or canned chat ACK. Production executor runs have no wall-clock timeout; cancellation is explicit.
 
 ## 7. Fail-Closed Authority (Channel Access ≠ Execution)
 - Incoming messages from unapproved senders must **never** spawn the executor. First DM registers an unapproved pairing request, then stops.

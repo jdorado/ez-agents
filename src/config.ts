@@ -40,7 +40,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     ...loadControlConfig(env),
     telegramBotToken,
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
-    executorTimeoutMs: positiveInteger(env.EZ_EXECUTOR_TIMEOUT_SECONDS, 'EZ_EXECUTOR_TIMEOUT_SECONDS', 300) * 1_000,
+    executorTimeoutMs: 0,
     executorCli: env.EZ_EXECUTOR_CLI?.trim() || 'agy',
     geminiApiKey: env.GEMINI_API_KEY?.trim(),
     openaiApiKey: env.OPENAI_API_KEY?.trim(),

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { validOrigin, type ExternalOrigin } from './event-sources.js'
 import { normalizeReactionEmoji } from './reaction.js'
+import { validScheduledOrigin, type ScheduledOrigin } from './scheduler.js'
 import { assertId } from './identity.js'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 
@@ -23,6 +24,9 @@ export type RunRecord = {
   pid?: number
   blockReason?: string
   execution?: ExecutionChoice
+  interrupted?: boolean
+  nativeSessionId?: string
+  scheduled?: ScheduledOrigin
   external?: ExternalOrigin
 }
 
@@ -59,6 +63,7 @@ const isRun = (value: unknown): value is RunRecord => {
     typeof candidate.createdAt === 'string' &&
     Number.isFinite(Date.parse(candidate.createdAt)) &&
     (candidate.pid === undefined || (Number.isSafeInteger(candidate.pid) && candidate.pid > 0)) &&
+    (candidate.scheduled === undefined || validScheduledOrigin(candidate.scheduled)) &&
     (candidate.blockReason === undefined || ['owner-mismatch', 'external-execution-unavailable'].includes(candidate.blockReason)) &&
     (candidate.external === undefined || validOrigin(candidate.external)) &&
     (candidate.execution === undefined || isExecutionChoice(candidate.execution))
@@ -77,6 +82,7 @@ export const isPidAlive = (pid: number): boolean => {
 }
 
 export class RunStore {
+  private readonly changes = new Map<string, Promise<unknown>>()
   private readonly runsDir: string
   private readonly outboxDir: string
 
@@ -108,6 +114,7 @@ export class RunStore {
     texts: string[]
     messageId?: number
     execution?: ExecutionChoice
+    scheduled?: ScheduledOrigin
     external?: ExternalOrigin
     taskId?: string
   }): Promise<RunRecord> {
@@ -129,6 +136,7 @@ export class RunStore {
       texts: input.texts,
       execution: input.execution,
       external: input.external,
+      scheduled: input.scheduled,
       status: 'queued',
       createdAt: new Date().toISOString(),
     }
@@ -149,13 +157,19 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'blockReason'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason'>>,
   ): Promise<RunRecord> {
-    const run = await this.get(id)
-    if (!run) throw new Error(`Unknown run ${id}`)
-    const next = { ...run, ...change }
-    await this.writeRun(next)
-    return next
+    const prior = this.changes.get(id) || Promise.resolve()
+    const work = prior.catch(() => {}).then(async () => {
+      const run = await this.get(id)
+      if (!run) throw new Error(`Unknown run ${id}`)
+      const next = { ...run, ...change }
+      await this.writeRun(next)
+      return next
+    })
+    this.changes.set(id, work)
+    try { return await work }
+    finally { if (this.changes.get(id) === work) this.changes.delete(id) }
   }
 
   async list(): Promise<RunRecord[]> {
@@ -174,22 +188,23 @@ export class RunStore {
     return runs.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   }
 
-  async running(): Promise<RunRecord | undefined> {
+  async running(background?: boolean): Promise<RunRecord | undefined> {
     const runs = await this.list()
+    let first: RunRecord | undefined
     for (const run of runs) {
-      if (run.status === 'running') {
+      if (run.status === 'running' && (background === undefined || Boolean(run.scheduled) === background)) {
         if (run.pid && !isPidAlive(run.pid)) {
           await this.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
           continue
         }
-        return run
+        first ??= run
       }
     }
-    return undefined
+    return first
   }
 
-  async nextQueued(): Promise<RunRecord | undefined> {
-    return (await this.list()).find((run) => run.status === 'queued')
+  async nextQueued(background?: boolean): Promise<RunRecord | undefined> {
+    return (await this.list()).find((run) => run.status === 'queued' && (background === undefined || Boolean(run.scheduled) === background))
   }
 
   async deliveryStatus(): Promise<{ failed: number; unknown: number }> {

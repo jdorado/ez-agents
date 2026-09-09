@@ -14,12 +14,12 @@ test('uses a relative agent workspace and protected control state defaults', () 
   })
   assert.match(config.workspace, /fixture-agent$/)
   assert.match(config.controlDir, /fixture-control$/)
-  assert.equal(config.executorTimeoutMs, 300_000)
+  assert.equal(config.executorTimeoutMs, 0)
   assert.equal(config.pairingTtlMs, 900_000)
 })
 
 test('rejects malformed timeouts', () => {
-  assert.throws(() => loadConfig({ TELEGRAM_BOT_TOKEN: 'test', EZ_EXECUTOR_TIMEOUT_SECONDS: '0' }), /positive integer/)
+  assert.equal(loadConfig({ TELEGRAM_BOT_TOKEN: 'test', EZ_EXECUTOR_TIMEOUT_SECONDS: '300' }).executorTimeoutMs, 0)
   assert.throws(() => loadConfig({ TELEGRAM_BOT_TOKEN: 'test', EZ_PAIRING_TTL_SECONDS: 'bad' }), /positive integer/)
 })
 
