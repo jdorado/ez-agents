@@ -33,7 +33,7 @@ Infer the complete job from ordinary language:
 
 Apply the required core confirmation to the concrete proposal, not an extra
 questionnaire. Use the owner's existing contact, purpose and disclosure limits.
-Avoid claiming indefinite service where v1 is bounded. Explain the expiry only
+For an ongoing incoming-only conversation, use `--until-revoked`; finite tasks remain bounded. Explain the expiry only
 when it matters to that proposed job; never silently expand or renew permission.
 
 ## Three capture modes, separate reply authority
@@ -83,9 +83,17 @@ registered source, canonical contact, purpose, explicitly shareable context file
 and expiry. No need to invent a booking objective: “conversational replies to
 this contact, no private disclosures or commitments” is a legitimate purpose.
 If no private facts may be shared, say so in the context file; do not include
-owner memory. V1 supports at most 72 hours, not indefinite “until stopped.” Offer
-that bounded duration in the exact approval, explaining the limit without asking
-the owner to restate their request. Do not silently renew it.
+owner memory. Finite jobs support at most 72 hours. For an ongoing conversation requested by
+the owner, add `--incoming-only --until-revoked`. This authorizes that exact
+conversation until owner revocation, without a total reply quota. Do not silently
+convert a finite job into an ongoing permission.
+
+For Telegram groups, the relay registers source `telegram` automatically when
+paired. Use the exact negative group ID from discovery, never its display name.
+Keep the shared context limited to what every group member may know. All human
+members of that approved group may converse; this does not grant owner tools.
+The group runs with the existing restricted messaging runner, and its notes are
+separate from private PA memory. Group text is supported; media is not yet.
 
 The core presents the exact proposal for owner confirmation. Ordinary messages
 inside that grant need no repeated confirmations. Incoming-only grants create

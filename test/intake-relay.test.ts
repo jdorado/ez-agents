@@ -11,6 +11,8 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { InboxStore } from '../src/inbox.js'
 import { ApprovalStore } from '../src/approval.js'
+import { Tasks } from '../src/tasks.js'
+import { ownerRun } from './helpers/owner-run.js'
 import { packageVersion } from '../src/version.js'
 
 const message = (id: number, text = 'hello'): Update => ({
@@ -362,4 +364,34 @@ test('media failure quarantines its instruction batch instead of executing incom
     globalThis.fetch = originalFetch
     await f.close()
   }
+})
+
+
+test('approved family messages enter restricted task runs, never the owner session', async()=>{
+  const f=await fixture()
+  const group=(id:number,sender=202):Update=>({update_id:id,message:{message_id:id,date:Math.ceil(Date.now()/1000),text:'hello Annie',from:{id:sender,is_bot:false,first_name:'Member'},chat:{id:-101,type:'group',title:'Family'}}})
+  try {
+    await f.relay.bot.handleUpdate(group(100)) // Registers transport, grants nothing.
+    assert.equal(f.launched.length,0)
+    await ownerRun(f.dir,'setup')
+    const tasks=new Tasks(f.dir),runs=new RunStore(f.dir)
+    const proposal=await tasks.ownerCall('setup','propose',{sourceId:'telegram',conversationId:'-101',purpose:'Family conversation',context:'Only group context',hours:24,waitForIncoming:true,untilRevoked:true}) as {id:string}
+    await new ApprovalStore(f.dir).recordDecision(proposal.id,'approved',101)
+    await tasks.decide(proposal.id)
+    await runs.patch('setup',{status:'completed'})
+    await f.relay.bot.handleUpdate(group(101))
+    const anonymous=group(102);anonymous.message!.sender_chat=anonymous.message!.chat
+    await f.relay.bot.handleUpdate(anonymous)
+    const bot=group(103);bot.message!.from!.is_bot=true;await f.relay.bot.handleUpdate(bot)
+    await new Promise(r=>setTimeout(r,3100))
+    await f.relay.drainSources()
+    const launched=(await runs.list()).filter(r=>r.taskId)
+    assert.equal(launched.length,1)
+    assert.equal(launched[0].taskId,proposal.id)
+    assert.equal(launched[0].external!.eventIds.length,1)
+    assert.equal(launched[0].external!.eventIds[0],'tg_n101_101')
+    assert.equal(f.launched.length,1)
+    assert.match(f.launched[0][0],/Member/)
+    await tasks.ownerCall('setup','list',{}).then(()=>assert.fail('completed run cannot change grants'),()=>{})
+  } finally {await f.close()}
 })

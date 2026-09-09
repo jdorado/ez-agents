@@ -67,7 +67,7 @@ This package will be published as an open-source, lightweight Telegram-to-CLI re
 
 ## 7. Fail-Closed Authority (Channel Access ≠ Execution)
 - Incoming messages from unapproved senders must **never** spawn the executor. First DM registers an unapproved pairing request, then stops.
-- Group messages from other senders and unknown DMs fail silently. Paired-owner group text is discovery routed to the owner's private chat; it grants no group reply authority.
+- Unapproved group messages from other senders and unknown DMs fail silently. Approved group text uses the existing conversation grant and restricted task runner. Paired-owner group text is discovery routed to the owner's private chat; it grants no group reply authority.
 - Stopping work (`/stop`) must terminate the active worker PID immediately (`SIGTERM`, escalating to `SIGKILL` if unclosed after 3s).
 
 ## 8. Mandatory Adversarial & Negative Tests

@@ -17,7 +17,7 @@ owner does not edit JSON. The agent uses `list` and `revoke` when asked.
 After approval the relay starts a restricted task, including the initial outgoing
 message. Incoming-only tasks instead wait for new correspondence and never create
 an opening run. Their task records use version 2 so older task readers fail closed. Matching new correspondence resumes that task in a fresh native session.
-Other contacts remain blocked. Each task has at most 30 distinct text sends;
+Other contacts remain blocked. Finite tasks have at most 30 distinct text sends;
 there are no payments, attachments, extra recipients, plugin installation,
 settings changes, or access to owner memory. A contact can have one active or
 pending task at a time. Completed, revoked, expired, replaced-source, and changed-
@@ -29,6 +29,29 @@ with that contact. The agent judges how to pursue the purpose; code does not pro
 that each sentence serves the booking or that a correspondent is truthful. A
 prompt injection can still derail a task or elicit its shared context. It cannot
 use the provided tools to read owner files or select another destination.
+
+## Ongoing conversation permissions
+
+Incoming-only proposals may use `--until-revoked` for an ongoing conversation.
+This is a provider-neutral version-3 grant using the same owner, account, source,
+conversation and disclosure checks. It has no total reply count or time expiry.
+A 30-send ceiling applies per incoming run to bound runaway output, not per grant.
+Receipts stay durable; current-run keys are namespaced to avoid collisions with
+later replies. The runner gets current-run receipts and rolling group-only notes
+(up to 16,000 characters), not the owner's private session or files. Providers
+receive the largest supported timestamp for the watch; the core still checks
+revocation before every operation. Older versions reject version-3 grants.
+
+The native Telegram source implements the existing provider protocol for exact
+group IDs. It records selected text messages and sender identity, and sends only
+to the bound group with durable uncertain/accepted receipts. Bot messages and
+anonymous-admin posts are excluded by intake. Unselected owner group text remains
+private discovery; other unselected group messages cannot launch work. Source
+registration enables discovery, never reply permission. Voice and attachments are
+not handled by this group adapter. WhatsApp continues using its existing adapter;
+group and ongoing watch support requires the companion provider update. Older
+adapters reject ongoing grants at proposal time. Pending watch removals retry
+after service outages; core revocation blocks sends immediately.
 
 ## Native execution and core tools
 
