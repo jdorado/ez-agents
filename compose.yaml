@@ -8,7 +8,9 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SETPCAP]
+    # Init must forward shutdown to the privilege-dropped relay. The entrypoint
+    # still removes every capability from the relay and its executor children.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SETPCAP, KILL]
     environment:
       EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md
       EZ_EXECUTOR_TRANSPORT: ${EZ_EXECUTOR_TRANSPORT:-host}
