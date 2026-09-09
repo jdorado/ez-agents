@@ -1,6 +1,6 @@
 // Opt-in token-consuming probe. Real executor and relay handlers; synthetic Telegram provider.
 // Run: node --import tsx scripts/smoke-scheduler.ts [seconds=1860] [cli=codex]
-import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRelay } from '../src/index.js'
@@ -12,6 +12,7 @@ import { initializeWorkspace } from '../src/workspace.js'
 import type { Update } from 'grammy/types'
 
 const duration=Number(process.argv[2] || 1860),cli=process.argv[3] || 'codex'
+const nativeGoal=process.argv[4]==='goal'
 if(!Number.isSafeInteger(duration) || duration<30)throw new Error('Duration must be at least 30 seconds')
 const root=await mkdtemp(join(tmpdir(),'ez-scheduler-smoke-')),workspace=join(root,'agent'),controlDir=join(root,'control')
 await initializeWorkspace(workspace)
@@ -26,7 +27,10 @@ relay.bot.api.config.use(async(_previous,method,payload)=>{
  return {ok:true,result:{message_id:replies.length}} as never
 })
 const due=Date.now()+2000
-await scheduler.save({id:'sleep',name:'Long-running synthetic QA',text:`This is an authorized synthetic test. In your task directory write progress.md with WAITING. Run a terminal sleep for ${duration} seconds and wait for that command to finish. Then write finished.txt containing DONE and use ezenciel-agents-message --text 'BACKGROUND_DONE'. Do not reschedule or finish early. No external services are needed.`,trigger:{at:new Date(due).toISOString()},enabled:true,owner,execution})
+const text=nativeGoal
+ ? `/goal Native multi-turn continuation QA: create phase1.txt containing ONE and phase2.txt containing TWO, then finished.txt containing DONE and deliver BACKGROUND_DONE. In the FIRST turn write only phase1.txt and END with final response FIRST_TURN_DONE, leaving this native goal active. Do not write phase2 or finished.txt or send BACKGROUND_DONE in the first turn. On a subsequent native automatic continuation, run a terminal sleep for ${duration} seconds and wait for it, write phase2.txt and finished.txt, read and verify all three files, send BACKGROUND_DONE through ezenciel-agents-message, verify delivery, and mark this goal complete. No extra schedule, user prompt or custom continuation loop. Keep progress.md updated.`
+ : `This is an authorized synthetic test. In your task directory write progress.md with WAITING. Run a terminal sleep for ${duration} seconds and wait for that command to finish. Then write finished.txt containing DONE and use ezenciel-agents-message --text 'BACKGROUND_DONE'. Do not reschedule or finish early. No external services are needed.`
+await scheduler.save({id:'sleep',name:'Long-running synthetic QA',text,trigger:{at:new Date(due).toISOString()},enabled:true,owner,execution})
 let draining=false
 const tick=setInterval(()=>{if(!draining){draining=true;void relay.drainSources().then(()=>relay.drainOutbox()).catch(console.error).finally(()=>{draining=false})}},250)
 const until=async(check:()=>Promise<boolean>,seconds:number)=>{
@@ -56,9 +60,31 @@ try{
  if(status!=='completed' || replies.filter(r=>r.text.includes('BACKGROUND_DONE')).length!==1)throw new Error('Missing completed run or exactly one delivered result')
  const finished=await readFile(join(workspace,'work/tasks',background.id,'finished.txt'),'utf8')
  if(finished.trim()!=='DONE')throw new Error('Missing finished.txt artifact')
+ if(nativeGoal){
+  for(const [file,expected] of [['phase1.txt','ONE'],['phase2.txt','TWO']])
+   if((await readFile(join(workspace,'work/tasks',background.id,file),'utf8')).trim()!==expected)throw new Error(`Missing native goal artifact: ${file}`)
+ }
  const record=(await runs.get(background.id))!
  if(Date.parse(record.endedAt!)-Date.parse(record.startedAt!) < duration*1000)throw new Error('Worker completed before requested duration')
- const evidence={duration,cli,status,replies,run:await runs.get(background.id)}
+ let goalEvidence:unknown
+ if(nativeGoal){
+  const home=join(controlDir,'cli/codex'),sessionId=record.nativeSessionId
+  if(!sessionId)throw new Error('Missing native session ID')
+  const files=await readdir(join(home,'sessions'),{recursive:true})
+  const file=files.find(f=>f.endsWith(`${sessionId}.jsonl`))
+  if(!file)throw new Error('Missing native transcript')
+  const events=(await readFile(join(home,'sessions',file),'utf8')).trim().split('\n').map(line=>JSON.parse(line)).filter(e=>e.type==='event_msg')
+  const turns=events.filter(e=>e.payload.type==='task_complete')
+  if(turns.length<2 || !turns[0].payload.last_agent_message?.includes('FIRST_TURN_DONE'))throw new Error('Native multi-turn continuation was not verified')
+  // Read Codex-owned evidence only; Ez never creates or manages this database.
+  const {DatabaseSync}=await import('node:sqlite'),db=new DatabaseSync(join(home,'goals_1.sqlite'),{readOnly:true})
+  try{
+   const goal=db.prepare('SELECT status FROM thread_goals WHERE thread_id = ?').get(sessionId)
+   if(goal?.status!=='complete')throw new Error('Native goal did not complete')
+   goalEvidence={status:goal.status,completedTurns:turns.map(e=>e.payload.turn_id)}
+  }finally{db.close()}
+ }
+ const evidence={duration,cli,nativeGoal,goalEvidence,status,replies,run:await runs.get(background.id)}
  await writeFile(join(root,'evidence.json'),JSON.stringify(evidence,null,2),{mode:0o600})
  console.log(JSON.stringify({passed:true,evidence:join(root,'evidence.json')}))
 }finally{clearInterval(tick);while(draining)await new Promise(r=>setTimeout(r,50));await relay.stop()}

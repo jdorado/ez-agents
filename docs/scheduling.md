@@ -10,7 +10,7 @@ ezenciel-agents-schedule create --name Reminder \
 ezenciel-agents-schedule create --name Weekdays \
   --cron '0 9 * * 1-5' --timezone Asia/Dubai --text 'Prepare the daily report.'
 ezenciel-agents-schedule create --name Research --now \
-  --text 'Use your native /goal for the authorized research objective. Save evidence, verify the outcome, and send the owner the result.'
+  --text '/goal Complete the authorized research objective. Save evidence, verify the outcome, and send the owner the result.'
 ezenciel-agents-schedule list
 ezenciel-agents-schedule runs
 ezenciel-agents-schedule pause SCHEDULE_ID
@@ -53,13 +53,18 @@ still have their own limits; those are not overall task deadlines. Native goals
 are an executor capability, configured through instructions. Ez has no goal API,
 continuation loop or rule equating a process exit with goal achievement.
 
-The tested Codex CLI 0.153.4 `codex exec` invocation can create native goals and
-use subagents, but exits after its requested turn even when a goal remains active.
-A two-phase probe left the native goal active and the second artifact absent.
-Therefore this executor path does not establish automatic goal continuation
-across turns. An executor/client that supports that lifecycle must be validated
-before promising persistent goal completion; Ez does not emulate it. This matches
-the upstream [exec shutdown path](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/exec/src/lib.rs#L1114).
+Scheduled Codex CLI tasks use a dedicated native app-server session, tested with
+CLI 0.153.4. A leading `/goal` in the instruction text maps to the same native
+goal command used by the interactive CLI. Codex automatically starts subsequent
+turns; the transport stays connected until the native goal is complete or stops
+for attention. It sends no continuation prompts and stores no Ez goal state.
+Goals created by the agent's native tools also keep the session alive. Ordinary
+tasks finish after their turn. A blocked, paused or limited goal is not reported
+as successful. Native RPC requests have a response deadline; running tasks do not.
+
+The foreground chat still uses `codex exec`. That invocation exits after one
+requested turn even if a goal is active, so delegate persistent work to the
+scheduler. Desktop and other executor goal lifecycles need separate validation.
 
 The CLI binds jobs to the paired owner and current AI selection. Queued/scheduled
 work retains that selection after the chat switches AI. Revoking/re-pairing an
@@ -100,6 +105,8 @@ For an opt-in real CLI probe (consumes model usage):
 
 ```sh
 pnpm smoke:scheduler -- 1860 codex
+# Native goal must finish a first turn and continue without another prompt:
+pnpm smoke:scheduler -- 45 codex goal
 ```
 
 This uses temporary workspaces and a synthetic Telegram provider, never live

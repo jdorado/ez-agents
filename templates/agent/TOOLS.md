@@ -53,9 +53,11 @@ and instruction text. Use `create --now` to hand long work to a separate CLI
 session and return to chat. `runs` shows actual state and native session IDs; read
 the task's progress/artifacts under `work/tasks/RUN_ID/` for updates.
 
-For an explicitly persistent objective, tell the background executor to use its
-native `/goal` capability. Use native subagents when useful. Ez does not implement
-goals or infer their completion. A background task should finish its own work,
+For an explicitly persistent objective on Codex CLI, begin the scheduled text
+with `/goal` followed by the objective. This uses Codex's native persistent session
+and goal command; Codex owns automatic continuation across turns. Ordinary tasks
+need no goal. Use native subagents when useful. Ez does not implement goals.
+A background task should finish its own work,
 verify the outcome and send the owner its result. Keep task writes in its own
 directory; coordinate shared files and external records before parallel writes.
 
