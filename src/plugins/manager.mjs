@@ -119,14 +119,22 @@ function dockerEnv() {
 export function run(argv,{capture=false,container}={}) {
   return new Promise((resolve,reject)=>{
     const child=spawn('docker',argv,{env:dockerEnv(),stdio:capture?['ignore','pipe','pipe']:['inherit','inherit','inherit']});
-    let stdout='',stderr='',cancelled=false;
+    let stdout='',stderr='',cancelled=false,killTimer;
     if(capture) {child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);}
-    const cancel=signal=>{cancelled=true;child.kill(signal);};
+    const cancel=signal=>{cancelled=true;child.kill(signal);killTimer??=setTimeout(()=>child.kill('SIGKILL'),2000);};
     const term=()=>cancel('SIGTERM'),int=()=>cancel('SIGINT');
     process.on('SIGTERM',term);process.on('SIGINT',int);
-    child.once('error',reject);
+    child.once('error',error=>{clearTimeout(killTimer);process.off('SIGTERM',term);process.off('SIGINT',int);reject(error);});
     child.once('close',async(code,signal)=>{process.off('SIGTERM',term);process.off('SIGINT',int);
-      if(cancelled&&container) await run(['rm','-f',container],{capture:true});
+      clearTimeout(killTimer);
+      if(cancelled&&container) {
+        try {
+          const cleanup=await run(['container','rm','--force',container],{capture:true});
+          // Compose --rm may already have removed this exact command container.
+          if(cleanup.code!==0&&!cleanup.stderr.includes(`No such container: ${container}`))
+            return reject(Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`));
+        } catch(error) {return reject(error);}
+      }
       resolve({code:cancelled?130:code??(signal?130:1),stdout,stderr});});
   });
 }
