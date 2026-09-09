@@ -45,7 +45,7 @@ export async function startTaskExecutor(options: ExecutorOptions) {
     })
     await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
     child.stdin.end(); child.stdout.resume()
-    const timeout = setTimeout(() => terminateJob(child), options.timeoutMs)
+    const timeout = setTimeout(() => terminateJob(child), options.timeoutMs > 0 ? options.timeoutMs : 300000)
     child.once('close', () => clearTimeout(timeout))
     return { child, stdout: '', cleanup: async () => { clearTimeout(timeout); await rm(temporary, { recursive: true, force: true }) } }
   } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }

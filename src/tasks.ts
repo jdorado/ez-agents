@@ -113,7 +113,7 @@ export class Tasks {
   async ownerCall(runId: string, command: string, args: Record<string, unknown>) {
     return this.serial(async () => {
       const run = await requireOwnerExecution(this.controlDir, runId)
-      if (run.id.startsWith('r_update_')) throw new Error('Task changes require a current owner message')
+      if (run.scheduled || run.id.startsWith('r_update_') || run.id.startsWith('r_schedule_')) throw new Error('Task changes require a current owner message')
       if (command === 'list') return this.list()
       if (command === 'revoke') {
         const task = await this.get(String(args.taskId))
