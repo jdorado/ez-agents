@@ -8,6 +8,7 @@ installation instructions and releases. Install only the plugins needed for the 
 |---|---|---|---|
 | [WhatsApp](https://github.com/jdorado/ez-whatsapp) | Link an existing WhatsApp account so the agent can use its messaging tools. Uses WhatsApp Web linked devices through Baileys; requires an account already on a phone. | `@jc_stack/ez-whatsapp` | [0.1.0-beta.12](https://github.com/jdorado/ez-whatsapp/releases/tag/v0.1.0-beta.12) — testing beta |
 | [Composio](https://github.com/jdorado/ez_composio) | Discover integrations and full native tool schemas, connect requested accounts and perform authorized actions through a private broker. Requires a Composio project key; individual apps may require OAuth consent. | `@jc_stack/ez-composio` | [0.1.0-beta.1](https://github.com/jdorado/ez_composio/releases/tag/v0.1.0-beta.1) — testing beta |
+| [GitHub](https://github.com/jdorado/ez_github) | Create repositories, commit and push through native Git/gh with a private per-agent profile. Requires GitHub browser consent and Ez 0.1.0-beta.13 or newer. | `@jc_stack/ez-github` | [0.1.0-beta.1](https://github.com/jdorado/ez_github/releases/tag/v0.1.0-beta.1) — testing beta |
 
 ## Set up a plugin
 

@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.13
+
+- Escalate cancelled plugin clients and report container cleanup failures.
+- List the GitHub CLI plugin in the public catalog.
+- Include standalone CLI, native task runtime and integration discovery updates.
 
 - Support incoming-only reply tasks without an opening message; refresh installed
   guidance for selective setup, implicit follow-up, and quiet account linking.
@@ -10,7 +14,6 @@
 - Task execution requires audited Codex 0.153.4 and a message-v1 event source.
   Other external events remain blocked; live provider acceptance is pending.
 
-## Unreleased
 
 - Add optional per-command exposure declarations and `ez tools exposure` with
   conservative defaults. Declarations do not grant authority.
