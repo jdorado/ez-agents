@@ -76,7 +76,9 @@ provider names do not change authority checks.
 
 ## Propose, confirm, verify
 
-For a reply mandate use `ezenciel-agents-task propose --incoming-only` with the
+For an outbound job such as a booking, use `ezenciel-agents-task propose` WITHOUT
+`--incoming-only`: it starts the inquiry and then watches replies. For “answer if
+they message,” use `ezenciel-agents-task propose --incoming-only` with the
 registered source, canonical contact, purpose, explicitly shareable context file
 and expiry. No need to invent a booking objective: “conversational replies to
 this contact, no private disclosures or commitments” is a legitimate purpose.
