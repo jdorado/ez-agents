@@ -23,6 +23,17 @@ const message = (id: number, text = 'hello'): Update => ({
     chat: { id: 101, type: 'private', first_name: 'Fixture' },
   },
 })
+
+const groupMessage = (id: number, text = 'hello', userId = 101): Update => ({
+  update_id: id,
+  message: {
+    message_id: id,
+    date: 0,
+    text,
+    from: { id: userId, is_bot: false, first_name: 'Fixture' },
+    chat: { id: -101, type: 'group', title: 'Fixture group' },
+  },
+})
 const fixture = async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-intake-relay-'))
   const launched: string[][] = []
@@ -93,6 +104,22 @@ const fixture = async () => {
     },
   }
 }
+
+test('a paired owner group check-in reaches the PA with bounded group context', async () => {
+  const f = await fixture()
+  try {
+    await f.relay.bot.handleUpdate(groupMessage(1, 'Hi, I added you here.'))
+    await f.relay.drainInbox(true)
+    assert.equal(f.launched.length, 1)
+    assert.match(f.launched[0][0], /Telegram owner group check-in/)
+    assert.match(f.launched[0][0], /Hi, I added you here\./)
+    const run = (await new RunStore(f.dir).list())[0]
+    assert.equal(run.chatId, -101)
+    assert.equal(run.chatScope, 'owner-group-checkin')
+  } finally {
+    await f.close()
+  }
+})
 
 test('four-item menu is owner-only; saved AI buttons work and forged/stale buttons cannot change settings', async () => {
   const f = await fixture()

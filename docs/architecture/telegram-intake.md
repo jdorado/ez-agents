@@ -2,13 +2,13 @@
 
 One owner, one bot, one relay writer per control directory. No database, extra agent, or executor loop.
 
-1. Gate the sender and private chat before accepting work.
+1. Gate the sender and paired private chat before accepting work. A paired owner may also make a group check-in; it never grants the group, its members, controls, or approvals authority.
 2. Atomically save the raw update and deduplicate its Telegram update ID in `EZ_CONTROL_DIR/inbox.json`.
 3. Collect a short burst before downloading/transcribing. Seal batch membership on disk, then normalize in receive order. Captions, album IDs and quoted context travel with the media.
 4. Create one durable run using the batch's stable ID. A restart between run creation and intake completion finds that same run; it does not create a second job.
 5. The selected CLI executes. Replies still come through the messaging CLI and the receipt-backed outbox.
 
-The polling handler does not wait for media processing or execution. Native controls bypass the work queue, but not the owner gate. Buffered work is checked against the current owner again before processing and execution.
+The polling handler does not wait for media processing or execution. Native controls bypass the work queue, but not the owner gate, and remain private-chat only. Buffered work is checked against the current owner and original chat scope again before processing and execution.
 
 ## Recovery boundaries
 

@@ -100,7 +100,12 @@ export class InboxStore {
         this.now() - first.receivedAt < 30000
       )
         return
-      const boundary = state.waiting.findIndex((e) => JSON.stringify(e.execution) !== JSON.stringify(first.execution))
+      const chatId = (update: Update) => update.message?.chat.id ?? update.callback_query?.message?.chat.id
+      const firstChatId = chatId(first.update)
+      const boundary = state.waiting.findIndex((e) =>
+        JSON.stringify(e.execution) !== JSON.stringify(first.execution) ||
+        chatId(e.update) !== firstChatId,
+      )
       const entries = state.waiting.splice(0, boundary < 0 ? 10 : Math.min(10, boundary))
       // Telegram albums contain at most ten items. Don't split one at the batch boundary.
       const album = entries.at(-1)?.update.message?.media_group_id

@@ -3,26 +3,32 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile, symlink, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isOwner } from '../src/identity.js'
+import { isOwner, isOwnerGroupCheckIn } from '../src/identity.js'
 import { RunStore } from '../src/runs.js'
 import { ApprovalStore } from '../src/approval.js'
 import { ControlStore } from '../src/control-state.js'
 import { stageIncomingFile, workspaceFile, detectFileType } from '../src/files.js'
 import { EXECUTOR_REGISTRY } from '../src/executor.js'
 
-test('owner gate denies groups, bots, missing identity, and a different sender or chat', () => {
+test('direct owner gate rejects groups while group check-ins accept only the paired owner', () => {
   const owner = { telegramUserId: 101, telegramChatId: 101, pairedAt: '' }
   const from = { id: 101, is_bot: false, first_name: 'Test' }
   const chat = { id: 101, type: 'private' as const, first_name: 'Test' }
   assert.ok(isOwner({ from, chat }, owner))
+  const group = { id: -101, type: 'group' as const, title: 'Test' }
+  assert.equal(isOwner({ from, chat: group }, owner), false)
+  assert.ok(isOwnerGroupCheckIn({ from, chat: group }, owner))
   for (const input of [
     { from: undefined, chat },
     { from: { ...from, id: 202 }, chat },
     { from: { ...from, is_bot: true }, chat },
     { from, chat: { ...chat, id: 202 } },
-    { from, chat: { id: -101, type: 'group' as const, title: 'Test' } },
+    { from: { ...from, id: 202 }, chat: group },
+    { from: { ...from, is_bot: true }, chat: group },
   ])
     assert.equal(isOwner(input, owner), false)
+  assert.equal(isOwnerGroupCheckIn({ from: { ...from, id: 202 }, chat: group }, owner), false)
+  assert.equal(isOwnerGroupCheckIn({ from, chat: { id: -101, type: 'channel' as const, title: 'Test' } }, owner), false)
   assert.equal(isOwner({ from, chat }, null), false)
 })
 
