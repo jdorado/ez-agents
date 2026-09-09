@@ -1,5 +1,12 @@
 # Agent-led setup
 
+Ez supports two independent, composable uses: an autonomous Telegram agent and
+workspace-scoped plugins called by your existing local CLI/GUI executor.
+For CLI-only requests, follow [standalone setup](standalone-cli.md): no Telegram
+pairing, relay or host executor is required. The main-first Telegram onboarding
+rules below apply only when installing the autonomous relay. When both are
+requested, keep each workspace's authority and registry explicit.
+
 The user starts in their existing CLI and says “install Ezenciel”, then “create
 an agent as my family shopper”. The installing agent does the technical work.
 Keep that host CLI and login for every agent; do not request another CLI login.
