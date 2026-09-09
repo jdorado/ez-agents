@@ -6,7 +6,7 @@ import { normalizeReactionEmoji } from './reaction.js'
 import { assertId } from './identity.js'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 
-export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'blocked'
+export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 export type RunRecord = {
   version: 1
@@ -54,7 +54,7 @@ const isRun = (value: unknown): value is RunRecord => {
     Number.isSafeInteger(candidate.telegramUserId) &&
     Array.isArray(candidate.texts) &&
     candidate.texts.every((text) => typeof text === 'string') &&
-    ['queued', 'running', 'completed', 'failed', 'cancelled', 'blocked'].includes(candidate.status ?? '') &&
+    ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') &&
     typeof candidate.createdAt === 'string' &&
     Number.isFinite(Date.parse(candidate.createdAt)) &&
     (candidate.pid === undefined || (Number.isSafeInteger(candidate.pid) && candidate.pid > 0)) &&

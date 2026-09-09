@@ -9,7 +9,9 @@ transport, authentication and operation receipts.
 
 Registered events are durably recorded and deduplicated but blocked before
 executor launch with `external-execution-unavailable`. Work status reports the
-blocked count. Subscription permission does not grant permission to execute
+blocked count. These use the existing terminal `cancelled` status plus an
+additive `blockReason` field, preserving state-schema-1 rollback readability.
+Subscription permission does not grant permission to execute
 incoming demands. Unsubscription still cancels queued events; blocked runs do
 not retry automatically or prevent ordinary owner work.
 

@@ -115,7 +115,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       const blockReason = executionBlockReason(run, owner)
       if (blockReason) {
-        await runs.patch(run.id, { status: 'blocked', blockReason, endedAt: new Date().toISOString() })
+        await runs.patch(run.id, { status: 'cancelled', blockReason, endedAt: new Date().toISOString() })
         return
       }
       try {
@@ -445,7 +445,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       `Work: ${running ? `running ${running.id}` : 'idle'}`,
       `Queue: ${all.filter((r) => r.status === 'queued').length} runs; ${incoming.pending} incoming messages`,
       `Failed: ${all.filter((r) => r.status === 'failed').length} runs; ${incoming.failed} incoming batches`,
-      `Blocked: ${all.filter((r) => r.status === 'blocked').length} external runs (isolated execution unavailable)`,
+      `Blocked: ${all.filter((r) => r.blockReason === 'external-execution-unavailable').length} external runs (isolated execution unavailable)`,
       `Delivery: ${delivery.failed} failed; ${delivery.unknown} unknown/in-flight (inspect before retrying)`,
       ...(unavailableSources.size ? [`Unavailable event sources: ${[...unavailableSources].join(', ')}`] : []),
       '/stop stops active work only. /cancel clears pending work only.',

@@ -60,7 +60,9 @@ test('registered external events are durably blocked before any executor launch'
   assert.equal(f.launches.length, 0)
   const stored = await f.runs.list()
   assert.equal(stored.length, 1)
-  assert.equal(stored[0].status, 'blocked')
+  assert.equal(stored[0].status, 'cancelled')
+  // Preserve the terminal status understood by previous state-schema-1 releases.
+  assert.equal((await new RunStore(f.dir).get(stored[0].id))?.blockReason, 'external-execution-unavailable')
   assert.equal(stored[0].blockReason, 'external-execution-unavailable')
   f.setRows([event('1'), event('2'), event('3', 'chat-b')])
   await f.relay.drainSources()
