@@ -61,6 +61,10 @@ for attention. It sends no continuation prompts and stores no Ez goal state.
 Goals created by the agent's native tools also keep the session alive. Ordinary
 tasks finish after their turn. A blocked, paused or limited goal is not reported
 as successful. Native RPC requests have a response deadline; running tasks do not.
+Each scheduled task has its own Codex state under `control/cli/codex/tasks/RUN_ID`,
+with a snapshot of the agent's Codex configuration and the existing auth link.
+Foreground chat and background tasks do not initialize or migrate one shared
+native database concurrently.
 
 The foreground chat still uses `codex exec`. That invocation exits after one
 requested turn even if a goal is active, so delegate persistent work to the

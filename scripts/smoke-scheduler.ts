@@ -68,7 +68,7 @@ try{
  if(Date.parse(record.endedAt!)-Date.parse(record.startedAt!) < duration*1000)throw new Error('Worker completed before requested duration')
  let goalEvidence:unknown
  if(nativeGoal){
-  const home=join(controlDir,'cli/codex'),sessionId=record.nativeSessionId
+  const home=join(controlDir,'cli/codex/tasks',background.id),sessionId=record.nativeSessionId
   if(!sessionId)throw new Error('Missing native session ID')
   const files=await readdir(join(home,'sessions'),{recursive:true})
   const file=files.find(f=>f.endsWith(`${sessionId}.jsonl`))

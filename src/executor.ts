@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, mkdir, symlink } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, mkdir, symlink, readFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -242,6 +242,7 @@ export const startExecutorJob = async (
   texts: string[],
   options: ExecutorOptions,
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
+  if(options.runId.startsWith('r_schedule_') && !/^[a-zA-Z0-9_-]+$/.test(options.runId))throw new Error('Invalid native task run ID')
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
@@ -266,8 +267,16 @@ export const startExecutorJob = async (
   const environment = executorJobEnv(options)
   if (!host && !gui && command === 'codex') {
     // Share the existing authentication, never the user's memory/config/sessions.
-    const home = path.join(options.controlDir, 'cli', 'codex')
+    const base = path.join(options.controlDir, 'cli', 'codex')
+    const home = nativeSession ? path.join(base,'tasks',options.runId) : base
     await mkdir(home, {recursive:true,mode:0o700})
+    if(nativeSession){
+      // Snapshot this agent's configuration, never personal global configuration.
+      // Native state databases stay per task, avoiding concurrent initialization
+      // and migration of the foreground session's database.
+      try{await writeFile(path.join(home,'config.toml'),await readFile(path.join(base,'config.toml')),{flag:'wx',mode:0o600})}
+      catch(error){if(!['ENOENT','EEXIST'].includes((error as NodeJS.ErrnoException).code || ''))throw error}
+    }
     try { await symlink(path.join(homedir(), '.codex', 'auth.json'), path.join(home, 'auth.json')) }
     catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     environment.CODEX_HOME = home
