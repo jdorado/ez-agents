@@ -15,6 +15,7 @@ services:
       EZ_AGENT_WORKSPACE: ${EZ_AGENT_WORKSPACE:?Set this agent workspace}
       EZ_CONTROL_DIR: ${EZ_CONTROL_DIR:?Set this agent control directory}
       EZ_EXECUTOR_CLI: ${EZ_EXECUTOR_CLI:?Set the host installation CLI}
+      EZ_EXECUTOR_TIMEOUT_SECONDS: ${EZ_EXECUTOR_TIMEOUT_SECONDS:-300}
     secrets: [relay_env]
     configs:
       - source: agent_purpose
