@@ -89,7 +89,9 @@ the owner to restate their request. Do not silently renew it.
 
 The core presents the exact proposal for owner confirmation. Ordinary messages
 inside that grant need no repeated confirmations. Incoming-only grants create
-no initial run or opening message. After approval, verify active core state,
+no initial run or opening message. They remain active across replies until expiry
+or owner revocation; the worker cannot close a watch by calling `complete`.
+After handling a message, save a task note and finish the run. After approval, verify active core state,
 contact and expiry, source reachability, and the provider's task watch. With
 `--incoming-only`, an empty conversation is correctly idle until a new message.
 If approval is still pending, say pending; if setup failed, name the actual

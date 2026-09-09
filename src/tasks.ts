@@ -151,6 +151,7 @@ export class Tasks {
         const incoming = run.external ? await new EventSources(this.controlDir).check(run.external, task.owner) : []
         if (incoming.some(e => e.conversationId !== task.conversationId || e.receivedAt < task.createdAt)) throw new Error('Task correspondence changed')
         return { purpose: task.purpose, context: task.context, contact: task.conversationId,
+        waitForIncoming: task.waitForIncoming === true,
         expiresAt: task.expiresAt, notes: task.notes, operations: task.operations,
         incoming }
       }
@@ -159,6 +160,7 @@ export class Tasks {
         if (task.notes.join('').length + args.text.length > 16000) throw new Error('Task notes are full')
         task.notes.push(args.text); await this.save(task); return { saved: true }
       }
+      if (command === 'complete' && task.waitForIncoming) throw new Error('This incoming-only watch stays active until expiry or owner revocation. Save a note and end this run; do not close the watch after replying.')
       if (command === 'report' || command === 'complete') {
         const item = await new RunStore(this.controlDir).enqueueMessage(run.id, `Task ${task.id} (${task.conversationId}) reports:\n${args.text}`)
         if (command === 'complete') { task.state = 'completed'; await this.save(task) }
