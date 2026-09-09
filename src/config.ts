@@ -11,6 +11,8 @@ export type Config = ControlConfig & {
   workspace: string
   executorTimeoutMs: number
   executorCli: string
+  channelBackendUrl?: string
+  channelBackendToken?: string
   geminiApiKey?: string
   openaiApiKey?: string
 }
@@ -36,12 +38,15 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   const telegramBotToken = env.TELEGRAM_BOT_TOKEN?.trim()
   if (!telegramBotToken) throw new Error('TELEGRAM_BOT_TOKEN is required')
 
+  if (env.EZ_CHANNEL_BACKEND_URL && !env.EZ_CHANNEL_BACKEND_TOKEN?.trim()) throw new Error('EZ_CHANNEL_BACKEND_TOKEN is required')
   return {
     ...loadControlConfig(env),
     telegramBotToken,
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
     executorTimeoutMs: positiveInteger(env.EZ_EXECUTOR_TIMEOUT_SECONDS, 'EZ_EXECUTOR_TIMEOUT_SECONDS', 300) * 1_000,
     executorCli: env.EZ_EXECUTOR_CLI?.trim() || 'agy',
+    channelBackendUrl: env.EZ_CHANNEL_BACKEND_URL?.trim(),
+    channelBackendToken: env.EZ_CHANNEL_BACKEND_TOKEN?.trim(),
     geminiApiKey: env.GEMINI_API_KEY?.trim(),
     openaiApiKey: env.OPENAI_API_KEY?.trim(),
   }

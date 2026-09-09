@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { validOrigin, type ExternalOrigin } from './event-sources.js'
 import { normalizeReactionEmoji } from './reaction.js'
+import type { IncomingItem } from './inbox.js'
 import { assertId } from './identity.js'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 
@@ -14,11 +15,13 @@ export type RunRecord = {
   chatId: number
   telegramUserId: number
   messageId?: number
+  items?: IncomingItem[]
   texts: string[]
   status: RunStatus
   createdAt: string
   startedAt?: string
   endedAt?: string
+  backendSubmitted?: boolean
   pid?: number
   execution?: ExecutionChoice
   external?: ExternalOrigin
@@ -56,6 +59,7 @@ const isRun = (value: unknown): value is RunRecord => {
     ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') &&
     typeof candidate.createdAt === 'string' &&
     Number.isFinite(Date.parse(candidate.createdAt)) &&
+    (candidate.backendSubmitted === undefined || typeof candidate.backendSubmitted === 'boolean') &&
     (candidate.pid === undefined || (Number.isSafeInteger(candidate.pid) && candidate.pid > 0)) &&
     (candidate.external === undefined || validOrigin(candidate.external)) &&
     (candidate.execution === undefined || isExecutionChoice(candidate.execution))
@@ -102,7 +106,8 @@ export class RunStore {
     id?: string
     chatId: number
     telegramUserId: number
-    texts: string[]
+    items?: IncomingItem[]
+  texts: string[]
     messageId?: number
     execution?: ExecutionChoice
     external?: ExternalOrigin
@@ -122,6 +127,7 @@ export class RunStore {
       telegramUserId: input.telegramUserId,
       messageId: input.messageId,
       texts: input.texts,
+      items: input.items,
       execution: input.execution,
       external: input.external,
       status: 'queued',
@@ -144,7 +150,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'backendSubmitted'>>,
   ): Promise<RunRecord> {
     const run = await this.get(id)
     if (!run) throw new Error(`Unknown run ${id}`)
@@ -215,13 +221,20 @@ export class RunStore {
   async enqueueMessage(
     runId: string,
     text: string,
-    options?: { replyToMessageId?: number },
+    options?: { replyToMessageId?: number; id?: string },
   ): Promise<OutboxItem> {
     const run = await this.get(runId)
     if (!run) throw new Error(`Unknown run ${runId}`)
     if (run.status !== 'running' && run.status !== 'queued') throw new Error(`Run ${runId} cannot send`)
+    if (options?.id) {
+      assertId(options.id)
+      for (const suffix of ['json', 'sending.json', 'sent.json', 'failed.json']) {
+        try { return JSON.parse(await readFile(path.join(this.outboxDir, `${options.id}.${suffix}`), 'utf8')) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      }
+    }
     const item: OutboxItem = {
-      id: `${runId}_${Date.now().toString(36)}_${randomBytes(2).toString('hex')}`,
+      id: options?.id ?? `${runId}_${Date.now().toString(36)}_${randomBytes(2).toString('hex')}`,
       runId,
       chatId: run.chatId,
       type: 'message',

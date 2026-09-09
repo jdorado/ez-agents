@@ -1,3 +1,4 @@
+import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { queueUpdateAttention } from './update-attention.js'
@@ -29,7 +30,7 @@ import { softwareStatus } from './software-status.js'
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
     let message = error instanceof Error ? error.message : 'Unknown error'
-    for (const secret of [config.telegramBotToken, config.geminiApiKey, config.openaiApiKey]) {
+    for (const secret of [config.channelBackendToken, config.telegramBotToken, config.geminiApiKey, config.openaiApiKey]) {
       if (secret) message = message.replaceAll(secret, '[redacted]')
     }
     return message
@@ -44,6 +45,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
 
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
+  let activeBackend = false
   let activeChild: ChildProcess | null = null
   let shuttingDown = false
   let nextSendAt = 0
@@ -91,7 +93,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
-      if (shuttingDown || activeChild) return
+      if (shuttingDown || activeChild || activeBackend) return
       // stat uses the effective UID; access uses the relay's isolated real UID.
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
@@ -99,6 +101,22 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const owner = (await control.status()).owner
       if (!owner || owner.telegramUserId !== run.telegramUserId || owner.telegramChatId !== run.chatId) {
         await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
+        return
+      }
+      if (config.channelBackendUrl) {
+        if (run.external) { await runs.patch(run.id, { status: 'failed' }); return }
+        activeBackend = true
+        await runs.patch(run.id, { status: 'running', backendSubmitted: true })
+        void dispatchChannel(config, run).then(async reply => {
+          if (reply === null) { await runs.patch(run.id, { status: 'queued' }); return }
+          if (reply) await runs.enqueueMessage(run.id, reply, { id: `${run.id}_backend`, replyToMessageId: run.messageId })
+          await runs.patch(run.id, { status: 'completed', endedAt: new Date().toISOString() })
+        }).catch(async error => {
+          console.error('Channel backend unavailable', safeError(error))
+          // The backend deduplicates the stable run ID. Retry transport, never create another operation.
+          await new Promise(resolve => setTimeout(resolve, 5000))
+          await runs.patch(run.id, { status: error?.permanent ? 'failed' : 'queued' })
+        }).finally(() => { activeBackend = false })
         return
       }
       let texts = run.texts
@@ -202,7 +220,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (shuttingDown) return
       const owner = (await control.status()).owner
       if (!owner) return
-      await queueUpdateAttention(config.controlDir,owner,runs,await control.captureChoice(aiMenu.initial))
+      if (!config.channelBackendUrl) await queueUpdateAttention(config.controlDir,owner,runs,await control.captureChoice(aiMenu.initial))
       for (const source of await sources.available(owner)) {
         try {
           const batch = await sources.batch(source)
@@ -239,6 +257,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let intakeWork: Promise<void> | undefined
   const collectItem = (item: IncomingItem) => {
     const message = normalizing?.message
+    item.sentAt = message?.date
+    item.caption = message?.caption
+    item.albumId = message?.media_group_id
     if (message?.media_group_id) item.text = `[Telegram album: ${message.media_group_id}]\n${item.text}`
     if (message && !message.text && message.reply_to_message) {
       const quoted = message.reply_to_message
@@ -284,6 +305,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
                 telegramUserId: first.fromId,
                 messageId: first.messageId,
                 texts: collected.map((item) => item.text),
+                items: collected,
                 execution: batch.entries[0].execution,
               })
             await inbox.finish(batch.id)
@@ -454,7 +476,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     await withStartLock(async () => {
       count += await inbox.cancel()
       for (const run of await runs.list()) {
-        if (run.status !== 'queued') continue
+        if (run.status !== 'queued' || run.backendSubmitted) continue
         await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() })
         count++
       }
@@ -505,7 +527,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
 
+    if (config.channelBackendUrl && ['/new', '/ai', '/settings'].includes(text ?? '')) {
+      await ctx.reply('Conversation and model settings are managed in the connected application.')
+      return
+    }
+
     // Steering & session commands
+    if (text === '/stop' && config.channelBackendUrl) {
+      await ctx.reply('This channel uses an application backend. Stopping its active job is not supported here; check the application. /cancel removes only pending relay work.')
+      return
+    }
     if (text === '/stop') {
       const running = await runs.running()
       if (running && running.pid) {
@@ -586,6 +617,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const prompt = `[Attached image staged at ${staged.relativePath} (type: ${staged.fileType}, size: ${buffer.length} bytes)]${caption ? `\n\nCaption: ${caption}` : ''}`
       collectItem({
         text: prompt,
+        attachment: { path: staged.relativePath, type: staged.fileType },
         messageId: ctx.message.message_id,
         updateId: ctx.update.update_id,
         chatId: ctx.chat.id,
@@ -614,6 +646,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const prompt = `[Attached document staged at ${staged.relativePath} (type: ${staged.fileType}, size: ${buffer.length} bytes)]${caption ? `\n\nCaption: ${caption}` : ''}`
       collectItem({
         text: prompt,
+        attachment: { path: staged.relativePath, type: staged.fileType },
         messageId: ctx.message.message_id,
         updateId: ctx.update.update_id,
         chatId: ctx.chat.id,
@@ -702,6 +735,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         })
         console.info('Approval decision recorded', { actionId, decision: isApproved ? 'approved' : 'denied' })
       }
+    } else if (config.channelBackendUrl && ['menu:new', 'menu:ai', 'menu:settings'].includes(data)) {
+      await ctx.answerCallbackQuery()
+      await ctx.reply('Conversation and model settings are managed in the connected application.')
     } else if (await aiMenu.handle(ctx)) {
       return
     } else if (data.startsWith('menu:')) {
@@ -728,6 +764,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       } else if (action === 'cancel') {
         await ctx.answerCallbackQuery()
         await ctx.reply(await cancelPending())
+      } else if (action === 'stop' && config.channelBackendUrl) {
+        await ctx.answerCallbackQuery()
+        await ctx.reply('This channel uses an application backend. Stopping its active job is not supported here; check the application.')
       } else if (action === 'stop') {
         const running = await runs.running()
         if (running && running.pid) {
@@ -773,9 +812,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       console.log(`ezenciel-agents listening with workspace ${config.workspace}`)
       console.log(`Authority control state: ${config.controlDir}`)
       console.log(`CLI executor: ${config.executorCli}`)
-      await aiMenu.refresh()
+      if (!config.channelBackendUrl) await aiMenu.refresh()
 
       // Reconcile stale runs and start any queued run on boot
+      if (config.channelBackendUrl) {
+        for (const run of await runs.list()) if (run.status === 'running' && !run.pid) await runs.patch(run.id, { status: 'queued' })
+      }
       const currentRunning = await runs.running()
       if (!currentRunning) {
         const pendingRun = await runs.nextQueued()
