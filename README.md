@@ -5,6 +5,13 @@ through a restricted Codex runtime. Other external events remain blocked. See
 [plugin declarations](docs/plugins.md#exposure-declarations) and
 [authority boundaries](docs/architecture/authority-boundaries.md).
 
+Ez supports two independent, composable uses: an autonomous Telegram agent and
+workspace-scoped plugins called by your existing local CLI/GUI executor.
+For CLI-only requests, follow [standalone setup](docs/standalone-cli.md): no Telegram
+pairing, relay or host executor is required. The main-first Telegram onboarding
+rules below apply only when installing the autonomous relay. When both are
+requested, keep each workspace's authority and registry explicit.
+
 Telegram `/status` shows the running relay and host
 versions plus installed plugin versions. The agent's `ez status` adds verified
 plugin runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).

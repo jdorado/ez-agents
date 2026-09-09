@@ -175,3 +175,37 @@ test('exposure is conservative discovery metadata and does not change literal di
   assert.throws(()=>validate(f.manifest,f.deployment,after.files),/exposure/);
  }
 });
+
+test('standalone CLI has discoverable setup, independent guidance and status without Telegram',async t=>{
+ const f=await fixture(t);
+ const help=JSON.parse((await exec(process.execPath,[bin,'--help'])).stdout);
+ assert.match(help.usage,/--standalone/);
+ await exec(process.execPath,[bin,'init','--standalone','--home',f.home,'--workspace',f.workspace],{env:f.env});
+ const notes=await fs.readFile(path.join(f.workspace,'TOOLS.md'),'utf8');
+ assert.match(notes,/existing local CLI/);
+ assert.doesNotMatch(notes,/Finish the main Telegram|ezenciel-agents-message/);
+ const launcher=path.join(f.home,'bin','ez');
+ const status=JSON.parse((await exec(launcher,['status'],{cwd:f.root,env:f.env})).stdout);
+ assert.equal(status.main,null);assert.deepEqual(status.plugins,[]);
+ assert.equal(status.workspace,await fs.realpath(f.workspace));
+ await assert.rejects(fs.access(f.log)); // no Docker call during initialization/status
+ await assert.rejects(exec(process.execPath,[bin,'init','--standalone','--home',f.home,'--workspace',f.workspace]),/Registry already exists/);
+ await fs.writeFile(path.join(f.home,'registry.json'),'{');
+ await assert.rejects(exec(launcher,['status']),/JSON/);
+});
+
+test('standalone rejects relay binding and preserves literal plugin arguments across callers',async t=>{
+ const f=await fixture(t);
+ await assert.rejects(initManager(f.home,f.workspace,undefined,'/missing/host.json',true),/cannot bind/);
+ await initManager(f.home,f.workspace,undefined,undefined,true);
+ const p=await snapshot(f.source);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ const launcher=path.join(f.home,'bin','ez'),args=['sample','--home','/other','$(literal)','--json'];
+ for(const cwd of [f.root,f.workspace,f.source]) {
+  assert.deepEqual(JSON.parse((await exec(launcher,args,{cwd,env:f.env})).stdout),args.slice(1));
+ }
+ const log=(await fs.readFile(f.log,'utf8')).trim().split('\n').map(JSON.parse);
+ assert(log.every(call=>call.secret===undefined));
+ await fs.writeFile(path.join(f.home,'config.json'),JSON.stringify({schemaVersion:1,workspace:f.workspace,catalog:{},deploymentDir:'/missing'}));
+ await assert.rejects(exec(launcher,['status']),/deployment-bound/); // never hide a broken relay binding
+});

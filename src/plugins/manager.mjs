@@ -143,7 +143,8 @@ async function registry(home) {
   for(const [alias,plugin] of Object.entries(r.commands)) if(!r.plugins[plugin]?.deployment?.commands?.[alias]) throw Error('Corrupt command registry');
   return r;
 }
-export async function init(home,workspace,catalogFile,hostConfig) {
+export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
+  if(standalone && hostConfig) throw Error('Standalone setup cannot bind a relay host config');
   if(typeof home!=='string'||typeof workspace!=='string'||!path.isAbsolute(home)||!path.isAbsolute(workspace)||/[\r\n\0$:,]/.test(home+workspace)) throw Error('Explicit absolute home/workspace required');
   workspace=await fs.realpath(workspace);await privateDir(home);home=await fs.realpath(home);
   if(await fs.lstat(path.join(home,'registry.json')).catch(()=>null)) throw Error('Registry already exists; refusing replacement');
@@ -172,7 +173,7 @@ export async function init(home,workspace,catalogFile,hostConfig) {
     }
   });
   const index=path.join(workspace,'TOOLS.md');
-  const prior=await fs.readFile(index,'utf8').catch(e=>{if(e.code==='ENOENT')return fs.readFile(new URL('../../templates/agent/TOOLS.md',import.meta.url),'utf8');throw e;});
+  const prior=await fs.readFile(index,'utf8').catch(e=>{if(e.code==='ENOENT')return fs.readFile(new URL(standalone?'../../templates/standalone-tools.md':'../../templates/agent/TOOLS.md',import.meta.url),'utf8');throw e;});
   await fs.writeFile(index,prior+'\n## Registered plugins\n\nUse `'+path.join(home,'bin','ez')+'` for this agent only.\nDiscover reviewed packages with `ez plugins available`; inspect with `ez plugins inspect <id>`.\nOn an authorized installation request, run `ez plugins install <id>`, then `ez plugins start <id>`.\nRead the installed skill paths from `ez plugins list` before onboarding or provider operations.\nUse `ez tools list` for aliases and `ez <alias> --help` for native commands.\nInstallation does not grant send authority. The registry is the only plugin installation, command and lifecycle authority. Do not create standalone provider launchers or deployments.\n',{mode:0o600});
   if(hostConfig && path.basename(hostConfig)==='host-executor.json') await (await import('../updates/binding.mjs')).bindUpdates(home,hostConfig);
   return {ok:true,launcher:path.join(home,'bin','ez'),workspace};
@@ -215,13 +216,14 @@ export async function main(args) {
   // Only the fixed launcher may supply the leading home binding. Never consume plugin arguments here.
   let home;if(args[0]==='--home') {home=args[1];args=args.slice(2);}
   if(args[0]==='enable-updates') {args.shift();const h=take('--home'),host=take('--host-config');if(args.length||!h||!host)throw Error('Supply --home and --host-config');return emit(await (await import('../updates/binding.mjs')).bindUpdates(h,host));}
-  if(args[0]==='init') {args.shift();const options=[take('--home'),take('--workspace'),take('--catalog'),take('--host-config')];if(args.length)throw Error('Unknown init arguments');return emit(await init(...options));}
+  if(!home && (args.length===0 || (args.length===1 && ['--help','-h'].includes(args[0])))) return emit({usage:'ezenciel-agents-tools init --standalone --home /absolute/tools --workspace /absolute/workspace',relay:'Omit --standalone and supply --host-config for a relay binding',discovery:'Use the returned launcher from any local executor; read workspace/TOOLS.md'});
+  if(args[0]==='init') {args.shift();const standalone=args.includes('--standalone');if(standalone)args.splice(args.indexOf('--standalone'),1);const options=[take('--home'),take('--workspace'),take('--catalog'),take('--host-config')];if(args.length)throw Error('Unknown init arguments');return emit(await init(...options,standalone));}
   if(!home || !path.isAbsolute(home)) throw Error('Use the agent-bound launcher, or init --home /absolute/tools --workspace /absolute/mind --catalog /absolute/catalog.json');
   home=await fs.realpath(home);
   const config=await json(path.join(home,'config.json'));
   if(config.schemaVersion!==1 || !path.isAbsolute(config.workspace)) throw Error('Invalid binding');
   const [group,action,...rest]=args;
-  if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');return emit(await (await import('../updates/status.mjs')).status(home));}
+  if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
   if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list|exposure','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});

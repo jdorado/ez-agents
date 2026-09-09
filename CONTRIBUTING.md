@@ -18,6 +18,9 @@ repository. Public docs describe shipped behavior and explicit limitations.
 
 You are responsible for understanding submitted code, including AI-generated
 code, and having the right to contribute it under this repository's license.
+For unreleased feature testing, follow [local QA](docs/local-qa.md): stage an
+immutable beta candidate and provide a simple PA upgrade instruction and feature
+QA flow. A public release is not required for this handoff.
 Do not upload conversation dumps, credentials, QR codes or customer records.
 Installation authority alone does not authorize messaging another person.
 Use synthetic providers for routine tests; live tests need a dedicated account

@@ -37,7 +37,13 @@ async function plugin(record,run) {
 }
 
 export async function status(home,run=execute) {
-  const {config,agent}=await state(home),registry=await read(path.join(home,'registry.json'));
+  const binding=await read(path.join(home,'config.json')),registry=await read(path.join(home,'registry.json'));
+  if(!Object.hasOwn(binding,'deploymentDir') && !Object.hasOwn(binding,'packageRoot')) return {
+    main:null,scope:home,workspace:binding.workspace,
+    plugins:await Promise.all(Object.values(registry.plugins).map(record=>plugin(record,run))),
+    jobs:[],updates:'Unavailable without a relay deployment binding'
+  };
+  const {config,agent}=await state(home);
   let installedVersion=null;
   try {installedVersion=(await read(path.join(config.packageRoot,'package.json'))).version;}catch {}
   return {
