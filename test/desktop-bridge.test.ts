@@ -157,3 +157,20 @@ test('an unavailable desktop fails closed without spawning Codex CLI', async () 
     await rm(home, { recursive: true, force: true })
   }
 })
+
+test('unlimited desktop waits reject on disconnect and do not miss an early completion',async()=>{
+ const {PassThrough}=await import('node:stream')
+ const {attachClient}=await import('../src/desktop-bridge.js')
+ const socket=new PassThrough()
+ const client=attachClient(socket as unknown as import('node:net').Socket)
+ const waiting=client.wait(()=>false,0)
+ const rejected=assert.rejects(waiting,/desktop|Codex|unavailable/i)
+ socket.destroy();await rejected
+ await assert.rejects(client.wait(()=>true,0),/desktop|Codex|unavailable/i)
+ await assert.rejects(client.request('test',{}),/desktop|Codex|unavailable/i)
+ const other=new PassThrough(),early=attachClient(other as unknown as import('node:net').Socket)
+ const payload=Buffer.from(JSON.stringify({method:'turn/completed'}))
+ other.write(Buffer.concat([Buffer.from([0x81,payload.length]),payload]))
+ assert.equal((await early.wait(m=>m.method==='turn/completed',0)).method,'turn/completed')
+ early.close()
+})

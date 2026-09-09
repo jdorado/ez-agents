@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { startExecutorJob, terminateJob, resolveExecutor, type ExecutorOptions } from './executor.js'
 import { readModels, validateSelection } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
+import { RunStore } from './runs.js'
+import { taskWorkspace } from './task-workspace.js'
 import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
 
@@ -66,10 +68,22 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
         await writeFile(path.join(directory,'heartbeat.tmp'),JSON.stringify({at:Date.now(),pid:process.pid,version:packageVersion,plugins:await installedPluginVersions(agent.toolsHome)}),{mode:0o600})
         await rename(path.join(directory,'heartbeat.tmp'),path.join(directory,'heartbeat.json'))
         for (const file of await readdir(directory)) {
-          if ((!file.endsWith('.request.json') || !isHostRunId(file.slice(0,-13))) || busy.has(agent.name)) continue
-          const base=path.join(directory,file.slice(0,-13))
+          if (!file.endsWith('.request.json') || !isHostRunId(file.slice(0,-13))) continue
+          const id=file.slice(0,-13)
+          let run
+          try {
+            run = id.startsWith('r_schedule_') ? await new RunStore(agent.controlDir).get(id) : null
+            if(id.startsWith('r_schedule_') && !run?.scheduled) throw new Error('Missing scheduled run')
+          } catch {
+            await appendFile(path.join(directory,id+'.events'),JSON.stringify({stream:'exit',code:1})+'\n',{mode:0o600})
+            await rm(path.join(directory,file))
+            continue
+          }
+          const lane=run?.scheduled ? agent.name+':'+id : agent.name
+          if(busy.has(lane) || (run?.scheduled && [...busy].filter(k=>k.startsWith(agent.name+':')).length>=4)) continue
+          const base=path.join(directory,id)
           await rename(base+'.request.json',base+'.running.json')
-          busy.add(agent.name)
+          busy.add(lane)
           const task=(async()=>{
             let job: Awaited<ReturnType<typeof startExecutorJob>> | undefined
             let cancellation: ReturnType<typeof setInterval> | undefined
@@ -83,11 +97,11 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               const cli = opts.cli || installation.cli
               resolveExecutor(cli)
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,model:opts.model,effort:opts.effort},await readModels())
-              const options:ExecutorOptions={workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,cli,
-                runId:path.basename(base),timeoutMs:Math.min(Math.max(Number(opts.timeoutMs)||300000,1000),1800000),
+              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,cli,
+                runId:path.basename(base),timeoutMs:0,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort}
               job=await startExecutorJob(request.texts,options)
-              active.set(agent.name,job.child)
+              active.set(lane,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})
               if(signal.aborted)terminateJob(job.child)
               job.child.stdout?.on('data',chunk=>emit({stream:'stdout',text:chunk.toString()}))
@@ -103,13 +117,12 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await rm(base+'.running.json',{force:true})
               await rm(base+'.process.json',{force:true})
               await rm(base+'.cancel',{force:true})
-              active.delete(agent.name)
-              busy.delete(agent.name)
+              active.delete(lane)
+              busy.delete(lane)
             }
           })()
           tasks.add(task); void task.finally(()=>tasks.delete(task))
-          // Do not claim a second job while asynchronous spawning is pending.
-          break
+          // The lane is reserved before spawning; other task workspaces may start.
         }
       }
       await new Promise(resolve=>setTimeout(resolve,250))

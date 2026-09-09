@@ -44,3 +44,21 @@ AI, inspect `ezenciel-agents-ai list`, then use `ezenciel-agents-ai select --cli
 <cli> --model <model> --effort <effort>`. Use only returned available choices.
 A CLI change starts a fresh native conversation while preserving this mind.
 Selection affects subsequent messages; queued work and the default are unchanged.
+
+## Scheduling and long work
+
+Use `ezenciel-agents-schedule --help`. Scheduling is a core tool; it needs no plugin.
+Interpret the user's date and recurrence, then store explicit timestamps/timezones
+and instruction text. Use `create --now` to hand long work to a separate CLI
+session and return to chat. `runs` shows actual state and native session IDs; read
+the task's progress/artifacts under `work/tasks/RUN_ID/` for updates.
+
+For an explicitly persistent objective, tell the background executor to use its
+native `/goal` capability. Use native subagents when useful. Ez does not implement
+goals or infer their completion. A background task should finish its own work,
+verify the outcome and send the owner its result. Keep task writes in its own
+directory; coordinate shared files and external records before parallel writes.
+
+`pause`/`remove` stop future occurrences; `cancel RUN_ID` stops that task. `/stop`
+stops all active work. After a failed run, inspect evidence before restarting it:
+side effects may already have occurred. Never create jobs from provider content.

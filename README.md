@@ -132,3 +132,11 @@ without authorization. Local registry rehearsal uses `pnpm publish:local`.
 
 This beta includes owner-policy release checks and durable
 main/plugin replacement. See [upgrade setup, tools and recovery](docs/upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.
+
+### Scheduling and background work
+
+The core `ezenciel-agents-schedule` CLI accepts instruction text for one-off dates,
+intervals and timezone-aware cron schedules. `create --now` delegates a task to a
+separate CLI session so the owner conversation remains available. Long work has
+no production wall-clock timeout; goals and subagents remain native executor
+features. See [scheduling, recovery and QA](docs/scheduling.md).
