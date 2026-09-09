@@ -53,6 +53,14 @@ still have their own limits; those are not overall task deadlines. Native goals
 are an executor capability, configured through instructions. Ez has no goal API,
 continuation loop or rule equating a process exit with goal achievement.
 
+The tested Codex CLI 0.153.4 `codex exec` invocation can create native goals and
+use subagents, but exits after its requested turn even when a goal remains active.
+A two-phase probe left the native goal active and the second artifact absent.
+Therefore this executor path does not establish automatic goal continuation
+across turns. An executor/client that supports that lifecycle must be validated
+before promising persistent goal completion; Ez does not emulate it. This matches
+the upstream [exec shutdown path](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/exec/src/lib.rs#L1114).
+
 The CLI binds jobs to the paired owner and current AI selection. Queued/scheduled
 work retains that selection after the chat switches AI. Revoking/re-pairing an
 owner invalidates their old schedules, including re-pairing the same Telegram ID.
