@@ -12,7 +12,7 @@ import { taskWorkspace } from './task-workspace.js'
 import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
 
-export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string }
+export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
 
 export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal) => {
@@ -27,6 +27,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   try {
     for (const agent of installation.agents) {
       if (![agent.workspace,agent.controlDir,agent.binDir].every(path.isAbsolute)) throw new Error('Host bindings require absolute paths')
+      if (agent.sharedWorkspace && !path.isAbsolute(agent.sharedWorkspace)) throw new Error('Shared workspace requires an absolute path')
       if (agent.toolsHome) {
         if (!path.isAbsolute(agent.toolsHome)) throw new Error('Plugin registry binding requires an absolute path')
         const config=JSON.parse(await readFile(path.join(agent.toolsHome,'config.json'),'utf8'))
@@ -81,7 +82,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             await rm(path.join(directory,file))
             continue
           }
-          const lane=run?.scheduled ? agent.name+':'+id : agent.name
+          const lane=run?.scheduled && !agent.sharedWorkspace ? agent.name+':'+id : agent.name
           if(busy.has(lane) || (run?.scheduled && [...busy].filter(k=>k.startsWith(agent.name+':')).length>=4)) continue
           const base=path.join(directory,id)
           await rename(base+'.request.json',base+'.running.json')
@@ -104,7 +105,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               const cli = opts.cli || installation.cli
               resolveExecutor(cli)
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,model:opts.model,effort:opts.effort},await readModels())
-              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,cli,
+              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace:agent.sharedWorkspace,cli,
                 runId:path.basename(base),timeoutMs:0,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort}
               job=await startExecutorJob(request.texts,options)

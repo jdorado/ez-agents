@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { isHostRunId } from '../src/host-executor-protocol.js'
 import { EXECUTOR_REGISTRY } from '../src/executor.js'
+import { RunStore } from '../src/runs.js'
 import { packageVersion } from '../src/version.js'
 
 test('one installed CLI executes two agent bindings with separate minds and sanitized environment', async () => {
@@ -32,7 +33,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       await mkdir(workspace,{recursive:true});await mkdir(controlDir,{recursive:true})
       const toolsHome=path.join(root,name,'tools');await mkdir(toolsHome)
       await writeFile(path.join(toolsHome,'config.json'),JSON.stringify({schemaVersion:1,workspace:await realpath(workspace)}))
-      return {name,workspace,controlDir,binDir:path.join(root,'bin'),toolsHome}
+      return {name,workspace,controlDir,binDir:path.join(root,'bin'),toolsHome,sharedWorkspace:root}
     }))
     server=serveHostExecutor({cli:'grok',agents},abort.signal)
     for(const agent of agents){
@@ -52,6 +53,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       assert.equal(result.control,agent.controlDir)
       assert.equal(result.token,undefined)
       assert.ok(result.args.includes(agent.toolsHome))
+      assert.ok(result.args.includes(root))
       assert.ok(!result.args.includes('/wrong'))
       assert.equal(result.home,process.env.HOME)
     }
@@ -88,12 +90,14 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     const submit=async(id:string)=>{await ownerRun(agents[0].controlDir,id);await writeFile(path.join(directory,id+'.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok',timeoutMs:5000}}))}
     await submit('r_hold')
     for(let n=0;n<100;n++){try{await readFile(path.join(directory,'r_hold.process.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
-    await submit('r_queued')
+    await new RunStore(agents[0].controlDir).create({id:'r_schedule_queued',chatId:101,telegramUserId:101,texts:['test'],scheduled:{id:'shared',revision:'v1',dueAt:new Date().toISOString(),pairedAt:new Date().toISOString()}})
+    await new RunStore(agents[0].controlDir).patch('r_schedule_queued',{status:'running'})
+    await writeFile(path.join(directory,'r_schedule_queued.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok',sharedWorkspace:'/wrong'}}))
     await new Promise(r=>setTimeout(r,350))
-    await assert.rejects(readFile(path.join(directory,'r_queued.running.json')),{code:'ENOENT'})
+    await assert.rejects(readFile(path.join(directory,'r_schedule_queued.running.json')),{code:'ENOENT'})
     await writeFile(path.join(directory,'r_hold.cancel'),'')
     let output=''
-    for(let n=0;n<200;n++){try{output=await readFile(path.join(directory,'r_queued.events'),'utf8');if(output.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
+    for(let n=0;n<200;n++){try{output=await readFile(path.join(directory,'r_schedule_queued.events'),'utf8');if(output.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
     assert.match(output, /"stream":"exit","code":0/)
     assert.match(await readFile(path.join(directory,'r_hold.events'),'utf8'), /"stream":"exit","code":1/)
   } finally {
