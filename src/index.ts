@@ -1,3 +1,6 @@
+import { Tasks } from './tasks.js'
+import { taskRequests } from './task-rpc.js'
+import { executionBlockReason } from './execution-authority.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
@@ -44,6 +47,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const sources = new EventSources(config.controlDir)
   const scheduler = new Scheduler(config.controlDir)
   const background = new Map<string, ChildProcess>()
+  const tasks = new Tasks(config.controlDir)
+  const drainTaskRequests = taskRequests(tasks)
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
 
@@ -122,13 +127,23 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         }
         texts = events.map(event => JSON.stringify(event))
       }
+      if (run.taskId) {
+        try { await tasks.authorize(run) } catch {
+          await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); return
+        }
+      }
+      const blockReason = run.taskId ? undefined : executionBlockReason(run, owner)
+      if (blockReason) {
+        await runs.patch(run.id, { status: 'cancelled', blockReason, endedAt: new Date().toISOString() })
+        return
+      }
       try {
         const started = await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
-        if (!started.execution) throw new Error('Legacy queued work has no pinned AI. Resend the request after /new.')
-        const session = run.external || run.scheduled
+        if (!started.execution && !run.taskId) throw new Error('Legacy queued work has no pinned AI. Resend the request after /new.')
+        const session = run.external || run.taskId || run.scheduled
           ? { sessionId: randomUUID(), hasStarted: false, nativeSessionId: undefined }
-          : await control.executionSession(started.execution)
-        const selected = started.execution.preset
+          : await control.executionSession(started.execution!)
+        const selected = run.taskId ? { cli: 'codex', model: undefined, effort: undefined } : started.execution!.preset
         const { child, cleanup } = await launch(texts, {
           workspace: run.scheduled ? await taskWorkspace(config.workspace,run.id) : config.workspace,
           timeoutMs: config.executorTimeoutMs,
@@ -141,7 +156,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           sessionId: session.nativeSessionId || session.sessionId,
           isResume: session.hasStarted,
           eventSource: run.external?.sourceId,
-          onSession: run.scheduled ? async (id) => { await runs.patch(run.id,{nativeSessionId:id}) } : run.external ? undefined : (id) => control.saveNativeSession(session.sessionId, id),
+          onSession: run.scheduled ? async (id) => { await runs.patch(run.id,{nativeSessionId:id}) } : run.external || run.taskId ? undefined : (id) => control.saveNativeSession(session.sessionId, id),
         })
         if (run.scheduled) background.set(run.id,child)
         else activeChild = child
@@ -159,7 +174,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         })
 
         if (!run.scheduled && activeTypingTimer) clearInterval(activeTypingTimer)
-        if (!run.external && !run.scheduled) activeTypingTimer = setInterval(() => {
+        if (!run.external && !run.taskId && !run.scheduled) activeTypingTimer = setInterval(() => {
           void bot.api.sendChatAction(run.chatId, 'typing').catch(() => {})
         }, 4000)
 
@@ -171,7 +186,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             await withStartLock(async () => {
               try {
                 await cleanup()
-                if (code === 0 && !run.external && !run.scheduled) await control.markSessionStarted(session.sessionId)
+                if (code === 0 && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(session.sessionId)
                 await runs.patch(started.id, { status: run.scheduled && await scheduler.cancelled(run.id) ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString() })
               } catch (error) {
                 await runs.patch(started.id, { status: 'failed', endedAt: new Date().toISOString() })
@@ -216,6 +231,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (shuttingDown) return
       const owner = (await control.status()).owner
       if (!owner) return
+      await drainTaskRequests()
+      for (const task of await tasks.list()) if (task.state === 'pending' || task.state === 'active') {
+        try { await tasks.decide(task.id) } catch { /* Failed or stale grants cannot launch. */ }
+      }
       await queueUpdateAttention(config.controlDir,owner,runs,await control.captureChoice(aiMenu.initial))
       for (const source of await sources.available(owner)) {
         try {
@@ -227,11 +246,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             await sources.remember(source, batch)
             const groups = new Map<string, SourceEvent[]>()
             for (const event of batch.events) groups.set(event.conversationId, [...(groups.get(event.conversationId) || []), event])
-            for (const events of groups.values()) await runs.create({
+            for (const events of groups.values()) {
+              const task = await tasks.match(source.id, source.bindingId, events)
+              await runs.create({
+              taskId: task?.id,
               id: eventRunId(source, events), chatId: owner.telegramChatId, telegramUserId: owner.telegramUserId,
               texts: [], execution: await control.captureChoice(aiMenu.initial),
               external: { sourceId: source.id, bindingId: source.bindingId, eventIds: events.map(e => e.id) },
             })
+            }
             // Acknowledgement follows durable run creation; replay uses the saved batch.
             await sources.advance(source, batch.cursor)
           })
@@ -460,6 +483,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       `Background: ${all.filter(r => r.scheduled && r.status === 'running').map(r=>r.id).join(', ') || 'idle'}`,
       `Queue: ${all.filter((r) => r.status === 'queued').length} runs; ${incoming.pending} incoming messages`,
       `Failed: ${all.filter((r) => r.status === 'failed').length} runs; ${incoming.failed} incoming batches`,
+      `Blocked: ${all.filter((r) => r.blockReason === 'external-execution-unavailable').length} external runs (isolated execution unavailable)`,
       `Delivery: ${delivery.failed} failed; ${delivery.unknown} unknown/in-flight (inspect before retrying)`,
       ...(unavailableSources.size ? [`Unavailable event sources: ${[...unavailableSources].join(', ')}`] : []),
       '/stop stops active work only. /cancel clears pending work only.',
@@ -715,6 +739,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const original = ctx.callbackQuery.message?.text || ''
         const updated = `${escapeHtml(original)}\n\n<b>Decision:</b> ${isApproved ? 'Approved ✅' : 'Denied ❌'}`
         await ctx.editMessageText(updated, { parse_mode: 'HTML' }).catch(() => {})
+        if (await tasks.decide(actionId)) { void drainSources(); return }
         collectItem({
           text: JSON.stringify({ event: 'approval_decision', actionId, decision, prompt: request?.prompt }),
           messageId: ctx.callbackQuery.message?.message_id,
@@ -790,6 +815,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     sourceTimer = setInterval(() => {
       void drainSources().catch(error => console.error('Event-source drain failed', safeError(error)))
     }, 1000)
+    const taskTimer = setInterval(() => { void drainTaskRequests().catch(console.error) }, 250)
     const drainTimer = setInterval(() => {
       void drainOutbox().catch((error) => console.error('Outbox drain failed', error.message))
     }, 250)
@@ -821,10 +847,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       })
     } finally {
       clearInterval(drainTimer)
+      clearInterval(taskTimer)
       if (sourceTimer) clearInterval(sourceTimer)
     }
   }
-  return { bot, start, stop, drainOutbox, drainInbox, drainSources }
+  return { bot, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

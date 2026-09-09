@@ -1,3 +1,4 @@
+import { ownerRun } from './helpers/owner-run.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises'
@@ -22,8 +23,10 @@ test('host transport reserves separate task and main lanes, pins directories, an
  const exists=async(file:string)=>readFile(join(dir,file),'utf8').catch(()=>'')
  try{
   await until(async()=>Boolean(await exists('heartbeat.json')))
-  await runs.create({id,chatId:1,telegramUserId:1,texts:['slow'],execution:{sessionId:randomUUID(),preset:{id:'fixture',name:'Fixture',cli:'grok'}},scheduled:{id:'s',revision:'v',dueAt:new Date().toISOString(),pairedAt:'paired'}})
+  await runs.create({id,chatId:101,telegramUserId:101,texts:['slow'],execution:{sessionId:randomUUID(),preset:{id:'fixture',name:'Fixture',cli:'grok'}},scheduled:{id:'s',revision:'v',dueAt:new Date().toISOString(),pairedAt:'paired'}})
   const submit=async(id:string)=>writeFile(join(dir,id+'.request.json'),JSON.stringify({texts:['fixture'],options:{workspace:'/evil',controlDir:'/evil',cli:'grok',timeoutMs:1}}))
+  await ownerRun(controlDir,'tg_1')
+  await runs.patch(id,{status:'running'})
   await submit(id)
   await until(async()=>Boolean(await exists(id+'.process.json')))
   await submit('tg_1')
@@ -38,6 +41,7 @@ test('host transport reserves separate task and main lanes, pins directories, an
   await submit('r_schedule_corrupt')
   await until(async()=>(await exists('r_schedule_corrupt.events')).includes('"stream":"exit","code":1'))
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
+  await ownerRun(controlDir,'tg_2')
   await submit('tg_2')
   await until(async()=>(await exists('tg_2.events')).includes('"stream":"exit","code":0'))
   await writeFile(join(dir,id+'.cancel'),'')

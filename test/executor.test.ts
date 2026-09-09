@@ -1,3 +1,4 @@
+import { ownerRun } from './helpers/owner-run.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
@@ -144,6 +145,7 @@ test('host transport does not throw when selecting the desktop adapter', async (
     await mkdir(path.join(controlDir, 'host-executor'), { recursive: true })
     await writeFile(path.join(controlDir, 'host-executor/heartbeat.json'), JSON.stringify({ at: Date.now() }))
     process.env.EZ_EXECUTOR_TRANSPORT = 'host'
+    await ownerRun(controlDir, 'r_hostgui')
     const job = await startExecutorJob(['hello'], {
       workspace: root, controlDir, binDir: path.join(root, 'bin'), cli: 'codex-gui', runId: 'r_hostgui', timeoutMs: 1500,
     })

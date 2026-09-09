@@ -1,3 +1,4 @@
+import { ownerRun } from './helpers/owner-run.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
@@ -141,6 +142,7 @@ test('an unavailable desktop fails closed without spawning Codex CLI', async () 
     await writeFile(path.join(home, 'bin/codex'), `#!${process.execPath}\nconsole.error('CLI fallback');\nprocess.exit(0)\n`, { mode: 0o700 })
     process.env.HOME = home
     process.env.PATH = path.join(home, 'bin')
+    await ownerRun(home, 'r_off')
     const job = await startExecutorJob(['hello'], {
       workspace: home, controlDir: home, binDir: path.join(home, 'bin'), cli: 'codex-gui', runId: 'r_off', timeoutMs: 4000,
     })

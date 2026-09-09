@@ -155,3 +155,23 @@ test('plugin versions accept SemVer beta releases and reject malformed versions'
  for(const version of ['0.1.0','0.1.0-beta.1','1.2.3-rc.0+build.12'])validate({...f.manifest,version},f.deployment,p.files);
  for(const version of ['01.2.3','1.2','1.2.3-beta.01','1.2.3-','1.2.3+','1.2.3/beta',null,{}])assert.throws(()=>validate({...f.manifest,version},f.deployment,p.files),/manifest version/);
 });
+
+
+test('exposure is conservative discovery metadata and does not change literal dispatch',async t=>{
+ const f=await fixture(t);await init(f.home,f.workspace);
+ const before=await snapshot(f.source);
+ const inspect=JSON.parse((await f.call('plugins','inspect','sample','--source',f.source)).stdout);
+ assert.deepEqual(inspect.exposure.sample,{declared:false,receivesExternalContent:true,sendsExternally:true,changesRecords:true,requiresReview:true});
+ f.manifest.commands.sample.exposure={receivesExternalContent:false,changesRecords:false,requiresReview:false};
+ await fs.writeFile(path.join(f.source,'ez-plugin.json'),JSON.stringify(f.manifest));
+ const after=await snapshot(f.source);assert.notEqual(before.revision,after.revision);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',after.revision);
+ const result=JSON.parse((await f.call('tools','exposure')).stdout);
+ assert.deepEqual(result.sample.sample,{declared:true,receivesExternalContent:false,sendsExternally:true,changesRecords:false,requiresReview:false});
+ assert.deepEqual(JSON.parse((await f.call('sample','literal','--account','unchanged')).stdout),['literal','--account','unchanged']);
+ assert.deepEqual(JSON.parse((await f.call('tools','list')).stdout),{sample:'sample'});
+ for(const value of [null,[],true,{receivesExternalContent:'false'},{trusted:true},{requiresReview:'never'}]) {
+  f.manifest.commands.sample.exposure=value;
+  assert.throws(()=>validate(f.manifest,f.deployment,after.files),/exposure/);
+ }
+});

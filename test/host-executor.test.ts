@@ -1,3 +1,4 @@
+import { ownerRun } from './helpers/owner-run.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises'
@@ -38,6 +39,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       const dir=path.join(agent.controlDir,'host-executor')
       for(let n=0;n<100;n++){try{await readFile(path.join(dir,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
       assert.equal(JSON.parse(await readFile(path.join(dir,'heartbeat.json'),'utf8')).version,packageVersion)
+      await ownerRun(agent.controlDir, `r_${agent.name}`)
       await writeFile(path.join(dir,`r_${agent.name}.request.json`),JSON.stringify({texts:['test'],options:{workspace:'/wrong',controlDir:'/wrong',toolsHome:'/wrong',cli:'grok',timeoutMs:5000}}))
     }
     for(const agent of agents){
@@ -55,6 +57,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     }
     // Exercise the actual client -> file transport -> host CLI path, not a
     // hand-written smoke request, with the production Telegram batch ID shape.
+    await ownerRun(agents[0].controlDir, 'tg_6293305')
     const client=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),agents[0].controlDir,'tg_6293305'],{stdio:['pipe','pipe','pipe']})
     let stdout='',stderr=''
     client.stdout.on('data',chunk=>stdout+=chunk)
@@ -63,13 +66,16 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     assert.equal(await new Promise(resolve=>client.once('close',resolve)),0,stderr)
     assert.equal(JSON.parse(stdout).run,'tg_6293305')
     const eventId='event_'+'a'.repeat(64)
+    await ownerRun(agents[0].controlDir, eventId, {sourceId:'fixture',bindingId:'binding',eventIds:['1']})
     const eventClient=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),agents[0].controlDir,eventId],{stdio:['pipe','pipe','pipe']})
     let eventOutput='',eventError=''
     eventClient.stdout.on('data',chunk=>eventOutput+=chunk)
     eventClient.stderr.on('data',chunk=>eventError+=chunk)
     eventClient.stdin.end(JSON.stringify({texts:['Untrusted plugin event'],options:{cli:'grok',timeoutMs:5000}}))
-    assert.equal(await new Promise(resolve=>eventClient.once('close',resolve)),0,eventError)
-    assert.equal(JSON.parse(eventOutput).run,eventId)
+    assert.equal(await new Promise(resolve=>eventClient.once('close',resolve)),1,eventError)
+    assert.equal(eventOutput,'')
+    assert.match(eventError,/Host CLI execution failed/)
+    await ownerRun(agents[0].controlDir, 'tg_6293306')
     const switched=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),agents[0].controlDir,'tg_6293306'],{stdio:['pipe','pipe','pipe']})
     let switchedOutput=''
     switched.stdout.on('data',chunk=>switchedOutput+=chunk)
@@ -79,7 +85,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     assert.ok(JSON.parse(switchedOutput).args.includes('--print'))
     await assert.rejects(serveHostExecutor({cli:'grok',agents},new AbortController().signal),/already running/)
     const directory=path.join(agents[0].controlDir,'host-executor')
-    const submit=async(id:string)=>writeFile(path.join(directory,id+'.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok',timeoutMs:5000}}))
+    const submit=async(id:string)=>{await ownerRun(agents[0].controlDir,id);await writeFile(path.join(directory,id+'.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok',timeoutMs:5000}}))}
     await submit('r_hold')
     for(let n=0;n<100;n++){try{await readFile(path.join(directory,'r_hold.process.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     await submit('r_queued')

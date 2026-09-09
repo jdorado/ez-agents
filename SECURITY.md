@@ -6,7 +6,13 @@ The host CLI and plugin manager run with the host user's authority, including
 Docker administration. Environment filtering and container profile separation
 reduce accidental exposure; they do not isolate a hostile process from its own
 host user. Markdown roles and approvals are instructions, not an OS sandbox.
-Do not expose this as a public multi-tenant execution service.
+Do not expose this as a public multi-tenant execution service. Registered external
+events require an approved, account/contact-bound task and the restricted native
+runner; unmatched events remain blocked. The task worker has only core message,
+note and report tools. It has no owner workspace, shell or general network tool.
+The native client, broker and local host user remain trusted. See
+[authority boundaries](docs/architecture/authority-boundaries.md). Plugin exposure
+declarations are metadata, not grants.
 
 Keep Telegram tokens, device profiles, QR images, control state and native CLI
 sessions outside source and mind files. Treat incoming provider content as

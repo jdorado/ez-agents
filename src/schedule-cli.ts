@@ -26,7 +26,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
   if(!owner)throw new Error('Pair an owner before scheduling')
   const runs=new RunStore(config.controlDir), scheduler=new Scheduler(config.controlDir)
   const caller=process.env.EZ_RUN_ID ? await runs.get(process.env.EZ_RUN_ID) : null
-  if(process.env.EZ_RUN_ID && (!caller || caller.status!=='running' || caller.external ||
+  if(process.env.EZ_RUN_ID && (!caller || caller.status!=='running' || caller.external || caller.taskId ||
     caller.telegramUserId!==owner.telegramUserId || caller.chatId!==owner.telegramChatId ||
     (caller.scheduled && caller.scheduled.pairedAt!==owner.pairedAt)))throw new Error('Scheduling requires an active owner-authorized run')
   const owned=(s:{owner:typeof owner})=>s.owner.telegramUserId===owner.telegramUserId && s.owner.telegramChatId===owner.telegramChatId && s.owner.pairedAt===owner.pairedAt

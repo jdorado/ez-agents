@@ -14,6 +14,7 @@
     "ezenciel-agents-react": "bin/ezenciel-agents-react.mjs",
     "ezenciel-agents-approval": "bin/ezenciel-agents-approval.mjs",
     "ezenciel-agents-setup": "bin/ezenciel-agents-setup.mjs",
+    "ezenciel-agents-task": "bin/ezenciel-agents-task.mjs",
     "ezenciel-agents-source": "bin/ezenciel-agents-source.mjs",
     "ezenciel-agents-docker": "bin/ezenciel-agents-docker",
     "ezenciel-agents-create": "bin/ezenciel-agents-create",

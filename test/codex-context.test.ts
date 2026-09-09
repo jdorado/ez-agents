@@ -1,3 +1,4 @@
+import { ownerRun } from './helpers/owner-run.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,readFile,readlink,readdir,rm} from 'node:fs/promises'
@@ -16,6 +17,7 @@ test('Codex shares only auth through a link and keeps each agent runtime state s
   process.env.HOME=root;process.env.PATH=path.join(root,'bin')+path.delimiter+priorPath
   for(const agent of ['one','two']){
    const controlDir=path.join(root,agent)
+   await ownerRun(controlDir, 'r_test')
    const job=await startExecutorJob(['hello'],{workspace:root,controlDir,binDir:path.join(root,'bin'),cli:'codex',runId:'r_test',timeoutMs:5000})
    let output='';job.child.stdout?.on('data',chunk=>output+=chunk)
    assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0)
@@ -49,6 +51,7 @@ send({id:q.id,result:q.method==='thread/goal/get'?{goal:null}:{}});});setInterva
   process.env.HOME=root;process.env.PATH=bin+path.delimiter+priorPath
   await assert.rejects(startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId:'r_schedule_/../../escape',timeoutMs:0}),/Invalid native task run ID/)
   await Promise.all(['r_schedule_one','r_schedule_two'].map(async runId=>{
+   await ownerRun(controlDir, runId)
    const job=await startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:0})
    assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0);await job.cleanup()
    const home=path.join(controlDir,'cli/codex/tasks',runId)
