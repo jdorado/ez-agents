@@ -539,27 +539,37 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const waitingForHost = running && process.env.EZ_EXECUTOR_TRANSPORT === 'host' && await stat(join(config.controlDir, 'host-executor', running.id + '.request.json')).then(() => true, () => false)
     const incoming = await inbox.status()
     const delivery = await runs.deliveryStatus()
-    const session = await control.getActiveSession()
     const ai = await control.aiState(aiMenu.initial)
     const selected = ai.presets.find((p) => p.id === ai.selectedId)!
-    const defaultPreset = ai.presets.find((p) => p.id === ai.defaultId)!
     const discovered = await discoverDefaults(config.workspace, { codexHome, nativeCodexFallback: true })
     const displayedSelected = statusPreset(selected, discovered)
-    const displayedDefault = statusPreset(defaultPreset, discovered)
+    const scheduled = all.filter(run => run.scheduled && run.status === 'running').length
+    const queued = all.filter(run => run.status === 'queued').length
+    const failedRuns = all.filter(run => run.status === 'failed').length
+    const blocked = all.filter(run => run.blockReason === 'external-execution-unavailable').length
+    const attention = [
+      ...(failedRuns || incoming.failed
+        ? [`• Past failures: ${failedRuns} run${failedRuns === 1 ? '' : 's'}; ${incoming.failed} incoming batch${incoming.failed === 1 ? '' : 'es'}. Current work is unaffected.`]
+        : []),
+      ...(blocked ? [`• ${blocked} external run${blocked === 1 ? ' was' : 's were'} blocked because isolated execution was unavailable.`] : []),
+      ...(delivery.failed ? [`• ${delivery.failed} message${delivery.failed === 1 ? ' failed' : 's failed'} to send.`] : []),
+      ...(delivery.unknown ? [`• ${delivery.unknown} delivery ${delivery.unknown === 1 ? 'is' : 'attempts are'} awaiting confirmation — inspect before retrying.`] : []),
+      ...(unavailableSources.size ? [`• Event sources unavailable: ${[...unavailableSources].join(', ')}.`] : []),
+    ]
     return [
+      '🟢 Ez is online',
+      '',
+      'System',
       ...await softwareStatus(config.controlDir),
       `AI: ${selected.name} (${presetLabel(displayedSelected)})`,
-      `Default: ${defaultPreset.name} (${presetLabel(displayedDefault)})`,
-      `Session: ${session?.sessionId.slice(0, 8) || 'none'}`,
-      `Work: ${running ? `${waitingForHost ? 'waiting for workspace' : 'running'} ${running.id}` : 'idle'}`,
-      `Background: ${all.filter(r => r.scheduled && r.status === 'running').map(r=>r.id).join(', ') || 'idle'}`,
-      `Queue: ${all.filter((r) => r.status === 'queued').length} runs; ${incoming.pending} incoming messages`,
-      `Failed history: ${all.filter((r) => r.status === 'failed').length} runs; ${incoming.failed} incoming batches`,
-      ...all.filter(r => r.status === 'failed').slice(-6).map(r => `${r.scheduled?.id || r.id} (${(r.endedAt || r.createdAt).slice(0,16)}Z): ${r.interrupted ? 'interrupted by restart' : r.failureReason || 'historical failure; reason not recorded'}${r.exitCode != null ? ` (exit ${r.exitCode})` : ''}`),
-      `Blocked: ${all.filter((r) => r.blockReason === 'external-execution-unavailable').length} external runs (isolated execution unavailable)`,
-      `Delivery: ${delivery.failed} failed; ${delivery.unknown} unknown/in-flight (inspect before retrying)`,
-      ...(unavailableSources.size ? [`Unavailable event sources: ${[...unavailableSources].join(', ')}`] : []),
-      '/stop stops active work only. /cancel clears pending work only.',
+      '',
+      'Work',
+      `Current: ${running ? (waitingForHost ? 'waiting for the workspace' : 'running') : 'idle'}`,
+      `Background: ${scheduled ? `${scheduled} scheduled task${scheduled === 1 ? '' : 's'} running` : 'none'}`,
+      `Queue: ${queued || incoming.pending ? `${queued} run${queued === 1 ? '' : 's'}; ${incoming.pending} incoming message${incoming.pending === 1 ? '' : 's'}` : 'empty'}`,
+      ...(attention.length ? ['', 'Needs attention', ...attention] : []),
+      '',
+      'Controls: /stop stops active work. /cancel clears queued work.',
       ...(config.executorCli === 'grok'
         ? [
             'Known limitation: interrupted Grok sessions may stall on resume. /new explicitly resets the conversation.',
