@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.17
+
+- Capture executor stderr before asynchronous PID persistence so fast failures retain actionable, redacted diagnostic evidence for agent-owned recovery.
+- Include the reviewed beta.16 runtime and catalog corrections. Earlier unpublished candidates remain preserved; existing beta acceptance limits remain.
+
 ## 0.1.0-beta.16
 
 - Correct stale plugin-publication claims and link the catalog to live npm/GitHub release records. Agents must verify available versions instead of treating a dated catalog snapshot as a blocker.

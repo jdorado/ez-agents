@@ -59,7 +59,7 @@ test('failure review CLI is owner-bound, rejects stale reviews, and keeps failur
  assert.equal(JSON.parse((await cli(['failures'])).stdout).total,1)
 })
 
-test('failure capture, diagnosis, verified recovery and conditional quiet next tick through real CLI and relay',async()=>{
+test('failure capture, diagnosis, verified recovery and conditional quiet next tick through real CLI and relay',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-failure-loop-')),runs=new RunStore(dir),control=new ControlStore(dir,1000),scheduler=new Scheduler(dir)
  const replies:string[]=[],children:ReturnType<typeof spawn>[]=[],fixture=join(dir,'fixture.txt')
  let reviews=0
@@ -80,6 +80,13 @@ test('failure capture, diagnosis, verified recovery and conditional quiet next t
  })
  relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
  relay.bot.api.config.use(async(_p,method,payload)=>{if(method==='sendMessage')replies.push((payload as any).text);return {ok:true,result:{message_id:replies.length}} as any})
+ const originalPatch=RunStore.prototype.patch
+ t.mock.method(RunStore.prototype,'patch',async function(this:RunStore,...args:Parameters<RunStore['patch']>){
+  // Hold the PID write until the fast child has closed, reproducing slow disk
+  // without a timer or depending on runner load. Stderr must already be captured.
+  if(args[0]==='tg_10' && args[1].pid && children[0].exitCode===null) await once(children[0],'close')
+  return originalPatch.apply(this,args)
+ })
  try{
   await control.requestPairing(101,101);await control.approveOwner(101)
   const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset('grok')),start=Date.now()+2000

@@ -203,6 +203,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           onSession: run.external || run.taskId || run.replyOnly ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
         })
         const executionStarted = performance.now()
+        // Attach before disk writes: a fast child can close while PID persistence
+        // is pending, and Node drains its remaining pipes during process close.
+        let failureReason = 'executor-exit', errorTail = ''
+        child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+          errorTail = (errorTail + chunk).slice(-16384)
+          if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
+          if (chunk.trim()) console.error('executor stderr', started.id, chunk.trim())
+        })
         console.info('run timing', { run_id: run.id, phase: 'launch',
           queue_ms: Math.max(0, Date.parse(started.startedAt!) - Date.parse(run.createdAt)),
           startup_ms: Math.round(executionStarted - launchStarted), resumed: session.hasStarted })
@@ -227,12 +235,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (performance.now() - executionStarted < 30000) void bot.api.sendChatAction(run.chatId, 'typing').catch(() => {})
         }, 4000)
 
-        let failureReason = 'executor-exit', errorTail = ''
-        child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
-          errorTail = (errorTail + chunk).slice(-16384)
-          if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
-          if (chunk.trim()) console.error('executor stderr', started.id, chunk.trim())
-        })
         void finished.then((code) => {
           console.info('run timing', { run_id: run.id, phase: 'execution',
             execution_ms: Math.round(performance.now() - executionStarted), exit_code: code })
