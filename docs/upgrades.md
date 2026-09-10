@@ -197,3 +197,17 @@ Beta policy discovers the newer of npm latest and the legacy beta tag. Stable-on
 policy selects non-deprecated stable versions, even when latest is a prerelease.
 No eligible version is reported as available:null with newer:false. Older installed
 updaters need an exact-version core update to adopt this discovery behavior.
+
+## Shared agent guidance
+
+Ez includes `templates/agent-guidance.md` from the running package in every
+owner-worker prompt, including resumed CLI and desktop conversations and scheduled
+owner work. After the runtime upgrades, the next turn receives the new guidance.
+An already running turn keeps its original prompt. Restricted contact tasks and
+reply-only workers retain their separate, bounded instructions.
+
+Keep general operating defaults in this package-owned file. Keep agent purpose,
+preferences and local conventions in the workspace's `AGENTS.md`, `SOUL.md`,
+`USER.md` and memory files; upgrades preserve them. Shared guidance does not
+grant permissions, and explicit owner instructions take precedence over its
+defaults within existing execution permissions.
