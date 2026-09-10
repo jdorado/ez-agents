@@ -1,3 +1,4 @@
+import { sharedService, attachShared } from './shared.mjs';
 import { exposure, commandExposure } from './exposure.mjs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
@@ -49,16 +50,17 @@ export async function snapshot(source) {
   for(const [name,file] of [...files].sort(([a],[b])=>a.localeCompare(b))) digest.update(JSON.stringify([name,file.mode,file.data.length])).update(file.data);
   const manifest=JSON.parse(files.get('ez-plugin.json').data), deployment=JSON.parse(files.get('ez-deployment.json').data);
   validate(manifest,deployment,files);
-  return {source,files,manifest,deployment,revision:`sha256:${digest.digest('hex')}`};
+  const sharedRevisions = Object.fromEntries(Object.entries(deployment.sharedServices || {}).map(([key, spec]) => [key, hash(spec.files.map(name => name + '\0' + files.get(name).data.toString('base64')).join('\0'))]));
+  return {source,files,manifest,deployment,sharedRevisions,revision:`sha256:${digest.digest('hex')}`};
 }
 export function validate(m,d,files) {
   keys(m,['schemaVersion','id','version','description','commands','skills']);
   if(m.schemaVersion!==1 || (typeof m.version!=='string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(m.version))) throw Error('Unsupported manifest version');
   id(m.id); strings(m.skills);
-  keys(d,['schemaVersion','services','commands','exports',...(d.schemaVersion===2?['secrets']:[])]);
-  if(![1,2].includes(d.schemaVersion) || !d.services || !d.commands) throw Error('Unsupported deployment descriptor');
+  keys(d,['schemaVersion','services','commands','exports',...(d.schemaVersion>=2?['secrets']:[]),...(d.schemaVersion===3?['sharedServices']:[])]);
+  if(![1,2,3].includes(d.schemaVersion) || !d.services || !d.commands) throw Error('Unsupported deployment descriptor');
   for(const [name,s] of Object.entries(d.services)) {
-    id(name); keys(s,['buildTarget','image','volumes','workspace','healthcheck','command',...(d.schemaVersion===2?['environment','dependsOn','user','memoryMiB']:[])]);
+    id(name); keys(s,['buildTarget','image','volumes','workspace','healthcheck','command',...(d.schemaVersion>=2?['environment','dependsOn','user','memoryMiB']:[])]);
     if(s.user!==undefined && !/^[1-9][0-9]{0,5}:[1-9][0-9]{0,5}$/.test(s.user)) throw Error('Only explicit non-root UID:GID is supported');
     if(s.memoryMiB!==undefined && (!Number.isInteger(s.memoryMiB)||s.memoryMiB<32||s.memoryMiB>8192)) throw Error('Invalid memory bound');
     if(s.dependsOn) for(const dependency of strings(s.dependsOn)) if(!d.services[dependency]||dependency===name) throw Error('Invalid service dependency');
@@ -76,6 +78,23 @@ export function validate(m,d,files) {
     const targets=new Set();
     for(const [volume,target] of Object.entries(s.volumes||{})) { id(volume);containerPath(target); if(target==='/'||targets.has(target)) throw Error('Duplicate/root mount');targets.add(target); }
   }
+  for (const [name, shared] of Object.entries(d.sharedServices || {})) {
+    id(name); keys(shared, ['identity','buildTarget','memoryMiB','healthcheck','clients','clientEnvironment','files']);
+    id(shared.identity); id(shared.buildTarget);
+    if (!strings(shared.files).length || shared.files.some(name => !files.has(name))) throw Error('Shared implementation files must be packaged');
+    if (!Number.isInteger(shared.memoryMiB) || shared.memoryMiB < 32 || shared.memoryMiB > 8192) throw Error('Invalid shared memory bound');
+    if (!strings(shared.healthcheck).length || !strings(shared.clients).length || new Set(shared.clients).size !== shared.clients.length) throw Error('Shared healthcheck and unique clients required');
+    for (const client of shared.clients) {
+      if (!d.services[client]) throw Error('Unknown shared client');
+      if (Object.values(d.services[client].volumes || {}).some(p => p === '/inference' || p.startsWith('/inference/'))) throw Error('Shared IPC mount collision');
+    }
+    keys(shared.clientEnvironment, Object.keys(shared.clientEnvironment || {}));
+    for (const [key, value] of Object.entries(shared.clientEnvironment)) {
+      if (!/^[A-Z][A-Z0-9_]*$/.test(key) || typeof value !== 'string' || /[\0$]/.test(value)) throw Error('Invalid shared client environment');
+      if (shared.clients.some(c => Object.hasOwn(d.services[c].environment || {}, key))) throw Error('Shared environment collision');
+    }
+  }
+  if (Object.keys(d.sharedServices || {}).length > 1) throw Error('Only one optional shared worker per plugin is supported');
   for(const secret of strings(d.secrets||[])) id(secret);
   const visiting=new Set(),visited=new Set();
   function visit(name) {if(visiting.has(name))throw Error('Cyclic service dependency');if(visited.has(name))return;visiting.add(name);for(const dependency of d.services[name].dependsOn||[])visit(dependency);visiting.delete(name);visited.add(name);}
@@ -102,7 +121,7 @@ export function compose(config, record, secrets={}) {
     if(s.workspace) mounts.push({type:'bind',source:config.workspace,target:config.workspace,read_only:true});
     services[name]={...(s.image?{image:s.image}:{image:`${record.project}-${name}:${record.revision.slice(7,23)}`,build:{context:record.source,target:s.buildTarget}}),
       init:true,user:s.user||'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
-      healthcheck:{test:['CMD',...s.healthcheck],interval:'2s',timeout:'5s',retries:30,...(record.deployment.schemaVersion===2?{start_period:'60s'}:{})},
+      healthcheck:{test:['CMD',...s.healthcheck],interval:'2s',timeout:'5s',retries:30,...(record.deployment.schemaVersion>=2?{start_period:'60s'}:{})},
       ...(s.dependsOn?{depends_on:Object.fromEntries(s.dependsOn.map(dep=>[dep,{condition:'service_healthy'}]))}:{}),
       ...(s.memoryMiB?{mem_limit:`${s.memoryMiB}m`}:{}),
       ...(s.environment?{environment:Object.fromEntries(Object.entries(s.environment).map(([key,value])=>{
@@ -111,7 +130,7 @@ export function compose(config, record, secrets={}) {
         return [key,(value.prefix||'')+secrets[value.secret]+(value.suffix||'')];
       }))}:{}),...(s.command?{command:s.command}:{})};
   }
-  return {name:record.project,services,volumes};
+  return attachShared({name:record.project,services,volumes}, record);
 }
 function dockerEnv() {
   return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
@@ -206,7 +225,7 @@ export async function install(home,config,name,source,revision) {
         if((await snapshot(target)).revision!==revision) throw Error('Interrupted package snapshot differs; inspect before recovery');
       }
     } finally {await fs.rm(stage,{recursive:true,force:true});}
-    const record={revision,source:target,project:`ezp-${hash(home).slice(0,16)}-${name}`,manifest:p.manifest,deployment:p.deployment,compose:path.join(base,'compose.json')};
+    const record={revision,source:target,project:`ezp-${hash(home).slice(0,16)}-${name}`,manifest:p.manifest,deployment:p.deployment,sharedRevisions:p.sharedRevisions,compose:path.join(base,'compose.json')};
     const secretsFile=path.join(base,'secrets.json');
     let secrets;try{secrets=await json(secretsFile);}catch(error){if(error.code!=='ENOENT')throw error;secrets={};}
     for(const name of p.deployment.secrets||[])if(secrets[name]===undefined)secrets[name]=randomBytes(32).toString('hex');
@@ -234,7 +253,7 @@ export async function main(args) {
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
   if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list|exposure','<registered CLI> ...'],scope:home});
-  if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
+  if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
     if(action==='available'&&group==='plugins') return emit(config.catalog);
@@ -257,6 +276,23 @@ export async function main(args) {
       return emit(await install(home,config,name,source,revision));
     }
     const record=r.plugins[name];if(!record)throw Error('Plugin not installed');
+    if (['shared-enable','shared-disable','shared-status'].includes(action)) {
+      const key = args.shift(); id(key);
+      if (args.length || !record.deployment.sharedServices?.[key]) throw Error('Supply a declared shared service');
+      if (action === 'shared-status') return emit({ enabled: (record.sharedEnabled || []).includes(key), ...await sharedService(record, key, 'status', run) });
+      return locked(home, async () => {
+        const current = await registry(home), latest = current.plugins[name];
+        if (latest?.revision !== record.revision) throw Error('Plugin changed during shared service request');
+        const result = action === 'shared-enable' ? await sharedService(latest, key, 'enable', run) : { state: 'detached' };
+        latest.sharedEnabled = [...new Set([...(latest.sharedEnabled || []).filter(k => k !== key), ...(action === 'shared-enable' ? [key] : [])])];
+        const secrets = await json(path.join(home, 'packages', name, 'secrets.json')).catch(e => { if (e.code === 'ENOENT') return {}; throw e; });
+        await atomic(latest.compose, compose(config, latest, secrets));
+        // Persist the binding before recreating clients; start can recover an interrupted recreation.
+        await atomic(path.join(home, 'registry.json'), current);
+        await checked([...composeArgs(latest), 'up', '-d', '--wait']);
+        return emit({ ok: true, plugin: name, shared: key, ...result });
+      });
+    }
     if(action==='export') {
       const artifact=args.shift(),output=take('--output'),e=record.deployment.exports?.[artifact];
       if(!e||!output||args.length)throw Error('Supply a declared export and --output workspace/file');

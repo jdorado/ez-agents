@@ -228,3 +228,11 @@ main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). E
 Find released packages and the agent-owned registration path in the
 [plugin catalog](plugin-catalog.md). This listing does not change the empty
 default installation or connect provider accounts.
+
+## Optional shared worker (deployment schema 3)
+
+Schema 3 adds one optional `sharedServices` entry. It is never built or started by ordinary installation/start. `plugins shared-enable <plugin> <key>` creates or discovers it on the selected Docker daemon and recreates that plugin's clients with a read-only `/inference` socket volume. `shared-disable` removes only the client attachment; `shared-status` is read-only. Default per-agent files, networks and indexes remain unchanged.
+
+A shared entry declares `identity` (stable host resource ID), `buildTarget`, `memoryMiB`, `healthcheck` (literal argv), `clients` (declared service names), `clientEnvironment` (literal environment entries), and `files` (packaged worker implementation/dependency paths). The manager fingerprints those files and the specification. Compatible package changes preserve attachments during managed updates; incompatible worker changes block an attached upgrade before stopping clients. The shared target must initialize `/inference` and `/models` for UID/GID 1000. Only its IPC volume is exposed to clients. The worker runs with dropped capabilities, bounded memory/PIDs and no published ports; outbound networking permits explicit model downloads. Library containers never receive Docker access.
+
+Docker's unique container name arbitrates concurrent first creation. Existing resources must match ownership and implementation labels. Labels assume a trusted Docker administrator; they are not credentials. Different Docker daemons are separate sharing domains. Stopping/uninstalling a plugin never stops or deletes the shared worker or model volume. Automatic shared-worker upgrades and garbage collection are not implemented; coordinate replacement explicitly after detaching all clients. Uninstall/reinstall resets client opt-in.
