@@ -2,6 +2,16 @@
 
 ## 0.1.0-beta.14
 
+- Preserve agent-specific scheduled authentication and model catalogs; show native
+  Codex defaults in status, and support explicitly approved group ownership.
+- Keep owner chat responsive during shared work with restricted reply sessions.
+  Capture redacted failure evidence and support quiet, owner-scoped reviews.
+- Add opt-in shared Docker plugin workers and agent-owned repair instructions.
+- Add optional PagerDuty Stocks monitoring with restart-safe recovery. Activation
+  requires the companion Stocks critical-health endpoint and private routing-key
+  configuration; real trigger/resolve delivery is not yet verified.
+- Publish verified beta artifacts through the shared trusted-publisher workflow.
+
 - Add explicit host-owned shared-workspace access and serialize bindings to the
   same resolved repository path while retaining isolated task transcripts.
 - Bound interactive Codex context through native compaction and expose
