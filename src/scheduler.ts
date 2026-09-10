@@ -1,3 +1,4 @@
+import { assertEffort } from './model-policy.js'
 import { needsFailureReview } from './failure.js'
 import { mkdir, readFile, readdir, writeFile, rename, link, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
@@ -55,6 +56,7 @@ export class Scheduler {
     await this.ensure(); assertId(input.id)
     if (input.when !== undefined && input.when !== 'unreviewed-failures') throw new Error('Unknown schedule condition')
     if (!input.name || !input.text?.trim() || !isExecutionChoice(input.execution)) throw new Error('Schedule needs name, text and an AI selection')
+    assertEffort(input.execution.preset.effort)
     const s: Schedule = {...input,trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
     if (nextOccurrence(s.trigger,Date.now()-1) === null) throw new Error('Schedule has no future occurrence within eight years')
     await atomic(join(this.dir,s.id+'.json'),s,exclusive)

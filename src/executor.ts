@@ -1,3 +1,4 @@
+import { executionDefaults } from './model-policy.js'
 import { parallelReplyHistory } from './reply-context.js'
 import { startReplyExecutor } from './reply-executor.js'
 import { repairPolicy } from './repair-policy.js'
@@ -258,6 +259,7 @@ export const startExecutorJob = async (
   texts: string[],
   options: ExecutorOptions,
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
+  options = executionDefaults(executorKey(options.cli), options)
   if(options.runId.startsWith('r_schedule_') && !/^[a-zA-Z0-9_-]+$/.test(options.runId))throw new Error('Invalid native task run ID')
   const run = await new RunStore(options.controlDir).get(options.runId)
   if (run?.taskId) {

@@ -44,18 +44,20 @@ test('reply native adapter exposes only context send defer with shell and networ
  assert.doesNotMatch(args,/--add-dir/)
 })
 
-test('reply handoff deduplicates the same owner request and retains its captured execution', async () => {
+test('reply handoff deduplicates the owner request and defaults independently to Terra high', async () => {
  const root=await mkdtemp(join(tmpdir(),'ez-reply-defer-')), runs=new RunStore(root)
  try {
   const control=new ControlStore(root,900000)
   await control.requestPairing(101,101);await control.approveOwner(101)
-  const execution={sessionId:'c5dd1edc-be24-47b8-a579-0bc70f44cf43',preset:{id:'codex',name:'Codex',cli:'codex'}}
+  const execution={sessionId:'c5dd1edc-be24-47b8-a579-0bc70f44cf43',preset:{id:'codex',name:'Codex',cli:'codex',model:'gpt-6-astra',effort:'low'}}
   await runs.create({id:'tg_4',chatId:101,telegramUserId:101,texts:['Make the report'],execution})
   await runs.patch('tg_4',{status:'running',replyOnly:true})
   const first=await replyCall(root,'tg_4',root,'defer',{text:'Prepare the report using the canonical sources'})
   assert.deepEqual(await replyCall(root,'tg_4',root,'defer',{text:'retry'}),first)
   const saved=JSON.parse(await readFile(join(root,'schedules','s_reply_tg_4.json'),'utf8'))
-  assert.deepEqual(saved.execution,execution)
+  assert.equal(saved.execution.preset.model,'gpt-5.6-terra')
+  assert.equal(saved.execution.preset.effort,'high')
+  assert.notEqual(saved.execution.sessionId,execution.sessionId)
   assert.match(saved.text,/Make the report/)
   assert.equal(saved.owner.telegramChatId,101)
  }finally{await rm(root,{recursive:true,force:true})}
