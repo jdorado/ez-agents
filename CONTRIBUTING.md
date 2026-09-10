@@ -75,19 +75,21 @@ and prepare the release. Reuse valid final-commit evidence; repeat checks when
 changes or failures invalidate it. Do not leave a ready feature silently in draft
 or ask the maintainer to run commands, coordinate reviewers, or operate CI.
 
-Once the applicable gates pass, proactively present one concise merge/release
-confirmation with the packages, versions, target channel, verification result
-and material limits. Prepare the exact reviewed commits, artifacts and checksums
-before asking. Batch related packages in dependency order. Honor authorization
-already given in the task or an explicit standing release policy; ask only for
-missing authority, never again for an approved step. Merge-only authorization
-does not imply publication or changing a private package's visibility.
+The maintainer's request is authorization for the requested work and its normal
+implementation steps. Do not ask them to approve the same work again. Once the
+applicable gates pass, execute the requested merge/release and report the packages,
+versions, channel, verification and material limits. Batch related packages in
+dependency order. Prepare the reviewed commits, artifacts and checksums before
+shipping. A request to merge does not silently expand to publication or changing
+a private package's visibility; a request to release already authorizes release.
+If shipping was not requested, report readiness and the next step without treating
+every completed feature as permission to publish.
 
-After approval, complete the authorized merge, publication and rollout using
+Complete the authorized merge, publication and rollout using
 docs/releasing.md, then verify registry metadata, downloaded artifact and the
 installed runtime. Report the outcome. Escalate only a product decision, missing
 credential/2FA, failed gate that cannot be repaired in scope, or material scope
-change. Human attention belongs on product intent and the release decision;
+change. Human attention belongs on product intent;
 the agent operates the technical workflow.
 
 Example, substituting a unique task name and an absolute external directory:
@@ -98,3 +100,7 @@ git worktree list
 git fetch origin
 git worktree add -b feat/task-name /absolute/worktrees/task-name origin/main
 ```
+
+Beta publishing workflow changes follow [trusted publishing](docs/trusted-publishing.md).
+Validate wrong source, repository, package, version and artifact inputs with
+negative tests. Never dispatch publication to test authentication.

@@ -14,6 +14,8 @@
   fixture cleanup. Make verified release handoff proactive and agent-owned.
 - Beta limits: no group media; live group-recipient and final fresh-host/reboot
   acceptance remain pending. No new live-delivery or latency claims.
+- Default core and plugin automatic updates to the beta channel; preserve saved
+  stable-only and manual policies.
 
 ## 0.1.0-beta.13
 
