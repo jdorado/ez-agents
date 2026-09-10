@@ -1,13 +1,14 @@
 import { ControlStore } from './control-state.js'
 import { RunStore, type RunRecord } from './runs.js'
 import type { Owner } from './control-state.js'
+import { ownsRun } from './identity.js'
 
 export const EXTERNAL_EXECUTION_BLOCK = 'external-execution-unavailable' as const
 
 // All current adapters run with the installing user's authority. A fresh
 // session or plugin declaration does not make that an isolated task runner.
 export function executionBlockReason(run: RunRecord, owner: Owner | null): string | undefined {
-  if (!owner || run.telegramUserId !== owner.telegramUserId || run.chatId !== owner.telegramChatId)
+  if (!ownsRun(owner, run))
     return 'owner-mismatch'
   if (run.taskId || run.external || run.id.startsWith('event_')) return EXTERNAL_EXECUTION_BLOCK
 }

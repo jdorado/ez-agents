@@ -29,6 +29,7 @@ const fixture = async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-intake-relay-'))
   const launched: string[][] = []
   const replies: string[] = []
+  const members = new Map<number, string>()
   const keyboards: { text: string; callback_data: string }[][][] = []
   const children: ReturnType<typeof spawn>[] = []
   const config = {
@@ -55,12 +56,13 @@ const fixture = async () => {
       username: 'fixture_bot',
     } as typeof relay.bot.botInfo
     relay.bot.api.config.use(async (_previous, method, payload) => {
+      if (method === 'getChatMember' && members.get((payload as {user_id: number}).user_id) === 'error') throw new Error('Fixture membership unavailable')
       if (method === 'sendMessage') replies.push((payload as { text: string }).text)
       const keyboard = (payload as { reply_markup?: { inline_keyboard?: { text: string; callback_data: string }[][] } }).reply_markup?.inline_keyboard
       if (keyboard) keyboards.push(keyboard)
       return {
         ok: true,
-        result: method === 'getFile' ? { file_path: 'fixture.ogg' } : { message_id: 42 },
+        result: method === 'getFile' ? { file_path: 'fixture.ogg' } : method === 'getChatMember' ? {status: members.get((payload as {user_id: number}).user_id) ?? 'member'} : { message_id: 42 },
       } as never
     })
     return relay
@@ -73,6 +75,7 @@ const fixture = async () => {
     dir,
     launched,
     replies,
+    members,
     keyboards,
     get relay() {
       return relay
@@ -95,6 +98,76 @@ const fixture = async () => {
     },
   }
 }
+
+test('approved owner group accepts different members, controls and group delivery; rejects other chats and anonymous posts', async () => {
+  const f = await fixture()
+  const control = new ControlStore(f.dir, 900000)
+  const group = (id: number, sender = 202, chatId = -101): Update => ({update_id: id, message: {
+    message_id: id, date: 0, text: 'Hello', from: {id: sender, is_bot: false, first_name: 'Member'},
+    chat: {id: chatId, type: 'supergroup', title: 'Team'},
+  }})
+  try {
+    await control.revokeOwner()
+    await f.relay.bot.handleUpdate(group(1))
+    assert.equal(f.launched.length, 0)
+    assert.equal((await control.status()).pending[0].title, 'Team')
+    await control.approveOwner(-101, true)
+    await f.relay.bot.handleUpdate(group(2, 303))
+    await f.relay.bot.handleUpdate(group(3, 404))
+    await f.relay.drainInbox(true)
+    const run = (await new RunStore(f.dir).list())[0]
+    assert.equal(run.chatId, -101)
+    assert.equal(run.telegramUserId, 303)
+    assert.equal(run.texts.length, 2)
+    assert.match(run.texts[0], /303/)
+    assert.match(run.texts[1], /404/)
+    assert.equal(f.launched.length, 1)
+    await new RunStore(f.dir).enqueueMessage(run.id, 'Group reply')
+    await f.relay.drainOutbox()
+    assert.ok(f.replies.includes('Group reply'))
+    const approval = new ApprovalStore(f.dir)
+    await approval.requestApproval('group_action', 'Approve this?', run.id)
+    f.members.set(707, 'left')
+    await f.relay.bot.handleUpdate({update_id: 12, callback_query: {
+      id: 'outsider', chat_instance: 'test', from: {id: 707, is_bot: false, first_name: 'Outsider'},
+      message: group(12).message!, data: 'approval:group_action:approve',
+    }})
+    assert.equal((await approval.getDecision('group_action'))?.decision, 'pending')
+    f.members.set(707, 'error')
+    await assert.rejects(f.relay.bot.handleUpdate({update_id: 13, callback_query: {
+      id: 'unavailable', chat_instance: 'test', from: {id: 707, is_bot: false, first_name: 'Member'},
+      message: group(13).message!, data: 'approval:group_action:approve',
+    }}), /membership verification unavailable/)
+    await f.relay.bot.handleUpdate({update_id: 4, callback_query: {
+      id: 'callback', chat_instance: 'test', from: {id: 404, is_bot: false, first_name: 'Second'},
+      message: group(4).message!, data: 'approval:group_action:approve',
+    }})
+    await f.relay.drainInbox(true)
+    assert.equal((await approval.getDecision('group_action'))?.decidedBy, 404)
+    await f.relay.bot.handleUpdate(group(5, 202, -102))
+    await f.relay.bot.handleUpdate(message(6))
+    const anonymous = group(7); anonymous.message!.sender_chat = anonymous.message!.chat
+    await f.relay.bot.handleUpdate(anonymous)
+    const bot = group(8); bot.message!.from!.is_bot = true
+    await f.relay.bot.handleUpdate(bot)
+    assert.equal((await new InboxStore(f.dir).status()).pending, 0)
+    const status = group(9); status.message!.text = '/status'
+    await f.relay.bot.handleUpdate(status)
+    assert.ok(f.replies.some(text => text.includes('Queue:')))
+    const inbox = new InboxStore(f.dir)
+    await inbox.accept(group(10, 505))
+    const failed = await inbox.next(true)
+    await inbox.finish(failed!.id, true)
+    await f.relay.bot.handleUpdate({update_id: 11, callback_query: {
+      id: 'retry', chat_instance: 'test', from: {id: 606, is_bot: false, first_name: 'Third'},
+      message: group(11).message!, data: 'menu:retry',
+    }})
+    assert.equal(await inbox.pending(failed!.id), true)
+    await inbox.cancel()
+    await control.revokeOwner()
+    await assert.rejects(new RunStore(f.dir).enqueueMessage('not_a_run', 'no'))
+  } finally { await f.close() }
+})
 
 test('owner group discovery routes only to the private chat and rechecks identity', async () => {
   const f = await fixture()
