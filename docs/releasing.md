@@ -41,8 +41,9 @@ separate release bot is not required.
    publishing. For an authorized release, merge the release PR and
    verify its tree matches the reviewed source before tagging `v<version>` and
    publishing that tarball:
-   `npm publish /absolute/candidate.tgz --access public --tag beta --registry https://registry.npmjs.org/`
-   for prereleases (use `--tag latest` only for an approved stable release).
+   `npm publish /absolute/candidate.tgz --access public --tag latest --registry https://registry.npmjs.org/`
+   for approved beta releases as well: `latest` is the default distribution tag,
+   not a claim that a SemVer prerelease is stable.
    For unattended beta publication use the [shared trusted publisher](trusted-publishing.md)
    and its exact-artifact staging/readback contract. Initial package publication
    requires authenticated npm with 2FA before trust can be enrolled; never paste
@@ -60,7 +61,9 @@ credential revocation; do not delete volumes as a routine rollback.
 ## Beta channel
 
 Use SemVer prereleases (`0.1.0-beta.1`), GitHub's prerelease flag and npm's
-`--tag beta`; never mark a beta latest/stable. For this first beta the maintainer
+`--tag latest` so default installs and the package page advance automatically.
+The version and GitHub release remain prereleases; stable-only update policies
+still exclude them. The legacy npm beta tag is no longer advanced. For this first beta the maintainer
 explicitly deferred real account/reboot acceptance. Keep that limitation in the
 README and release notes. Source/tarball publication is permitted after the
 automated gates; deferred live checks remain required for stable release.

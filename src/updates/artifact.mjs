@@ -70,6 +70,22 @@ export async function registryVersion(name,tag='latest') {
   if(!response.ok)throw Error(`npm metadata unavailable (${response.status})`);
   const pkg=await response.json();if(pkg.name!==name)throw Error('Registry identity mismatch');version(pkg.version);if(!['latest','beta'].includes(tag)&&pkg.version!==tag)throw Error('Registry version mismatch');return pkg;
 }
+// Policies describe accepted versions, not a permanently fixed npm tag.
+export async function registryCandidate(name,channel) {
+  if(!/^@[a-z0-9_-]+\/[a-z0-9][a-z0-9._-]*$/.test(name)||!['stable','beta'].includes(channel))throw Error('Invalid registry update policy');
+  const response=await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`,{signal:AbortSignal.timeout(15000),redirect:'error'});
+  if(!response.ok)throw Error(`npm metadata unavailable (${response.status})`);
+  const data=await response.json();if(data.name!==name||!data.versions||!data['dist-tags'])throw Error('Registry identity mismatch');
+  const candidates=channel==='beta'?[data['dist-tags'].latest,data['dist-tags'].beta]:Object.keys(data.versions);
+  let selected;
+  for(const value of candidates.filter(Boolean)) {
+    const parsed=version(value),pkg=data.versions[value];
+    if(!pkg||pkg.name!==name||pkg.version!==value)throw Error('Registry version mismatch');
+    if(pkg.deprecated||(channel==='stable'&&parsed.pre))continue;
+    if(!selected||newer(value,selected.version))selected=pkg;
+  }
+  return selected??null;
+}
 export async function download(pkg) {
   const url=new URL(pkg.dist?.tarball);
   if(url.protocol!=='https:'||url.hostname!=='registry.npmjs.org'||url.username||url.password)throw Error('Untrusted package host');

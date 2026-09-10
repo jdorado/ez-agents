@@ -54,7 +54,7 @@
   ],
   "publishConfig": {
     "access": "public",
-    "tag": "beta"
+    "tag": "latest"
   },
   "scripts": {
     "setup": "tsx --env-file-if-exists=.env src/setup.ts",
