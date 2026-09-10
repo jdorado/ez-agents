@@ -6,6 +6,7 @@ import { ApprovalStore } from './approval.js'
 import { EventSources, sourceCall, type SourceEvent } from './event-sources.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { requireOwnerExecution } from './execution-authority.js'
+import { ownsRun } from './identity.js'
 
 export type Task = {
   version: 1 | 2 | 3; waitForIncoming?: true; untilRevoked?: true; unwatchPending?: true; id: string; runId: string; owner: Owner
@@ -70,7 +71,7 @@ export class Tasks {
     const owner = (await new ControlStore(this.controlDir, 900000).status()).owner
     const approval = await new ApprovalStore(this.controlDir).getDecision(task.id)
     if (!owner || owner.telegramUserId !== task.owner.telegramUserId || owner.telegramChatId !== task.owner.telegramChatId ||
-      approval?.decision !== 'approved' || approval.decidedBy !== owner.telegramUserId || approval.runId !== task.runId || approval.prompt !== this.prompt(task))
+      approval?.decision !== 'approved' || !ownsRun(owner, {telegramUserId: approval.decidedBy!, chatId: task.owner.telegramChatId}) || approval.runId !== task.runId || approval.prompt !== this.prompt(task))
       throw new Error('Task approval is no longer valid')
     if (checkProvider) await this.source(task)
     if (run.external && checkProvider) {
@@ -124,7 +125,7 @@ export class Tasks {
       if (command === 'list') return this.list()
       if (command === 'revoke') {
         const task = await this.get(String(args.taskId))
-        if (!task || task.owner.telegramUserId !== run.telegramUserId || task.owner.telegramChatId !== run.chatId) throw new Error('Unknown task')
+        if (!task || !ownsRun(task.owner, run)) throw new Error('Unknown task')
         if(task.state === 'revoked' && !task.unwatchPending) return {id:task.id,state:task.state}
         task.state = 'revoked'
         if(task.untilRevoked) task.unwatchPending=true

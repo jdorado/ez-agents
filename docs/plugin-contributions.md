@@ -35,3 +35,12 @@ inert. Installation is complete only after account onboarding and verified use.
 
 This beta includes owner-policy release checks and durable
 main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.
+
+## Publication onboarding
+
+Generate a thin `publish-beta.yml` caller pinned to the reviewed core shared
+publisher; do not copy a publishing implementation into each plugin. Follow
+[trusted publishing](trusted-publishing.md) for required-check configuration,
+exact candidate staging, caller-specific npm trust enrollment and initial-package
+bootstrap. Account/trust enrollment is a separate authenticated owner action.
+A registered source with missing npm or GitHub artifacts remains unreleased.
