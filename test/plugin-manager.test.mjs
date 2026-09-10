@@ -125,13 +125,14 @@ test('copying another agent registry is rejected before any Docker operation',as
 test('v2 supports bounded dependency graphs and generated private secrets',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);
  const d=structuredClone(f.deployment);d.schemaVersion=2;d.secrets=['db-password'];
- d.services.database={image:'example/database@sha256:'+'a'.repeat(64),user:'999:999',healthcheck:['check'],memoryMiB:128,environment:{PASSWORD:{secret:'db-password'}}};
+ d.services.database={image:'example/database@sha256:'+'a'.repeat(64),user:'999:999',healthcheck:['check'],memoryMiB:128,cpus:2,environment:{PASSWORD:{secret:'db-password'}}};
  d.services.sample.dependsOn=['database'];d.services.sample.environment={URL:{secret:'db-password',prefix:'db://',suffix:'@database'}};
  validate(f.manifest,d,p.files);
  const c=compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d},{'db-password':'b'.repeat(64)});
  assert.equal(c.services.database.user,'999:999');assert.equal(c.services.sample.depends_on.database.condition,'service_healthy');assert.equal(c.services.sample.environment.URL,'db://'+'b'.repeat(64)+'@database');
  assert.equal(c.services.database.mem_limit,'128m');assert.throws(()=>compose({workspace:f.workspace}, {source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d}),/Missing/);
- for(const change of [x=>x.services.database.user='0:0',x=>x.services.database.environment.PASSWORD={secret:'undeclared'},x=>x.services.database.environment.PASSWORD='${HOST_SECRET}',x=>x.services.database.dependsOn=['sample'],x=>x.services.sample.dependsOn=['missing'],x=>x.services.sample.ports=['9999:9999']]){const bad=structuredClone(d);change(bad);assert.throws(()=>validate(f.manifest,bad,p.files));}
+ assert.equal(c.services.database.cpus,2);assert.throws(()=>compose({workspace:f.workspace}, {source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d}),/Missing/);
+ for(const change of [x=>x.services.database.user='0:0',x=>x.services.database.cpus=0.01,x=>x.services.database.cpus=9,x=>x.services.database.environment.PASSWORD={secret:'undeclared'},x=>x.services.database.environment.PASSWORD='${HOST_SECRET}',x=>x.services.database.dependsOn=['sample'],x=>x.services.sample.dependsOn=['missing'],x=>x.services.sample.ports=['9999:9999']]){const bad=structuredClone(d);change(bad);assert.throws(()=>validate(f.manifest,bad,p.files));}
  const old=structuredClone(d);old.schemaVersion=1;assert.throws(()=>validate(f.manifest,old,p.files));
 });
 test('catalog publication pins reviewed source without install or Docker calls',async t=>{

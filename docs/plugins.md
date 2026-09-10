@@ -191,7 +191,8 @@ and monitoring subscriptions alone never grant task execution. See
 
 V1 remains supported. V2 adds declared generated `secrets`, service `environment`
 (literal strings or declared secret references with literal prefix/suffix),
-`dependsOn` health dependencies, non-root `user` and bounded `memoryMiB`.
+`dependsOn` health dependencies, non-root `user`, bounded `memoryMiB`, and an
+optional `cpus` limit (0.1–8 cores).
 Cycles, unknown dependencies and host environment interpolation are rejected.
 Secrets persist privately across reinstall and are never included in registry
 responses. Twenty provides a complete v2 backend example.
