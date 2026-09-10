@@ -154,6 +154,9 @@ test('approved owner group accepts different members, controls and group deliver
     const status = group(9); status.message!.text = '/status'
     await f.relay.bot.handleUpdate(status)
     assert.ok(f.replies.some(text => text.includes('Queue:')))
+    // Seed the retry fixture only after the relay writer and its timer are idle.
+    await f.relay.stop()
+    await f.relay.drainInbox()
     const inbox = new InboxStore(f.dir)
     await inbox.accept(group(10, 505))
     const failed = await inbox.next(true)
