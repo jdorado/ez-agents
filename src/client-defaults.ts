@@ -15,11 +15,28 @@ const value = (v: unknown): string | undefined =>
 const command = async (cli: string, args: string[], cwd: string): Promise<string> =>
   (await promisify(execFile)(cli, args, { cwd, env: executorEnvironment(), timeout: 8000, maxBuffer: 2 * 1024 * 1024 })).stdout
 
+export const resolvedCodexDefaults = (configValue: unknown, catalogValue: unknown): Record<string, unknown> => {
+  const config = record(configValue)
+  const managed = record(record(config.models).new_thread)
+  const model = value(managed.model) ?? value(config.model)
+  const effort = value(managed.model_reasoning_effort) ?? value(config.model_reasoning_effort)
+  const catalog = (Array.isArray(catalogValue) ? catalogValue : []).map(record)
+  const selected = model
+    ? catalog.find((entry) => value(entry.model) === model || value(entry.id) === model)
+    : catalog.find((entry) => entry.isDefault === true)
+  return {
+    ...(model ?? value(selected?.model) ?? value(selected?.id) ? { model: model ?? value(selected?.model) ?? value(selected?.id) } : {}),
+    ...(effort ?? value(selected?.defaultReasoningEffort) ? { effort: effort ?? value(selected?.defaultReasoningEffort) } : {}),
+  }
+}
+
 // Native config/read resolves Codex's layers; do not reimplement TOML or start a turn.
-export const codexDefaults = (cwd: string): Promise<Record<string, unknown>> => new Promise((resolve) => {
-  const child = spawn('codex', ['app-server'], { cwd, env: executorEnvironment(), stdio: ['pipe', 'pipe', 'ignore'] })
+export const codexDefaults = (cwd: string, codexHome?: string, nativeFallback = false): Promise<Record<string, unknown>> => new Promise((resolve) => {
+  const child = spawn('codex', ['app-server'], { cwd,
+    env: { ...executorEnvironment(), ...(codexHome ? { CODEX_HOME: codexHome } : {}) }, stdio: ['pipe', 'pipe', 'ignore'] })
   const lines = createInterface({ input: child.stdout })
   let done = false
+  let config: unknown = {}
   const finish = (config: Record<string, unknown> = {}) => {
     if (done) return
     done = true
@@ -37,10 +54,12 @@ export const codexDefaults = (cwd: string): Promise<Record<string, unknown>> => 
         send({ method: 'initialized', params: {} })
         send({ id: 1, method: 'config/read', params: { includeLayers: false, cwd } })
       } else if (message.id === 1) {
-        const config = record(message.result?.config)
-        const managed = record(record(config.models).new_thread)
-        finish({ model: managed.model ?? config.model,
-          effort: managed.model_reasoning_effort ?? config.model_reasoning_effort })
+        config = message.result?.config
+        const resolved = resolvedCodexDefaults(config, [])
+        if (!nativeFallback || (resolved.model && resolved.effort)) finish(resolved)
+        else send({ id: 2, method: 'model/list', params: { limit: 100, includeHidden: false } })
+      } else if (message.id === 2) {
+        finish(resolvedCodexDefaults(config, message.result?.data))
       }
     } catch { finish() }
   })
@@ -56,7 +75,7 @@ export const grokSettings = (text: string): { model?: string; effort?: string } 
 }
 
 export const discoverDefaults = async (cwd: string, options: {
-  home?: string; available?: typeof installed; run?: typeof command; codex?: typeof codexDefaults
+  home?: string; codexHome?: string; nativeCodexFallback?: boolean; available?: typeof installed; run?: typeof command; codex?: typeof codexDefaults
 } = {}): Promise<AiPreset[]> => {
   const home = options.home ?? homedir()
   const available = options.available ?? installed
@@ -73,7 +92,7 @@ export const discoverDefaults = async (cwd: string, options: {
         model = settings.model ?? value((await run(cli, ['models'], cwd)).match(/^Default model:\s*(\S+)/m)?.[1])
         effort = settings.effort
       } else if (cli === 'codex') {
-        const config = await (options.codex ?? codexDefaults)(cwd)
+        const config = await (options.codex ?? codexDefaults)(cwd, options.codexHome, options.nativeCodexFallback)
         model = value(config.model); effort = value(config.effort)
       } else if (cli === 'claude') {
         // Match Claude's documented user -> project -> local settings precedence.
@@ -91,11 +110,8 @@ export const discoverDefaults = async (cwd: string, options: {
   }))
   const discovered = results.filter((p): p is AiPreset => Boolean(p))
   if (await available('codex-gui')) {
-    const source = discovered.find((preset) => preset.cli === 'codex')
-    const model = source?.model, effort = source?.effort
-    const id = 'detected_' + createHash('sha256').update(JSON.stringify(['codex-gui', model, effort])).digest('hex').slice(0, 12)
-    discovered.push({ id, cli: 'codex-gui', model, effort,
-      name: `codex-gui · ${model || 'desktop'}${effort ? ` · ${effort}` : ''}`.slice(0, 80) })
+    const id = 'detected_' + createHash('sha256').update('codex-gui').digest('hex').slice(0, 12)
+    discovered.push({ id, cli: 'codex-gui', name: 'codex-gui · desktop' })
   }
   return discovered
 }
