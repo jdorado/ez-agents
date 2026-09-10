@@ -113,9 +113,13 @@ test('archive admission rejects traversal, links, special files, duplicates and 
  await assert.rejects(extract(Buffer.from('not gzip'),path.join(f.root,'bad')));
  await assert.rejects(fs.access(path.join(f.root,'bad')));
 });
-test('policy defaults stable; prepared local candidates need explicit authority and a live supervisor',async t=>{
+test('policy defaults beta; prepared local candidates need explicit authority and a live supervisor',async t=>{
  const f=await fixture(t),job=await prepare(f.home,'main',{file:await f.pack()});
+ assert.deepEqual(await command(f.home,['policy','main']),{automatic:true,channel:'beta'});
+ assert.deepEqual(await command(f.home,['policy','sample']),{automatic:true,channel:'beta'});
+ await command(f.home,['policy','main','stable']);
  assert.deepEqual(await command(f.home,['policy','main']),{automatic:true,channel:'stable'});
+ assert.deepEqual(await command(f.home,['policy','sample']),{automatic:true,channel:'beta'});
  await assert.rejects(submit(f.home,job.id,false));
  await atomic(path.join(f.home,'updates/supervisor.json'),{at:Date.now()});
  await assert.rejects(submit(f.home,job.id,true),/Local/);
