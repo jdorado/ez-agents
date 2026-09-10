@@ -112,12 +112,20 @@ test('uncertain send survives core restart and is never replayed; key prototype 
 })
 test('file RPC verifies stored authority rather than role supplied in request', async t => {
   const f = await fixture(t), { run } = await f.activate()
-  const drain = taskRequests(f.tasks), timer = setInterval(() => { void drain() }, 10)
-  t.after(() => clearInterval(timer))
-  const context: any = await taskCall(f.dir, run.id, 'worker', 'context')
-  assert.match(context.purpose, /Book a table/)
-  await assert.rejects(taskCall(f.dir, run.id, 'owner', 'revoke', { taskId: run.taskId }), /blocked/)
-  await assert.rejects(taskCall(f.dir, 'owner', 'worker', 'send', { text: 'x', key: 'x' }), /inactive/)
+  const drain = taskRequests(f.tasks)
+  let pending: Promise<void> | undefined, drainError: unknown
+  const timer = setInterval(() => { pending = drain().catch(error => { drainError = error }) }, 10)
+  try {
+    const context: any = await taskCall(f.dir, run.id, 'worker', 'context')
+    assert.match(context.purpose, /Book a table/)
+    await assert.rejects(taskCall(f.dir, run.id, 'owner', 'revoke', { taskId: run.taskId }), /blocked/)
+    await assert.rejects(taskCall(f.dir, 'owner', 'worker', 'send', { text: 'x', key: 'x' }), /inactive/)
+  } finally {
+    // Complete the in-flight drain before the fixture removes its directory.
+    clearInterval(timer)
+    await pending
+    if (drainError) throw drainError
+  }
 })
 
 test('approved initial task crosses the real host file client and uses a fresh restricted runtime', async t => {

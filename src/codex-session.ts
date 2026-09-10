@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { terminateJob } from './executor.js'
 
-type Options = {workspace:string;controlDir:string;toolsHome?:string;model?:string;effort?:string;prompt:string;goal:boolean}
+type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;model?:string;effort?:string;prompt:string;goal:boolean}
 type Message = {id?:number;method?:string;params?:any;result?:any;error?:{message:string;code?:number}}
 
 // Keep Codex's native session alive. Codex itself starts goal continuation turns;
@@ -69,7 +69,7 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     send({method:'initialized',params:{}})
     const result=await request('thread/start',{
       cwd:options.workspace,approvalPolicy:'never',sandbox:'workspace-write',model:options.model,
-      config:{'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[])],
+      config:{'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[]),...(options.sharedWorkspace?[options.sharedWorkspace]:[])],
         'sandbox_workspace_write.network_access':Boolean(options.toolsHome),...(options.effort?{model_reasoning_effort:options.effort}:{})},
     })
     threadId=result.thread?.id

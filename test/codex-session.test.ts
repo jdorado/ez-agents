@@ -33,14 +33,16 @@ if(q.method==='thread/goal/get'){
  }
 }
 });setInterval(()=>{},1000);`
+  let threadConfig:any
   const launch=()=>{
     const child=spawn(process.execPath,['-e',program],{stdio:['pipe','pipe','pipe'],detached:process.platform!=='win32'})
     const write=child.stdin.write.bind(child.stdin)
-    child.stdin.write=((chunk:any,...args:any[])=>{try{requests.push(JSON.parse(String(chunk)).method)}catch{};return (write as any)(chunk,...args)}) as typeof child.stdin.write
+    child.stdin.write=((chunk:any,...args:any[])=>{try{requests.push(JSON.parse(String(chunk)).method);if(JSON.parse(String(chunk)).method==='thread/start')threadConfig=JSON.parse(String(chunk)).params.config}catch{};return (write as any)(chunk,...args)}) as typeof child.stdin.write
     return child
   }
   const plain=['plain','tool-goal'].includes(mode)
-  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',prompt:'test',goal:!plain},{launch,emit:line=>output.push(line)})
+  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',prompt:'test',goal:!plain},{launch,emit:line=>output.push(line)})
+  assert.ok(threadConfig['sandbox_workspace_write.writable_roots'].includes('/canonical'))
   assert.equal(result,['plain','goal','tool-goal'].includes(mode)?0:1)
   assert.equal(requests.filter(x=>x==='turn/start').length,plain?1:0,'transport must not send goal continuation prompts')
   assert.equal(requests.filter(x=>x==='thread/goal/set').length,plain?0:1)

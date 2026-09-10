@@ -222,3 +222,9 @@ non-destructive uninstall. No live account or recipient is used.
 
 This beta includes owner-policy release checks and durable
 main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.
+
+## Published catalog
+
+Find released packages and the agent-owned registration path in the
+[plugin catalog](plugin-catalog.md). This listing does not change the empty
+default installation or connect provider accounts.

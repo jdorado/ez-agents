@@ -18,6 +18,7 @@ export type ExecutorOptions = {
   controlDir: string
   binDir: string
   toolsHome?: string
+  sharedWorkspace?: string
   cli?: string
   sessionId?: string
   isResume?: boolean
@@ -97,7 +98,7 @@ export type CliAdapter = {
   command: string
   description: string
   buildArgs: (
-    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'codexAutoCompactTokens'> & { controlDir?: string },
+    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'codexAutoCompactTokens'> & { controlDir?: string },
     promptFile: string,
     promptText: string,
   ) => string[]
@@ -112,6 +113,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid Codex compaction token limit')
       args.push('-c', `model_auto_compact_token_limit=${limit}`)
       if (opts.controlDir) args.push('--add-dir', opts.controlDir)
+      if (opts.sharedWorkspace) args.push('--add-dir', opts.sharedWorkspace)
       if (opts.toolsHome) args.push('--add-dir', opts.toolsHome, '-c', 'sandbox_workspace_write.network_access=true')
       if (opts.model) args.push('--model', opts.model)
       if (opts.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(opts.effort)}`)
