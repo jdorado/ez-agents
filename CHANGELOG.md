@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Default core and plugin automatic updates to the beta channel; preserve saved
+  stable-only and manual policies.
+
 ## 0.1.0-beta.13
 
 - Escalate cancelled plugin clients and report container cleanup failures.

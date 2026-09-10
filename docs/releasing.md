@@ -43,7 +43,10 @@ separate release bot is not required.
    publishing that tarball:
    `npm publish /absolute/candidate.tgz --access public --tag beta --registry https://registry.npmjs.org/`
    for prereleases (use `--tag latest` only for an approved stable release).
-   Use interactive npm authentication with 2FA; never paste tokens into CI or docs.
+   For unattended beta publication use the [shared trusted publisher](trusted-publishing.md)
+   and its exact-artifact staging/readback contract. Initial package publication
+   requires authenticated npm with 2FA before trust can be enrolled; never paste
+   tokens into CI or docs.
 8. Create the GitHub release from CHANGELOG.md, attach artifact/checksum, and
    install the registry version on a clean host. Verify metadata and the same
    onboarding path before posting launch copy. Stop rollout on failure; publish
@@ -63,7 +66,8 @@ README and release notes. Source/tarball publication is permitted after the
 automated gates; deferred live checks remain required for stable release.
 GitHub repositories use `jdorado`; npm packages use `jc_stack`. Verify
 `npm whoami --registry https://registry.npmjs.org/` returns `jc_stack` before
-publishing. Never infer npm scope ownership from a GitHub login. After publishing,
+interactive publication. OIDC publication instead requires package-owner trust
+enrollment for the exact caller workflow; `whoami` is not its publication gate. Never infer npm scope ownership from a GitHub login. After publishing,
 read back `npm view @jc_stack/ez-agents@0.1.0-beta.12 name version dist-tags --json`
 (using the release being published), download it with `npm pack`, and verify its
 contents/checksum against the reviewed artifact. Keep the npm artifact and

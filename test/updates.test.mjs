@@ -113,9 +113,13 @@ test('archive admission rejects traversal, links, special files, duplicates and 
  await assert.rejects(extract(Buffer.from('not gzip'),path.join(f.root,'bad')));
  await assert.rejects(fs.access(path.join(f.root,'bad')));
 });
-test('policy defaults stable; prepared local candidates need explicit authority and a live supervisor',async t=>{
+test('policy defaults beta; prepared local candidates need explicit authority and a live supervisor',async t=>{
  const f=await fixture(t),job=await prepare(f.home,'main',{file:await f.pack()});
+ assert.deepEqual(await command(f.home,['policy','main']),{automatic:true,channel:'beta'});
+ assert.deepEqual(await command(f.home,['policy','sample']),{automatic:true,channel:'beta'});
+ await command(f.home,['policy','main','stable']);
  assert.deepEqual(await command(f.home,['policy','main']),{automatic:true,channel:'stable'});
+ assert.deepEqual(await command(f.home,['policy','sample']),{automatic:true,channel:'beta'});
  await assert.rejects(submit(f.home,job.id,false));
  await atomic(path.join(f.home,'updates/supervisor.json'),{at:Date.now()});
  await assert.rejects(submit(f.home,job.id,true),/Local/);
@@ -183,7 +187,13 @@ test('interrupted activation recovers previous code; rollback failure is explici
  const retried=await read(path.join(jobPath(f.home,interrupted.id),'job.json'));assert.equal((await perform(f.home,retried,r)).status,'rolled-back');
 });
 test('bound dispatch follows active package root and retains private scope',async t=>{
- const f=await fixture(t);await bindUpdates(f.home,path.join(f.config.deploymentDir,'host-executor.json'));
+ const f=await fixture(t);
+ await fs.appendFile(path.join(f.agent.workspace,'TOOLS.md'),"\n## Software updates\nThe default policy\nauthorizes compatible stable updates without asking again. Respect an owner's\nmanual policy or beta opt-in.\nOwner notes stay here.\n");
+ const bound=await bindUpdates(f.home,path.join(f.config.deploymentDir,'host-executor.json'));
+ assert.match(bound.policy,/beta-channel/);
+ const guidance=await fs.readFile(path.join(f.agent.workspace,'TOOLS.md'),'utf8');
+ assert.match(guidance,/beta channel/);assert.match(guidance,/Owner notes stay here/);
+ assert.doesNotMatch(guidance,/beta opt-in/);
  const config=await read(path.join(f.home,'config.json'));config.packageRoot=f.source;await atomic(path.join(f.home,'config.json'),config);
  // A native launcher from the real package looks up its entry point in the active root.
  await fs.writeFile(path.join(f.source,'bin/ezenciel-agents.mjs'),'#!/usr/bin/env node\nconsole.log(process.env.EZ_DEPLOYMENT_DIR)',{mode:0o755});
