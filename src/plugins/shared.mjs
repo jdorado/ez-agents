@@ -10,7 +10,7 @@ export function sharedIdentity(record, key) {
   if (!/^[a-f0-9]{64}$/.test(record.sharedRevisions?.[key] || '')) throw Error('Missing reviewed shared implementation revision');
   const name = `ez-shared-${spec.identity}`;
   // Reuse only the exact reviewed implementation. Upgrades never replace a live worker.
-  const fingerprint = hash(JSON.stringify([record.manifest.id, record.sharedRevisions?.[key], spec]));
+  const fingerprint = hash(JSON.stringify([record.manifest.id, record.sharedRevisions?.[key], { ...spec, cpus: spec.cpus ?? 0.5 }]));
   return { name, fingerprint, spec, image: `${name}:${fingerprint.slice(0,16)}`, labels: { [label]: spec.identity, [`${label}.fingerprint`]: fingerprint } };
 }
 
@@ -25,11 +25,12 @@ export async function sharedService(record, key, action, run) {
   };
   const compatible = item => {
     const actual = item.Config?.Labels || item.Labels || {};
+    if (item.Config && item.HostConfig?.NanoCpus !== Math.round((spec.cpus ?? 0.5) * 1e9)) throw Error(`Shared CPU limit differs from reviewed configuration: ${name}`);
     if (Object.entries(labels).some(([k,v]) => actual[k] !== v)) throw Error(`Unowned or incompatible shared resource: ${name}`);
   };
   let container = await inspect('container', name);
   if (container) compatible(container);
-  if (action === 'status') return { name, fingerprint, state: container?.State?.Health?.Status || (container ? container.State.Status : 'absent') };
+  if (action === 'status') return { name, fingerprint, cpus: spec.cpus ?? 0.5, state: container?.State?.Health?.Status || (container ? container.State.Status : 'absent') };
   if (action !== 'enable') throw Error('Unknown shared service action');
   if (!container) {
     await checked(['build', '--target', spec.buildTarget, '--tag', image, record.source]);
@@ -44,7 +45,7 @@ export async function sharedService(record, key, action, run) {
     }
     const result = await run(['create', '--name', name, ...Object.entries(labels).flatMap(([k,v]) => ['--label', `${k}=${v}`]),
       '--network', 'bridge', '--user', '1000:1000', '--init', '--restart', 'unless-stopped', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
-      '--memory', `${spec.memoryMiB}m`, '--pids-limit', '256', '--tmpfs', '/tmp',
+      '--memory', `${spec.memoryMiB}m`, '--cpus', String(spec.cpus ?? 0.5), '--pids-limit', '256', '--tmpfs', '/tmp',
       '--mount', `type=volume,src=${name}-ipc,dst=/inference`, '--mount', `type=volume,src=${name}-models,dst=/models`,
       '--health-cmd', spec.healthcheck.map(x => `'${x.replaceAll("'", "'\\''")}'`).join(' '), '--health-interval', '2s', '--health-timeout', '5s', '--health-retries', '30', '--health-start-period', '10m', image], { capture: true });
     if (result.code === 130) throw Error('Shared service creation cancelled; inspect before retrying');
@@ -58,7 +59,7 @@ export async function sharedService(record, key, action, run) {
     compatible(container);
   }
   await checked(['start', name]);
-  return { name, fingerprint, state: 'starting', modelVolume: `${name}-models` };
+  return { name, fingerprint, state: 'starting', cpus: spec.cpus ?? 0.5, modelVolume: `${name}-models` };
 }
 
 export function attachShared(compose, record) {

@@ -19,7 +19,7 @@ function daemon() {
     if (a[0] === 'create') {
       const name = a[a.indexOf('--name')+1];
       if (objects.has(name)) return { code: 1, stderr: 'Conflict: name already in use' };
-      objects.set(name, { Config: { Labels: labels }, State: { Status: 'created' } });
+      objects.set(name, { Config: { Labels: labels }, HostConfig: { NanoCpus: Number(a[a.indexOf('--cpus')+1]) * 1e9 }, State: { Status: 'created' } });
     }
     return { code: 0, stdout: '' };
   };
@@ -73,4 +73,26 @@ test('cancelled creation never starts a possibly created container', async () =>
   const run = async a => { const result = await d.run(a); return a[0] === 'create' ? { code: 130, stderr: 'cancelled' } : result; };
   await assert.rejects(sharedService(record(), 'embeddings', 'enable', run), /cancelled/);
   assert(!d.calls.some(a => a[0] === 'start'));
+});
+
+test('default worker quota is half a core; explicit reviewed quotas are honored and drift rejected', async () => {
+  for (const cpus of [undefined, 0.25, 1]) {
+    const d = daemon(), r = record();
+    if (cpus !== undefined) r.deployment.sharedServices.embeddings.cpus = cpus;
+    const result = await sharedService(r, 'embeddings', 'enable', d.run);
+    assert.equal(result.cpus, cpus ?? 0.5);
+    const create = d.calls.find(a => a[0] === 'create');
+    assert.equal(create[create.indexOf('--cpus')+1], String(cpus ?? 0.5));
+    assert.equal((await sharedService(r, 'embeddings', 'status', d.run)).cpus, cpus ?? 0.5);
+    d.objects.get(result.name).HostConfig.NanoCpus = 0;
+    await assert.rejects(sharedService(r, 'embeddings', 'enable', d.run), /CPU limit/);
+  }
+});
+test('CPU limits cannot be unlimited, negative, nonnumeric or unbounded', () => {
+  const m = { schemaVersion: 1, id: 'library', version: '0.1.0', commands: {}, skills: [] };
+  for (const cpus of [0, -1, 0.01, 9, Infinity, NaN, '0.5', null]) {
+    const d = { schemaVersion: 3, services: { library: { buildTarget: 'runtime', healthcheck: ['true'] } }, commands: {}, ...record().deployment };
+    d.sharedServices.embeddings.cpus = cpus;
+    assert.throws(() => validate(m, d, new Map([['worker.mjs', {}]])), /CPU limit/);
+  }
 });

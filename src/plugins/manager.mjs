@@ -79,9 +79,10 @@ export function validate(m,d,files) {
     for(const [volume,target] of Object.entries(s.volumes||{})) { id(volume);containerPath(target); if(target==='/'||targets.has(target)) throw Error('Duplicate/root mount');targets.add(target); }
   }
   for (const [name, shared] of Object.entries(d.sharedServices || {})) {
-    id(name); keys(shared, ['identity','buildTarget','memoryMiB','healthcheck','clients','clientEnvironment','files']);
+    id(name); keys(shared, ['identity','buildTarget','memoryMiB','cpus','healthcheck','clients','clientEnvironment','files']);
     id(shared.identity); id(shared.buildTarget);
     if (!strings(shared.files).length || shared.files.some(name => !files.has(name))) throw Error('Shared implementation files must be packaged');
+    if (shared.cpus !== undefined && (typeof shared.cpus !== 'number' || !Number.isFinite(shared.cpus) || shared.cpus < 0.1 || shared.cpus > 8)) throw Error('Shared CPU limit must be between 0.1 and 8 cores');
     if (!Number.isInteger(shared.memoryMiB) || shared.memoryMiB < 32 || shared.memoryMiB > 8192) throw Error('Invalid shared memory bound');
     if (!strings(shared.healthcheck).length || !strings(shared.clients).length || new Set(shared.clients).size !== shared.clients.length) throw Error('Shared healthcheck and unique clients required');
     for (const client of shared.clients) {
