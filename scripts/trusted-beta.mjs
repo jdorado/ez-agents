@@ -24,6 +24,10 @@ export function publishEnvironment(env) {
   return Object.fromEntries(allowed.filter(key => env[key] !== undefined).map(key => [key, env[key]]));
 }
 
+export function publishArguments(path, npmrc, globalNpmrc) {
+  return ['publish', path, '--fetch-retries=0', '--ignore-scripts', '--provenance', '--access', 'public', '--tag', 'beta', '--registry', REGISTRY, '--userconfig', npmrc, '--globalconfig', globalNpmrc];
+}
+
 export function identity(env) {
   const value = { repository: env.RELEASE_REPOSITORY, package: env.RELEASE_PACKAGE,
     version: env.RELEASE_VERSION, sourceSha: env.RELEASE_SOURCE_SHA,
@@ -246,7 +250,7 @@ export async function publish(output, env = process.env) {
       record,
       allowWrite: env.GITHUB_RUN_ATTEMPT === '1',
       readState: () => registryState(expected),
-      publishTarball: () => execFileSync('npm', ['publish', path, '--fetch-retries=0', '--ignore-scripts', '--provenance', '--access', 'public', '--tag', 'beta', '--registry', REGISTRY, '--userconfig', npmrc, '--globalconfig', globalNpmrc], {
+      publishTarball: () => execFileSync('npm', publishArguments(path, npmrc, globalNpmrc), {
         cwd: temporary, stdio: 'inherit', timeout: 180_000,
         env: publishEnvironment(env),
       }),

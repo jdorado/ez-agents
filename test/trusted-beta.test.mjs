@@ -150,3 +150,13 @@ test('generated caller pins shared code, permits manual dispatch only and reject
   assert.ok(generateCaller({ ...config, repository: 'jdorado/ez-agents', packageName: '@jc_stack/ez-agents' }).includes('uses: ./.github/workflows/npm-beta-shared.yml'));
   for (const invalid of [{ repository: "jdorado/repo'\nsteps:" }, { packageName: "@jc_stack/p'\nsteps:" }, { publisherSha: 'main' }, { checks: ['a\nsteps:'] }, { checks: [] }]) assert.throws(() => generateCaller({ ...config, ...invalid }));
 });
+
+test('npm publication disables transport retries and scripts, preserving explicit beta registry', async () => {
+  const { publishArguments } = await import('../scripts/trusted-beta.mjs');
+  const args = publishArguments('/candidate.tgz', '/user-npmrc', '/global-npmrc');
+  assert.ok(args.includes('--fetch-retries=0'));
+  assert.ok(args.includes('--ignore-scripts'));
+  assert.equal(args[args.indexOf('--tag') + 1], 'beta');
+  assert.equal(args[args.indexOf('--registry') + 1], 'https://registry.npmjs.org/');
+  assert.notEqual(args[args.indexOf('--userconfig') + 1], args[args.indexOf('--globalconfig') + 1]);
+});

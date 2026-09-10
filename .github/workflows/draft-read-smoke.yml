@@ -2,12 +2,12 @@
 name: Draft asset read permission probe
 on: pull_request
 permissions:
-  contents: read
+  contents: write
 jobs:
   read-draft:
     runs-on: ubuntu-latest
     steps:
-      - name: Read an existing draft with read-only GITHUB_TOKEN
+      - name: Read an existing draft with draft-capable GITHUB_TOKEN
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

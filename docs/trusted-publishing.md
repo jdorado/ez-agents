@@ -34,7 +34,10 @@ release authority or establish npm trust automatically.
    This workflow currently uses no environment.
 4. Verify enrollment through npm settings or `npm trust list PACKAGE`. npm
    validates the **calling** workflow for reusable workflows. Both caller and
-   publishing job need `id-token: write`; test/validation jobs do not receive it.
+   publishing job need `id-token: write`; test/validation jobs do not receive it. GitHub requires `contents: write`
+   to read unpublished draft assets: only the validation job receives that
+   capability and makes GET requests only. The separate OIDC job has
+   `contents: read`. No package code or lifecycle scripts run in validation.
    Do not add `NODE_AUTH_TOKEN`, npm tokens, or private profiles to these jobs.
 
 An npm package must already exist before trust enrollment. If a registered

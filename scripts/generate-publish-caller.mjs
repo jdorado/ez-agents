@@ -36,7 +36,7 @@ jobs:
   publish:
     if: github.repository == '${repository}' && github.ref == 'refs/heads/main'
     permissions:
-      contents: read
+      contents: write
       checks: read
       actions: read
       pull-requests: read
