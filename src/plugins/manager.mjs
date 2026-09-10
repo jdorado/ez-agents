@@ -60,9 +60,10 @@ export function validate(m,d,files) {
   keys(d,['schemaVersion','services','commands','exports',...(d.schemaVersion>=2?['secrets']:[]),...(d.schemaVersion===3?['sharedServices']:[])]);
   if(![1,2,3].includes(d.schemaVersion) || !d.services || !d.commands) throw Error('Unsupported deployment descriptor');
   for(const [name,s] of Object.entries(d.services)) {
-    id(name); keys(s,['buildTarget','image','volumes','workspace','healthcheck','command',...(d.schemaVersion>=2?['environment','dependsOn','user','memoryMiB']:[])]);
+    id(name); keys(s,['buildTarget','image','volumes','workspace','healthcheck','command',...(d.schemaVersion>=2?['environment','dependsOn','user','memoryMiB','cpus']:[])]);
     if(s.user!==undefined && !/^[1-9][0-9]{0,5}:[1-9][0-9]{0,5}$/.test(s.user)) throw Error('Only explicit non-root UID:GID is supported');
     if(s.memoryMiB!==undefined && (!Number.isInteger(s.memoryMiB)||s.memoryMiB<32||s.memoryMiB>8192)) throw Error('Invalid memory bound');
+    if(s.cpus!==undefined && (typeof s.cpus!=='number'||!Number.isFinite(s.cpus)||s.cpus<0.1||s.cpus>8)) throw Error('CPU limit must be between 0.1 and 8 cores');
     if(s.dependsOn) for(const dependency of strings(s.dependsOn)) if(!d.services[dependency]||dependency===name) throw Error('Invalid service dependency');
     for(const [key,value] of Object.entries(s.environment||{})) {
       if(!/^[A-Z][A-Z0-9_]*$/.test(key)) throw Error('Invalid environment name');
@@ -125,6 +126,7 @@ export function compose(config, record, secrets={}) {
       healthcheck:{test:['CMD',...s.healthcheck],interval:'2s',timeout:'5s',retries:30,...(record.deployment.schemaVersion>=2?{start_period:'60s'}:{})},
       ...(s.dependsOn?{depends_on:Object.fromEntries(s.dependsOn.map(dep=>[dep,{condition:'service_healthy'}]))}:{}),
       ...(s.memoryMiB?{mem_limit:`${s.memoryMiB}m`}:{}),
+      ...(s.cpus?{cpus:s.cpus}:{}),
       ...(s.environment?{environment:Object.fromEntries(Object.entries(s.environment).map(([key,value])=>{
         if(typeof value==='string')return [key,value];
         if(!/^[a-f0-9]{64}$/.test(secrets[value.secret]||''))throw Error('Missing or invalid private deployment secret');
