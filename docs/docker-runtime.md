@@ -61,6 +61,19 @@ Live smoke uses the same host CLI and requires an actual Telegram receipt.
 Restart preserves pairing and files. One kernel lock excludes relay/smoke
 writers; exit 73 means a writer is active. Do not delete its lock to bypass it.
 Health requires recent polling and host-transport heartbeats, not just a process.
+Fatal Telegram polling errors, including `409 Conflict`, stop intake and await
+worker cleanup plus in-flight task/outbox writes before exit. A conflict still
+requires the operator to stop the competing bot poller; the relay does not retry
+around that ownership error. Pending and uncertain deliveries keep their existing
+outbox/receipt semantics; executor stdout is not replayed as a reply.
+
+The separate `control-state.lock` serializes authority JSON updates across CLI
+processes. A forced kill or host crash can orphan this exclusive-create sentinel.
+It deliberately has no age/PID-based auto-reclamation: expiry cannot prove that a
+paused writer is dead, and host/container PIDs are not interchangeable. For an
+orphan, stop the relay and all CLI writers for this deployment, preserve its
+control state, then remove only the verified orphaned `control-state.lock` and
+restart the single relay. Never remove a lock while a writer might still be live.
 Model catalog metadata is exported from the selected host CLI without credentials.
 The AI menu stays within that CLI. No automatic executor fallback is performed.
 
