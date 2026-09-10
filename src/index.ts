@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { Bot, InlineKeyboard, InputFile, GrammyError, type Context } from 'grammy'
 import type { ChildProcess } from 'node:child_process'
-import { isOwner } from './identity.js'
+import { isOwner, ownsRun } from './identity.js'
 import type { Update } from 'grammy/types'
 import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
@@ -29,7 +29,8 @@ import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
-import { presetLabel } from './ai.js'
+import { presetLabel, statusPreset } from './ai.js'
+import { discoverDefaults } from './client-defaults.js'
 import { initializeWorkspace } from './workspace.js'
 import { softwareStatus } from './software-status.js'
 
@@ -51,7 +52,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const background = new Map<string, ChildProcess>()
   const tasks = new Tasks(config.controlDir)
   const drainTaskRequests = taskRequests(tasks)
-  const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace)
+  const codexHome = join(config.controlDir, 'cli', 'codex')
+  const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
 
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
@@ -117,7 +119,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       if (!run.scheduled && !run.replyOnly && await runs.running(false)) return
       const owner = (await control.status()).owner
-      if (!owner || owner.telegramUserId !== run.telegramUserId || owner.telegramChatId !== run.chatId) {
+      if (!owner || !ownsRun(owner, run)) {
         await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
         return
       }
@@ -326,6 +328,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     item.caption = message?.caption
     item.albumId = message?.media_group_id
     if (message?.media_group_id) item.text = `[Telegram album: ${message.media_group_id}]\n${item.text}`
+    if (message && (message.chat.type === 'group' || message.chat.type === 'supergroup'))
+      item.text = `[Telegram sender ${message.from?.id}, name ${JSON.stringify(message.from?.first_name)}]\n${item.text}`
     if (message && !message.text && message.reply_to_message) {
       const quoted = message.reply_to_message
       item.text = `[Quoted message ${quoted.message_id}]: ${quoted.text || quoted.caption || '[media]'}\n\n${item.text}`
@@ -414,8 +418,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (
             !origin ||
             !owner ||
-            origin.telegramUserId !== owner.telegramUserId ||
-            origin.chatId !== owner.telegramChatId ||
+            !ownsRun(owner, origin) ||
             (origin.scheduled && origin.scheduled.pairedAt !== owner.pairedAt) ||
             item.chatId !== origin.chatId
           )
@@ -490,9 +493,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   }
 
   const checkOwner = async (ctx: Context): Promise<boolean> => {
-    if (!ctx.from || ctx.from.is_bot || ctx.chat?.type !== 'private') return false
+    if (!ctx.from || ctx.from.is_bot || ctx.message?.sender_chat) return false
     const state = await control.status()
     if (!state.owner) {
+      if (ctx.chat?.type !== 'private') return false
       const result = await control.requestPairing(ctx.from.id, ctx.chat.id)
       if (result === 'requested')
         await ctx.reply('Owner approval is pending. Confirm this request through the local setup assistant.')
@@ -524,10 +528,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const session = await control.getActiveSession()
     const ai = await control.aiState(aiMenu.initial)
     const selected = ai.presets.find((p) => p.id === ai.selectedId)!
+    const defaultPreset = ai.presets.find((p) => p.id === ai.defaultId)!
+    const discovered = await discoverDefaults(config.workspace, { codexHome, nativeCodexFallback: true })
+    const displayedSelected = statusPreset(selected, discovered)
+    const displayedDefault = statusPreset(defaultPreset, discovered)
     return [
       ...await softwareStatus(config.controlDir),
-      `AI: ${selected.name} (${presetLabel(selected)})`,
-      `Default: ${ai.presets.find((p) => p.id === ai.defaultId)!.name}`,
+      `AI: ${selected.name} (${presetLabel(displayedSelected)})`,
+      `Default: ${defaultPreset.name} (${presetLabel(displayedDefault)})`,
       `Session: ${session?.sessionId.slice(0, 8) || 'none'}`,
       `Work: ${running ? `${waitingForHost ? 'waiting for workspace' : 'running'} ${running.id}` : 'idle'}`,
       `Background: ${all.filter(r => r.scheduled && r.status === 'running').map(r=>r.id).join(', ') || 'idle'}`,
@@ -561,13 +569,27 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // Returning from the polling handler acknowledges intake, not execution. Only
   // return after the authorized update has reached the atomic local journal.
   bot.use(async (ctx, next) => {
-    if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
+    if (ctx.callbackQuery && (await control.status()).owner?.kind === 'group') {
+      if (!isOwner(ctx, (await control.status()).owner)) return
+      try {
+        const member = await bot.api.getChatMember(ctx.chat!.id, ctx.from!.id)
+        if (!['creator', 'administrator', 'member'].includes(member.status) &&
+          !(member.status === 'restricted' && member.is_member)) return
+      } catch { throw new Error('Group membership verification unavailable; retry the update') }
+    }
+    if ((ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') &&
+      !isOwner(ctx, (await control.status()).owner)) {
       if (config.channelBackendUrl) return
       const owner = (await control.status()).owner
       const message = ctx.message
+      if (!owner && message && !message.sender_chat && ctx.from && !ctx.from.is_bot) {
+        await control.requestPairing(ctx.from.id, ctx.chat.id, ctx.chat.title)
+        return
+      }
       if (!owner || !message?.text || message.sender_chat || !ctx.from || ctx.from.is_bot) return
       await telegramSource.start(owner)
       if (await telegramSource.capture(ctx.update.update_id, message as import('grammy/types').Message.TextMessage, ctx.from)) return
+      if (owner.kind === 'group') return
       if (ctx.from.id !== owner.telegramUserId) return
       if (replay.has(ctx.update)) {
         collected.push({
@@ -578,7 +600,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
     if (replay.has(ctx.update)) {
-      if (isOwner(ctx, (await control.status()).owner)) return next()
+      if (!ctx.message?.sender_chat && isOwner(ctx, (await control.status()).owner)) return next()
       return
     }
     const message = ctx.message
@@ -607,7 +629,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
     if (text === '/retry') {
-      const id = await inbox.retryLatest(ctx.from.id, ctx.chat.id)
+      const id = await inbox.retryLatest(ctx.from.id, ctx.chat.id, (await control.status()).owner)
       if (id) scheduleIntake()
       await ctx.reply(id ? `Incoming batch ${id} queued for retry.` : 'No failed incoming batch to retry.')
       return
@@ -798,7 +820,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (actionId && (decision === 'approve' || decision === 'deny')) {
         const request = await approvals.getDecision(actionId)
         const run = request?.runId ? await runs.get(request.runId) : null
-        if (!run || run.chatId !== ctx.chat?.id || run.telegramUserId !== ctx.from.id) {
+        if (!run || run.chatId !== ctx.chat?.id || !ownsRun((await control.status()).owner, run) ||
+          ((await control.status()).owner?.kind !== 'group' && run.telegramUserId !== ctx.from.id)) {
           await ctx.answerCallbackQuery({ text: 'Approval unavailable' })
           return
         }
@@ -840,7 +863,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         await aiMenu.list(ctx, action === 'settings')
       } else if (action === 'retry') {
         await ctx.answerCallbackQuery()
-        const id = await inbox.retryLatest(ctx.from.id, ctx.chat!.id)
+        const id = await inbox.retryLatest(ctx.from.id, ctx.chat!.id, (await control.status()).owner)
         if (id) scheduleIntake()
         await ctx.reply(id ? `Incoming batch ${id} queued for retry.` : 'No failed incoming batch to retry.')
       } else if (action === 'new') {

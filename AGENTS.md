@@ -66,7 +66,7 @@ This package will be published as an open-source, lightweight Telegram-to-CLI re
 - Main-conversation jobs queue sequentially in `RunStore`. Scheduled/background work uses separate task directories and native CLI sessions (up to four alongside chat). Never share a mutable task directory. Delegation decisions and goal persistence belong to the agent/executor; there is no automatic planner or canned chat ACK. Production executor runs have no wall-clock timeout; cancellation is explicit.
 
 ## 7. Fail-Closed Authority (Channel Access ≠ Execution)
-- Incoming messages from unapproved senders must **never** spawn the executor. First DM registers an unapproved pairing request, then stops.
+- Incoming messages outside the approved owner binding must **never** spawn the executor. A first DM or group message records a pending request only. Explicitly approved owner groups grant owner access to all human members in that exact chat; bots and anonymous posts are ignored.
 - Unapproved group messages from other senders and unknown DMs fail silently. Approved group text uses the existing conversation grant and restricted task runner. Paired-owner group text is discovery routed to the owner's private chat; it grants no group reply authority.
 - Stopping work (`/stop`) must terminate the active worker PID immediately (`SIGTERM`, escalating to `SIGKILL` if unclosed after 3s).
 
