@@ -6,6 +6,7 @@ import { ControlStore } from './control-state.js'
 import { RunStore } from './runs.js'
 import { initialPreset } from './ai.js'
 import { Scheduler } from './scheduler.js'
+import { ownsRun } from './identity.js'
 import { nextOccurrence, type Trigger } from './schedule-time.js'
 
 async function main() {
@@ -27,7 +28,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
   const runs=new RunStore(config.controlDir), scheduler=new Scheduler(config.controlDir)
   const caller=process.env.EZ_RUN_ID ? await runs.get(process.env.EZ_RUN_ID) : null
   if(process.env.EZ_RUN_ID && (!caller || caller.status!=='running' || caller.external || caller.taskId ||
-    caller.telegramUserId!==owner.telegramUserId || caller.chatId!==owner.telegramChatId ||
+    !ownsRun(owner, caller) ||
     (caller.scheduled && caller.scheduled.pairedAt!==owner.pairedAt)))throw new Error('Scheduling requires an active owner-authorized run')
   const owned=(s:{owner:typeof owner})=>s.owner.telegramUserId===owner.telegramUserId && s.owner.telegramChatId===owner.telegramChatId && s.owner.pairedAt===owner.pairedAt
   const show=async(s:Awaited<ReturnType<Scheduler['get']>>)=>{
