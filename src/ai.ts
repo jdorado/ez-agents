@@ -31,6 +31,8 @@ export const initialPreset = (cli: string): AiPreset => {
   const key = executorKey(cli)
   return {
     id: 'initial', name: `${resolveExecutor(key).name} · current setup`, cli: key,
+    ...(key === 'codex' || key === 'codex-gui'
+      ? { model: 'gpt-5.6-terra', effort: 'high' } : {}),
     ...(key === 'opencode'
       ? { model: process.env.OPENCODE_MODEL || 'opencode/nemotron-3.5-lightning-free' } : {}),
   }
