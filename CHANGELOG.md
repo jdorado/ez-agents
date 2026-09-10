@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.15
+
+- Include current reviewed model defaults, reply/status fixes, shared Library services and CPU limits, and the corrected main-CI publisher validation.
+- Testing beta; previously documented live-provider and fresh-host acceptance limits remain.
+
 ## 0.1.0-beta.14
 
 - Preserve agent-specific scheduled authentication and model catalogs; show native
