@@ -89,5 +89,8 @@ worktree/branch/PR, starting from fetched origin/main. Do not switch or mix work
 another task's checkout. Stage only this task's changes. Keep its worktree through
 review and QA; independent review and green CI precede an authorized merge.
 Never treat task completion as permission to merge or publish.
+Own the complete engineering/release handoff in CONTRIBUTING.md. Once ready,
+proactively request only missing merge/release authority, then ship and verify;
+do not leave the maintainer to discover ready drafts or operate the release.
 
 - In channel-backend mode, the application owns native sessions and actions. Forward normalized inputs with stable run IDs, recover only by idempotent backend submission, and deliver replies through the existing outbox. Never launch a fallback CLI or pass relay credentials into an executor.
