@@ -89,6 +89,23 @@ test('model catalog projects native metadata only, excluding hidden entries and 
   } finally { await rm(home, { recursive: true, force: true }) }
 })
 
+test('model catalog can read an agent-bound Codex home', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ez-catalog-home-'))
+  const codexHome = await mkdtemp(join(tmpdir(), 'ez-catalog-codex-'))
+  try {
+    await writeFile(join(codexHome, 'models_cache.json'), JSON.stringify({ models: [
+      { slug: 'gpt-6-astra', display_name: 'GPT-6 Astra', visibility: 'list',
+        supported_reasoning_levels: [{ effort: 'low' }] },
+    ] }))
+    assert.deepEqual(await readModels(home, async (cli) => cli === 'codex', codexHome), [
+      { cli: 'codex', model: 'gpt-6-astra', name: 'GPT-6 Astra', efforts: ['low'] },
+    ])
+  } finally {
+    await rm(home, { recursive: true, force: true })
+    await rm(codexHome, { recursive: true, force: true })
+  }
+})
+
 test('native executor flags carry the exact model and effort; only structured metadata binds sessions', () => {
   const opts = { workspace: '/tmp/fixture', sessionId: crypto.randomUUID(), isResume: true,
     model: 'fixture-model', effort: 'medium' }
