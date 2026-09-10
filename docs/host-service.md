@@ -78,3 +78,17 @@ are not certified by these instructions or the headless Docker tests.
 
 This beta includes owner-policy release checks and durable
 main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.
+
+## Shared application workspace
+
+An agent binding may set `sharedWorkspace` to an absolute canonical application
+repository. The host resolves its canonical path, adds that directory to Codex
+write permissions for chat and scheduled jobs, and serializes all bindings in
+that host executor which share it (including symlink aliases). Task sessions and
+artifacts remain isolated. This is useful when independent task folders still
+write the same application records. Long jobs can delay chat execution; relay
+intake and cancellation remain available. The binding is host-owned and cannot
+be supplied by a queued request. Other executors keep their native filesystem
+policy. This lock is scoped to one host executor process; it does not coordinate
+separate deployments or external writers. Do not run a second controller against
+that repository.
