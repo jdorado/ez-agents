@@ -67,3 +67,10 @@ test('schema 3 rejects unauthorized shared fields, clients and mount collisions'
     const d = make(); mutate(d); assert.throws(() => validate(m, d, new Map([['worker.mjs', {}]])));
   }
 });
+
+test('cancelled creation never starts a possibly created container', async () => {
+  const d = daemon();
+  const run = async a => { const result = await d.run(a); return a[0] === 'create' ? { code: 130, stderr: 'cancelled' } : result; };
+  await assert.rejects(sharedService(record(), 'embeddings', 'enable', run), /cancelled/);
+  assert(!d.calls.some(a => a[0] === 'start'));
+});
