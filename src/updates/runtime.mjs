@@ -1,3 +1,4 @@
+import { sharedIdentity } from '../plugins/shared.mjs';
 import * as fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
@@ -100,7 +101,8 @@ export async function perform(home,job,hooks) {
     } else {
       const old=next.old.record,r=await read(path.join(home,'registry.json'));
       const secrets=await read(path.join(home,'packages',job.target,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
-      const s=await snapshot(root),candidate={...old,source:root,revision:s.revision,manifest:s.manifest,deployment:s.deployment};
+      const s=await snapshot(root),candidate={...old,source:root,revision:s.revision,manifest:s.manifest,deployment:s.deployment,sharedRevisions:s.sharedRevisions};
+      for (const key of old.sharedEnabled || []) if (sharedIdentity(old, key).fingerprint !== sharedIdentity(candidate, key).fingerprint) throw Error('Shared worker changed; disable this client and coordinate an explicit shared worker upgrade before updating');
       const stage={...candidate,compose:path.join(dir,'compose.json')};await atomic(stage.compose,compose(config,stage,secrets));
       for(const [service,spec] of Object.entries(stage.deployment.services))await run('docker',[...pluginArgs(stage),spec.image?'pull':'build',service]);
       const running=Boolean((await run('docker',[...pluginArgs(old),'ps','-q'])).trim());
