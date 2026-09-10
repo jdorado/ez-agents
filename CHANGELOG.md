@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.0-beta.14
+
+- Add explicit host-owned shared-workspace access and serialize bindings to the
+  same resolved repository path while retaining isolated task transcripts.
+- Bound interactive Codex context through native compaction and expose
+  content-free launch, execution and delivery timings.
+- Support owner-approved Telegram text groups and ongoing incoming-only grants
+  through restricted task execution; retain exact conversation/account authority.
+- Preserve revocation recovery and uncertain-send receipts. Ongoing WhatsApp
+  grants require the companion WhatsApp beta.13 provider.
+- Fix graceful container shutdown, isolate CI package sources and await RPC
+  fixture cleanup. Make verified release handoff proactive and agent-owned.
+- Beta limits: no group media; live group-recipient and final fresh-host/reboot
+  acceptance remain pending. No new live-delivery or latency claims.
+
 ## 0.1.0-beta.13
 
 - Escalate cancelled plugin clients and report container cleanup failures.
