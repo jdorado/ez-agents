@@ -25,6 +25,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const tasks = new Set<Promise<void>>()
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
+  const catalog = (agent: HostBinding) => readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
   try {
     for (const agent of installation.agents) {
       if (![agent.workspace,agent.controlDir,agent.binDir].every(path.isAbsolute)) throw new Error('Host bindings require absolute paths')
@@ -42,7 +43,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid}),{mode:0o600,flag:'wx'})
       locks.push(lock)
-      await writeFile(path.join(directory,'models.json'),JSON.stringify(await readModels()),{mode:0o600})
+      await writeFile(path.join(directory,'models.json'),JSON.stringify(await catalog(agent)),{mode:0o600})
       // A host crash is terminal for a claimed job. Never replay an action.
       for (const file of await readdir(directory)) if (file.endsWith('.running.json')) {
         const base=path.join(directory,file.slice(0,-13))
@@ -61,8 +62,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
       if(parent) { try { process.kill(parent,0) } catch { break } }
       if(Date.now()-catalogAt>30000){
-        const models=JSON.stringify(await readModels())
         for(const agent of installation.agents){
+          const models=JSON.stringify(await catalog(agent))
           const file=path.join(agent.controlDir,'host-executor/models.json')
           await writeFile(file+'.tmp',models,{mode:0o600});await rename(file+'.tmp',file)
         }

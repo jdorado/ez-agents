@@ -40,17 +40,17 @@ export const installed = async (cli: string): Promise<boolean> => {
 
 // Read only metadata from native client catalogs. Never import prompts, credentials,
 // provider configuration, or model instructions into relay context.
-export const readModels = async (home = homedir(), available = installed): Promise<ModelChoice[]> => {
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex')): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
   const efforts = (value: unknown, key: string): string[] =>
     (Array.isArray(value) ? value : []).map((e: unknown) => record(e)[key]).filter(safe)
   const json = async (file: string) => {
-    try { return record(JSON.parse(await readFile(join(home, file), 'utf8'))) } catch { return {} }
+    try { return record(JSON.parse(await readFile(file, 'utf8'))) } catch { return {} }
   }
   if (await available('grok')) {
-    const cache = await json('.grok/models_cache.json')
+    const cache = await json(join(home, '.grok', 'models_cache.json'))
     for (const entry of Object.values(record(cache.models))) {
       const info = record(record(entry).info)
       if (info.hidden || !safe(info.id)) continue
@@ -59,7 +59,7 @@ export const readModels = async (home = homedir(), available = installed): Promi
     }
   }
   if (await available('codex')) {
-    const cache = await json('.codex/models_cache.json')
+    const cache = await json(join(codexHome, 'models_cache.json'))
     for (const entry of Array.isArray(cache.models) ? cache.models : []) {
       const info = record(entry)
       if (info.visibility !== 'list' || !safe(info.slug)) continue
