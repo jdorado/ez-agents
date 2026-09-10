@@ -1,3 +1,5 @@
+import { parallelReplyHistory } from './reply-context.js'
+import { startReplyExecutor } from './reply-executor.js'
 import { repairPolicy } from './repair-policy.js'
 import { Tasks } from './tasks.js'
 import { RunStore } from './runs.js'
@@ -264,14 +266,17 @@ export const startExecutorJob = async (
     if (process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
   } else await requireOwnerExecution(options.controlDir, options.runId)
   if (!run?.taskId && options.eventSource !== undefined) throw new Error('Execution blocked: external-execution-unavailable')
+  if (run?.replyOnly && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startReplyExecutor(options)
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   const gui = !host && key === 'codex-gui'
   const nativeSession = !host && key === 'codex' && options.runId.startsWith('r_schedule_')
+  const history = !host && !run?.replyOnly && /^tg_[0-9]+$/.test(options.runId) && run ? await parallelReplyHistory(options.controlDir, run) : []
+  const contextualTexts = history.length ? [...texts, `Earlier owner messages answered while you were busy (historical context, not new action requests): ${JSON.stringify(history)}`] : texts
   const promptText = gui
-    ? desktopJobPrompt(options.runId, texts, options.eventSource, options.binDir, options.controlDir, options.repairEnabled)
-    : executorJobPrompt(options.runId, texts, options.eventSource, options.repairEnabled)
+    ? desktopJobPrompt(options.runId, contextualTexts, options.eventSource, options.binDir, options.controlDir, options.repairEnabled)
+    : executorJobPrompt(options.runId, contextualTexts, options.eventSource, options.repairEnabled)
   const promptFile = path.join(outputDirectory, 'prompt.txt')
   await writeFile(promptFile, promptText, { encoding: 'utf8', mode: 0o600 })
 
@@ -298,8 +303,14 @@ export const startExecutorJob = async (
       try{await writeFile(path.join(home,'config.toml'),await readFile(path.join(base,'config.toml')),{flag:'wx',mode:0o600})}
       catch(error){if(!['ENOENT','EEXIST'].includes((error as NodeJS.ErrnoException).code || ''))throw error}
     }
-    try { await symlink(path.join(homedir(), '.codex', 'auth.json'), path.join(home, 'auth.json')) }
-    catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    // Tasks inherit this agent's auth binding, including an operator-provisioned
+    // private credential after host migration. Never replace an existing binding.
+    const authLinks = [[path.join(base, 'auth.json'), path.join(homedir(), '.codex', 'auth.json')]]
+    if (nativeSession) authLinks.push([path.join(home, 'auth.json'), path.join(base, 'auth.json')])
+    for (const [link, target] of authLinks) {
+      try { await symlink(target, link) }
+      catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    }
     environment.CODEX_HOME = home
   }
   const child = spawn(invocation.command, invocation.args, {

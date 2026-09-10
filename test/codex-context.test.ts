@@ -41,6 +41,7 @@ test('scheduled Codex sessions isolate native state and snapshot only agent conf
   await mkdir(path.join(root,'.codex'));await mkdir(bin);await mkdir(path.join(controlDir,'cli/codex'),{recursive:true})
   await writeFile(path.join(root,'.codex/auth.json'),'{}');await writeFile(path.join(root,'.codex/config.toml'),'# personal configuration')
   await writeFile(path.join(controlDir,'cli/codex/config.toml'),'# agent configuration')
+  await writeFile(path.join(controlDir,'cli/codex/auth.json'),'{"private_agent_fixture":true}')
   await writeFile(path.join(bin,'codex'),`#!${process.execPath}
 const fs=require('fs');fs.writeFileSync(process.env.CODEX_HOME+'/observed.json',JSON.stringify({home:process.env.CODEX_HOME,secret:process.env.TELEGRAM_BOT_TOKEN}));
 const send=x=>console.log(JSON.stringify(x));require('readline').createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);if(!q.id)return;
@@ -50,6 +51,7 @@ send({id:q.id,result:q.method==='thread/goal/get'?{goal:null}:{}});});setInterva
 `,{mode:0o700})
   process.env.HOME=root;process.env.PATH=bin+path.delimiter+priorPath
   await assert.rejects(startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId:'r_schedule_/../../escape',timeoutMs:0}),/Invalid native task run ID/)
+  await ownerRun(controlDir, 'r_pair_fixture')
   await Promise.all(['r_schedule_one','r_schedule_two'].map(async runId=>{
    await ownerRun(controlDir, runId)
    const job=await startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:0})
@@ -57,9 +59,10 @@ send({id:q.id,result:q.method==='thread/goal/get'?{goal:null}:{}});});setInterva
    const home=path.join(controlDir,'cli/codex/tasks',runId)
    assert.equal(JSON.parse(await readFile(path.join(home,'observed.json'),'utf8')).home,home)
    assert.equal(await readFile(path.join(home,'config.toml'),'utf8'),'# agent configuration')
-   assert.equal(await readlink(path.join(home,'auth.json')),path.join(root,'.codex/auth.json'))
+   assert.equal(await readlink(path.join(home,'auth.json')),path.join(controlDir,'cli/codex/auth.json'))
+   assert.equal(await readFile(path.join(home,'auth.json'),'utf8'),'{"private_agent_fixture":true}')
   }))
-  assert.deepEqual((await readdir(path.join(controlDir,'cli/codex'))).sort(),['config.toml','tasks'])
+  assert.deepEqual((await readdir(path.join(controlDir,'cli/codex'))).sort(),['auth.json','config.toml','tasks'])
  }finally{
   if(priorHome===undefined)delete process.env.HOME;else process.env.HOME=priorHome
   if(priorPath===undefined)delete process.env.PATH;else process.env.PATH=priorPath

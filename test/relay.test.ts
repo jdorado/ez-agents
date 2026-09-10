@@ -84,7 +84,7 @@ test('owner stop terminates the writer and starts queued work without overlap', 
     stop.message!.text = '/stop'
     await relay.bot.handleUpdate(stop)
     await until(async () => children.length === 2)
-    assert.equal((await runs.list()).filter((run) => run.status === 'failed').length, 1)
+    assert.equal((await runs.list()).filter((run) => run.status === 'cancelled').length, 1)
     await relay.stop()
     await until(async () => children[1].signalCode !== null)
     await until(async () => (await runs.list()).every((run) => run.status !== 'running'))

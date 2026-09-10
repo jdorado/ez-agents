@@ -100,3 +100,7 @@ git worktree list
 git fetch origin
 git worktree add -b feat/task-name /absolute/worktrees/task-name origin/main
 ```
+
+Beta publishing workflow changes follow [trusted publishing](docs/trusted-publishing.md).
+Validate wrong source, repository, package, version and artifact inputs with
+negative tests. Never dispatch publication to test authentication.
