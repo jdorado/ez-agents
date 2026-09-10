@@ -25,7 +25,7 @@ export function publishEnvironment(env) {
 }
 
 export function publishArguments(path, npmrc, globalNpmrc) {
-  return ['publish', path, '--fetch-retries=0', '--ignore-scripts', '--provenance', '--access', 'public', '--tag', 'beta', '--registry', REGISTRY, '--userconfig', npmrc, '--globalconfig', globalNpmrc];
+  return ['publish', path, '--fetch-retries=0', '--ignore-scripts', '--provenance', '--access', 'public', '--tag', 'latest', '--registry', REGISTRY, '--userconfig', npmrc, '--globalconfig', globalNpmrc];
 }
 
 export function identity(env) {
@@ -53,7 +53,7 @@ export function validateManifest(manifest, expected) {
   const config = manifest.publishConfig || {};
   assert(Object.keys(config).every(key => ['access', 'tag', 'registry', 'provenance'].includes(key)), 'Unsupported publish configuration');
   assert(config.access === undefined || config.access === 'public', 'Invalid publish access');
-  assert(config.tag === undefined || config.tag === 'beta', 'Invalid publish tag');
+  assert(config.tag === undefined || config.tag === 'latest', 'Invalid publish tag');
   assert(config.registry === undefined || config.registry === REGISTRY || config.registry === REGISTRY.slice(0, -1), 'Invalid publish registry');
   assert(config.provenance !== false, 'Provenance must not be disabled');
 }
@@ -196,7 +196,7 @@ export async function publishOnce(expected, { readState, publishTarball, sleep =
   const before = await readState();
   await record({ phase: 'preflight', before });
   if (before.exists) {
-    assert(before.beta === expected.version, 'Artifact exists but beta tag differs; reconcile without republishing');
+    assert(before.latest === expected.version, 'Artifact exists but latest tag differs; reconcile without republishing');
     return { status: 'already-published', version: expected.version, sha256: expected.sha256 };
   }
   assert(allowWrite, 'Rerun cannot repeat publication: reconcile registry state and create a fresh authorized dispatch if a new attempt is needed');
@@ -209,12 +209,11 @@ export async function publishOnce(expected, { readState, publishTarball, sleep =
     try {
       const after = await readState();
       await record({ phase: 'readback', before, after, publishCommandFailed: Boolean(writeError), attempt });
-      assert(after.latest === before.latest, 'latest tag changed during beta publication');
-      if (after.exists && after.beta === expected.version) {
-        if (writeError) report('Publish command was uncertain; registry readback verified exact artifact and beta tag.');
+      if (after.exists && after.latest === expected.version) {
+        if (writeError) report('Publish command was uncertain; registry readback verified exact artifact and latest tag.');
         return { status: 'published', version: expected.version, sha256: expected.sha256 };
       }
-      lastError = new Error('Exact artifact and beta tag not yet verified');
+      lastError = new Error('Exact artifact and latest tag not yet verified');
     } catch (error) { lastError = error; await record({ phase: 'readback-error', before, error: error.message, attempt }); }
   }
   throw new Error(`Publication unresolved; do not repeat the write before registry reconciliation: ${lastError?.message || writeError?.message}`);

@@ -1,6 +1,6 @@
 {
   "name": "@jc_stack/ez-agents",
-  "version": "0.1.0-beta.13",
+  "version": "0.1.0-beta.14",
   "private": false,
   "type": "module",
   "description": "A lightweight foundation for persistent business AI assistants using existing AI harnesses, workspaces and plugins.",
@@ -54,7 +54,7 @@
   ],
   "publishConfig": {
     "access": "public",
-    "tag": "beta"
+    "tag": "latest"
   },
   "scripts": {
     "setup": "tsx --env-file-if-exists=.env src/setup.ts",

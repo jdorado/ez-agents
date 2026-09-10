@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { atomic, locked, snapshot } from '../plugins/manager.mjs';
-import { digest, extract, newer, compatible, version, releaseContract, registryVersion, download } from './artifact.mjs';
+import { digest, extract, newer, compatible, version, releaseContract, registryVersion, registryCandidate, download } from './artifact.mjs';
 
 export const read = async file => JSON.parse(await fs.readFile(file,'utf8'));
 export const missing = error => {if(error.code!=='ENOENT')throw error;return null;};
@@ -33,8 +33,8 @@ export async function check(home) {
   for(const target of ['main',...Object.keys(registry.plugins)]) {
     try {
       const old=await installed(home,target),p=await policy(home,target);
-      const candidate=await registryVersion(old.pkg.name,p.channel==='stable'?'latest':'beta');
-      results.push({target,installed:old.pkg.version,available:candidate.version,newer:newer(candidate.version,old.pkg.version),policy:p,package:candidate.name});
+      const candidate=await registryCandidate(old.pkg.name,p.channel);
+      results.push({target,installed:old.pkg.version,available:candidate?.version??null,newer:Boolean(candidate&&newer(candidate.version,old.pkg.version)),policy:p,package:old.pkg.name});
     }catch(error){results.push({target,error:error.message});}
   }
   return results;
