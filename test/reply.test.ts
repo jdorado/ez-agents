@@ -96,3 +96,17 @@ test('a successful native exit without a reply receipt is not completion', async
   await assert.rejects(requireReplyReceipt(root,'../escape'))
  }finally{await rm(root,{recursive:true,force:true})}
 })
+
+
+test('normal conversation receives delivered parallel replies as historical context', async()=>{
+ const { parallelReplyHistory }=await import('../src/reply-context.js')
+ const root=await mkdtemp(join(tmpdir(),'ez-reply-continuity-')),runs=new RunStore(root)
+ try{
+  await ownerRun(root,'tg_1');await runs.patch('tg_1',{replyOnly:true})
+  await mkdir(join(root,'outbox'),{recursive:true})
+  await writeFile(join(root,'outbox','tg_1_busy_reply.sent.json'),JSON.stringify({chatId:101,text:'Earlier answer'}))
+  const current=await ownerRun(root,'tg_2')
+  assert.deepEqual(await parallelReplyHistory(root,current),[{owner:'test',reply:'Earlier answer'}])
+  assert.deepEqual(await parallelReplyHistory(root,{...current,chatId:202}),[])
+ }finally{await rm(root,{recursive:true,force:true})}
+})

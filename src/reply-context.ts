@@ -1,7 +1,7 @@
 import { readFile, readdir, lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { requireOwnerExecution } from './execution-authority.js'
-import { RunStore } from './runs.js'
+import { RunStore, type RunRecord } from './runs.js'
 import { ControlStore } from './control-state.js'
 import { Scheduler } from './scheduler.js'
 
@@ -45,4 +45,18 @@ export async function replyCall(controlDir: string, runId: string, workspace: st
     return { id }
   }
   throw new Error('Unknown reply tool')
+}
+
+// Give the next normal conversation turn the replies it did not see natively.
+export async function parallelReplyHistory(controlDir: string, current: RunRecord) {
+  const records = (await new RunStore(controlDir).list()).filter(r => r.chatId === current.chatId && r.telegramUserId === current.telegramUserId && r.id !== current.id)
+  const previous = records.filter(r => /^tg_/.test(r.id) && !r.replyOnly && r.status === 'completed').at(-1)?.createdAt || ''
+  const history = []
+  for (const r of records.filter(r => r.replyOnly && r.createdAt > previous).slice(-8)) {
+    try {
+      const receipt = JSON.parse(await readFile(join(controlDir, 'outbox', r.id+'_busy_reply.sent.json'), 'utf8'))
+      if (receipt.chatId === current.chatId) history.push({owner: r.texts.join('\n').slice(-1600), reply: String(receipt.text || '').slice(-2400)})
+    } catch {}
+  }
+  return history
 }
