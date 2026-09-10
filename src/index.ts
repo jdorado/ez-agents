@@ -54,7 +54,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const background = new Map<string, ChildProcess>()
   const completions = new Set<Promise<void>>()
   const tasks = new Tasks(config.controlDir)
-  const drainTaskRequests = taskRequests(tasks)
+  const processTaskRequests = taskRequests(tasks)
+  let taskWork: Promise<void> | undefined
+  const drainTaskRequests = (): Promise<void> => {
+    if (shuttingDown) return taskWork ?? Promise.resolve()
+    return taskWork ?? (taskWork = processTaskRequests().finally(() => { taskWork = undefined }))
+  }
+  let taskTimer: ReturnType<typeof setInterval> | undefined
+  let drainTimer: ReturnType<typeof setInterval> | undefined
   const codexHome = join(config.controlDir, 'cli', 'codex')
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
@@ -417,11 +424,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     return intakeWork
   }
 
-  let isDraining = false
-  const drainOutbox = async (onlyRunId?: string): Promise<void> => {
-    if (isDraining) return
-    isDraining = true
-    try {
+  let outboxWork: Promise<void> | undefined
+  const drainOutbox = (onlyRunId?: string): Promise<void> => {
+    if (shuttingDown) return outboxWork ?? Promise.resolve()
+    return outboxWork ?? (outboxWork = (async () => {
       for (const item of await runs.pendingOutbox()) {
         if (onlyRunId && item.runId !== onlyRunId) continue
         const claimed = await runs.claimOutbox(item.id)
@@ -506,9 +512,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           )
         }
       }
-    } finally {
-      isDraining = false
-    }
+    })().finally(() => { outboxWork = undefined }))
   }
 
   const checkOwner = async (ctx: Context): Promise<boolean> => {
@@ -936,10 +940,13 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     throw error
   })
 
-  const stop = async () => {
+  let stopWork: Promise<void> | undefined
+  const stop = (): Promise<void> => stopWork ?? (stopWork = (async () => {
     shuttingDown = true
     if (intakeTimer) clearTimeout(intakeTimer)
     if (sourceTimer) clearInterval(sourceTimer)
+    if (taskTimer) clearInterval(taskTimer)
+    if (drainTimer) clearInterval(drainTimer)
     await Promise.all([sourceWork, intakeWork].map(work => work?.catch(() => {})))
     // Finish registering in-flight launches before taking the child snapshot.
     await withStartLock(async () => {
@@ -949,26 +956,31 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (activeTypingTimer) clearInterval(activeTypingTimer)
     })
     await Promise.all(completions)
+    await Promise.all([taskWork, outboxWork].map(work => work?.catch(() => {})))
     pagerDuty?.stop()
-    if (bot.isRunning()) await bot.stop()
-    await telegramSource.stop()
-  }
+    try {
+      if (bot.isRunning()) await bot.stop()
+    } finally {
+      await telegramSource.stop()
+    }
+  })())
 
   const start = async () => {
-    await initializeWorkspace(config.workspace)
-    pagerDuty?.start()
-    const owner = (await control.status()).owner
-    if (owner && !config.channelBackendUrl) await telegramSource.start(owner)
-    await scheduler.recover(runs)
-    sourceTimer = setInterval(() => {
-      void drainSources().catch(error => console.error('Event-source drain failed', safeError(error)))
-    }, 1000)
-    const taskTimer = setInterval(() => { void drainTaskRequests().catch(console.error) }, 250)
-    const drainTimer = setInterval(() => {
-      void drainOutbox().catch((error) => console.error('Outbox drain failed', error.message))
-    }, 250)
-    drainTimer.unref()
+    let failed = false
     try {
+      await initializeWorkspace(config.workspace)
+      pagerDuty?.start()
+      const owner = (await control.status()).owner
+      if (owner && !config.channelBackendUrl) await telegramSource.start(owner)
+      await scheduler.recover(runs)
+      sourceTimer = setInterval(() => {
+        void drainSources().catch(error => console.error('Event-source drain failed', safeError(error)))
+      }, 1000)
+      taskTimer = setInterval(() => { void drainTaskRequests().catch(console.error) }, 250)
+      drainTimer = setInterval(() => {
+        void drainOutbox().catch((error) => console.error('Outbox drain failed', error.message))
+      }, 250)
+      drainTimer.unref()
       console.log(`ezenciel-agents listening with workspace ${config.workspace}`)
       console.log(`Authority control state: ${config.controlDir}`)
       console.log(`CLI executor: ${config.executorCli}`)
@@ -996,11 +1008,17 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         drop_pending_updates: false,
         onStart: (botInfo) => console.log(`✓ Bot @${botInfo.username} polling for messages...`),
       })
+    } catch (error) {
+      failed = true
+      throw error
     } finally {
-      clearInterval(drainTimer)
-      clearInterval(taskTimer)
-      if (sourceTimer) clearInterval(sourceTimer)
-      pagerDuty?.stop()
+      // Fatal polling errors (including a competing poller's 409) must finish
+      // the same worker/state cleanup as a signal before the process exits.
+      try { await stop() }
+      catch (error) {
+        if (!failed) throw error
+        console.error('Relay shutdown failed', safeError(error))
+      }
     }
   }
   return { bot, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests }
@@ -1010,7 +1028,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const relay = createRelay(loadConfig())
   for (const signal of ['SIGINT', 'SIGTERM'] as const)
     process.once(signal, () => {
-      void relay.stop()
+      // start() awaits this same shutdown and reports its error. Avoid a
+      // second unhandled rejection from the signal callback.
+      void relay.stop().catch(() => { process.exitCode = 1 })
     })
   await relay.start()
 }
