@@ -169,6 +169,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const { child, cleanup } = await launch(texts, {
           workspace: run.scheduled ? await taskWorkspace(config.workspace,run.id) : config.workspace,
           timeoutMs: config.executorTimeoutMs,
+          repairEnabled: config.repairEnabled,
           runId: started.id,
           controlDir: config.controlDir,
           binDir,
