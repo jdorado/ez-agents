@@ -13,8 +13,9 @@ repository. Public docs describe shipped behavior and explicit limitations.
    Packaging/runtime changes also need the Docker checks in docs/releasing.md.
 5. Open a PR explaining the problem, resulting behavior, verification and limits.
    Include a short sanitized reproduction. State which tests were not run.
-6. A maintainer reviews and merges after CI. Maintainers use PRs too. No CLA,
-   ticket requirement, custom commit format or additional approval committee.
+6. Obtain independent review and required CI, then complete the
+   maintainer-authorized merge. Maintainers use PRs too. No CLA, ticket
+   requirement, custom commit format or additional approval committee.
 
 You are responsible for understanding submitted code, including AI-generated
 code, and having the right to contribute it under this repository's license.
