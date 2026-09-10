@@ -29,7 +29,8 @@ import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
-import { presetLabel } from './ai.js'
+import { presetLabel, statusPreset } from './ai.js'
+import { discoverDefaults } from './client-defaults.js'
 import { initializeWorkspace } from './workspace.js'
 import { softwareStatus } from './software-status.js'
 
@@ -51,7 +52,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const background = new Map<string, ChildProcess>()
   const tasks = new Tasks(config.controlDir)
   const drainTaskRequests = taskRequests(tasks)
-  const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace)
+  const codexHome = join(config.controlDir, 'cli', 'codex')
+  const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
 
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
@@ -513,10 +515,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const session = await control.getActiveSession()
     const ai = await control.aiState(aiMenu.initial)
     const selected = ai.presets.find((p) => p.id === ai.selectedId)!
+    const defaultPreset = ai.presets.find((p) => p.id === ai.defaultId)!
+    const discovered = await discoverDefaults(config.workspace, { codexHome, nativeCodexFallback: true })
+    const displayedSelected = statusPreset(selected, discovered)
+    const displayedDefault = statusPreset(defaultPreset, discovered)
     return [
       ...await softwareStatus(config.controlDir),
-      `AI: ${selected.name} (${presetLabel(selected)})`,
-      `Default: ${ai.presets.find((p) => p.id === ai.defaultId)!.name}`,
+      `AI: ${selected.name} (${presetLabel(displayedSelected)})`,
+      `Default: ${defaultPreset.name} (${presetLabel(displayedDefault)})`,
       `Session: ${session?.sessionId.slice(0, 8) || 'none'}`,
       `Work: ${running ? `running ${running.id}` : 'idle'}`,
       `Background: ${all.filter(r => r.scheduled && r.status === 'running').map(r=>r.id).join(', ') || 'idle'}`,

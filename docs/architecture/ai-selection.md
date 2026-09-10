@@ -35,3 +35,11 @@ model/effort settings (or `models` for the default model). Claude reads user and
 workspace JSON settings; OpenCode reports resolved config. Unknown defaults and
 opaque wrappers remain explicitly “client default”. No credentials are stored,
 no inference runs, no new dependency, and no cross-CLI session transfer.
+
+`/status` resolves the configured model and reasoning effort for the current
+client-default seed from the agent's isolated Codex profile when that metadata
+is available. If the profile has no explicit model, it uses Codex's native
+default-model catalog for display. It displays that snapshot only; setup and
+refresh do not save the fallback, so the seed remains a native client default
+for later conversations. Desktop Codex remains its own opaque client default
+rather than inheriting CLI configuration.

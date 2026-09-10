@@ -19,15 +19,15 @@ export const mainKeyboard = () => new InlineKeyboard()
 
 // Short-lived opaque button IDs: no model names or executable arguments from callbacks.
 // These are operational settings, not a second conversational/agent loop.
-export const createAiMenu = (control: ControlStore, cli: string, catalog = readModels, workspace = process.cwd()) => {
+export const createAiMenu = (control: ControlStore, cli: string, catalog = readModels, workspace = process.cwd(), codexHome?: string) => {
   const initial = initialPreset(cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   if (host) catalog = async () => JSON.parse(await readFile(path.join(process.env.EZ_CONTROL_DIR!, 'host-executor/models.json'),'utf8'))
-  const refresh = async () => control.syncClientPresets(initial, host ? [] : await discoverDefaults(workspace))
+  const refresh = async () => control.syncClientPresets(initial, host ? [] : await discoverDefaults(workspace, { codexHome }))
   const validate = async (preset: AiPreset) => {
     if (preset.id === initial.id) return
     if (preset.id.startsWith('detected_')) {
-      const detected = await discoverDefaults(workspace)
+      const detected = await discoverDefaults(workspace, { codexHome })
       if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. Refresh available AIs and select the updated choice.')
     } else await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : undefined)
   }
