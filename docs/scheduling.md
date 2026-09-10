@@ -41,7 +41,7 @@ Instructions must include any needed context or source paths; full chat history
 is not copied. Task folders remain for inspection and artifact delivery.
 
 One writer runs per task directory. Up to four background tasks can run alongside
-the sequential main conversation. A recurring schedule has at most one pending
+the main conversation. When a Codex owner message arrives while work is busy, a separate restricted session reads recent messages and run progress and answers through the normal outbox. It can queue requested work through the scheduler, but cannot run shell commands, access plugins, or edit the agent workspace. Only one reply session runs at a time and it releases its slot after a 60-second reply deadline; this deadline does not apply to writer jobs. Its context is a bounded snapshot, not a shared native transcript. Delivered parallel replies are included as historical context in the next normal conversation turn. Codex 0.153.4 and 0.154.0 are supported for this restricted adapter. Other versions fail closed pending tool-surface validation. A recurring schedule has at most one pending
 or active occurrence. Agents should delegate long work with `create --now`, return
 to chat, and inspect `runs` or task progress when asked. Native subagents can be
 used inside the worker. Sharing provider profiles does not make concurrent CRM,
@@ -88,7 +88,7 @@ queued occurrence; already-running work continues until explicitly cancelled.
 `/stop` stops all active work; `cancel RUN_ID` stops one background task. `/cancel`
 clears queued work. Pause/remove a recurring schedule to prevent future runs.
 Stopping the relay also stops its workers. A crashed or interrupted execution is
-not automatically replayed. Runs found active at startup are marked failed with
+not automatically replayed. Status labels failed runs as history and shows recent reasons; new failures retain their exit code or interruption cause. Typing indicators stop after 30 seconds even when work continues. Runs found active at startup are marked failed with
 `interrupted: true`; their schedule revision stays held until the agent inspects
 the evidence and explicitly edits the schedule. Inspect the task's files, native session and delivery
 receipts before deciding whether to resume. A clock cannot reconstruct an
@@ -125,3 +125,13 @@ minutes. Verify `finished.txt` and exactly one completion in Telegram. Separatel
 exercise cancellation, downtime catch-up and an explicitly requested native goal
 that needs more than one turn. Synthetic provider evidence does not prove real
 Telegram delivery, and a sleep test does not prove native goal persistence.
+
+Busy-chat regression probe (real Codex, synthetic Telegram):
+
+```sh
+pnpm exec tsx scripts/smoke-busy-reply.ts --transport
+```
+
+The probe holds a writer on a shared workspace, asks an owner question through
+the relay and host transport, and requires the restricted reply to complete
+while the writer remains active. It sends no real Telegram messages.
