@@ -3,6 +3,7 @@
 ## 0.1.0-beta.17
 
 - Capture executor stderr before asynchronous PID persistence so fast failures retain actionable, redacted diagnostic evidence for agent-owned recovery.
+- Wait for executor cleanup and final run-state writes when stopping the relay, so shutdown does not return while its state is still being written.
 - Include the reviewed beta.16 runtime and catalog corrections. Earlier unpublished candidates remain preserved; existing beta acceptance limits remain.
 
 ## 0.1.0-beta.16

@@ -52,6 +52,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const sources = new EventSources(config.controlDir)
   const scheduler = new Scheduler(config.controlDir)
   const background = new Map<string, ChildProcess>()
+  const completions = new Set<Promise<void>>()
   const tasks = new Tasks(config.controlDir)
   const drainTaskRequests = taskRequests(tasks)
   const codexHome = join(config.controlDir, 'cli', 'codex')
@@ -235,10 +236,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (performance.now() - executionStarted < 30000) void bot.api.sendChatAction(run.chatId, 'typing').catch(() => {})
         }, 4000)
 
-        void finished.then((code) => {
+        const completion = finished.then((code) => {
           console.info('run timing', { run_id: run.id, phase: 'execution',
             execution_ms: Math.round(performance.now() - executionStarted), exit_code: code })
-          void (async () => {
+          return (async () => {
             await withStartLock(async () => {
               try {
                 await cleanup()
@@ -262,6 +263,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             if (next && !shuttingDown) await startJob(next)
           })().catch((error) => console.error('Run completion failed', error.message))
         })
+        completions.add(completion)
+        void completion.finally(() => completions.delete(completion))
       } catch (error) {
         if (!run.scheduled && !run.replyOnly && activeTypingTimer) {
           clearInterval(activeTypingTimer)
@@ -937,11 +940,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     shuttingDown = true
     if (intakeTimer) clearTimeout(intakeTimer)
     if (sourceTimer) clearInterval(sourceTimer)
-    if (activeReply) terminateJob(activeReply)
-    if (activeChild) terminateJob(activeChild)
-    for (const child of background.values()) terminateJob(child)
-    if (activeTypingTimer) clearInterval(activeTypingTimer)
-    if (sourceWork) await sourceWork.catch(() => {})
+    await Promise.all([sourceWork, intakeWork].map(work => work?.catch(() => {})))
+    // Finish registering in-flight launches before taking the child snapshot.
+    await withStartLock(async () => {
+      if (activeReply) terminateJob(activeReply)
+      if (activeChild) terminateJob(activeChild)
+      for (const child of background.values()) terminateJob(child)
+      if (activeTypingTimer) clearInterval(activeTypingTimer)
+    })
+    await Promise.all(completions)
     pagerDuty?.stop()
     if (bot.isRunning()) await bot.stop()
     await telegramSource.stop()
