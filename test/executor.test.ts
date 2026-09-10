@@ -64,9 +64,10 @@ test('Telegram replies are split within the configured message limit', () => {
 })
 
 test('the executor receives a deliberately small environment', () => {
-  const environment = executorEnvironment({ PATH: '/bin', HOME: '/tmp/home', TELEGRAM_BOT_TOKEN: 'secret', AWS_SECRET_ACCESS_KEY: 'secret' })
+  const environment = executorEnvironment({ PATH: '/bin', HOME: '/tmp/home', TELEGRAM_BOT_TOKEN: 'secret', PAGERDUTY_ROUTING_KEY: 'secret', AWS_SECRET_ACCESS_KEY: 'secret' })
   assert.deepEqual(environment, { PATH: '/bin', HOME: '/tmp/home' })
   assert.ok(!('TELEGRAM_BOT_TOKEN' in environment))
+  assert.ok(!('PAGERDUTY_ROUTING_KEY' in environment))
 })
 
 test('the Grok job env binds the run and still strips the bot token', () => {
