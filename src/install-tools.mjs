@@ -46,7 +46,7 @@ export async function installationStatus(deployment) {
   const exists=async f=>Boolean(await fs.stat(path.join(deployment,f)).catch(absent));
   const configured=(await Promise.all(['agent.json','host-executor.json','docker.env','relay.env'].map(exists))).every(Boolean);
   const owner=(await read(path.join(control,'control-state.json')).catch(absent))?.owner;
-  const paired=Boolean(owner&&Number.isSafeInteger(owner.telegramUserId)&&owner.telegramUserId>0&&Number.isSafeInteger(owner.telegramChatId)&&owner.telegramChatId>0&&Number.isFinite(Date.parse(owner.pairedAt)));
+  const paired=Boolean(owner&&Number.isSafeInteger(owner.telegramUserId)&&owner.telegramUserId>0&&Number.isSafeInteger(owner.telegramChatId)&&(owner.kind==='group'?owner.telegramChatId<0:owner.kind===undefined&&owner.telegramChatId>0)&&Number.isFinite(Date.parse(owner.pairedAt)));
   const relay=await read(path.join(control,'heartbeat.json')).catch(absent),host=await read(path.join(control,'host-executor/heartbeat.json')).catch(absent);
   const fresh=(h,ms)=>Boolean(h&&Number.isFinite(h.at)&&h.at<=Date.now()+1000&&Date.now()-h.at<ms);
   const runtimeReady=Boolean(relay?.polling&&fresh(relay,20000)&&fresh(host,15000));
@@ -57,7 +57,7 @@ export async function installationStatus(deployment) {
     if(!/^tg_\d+$/.test(item.runId||'')||item.chatId!==owner.telegramChatId||(item.type&&item.type!=='message')||!Array.isArray(item.receipt?.messageIds)||!item.receipt.messageIds.length||!item.receipt.messageIds.every(n=>Number.isSafeInteger(n)&&n>0))continue;
     const delivered=Date.parse(item.receipt.deliveredAt);if(!Number.isFinite(delivered)||delivered<Date.parse(owner.pairedAt)||delivered>Date.now())continue;
     const r=await read(path.join(control,'runs',item.runId+'.json')).catch(absent);
-    if(r?.status==='completed'&&!r.external&&r.chatId===owner.telegramChatId&&r.telegramUserId===owner.telegramUserId&&(!reply||delivered>Date.parse(reply.deliveredAt)))reply={runId:item.runId,messageIds:item.receipt.messageIds,deliveredAt:item.receipt.deliveredAt};
+    if(r?.status==='completed'&&!r.external&&r.chatId===owner.telegramChatId&&Number.isSafeInteger(r.telegramUserId)&&r.telegramUserId>0&&(owner.kind==='group'||r.telegramUserId===owner.telegramUserId)&&(!reply||delivered>Date.parse(reply.deliveredAt)))reply={runId:item.runId,messageIds:item.receipt.messageIds,deliveredAt:item.receipt.deliveredAt};
   }
   return {deployment,configured,runtimeReady,ownerPaired:paired,telegramReplyVerified:Boolean(reply),reply,
     stage:!configured?'not-configured':!runtimeReady?'runtime-offline':!paired?'awaiting-owner':!reply?'awaiting-telegram-reply':'ready-for-telegram-plugin-request',

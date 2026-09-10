@@ -2,6 +2,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Update } from 'grammy/types'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
+import { isOwner } from './identity.js'
+import type { Owner } from './control-state.js'
 
 export type IncomingItem = {
   text: string
@@ -137,7 +139,7 @@ export class InboxStore {
     })
   }
 
-  retryLatest(userId: number, chatId: number): Promise<string | undefined> {
+  retryLatest(userId: number, chatId: number, owner?: Owner | null): Promise<string | undefined> {
     return this.change((state) => {
       const batch = [...state.batches].reverse().find(
         (b) =>
@@ -146,7 +148,7 @@ export class InboxStore {
             const message = e.update.message || e.update.callback_query?.message
             const from = e.update.message?.from || e.update.callback_query?.from
             return (
-              from?.id === userId &&
+              owner?.kind === 'group' ? !e.update.message?.sender_chat && isOwner({from, chat: message?.chat}, owner) : from?.id === userId &&
               !from.is_bot &&
               message?.chat.type === 'private' &&
               message.chat.id === chatId
