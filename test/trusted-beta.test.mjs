@@ -147,6 +147,8 @@ test('generated caller pins shared code, permits manual dispatch only and reject
   assert.ok(caller.includes('  workflow_dispatch:'));
   assert.ok(!/^\s+(?:push|pull_request|workflow_run):/m.test(caller));
   assert.ok(caller.includes('      release-id: ${{ inputs.release-id }}'));
+  const matrixChecks = ['test (ubuntu-latest, 22)', 'test (macos-latest, 24)', 'docker'];
+  assert.ok(generateCaller({ ...config, checks: matrixChecks }).includes(`required-checks: '${JSON.stringify(matrixChecks)}'`));
   assert.ok(generateCaller({ ...config, repository: 'jdorado/ez-agents', packageName: '@jc_stack/ez-agents' }).includes('uses: ./.github/workflows/npm-beta-shared.yml'));
   for (const invalid of [{ repository: "jdorado/repo'\nsteps:" }, { packageName: "@jc_stack/p'\nsteps:" }, { publisherSha: 'main' }, { checks: ['a\nsteps:'] }, { checks: [] }]) assert.throws(() => generateCaller({ ...config, ...invalid }));
 });
