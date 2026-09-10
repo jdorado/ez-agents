@@ -47,7 +47,9 @@
     "test",
     "tsconfig.json",
     "scripts/assert-local-registry.mjs",
-    ".dockerignore"
+    ".dockerignore",
+    "scripts/trusted-beta.mjs",
+    "scripts/generate-publish-caller.mjs"
   ],
   "publishConfig": {
     "access": "public",
