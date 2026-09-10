@@ -2,8 +2,9 @@
 
 Available in this beta. Earlier main upgrade/rollback VM QA passed; final-release
 fresh-host/reboot and live plugin upgrade acceptance remain pending. npm
-publication is not required to test this feature. Stable releases are the default
-automatic channel. The existing owner may select beta or manual policy per target.
+publication is not required to test this feature. The beta channel is the default
+automatic channel for core and plugins without a saved policy. Existing explicit
+stable or manual policies are preserved. The owner may select either per target.
 The main target and installed plugins version independently.
 
 The agent owns release review, policy decisions and communication. The host
@@ -109,8 +110,8 @@ live. A healthy container alone does not prove a Telegram or plugin reply.
 
 ```sh
 ez updates check
-ez updates policy main                 # defaults: automatic, stable
-ez updates policy whatsapp beta        # only under owner authorization
+ez updates policy main                 # defaults: automatic, beta
+ez updates policy whatsapp stable      # opt into stable-only updates
 ez updates policy main manual          # disable unattended upgrades
 ez updates prepare main --version 0.1.0-beta.4
 # Or a local candidate, independently of npm:

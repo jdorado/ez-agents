@@ -24,7 +24,7 @@ export async function installed(home,target) {
 }
 export async function policy(home,target) {
   targetId(target);const all=await read(path.join(updateHome(home),'policy.json')).catch(missing)||{};
-  const p=all[target]||{automatic:true,channel:'stable'};
+  const p=all[target]||{automatic:true,channel:'beta'};
   if(typeof p.automatic!=='boolean'||!['stable','beta'].includes(p.channel))throw Error('Invalid update policy');
   return p;
 }
