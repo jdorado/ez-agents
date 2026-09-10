@@ -59,7 +59,7 @@ test('failure review CLI is owner-bound, rejects stale reviews, and keeps failur
  assert.equal(JSON.parse((await cli(['failures'])).stdout).total,1)
 })
 
-test('failure capture, diagnosis, verified recovery and conditional quiet next tick through real CLI and relay',async()=>{
+test('failure capture, diagnosis, verified recovery and conditional quiet next tick through real CLI and relay',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-failure-loop-')),runs=new RunStore(dir),control=new ControlStore(dir,1000),scheduler=new Scheduler(dir)
  const replies:string[]=[],children:ReturnType<typeof spawn>[]=[],fixture=join(dir,'fixture.txt')
  let reviews=0
@@ -80,6 +80,13 @@ test('failure capture, diagnosis, verified recovery and conditional quiet next t
  })
  relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
  relay.bot.api.config.use(async(_p,method,payload)=>{if(method==='sendMessage')replies.push((payload as any).text);return {ok:true,result:{message_id:replies.length}} as any})
+ const originalPatch=RunStore.prototype.patch
+ t.mock.method(RunStore.prototype,'patch',async function(this:RunStore,...args:Parameters<RunStore['patch']>){
+  // Hold the PID write until the fast child has closed, reproducing slow disk
+  // without a timer or depending on runner load. Stderr must already be captured.
+  if(args[0]==='tg_10' && args[1].pid && children[0].exitCode===null) await once(children[0],'close')
+  return originalPatch.apply(this,args)
+ })
  try{
   await control.requestPairing(101,101);await control.approveOwner(101)
   const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset('grok')),start=Date.now()+2000
@@ -104,6 +111,66 @@ test('failure capture, diagnosis, verified recovery and conditional quiet next t
  }finally{await relay.stop();for(const child of children)child.kill();await rm(dir,{recursive:true,force:true})}
 })
 
+
+test('relay shutdown waits for executor cleanup and final run state', async () => {
+ const dir=await mkdtemp(join(tmpdir(),'ez-stop-finalize-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
+ let release!:()=>void,entered!:()=>void
+ const gate=new Promise<void>(resolve=>{release=resolve}),cleaning=new Promise<void>(resolve=>{entered=resolve})
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{
+  const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:['pipe','pipe','pipe']})
+  await once(child,'spawn')
+  return {child,cleanup:async()=>{entered();await gate},stdout:''}
+ })
+ relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
+ relay.bot.api.config.use(async()=>({ok:true,result:{message_id:1}} as any))
+ try {
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  await relay.bot.handleUpdate({update_id:90,message:{message_id:90,date:0,text:'fixture',from:{id:101,is_bot:false,first_name:'Fixture'},chat:{id:101,type:'private',first_name:'Fixture'}}})
+  await relay.drainInbox(true)
+  let stopped=false
+  const stop=relay.stop().then(()=>{stopped=true})
+  await cleaning
+  assert.equal(stopped,false,'stop must not finish before cleanup')
+  release();await stop
+  assert.notEqual((await runs.get('tg_90'))?.status,'running')
+ } finally {release();await relay.stop();await rm(dir,{recursive:true,force:true})}
+})
+
+for (const intake of [true,false]) test(`relay shutdown terminates an in-flight ${intake?'intake':'scheduled'} launch`, async () => {
+ const dir=await mkdtemp(join(tmpdir(),'ez-stop-launch-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
+ let release!:()=>void,entered!:()=>void,child:ReturnType<typeof spawn>|undefined,cleaned=false
+ const gate=new Promise<void>(resolve=>{release=resolve}),launching=new Promise<void>(resolve=>{entered=resolve})
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{
+  entered();await gate
+  child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:['pipe','pipe','pipe']})
+  await once(child,'spawn')
+  return {child,cleanup:async()=>{cleaned=true},stdout:''}
+ })
+ relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
+ relay.bot.api.config.use(async()=>({ok:true,result:{message_id:1}} as any))
+ try {
+  await control.requestPairing(101,101);const owner=await control.approveOwner(101)
+  if(intake) await relay.bot.handleUpdate({update_id:91,message:{message_id:91,date:0,text:'fixture',from:{id:101,is_bot:false,first_name:'Fixture'},chat:{id:101,type:'private',first_name:'Fixture'}}})
+  else {
+   const scheduler=new Scheduler(dir),at=Date.now()+1000,execution=await control.captureChoice(initialPreset('grok'))
+   await scheduler.save({id:'fixture',name:'Fixture',text:'fixture',trigger:{at:new Date(at).toISOString()},enabled:true,owner,execution})
+   await scheduler.tick(owner,runs,at)
+  }
+  const drain=intake?relay.drainInbox(true):relay.drainSources()
+  await launching
+  let stopped=false
+  const stop=relay.stop().then(()=>{stopped=true})
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(stopped,false,'stop must wait for the pending launch')
+  release();await drain
+  // Bound regressions without leaving a real child running on a failed check.
+  await until(async()=>stopped)
+  await stop
+  assert.equal(cleaned,true)
+  assert.ok(child && (child.exitCode!==null || child.signalCode!==null))
+  assert.ok((await runs.list()).every(run=>run.status!=='running'))
+ } finally {release();child?.kill();await relay.stop();await rm(dir,{recursive:true,force:true})}
+})
 
 test('group members can inspect failures and wake review without exposing other chats', async t => {
  const dir=await mkdtemp(join(tmpdir(),'ez-group-failure-'));t.after(()=>rm(dir,{recursive:true,force:true}))
