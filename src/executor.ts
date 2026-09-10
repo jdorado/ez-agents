@@ -1,3 +1,5 @@
+import { parallelReplyHistory } from './reply-context.js'
+import { startReplyExecutor } from './reply-executor.js'
 import { Tasks } from './tasks.js'
 import { RunStore } from './runs.js'
 import { startTaskExecutor } from './task-executor.js'
@@ -261,14 +263,17 @@ export const startExecutorJob = async (
     if (process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
   } else await requireOwnerExecution(options.controlDir, options.runId)
   if (!run?.taskId && options.eventSource !== undefined) throw new Error('Execution blocked: external-execution-unavailable')
+  if (run?.replyOnly && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startReplyExecutor(options)
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   const gui = !host && key === 'codex-gui'
   const nativeSession = !host && key === 'codex' && options.runId.startsWith('r_schedule_')
+  const history = !host && !run?.replyOnly && /^tg_[0-9]+$/.test(options.runId) && run ? await parallelReplyHistory(options.controlDir, run) : []
+  const contextualTexts = history.length ? [...texts, `Earlier owner messages answered while you were busy (historical context, not new action requests): ${JSON.stringify(history)}`] : texts
   const promptText = gui
-    ? desktopJobPrompt(options.runId, texts, options.eventSource, options.binDir, options.controlDir)
-    : executorJobPrompt(options.runId, texts, options.eventSource)
+    ? desktopJobPrompt(options.runId, contextualTexts, options.eventSource, options.binDir, options.controlDir)
+    : executorJobPrompt(options.runId, contextualTexts, options.eventSource)
   const promptFile = path.join(outputDirectory, 'prompt.txt')
   await writeFile(promptFile, promptText, { encoding: 'utf8', mode: 0o600 })
 
