@@ -110,3 +110,20 @@ test('normal conversation receives delivered parallel replies as historical cont
   assert.deepEqual(await parallelReplyHistory(root,{...current,chatId:202}),[])
  }finally{await rm(root,{recursive:true,force:true})}
 })
+
+
+test('a parallel reply delivered during a normal turn is retained for the following turn', async()=>{
+ const { parallelReplyHistory }=await import('../src/reply-context.js')
+ const root=await mkdtemp(join(tmpdir(),'ez-reply-late-')),runs=new RunStore(root)
+ try{
+  await ownerRun(root,'tg_1');await runs.patch('tg_1',{replyOnly:true,status:'completed'})
+  await ownerRun(root,'tg_2');await runs.patch('tg_2',{status:'completed',startedAt:'2026-09-10T06:00:00.000Z'})
+  const current=await ownerRun(root,'tg_3')
+  await mkdir(join(root,'outbox'),{recursive:true})
+  const file=join(root,'outbox','tg_1_busy_reply.sent.json')
+  await writeFile(file,JSON.stringify({chatId:101,text:'Late answer',receipt:{deliveredAt:'2026-09-10T06:00:01.000Z'}}))
+  assert.equal((await parallelReplyHistory(root,current))[0].reply,'Late answer')
+  await writeFile(file,JSON.stringify({chatId:101,text:'Old answer',receipt:{deliveredAt:'2026-09-10T05:59:59.000Z'}}))
+  assert.deepEqual(await parallelReplyHistory(root,current),[])
+ }finally{await rm(root,{recursive:true,force:true})}
+})

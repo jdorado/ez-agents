@@ -50,11 +50,14 @@ export async function replyCall(controlDir: string, runId: string, workspace: st
 // Give the next normal conversation turn the replies it did not see natively.
 export async function parallelReplyHistory(controlDir: string, current: RunRecord) {
   const records = (await new RunStore(controlDir).list()).filter(r => r.chatId === current.chatId && r.telegramUserId === current.telegramUserId && r.id !== current.id)
-  const previous = records.filter(r => /^tg_/.test(r.id) && !r.replyOnly && r.status === 'completed').at(-1)?.createdAt || ''
+  const previous = records.filter(r => /^tg_/.test(r.id) && !r.replyOnly && r.status === 'completed').at(-1)
+  const cutoff = previous?.startedAt || previous?.createdAt || ''
   const history = []
-  for (const r of records.filter(r => r.replyOnly && r.createdAt > previous).slice(-8)) {
+  for (const r of records.filter(r => r.replyOnly).slice(-8)) {
     try {
       const receipt = JSON.parse(await readFile(join(controlDir, 'outbox', r.id+'_busy_reply.sent.json'), 'utf8'))
+      // A reply delivered during that turn was absent from its initial prompt.
+      if (receipt.receipt?.deliveredAt && receipt.receipt.deliveredAt <= cutoff) continue
       if (receipt.chatId === current.chatId) history.push({owner: r.texts.join('\n').slice(-1600), reply: String(receipt.text || '').slice(-2400)})
     } catch {}
   }
