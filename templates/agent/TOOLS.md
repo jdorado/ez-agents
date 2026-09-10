@@ -97,3 +97,9 @@ Infer follow-up from the requested job: booking or finding an answer includes
 watching that contact and completing the conversation. “Just send; I will reply”
 means no new watch. Account linking alone stays quiet. Do not expose monitoring
 mode names or ask redundant questions when the owner's intent is clear.
+
+### Failure review
+
+`ezenciel-agents-schedule failures` lists unreviewed failed runs with bounded, redacted error evidence and runtime versions when captured. Use `--all` to include reviewed failures, and `run RUN_ID` for the complete record. Record a diagnosis with `review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT`; this preserves the original failure and does not retry it. Check prior effects and delivery receipts before any recovery. Historical runs may not contain error evidence.
+
+An optional existing schedule can use `--every-seconds 900 --when unreviewed-failures --text-file PATH`. It only launches when unreviewed failures exist. The shipped `templates/failure-review.md` is a starting prompt; recovery remains subject to existing authorization.

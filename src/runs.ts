@@ -1,3 +1,4 @@
+import { type FailureEvidence, type FailureReview, validFailureReview, failureStamp, failureEvidence } from './failure.js'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -30,6 +31,8 @@ export type RunRecord = {
   replyOnly?: boolean
   exitCode?: number | null
   failureReason?: string
+  failure?: FailureEvidence
+  failureReview?: FailureReview
   interrupted?: boolean
   nativeSessionId?: string
   scheduled?: ScheduledOrigin
@@ -68,6 +71,8 @@ const isRun = (value: unknown): value is RunRecord => {
     ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') &&
     typeof candidate.createdAt === 'string' &&
     Number.isFinite(Date.parse(candidate.createdAt)) &&
+    (candidate.failureReview === undefined || validFailureReview(candidate.failureReview)) &&
+    (candidate.failure === undefined || (typeof candidate.failure.error === 'string' && candidate.failure.error.length <= 4096 && typeof candidate.failure.relayVersion === 'string')) &&
     (candidate.replyOnly === undefined || typeof candidate.replyOnly === 'boolean') &&
     (candidate.backendSubmitted === undefined || typeof candidate.backendSubmitted === 'boolean') &&
     (candidate.pid === undefined || (Number.isSafeInteger(candidate.pid) && candidate.pid > 0)) &&
@@ -94,7 +99,7 @@ export class RunStore {
   private readonly runsDir: string
   private readonly outboxDir: string
 
-  constructor(controlDir: string) {
+  constructor(private readonly controlDir: string) {
     this.runsDir = path.join(controlDir, 'runs')
     this.outboxDir = path.join(controlDir, 'outbox')
   }
@@ -167,13 +172,15 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview'>>,
   ): Promise<RunRecord> {
     const prior = this.changes.get(id) || Promise.resolve()
     const work = prior.catch(() => {}).then(async () => {
       const run = await this.get(id)
       if (!run) throw new Error(`Unknown run ${id}`)
-      const next = { ...run, ...change }
+      if (change.failureReview && (!validFailureReview(change.failureReview) || run.status !== 'failed' || change.failureReview.failedAt !== failureStamp(run))) throw new Error('Failure changed or review is invalid; inspect the run again')
+      const failure = change.status === 'failed' && !change.failure ? await failureEvidence(this.controlDir, change.failureReason || (change.interrupted ? 'Execution interrupted by relay restart; inspect effects before recovery' : 'No error detail recorded')) : undefined
+      const next = { ...run, ...(failure ? {failure} : {}), ...change }
       await this.writeRun(next)
       return next
     })

@@ -1,3 +1,4 @@
+import { redactFailure } from './failure.js'
 import { RunStore } from './runs.js'
 import { Tasks } from './tasks.js'
 import { requireOwnerExecution } from './execution-authority.js'
@@ -123,7 +124,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await job.cleanup()
               job = undefined
               emit({stream:'exit',code})
-            } catch { emit({stream:'stderr',text:'Host CLI execution failed\n'}); emit({stream:'exit',code:1}) }
+            } catch (error) { emit({stream:'stderr',text:'Host CLI execution failed: '+redactFailure(error instanceof Error ? error.message : 'Unknown error')+'\n'}); emit({stream:'exit',code:1}) }
             finally {
               if(cancellation)clearInterval(cancellation)
               await job?.cleanup().catch(() => {})

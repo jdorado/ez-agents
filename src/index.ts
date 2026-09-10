@@ -1,3 +1,4 @@
+import { failureEvidence } from './failure.js'
 import { TelegramSource } from './telegram-source.js'
 import { Tasks } from './tasks.js'
 import { taskRequests } from './task-rpc.js'
@@ -35,7 +36,7 @@ import { softwareStatus } from './software-status.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
-    let message = error instanceof Error ? error.message : 'Unknown error'
+    let message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unknown error'
     for (const secret of [config.channelBackendToken, config.telegramBotToken, config.geminiApiKey, config.openaiApiKey]) {
       if (secret) message = message.replaceAll(secret, '[redacted]')
     }
@@ -57,6 +58,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
   let activeBackend = false
   let activeReply: ChildProcess | null = null
+  const ownerStopped = new WeakSet<ChildProcess>()
   let activeChild: ChildProcess | null = null
   let shuttingDown = false
   let nextSendAt = 0
@@ -185,7 +187,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           sessionId: session.nativeSessionId || session.sessionId,
           isResume: session.hasStarted,
           eventSource: run.external?.sourceId,
-          onSession: run.scheduled ? async (id) => { await runs.patch(run.id,{nativeSessionId:id}) } : run.external || run.taskId || run.replyOnly ? undefined : (id) => control.saveNativeSession(session.sessionId, id),
+          onSession: run.external || run.taskId || run.replyOnly ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
         })
         const executionStarted = performance.now()
         console.info('run timing', { run_id: run.id, phase: 'launch',
@@ -212,8 +214,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (performance.now() - executionStarted < 30000) void bot.api.sendChatAction(run.chatId, 'typing').catch(() => {})
         }, 4000)
 
-        let failureReason = 'executor-exit'
+        let failureReason = 'executor-exit', errorTail = ''
         child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+          errorTail = (errorTail + chunk).slice(-16384)
           if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
           if (chunk.trim()) console.error('executor stderr', started.id, chunk.trim())
         })
@@ -225,9 +228,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               try {
                 await cleanup()
                 if (code === 0 && !run.external && !run.taskId && !run.scheduled && !run.replyOnly) await control.markSessionStarted(session.sessionId)
-                await runs.patch(started.id, { status: run.scheduled && await scheduler.cancelled(run.id) ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString(), exitCode: code, ...(code !== 0 ? { failureReason } : {}) })
+                await runs.patch(started.id, { status: ownerStopped.has(child) || (run.scheduled && await scheduler.cancelled(run.id)) ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString(), exitCode: code, ...(code !== 0 ? { failureReason, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
               } catch (error) {
-                await runs.patch(started.id, { status: 'failed', failureReason: 'session-finalization', endedAt: new Date().toISOString() })
+                await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
                 console.error('Session completion failed', safeError(error))
               } finally {
                 if (run.replyOnly) activeReply = null
@@ -249,7 +252,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           clearInterval(activeTypingTimer)
           activeTypingTimer = null
         }
-        await runs.patch(run.id, { status: 'failed', failureReason: 'executor-start', endedAt: new Date().toISOString() })
+        await runs.patch(run.id, { status: 'failed', failureReason: 'executor-start', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
         console.error('run start failed', run.id, safeError(error))
         await sendChat(run.chatId, `Run ${run.id} failed to start. Check the local relay log.`)
         setImmediate(() => {
@@ -631,9 +634,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const running = await runs.running(false)
       if ((running && running.pid) || background.size) {
         try {
-          if (activeReply) terminateJob(activeReply)
-          if (activeChild) terminateJob(activeChild)
-          for (const [id,child] of background) { await scheduler.cancel(id); terminateJob(child) }
+          if (activeReply) { ownerStopped.add(activeReply); terminateJob(activeReply) }
+          if (activeChild) { ownerStopped.add(activeChild); terminateJob(activeChild) }
+          for (const [id,child] of background) { await scheduler.cancel(id); ownerStopped.add(child); terminateJob(child) }
         } catch {}
         if (activeTypingTimer) {
           clearInterval(activeTypingTimer)
@@ -863,9 +866,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       } else if (action === 'stop') {
         const running = await runs.running(false)
         if ((running && running.pid) || background.size) {
-          if (activeReply) terminateJob(activeReply)
-          if (activeChild) terminateJob(activeChild)
-          for (const [id,child] of background) { await scheduler.cancel(id); terminateJob(child) }
+          if (activeReply) { ownerStopped.add(activeReply); terminateJob(activeReply) }
+          if (activeChild) { ownerStopped.add(activeChild); terminateJob(activeChild) }
+          for (const [id,child] of background) { await scheduler.cancel(id); ownerStopped.add(child); terminateJob(child) }
           await ctx.answerCallbackQuery({ text: 'Run stopped' })
           await ctx.reply(
             '🛑 Stop requested for active work. Queued work remains and will run next. /cancel clears it.',
