@@ -59,7 +59,10 @@ inspection, independent review, required CI and authorized merge. The source
 must be the exact current `main` commit; after a merge, verify that its tree
 matches the tested source and renew invalidated evidence. Wait for that commit's
 CI from `.github/workflows/ci.yml`, triggered by a push on `main`. The caller's reviewed list of required checks is a fail-closed minimum;
-update it when repository policy adds checks.
+update it when repository policy adds checks. The validator selects the newest
+main-push CI run for that source before checking success, then requires the named
+jobs from its latest attempt. Tag, PR and other workflow runs cannot shadow it;
+failed, pending or incomplete main CI cannot fall back to an older success.
 
 Create the `vVERSION` tag at that exact source commit and a **draft prerelease**
 with these assets, using native `gh release create --draft --prerelease` and
