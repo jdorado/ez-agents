@@ -111,7 +111,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               resolveExecutor(cli)
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,model:opts.model,effort:opts.effort},await catalog(agent))
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,cli,
-                runId:path.basename(base),timeoutMs:0,
+                runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort,codexAutoCompactTokens:opts.codexAutoCompactTokens}
               job=await launch(request.texts,options)
               active.set(lane,job.child)
