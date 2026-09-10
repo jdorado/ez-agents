@@ -10,10 +10,14 @@ has been published. Install only released plugins needed for the owner's request
 | [WhatsApp](https://github.com/jdorado/ez-whatsapp) | Link an existing WhatsApp account so the agent can use its messaging tools. Uses WhatsApp Web linked devices through Baileys; requires an account already on a phone. | `@jc_stack/ez-whatsapp` | [0.1.0-beta.12](https://github.com/jdorado/ez-whatsapp/releases/tag/v0.1.0-beta.12) — testing beta |
 | [Composio](https://github.com/jdorado/ez_composio) | Discover integrations and full native tool schemas, connect requested accounts and perform authorized actions through a private broker. Requires a Composio project key; individual apps may require OAuth consent. | `@jc_stack/ez-composio` | [0.1.0-beta.1](https://github.com/jdorado/ez_composio/releases/tag/v0.1.0-beta.1) — testing beta |
 | [GitHub](https://github.com/jdorado/ez_github) | Create repositories, commit and push through native Git/gh with a private per-agent profile. Requires GitHub browser consent and Ez 0.1.0-beta.13 or newer. | `@jc_stack/ez-github` | Source available; npm and GitHub release pending |
+| [Library](https://github.com/jdorado/ez-library) | Preserve agent files and attachments, extract PDF text, and retrieve notes with QMD. Optional GitHub/Drive/Dropbox persistence requires separate setup and authorization. | `@jc_stack/ez-library` | Source available; npm and GitHub release pending |
 
 The GitHub plugin has public source, but its previously advertised
 `@jc_stack/ez-github@0.1.0-beta.1` npm package and GitHub release are unavailable.
 Do not use that version as an installable release until publication is verified.
+Library is also registered from its public source; its package currently has
+`private: true` and no published npm release. Follow its README for reviewed-source
+setup; do not claim an npm release until the normal release process is complete.
 
 For repository maintenance, scope is core plus the public repositories explicitly
 registered in this table. Recheck the current catalog and repository visibility;
