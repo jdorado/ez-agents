@@ -58,3 +58,47 @@ test('a failed PagerDuty delivery remains eligible for a later trigger', async (
   await monitor.check()
   assert.equal(pagerDutyCalls, 2)
 })
+
+for (const uncertainTrigger of [false, true]) {
+  test(`recovery after restart resolves ${uncertainTrigger ? 'uncertain' : 'accepted'} trigger`, async () => {
+    let healthy = false
+    const actions: string[] = []
+    const options = {
+      routingKey: 'fixture', healthUrl: 'http://stocks.test/health/critical',
+      pollMs: 30000, failureThreshold: 1,
+      fetcher: async (url: string | URL | Request, init?: RequestInit) => {
+        if (!String(url).includes('pagerduty.com'))
+          return new Response(JSON.stringify({status: healthy ? 'ok' : 'critical'}))
+        const action = JSON.parse(String(init?.body)).event_action
+        actions.push(action)
+        if (action === 'trigger' && uncertainTrigger) throw new Error('connection lost after acceptance')
+        return new Response('{}', {status: 202})
+      },
+    }
+    const first = new PagerDutyStocksMonitor(options)
+    await first.check()
+    first.stop()
+    healthy = true
+    const restarted = new PagerDutyStocksMonitor(options)
+    await restarted.check()
+    await restarted.check()
+    assert.deepEqual(actions, ['trigger', 'resolve'])
+  })
+}
+
+test('failed recovery delivery retries without generating a false outage', async () => {
+  const actions: string[] = []
+  const monitor = new PagerDutyStocksMonitor({
+    routingKey: 'fixture', healthUrl: 'http://stocks.test/health/critical',
+    pollMs: 30000, failureThreshold: 1,
+    fetcher: async (url, init) => {
+      if (!String(url).includes('pagerduty.com')) return new Response('{"status":"ok"}')
+      actions.push(JSON.parse(String(init?.body)).event_action)
+      return new Response('{}', {status: actions.length === 1 ? 500 : 202})
+    },
+  })
+  await monitor.check()
+  await monitor.check()
+  await monitor.check()
+  assert.deepEqual(actions, ['resolve', 'resolve'])
+})

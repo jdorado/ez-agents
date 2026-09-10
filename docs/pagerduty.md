@@ -23,7 +23,10 @@ EZ_PAGERDUTY_FAILURE_THRESHOLD=3
 The core checks the endpoint every 30 seconds by default. Three consecutive
 unhealthy checks trigger one incident with the stable deduplication key
 `ez:stocks:critical-health`; recovery resolves that same incident. A failed
-PagerDuty submission remains eligible for a later trigger. No key or health
+PagerDuty submission remains eligible for a later trigger. On startup, the first
+healthy check resolves any incident left by the previous process, including an
+uncertain trigger delivery. Failed resolves retry without treating healthy
+Stocks as an outage. No key or health
 response is written to agent workspaces, executor environments, or logs.
 
 `/health/critical` is intentionally narrower than Stocks `/health`: it pages

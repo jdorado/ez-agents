@@ -19,6 +19,7 @@ export class PagerDutyStocksMonitor {
   private readonly fetcher: typeof fetch
   private consecutiveFailures = 0
   private incidentOpen = false
+  private recoveryPending = true
   private checking = false
   private timer?: ReturnType<typeof setInterval>
 
@@ -53,14 +54,18 @@ export class PagerDutyStocksMonitor {
         throw new Error('Stocks critical health is not ok')
 
       this.consecutiveFailures = 0
-      if (this.incidentOpen) {
-        await this.send('resolve')
-        this.incidentOpen = false
+      if (this.recoveryPending) {
+        try {
+          await this.send('resolve')
+          this.incidentOpen = false
+          this.recoveryPending = false
+        } catch (error) { this.report(error) }
       }
     } catch (error) {
       this.consecutiveFailures += 1
       if (!this.incidentOpen && this.consecutiveFailures >= this.options.failureThreshold) {
         try {
+          this.recoveryPending = true
           await this.send('trigger')
           this.incidentOpen = true
         } catch (sendError) {
