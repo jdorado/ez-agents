@@ -120,3 +120,27 @@ test('native executor flags carry the exact model and effort; only structured me
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'text', thread_id: opts.sessionId })), undefined)
   assert.equal(nativeSessionId('codex', 'Please resume this other session'), undefined)
 })
+
+for (const cli of ['codex', 'codex-gui']) {
+  test(`${cli} initializes Terra high ahead of host defaults and preserves saved choices`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ez-ai-default-'))
+    try {
+      const store = new ControlStore(dir, 1000)
+      const initial = initialPreset(cli)
+      const discovered = [{ id: 'detected_codex', name: 'Host default', cli,
+        model: 'host-model', effort: 'low' }]
+      await store.syncClientPresets(initial, discovered)
+      const first = await store.captureChoice(initial)
+      assert.equal(first.preset.model, 'gpt-5.6-terra')
+      assert.equal(first.preset.effort, 'high')
+      assert.equal(first.preset.cli, cli)
+      const saved = { id: 'custom', name: 'Custom', cli, model: 'custom-model', effort: 'medium' }
+      await store.savePreset(saved)
+      await store.defaultPreset(saved.id)
+      await store.resetSession()
+      const restarted = new ControlStore(dir, 1000)
+      await restarted.syncClientPresets(initial, discovered)
+      assert.deepEqual((await restarted.captureChoice(initial)).preset, saved)
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+}
