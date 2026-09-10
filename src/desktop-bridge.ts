@@ -1,3 +1,4 @@
+import { executionDefaults } from './model-policy.js'
 import { repairPolicy } from './repair-policy.js'
 import { access, constants } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
@@ -238,6 +239,7 @@ export const runDesktopTurn = async (
   options: DesktopTurnOptions,
   io: { connect?: typeof connectDesktop; emit?: (line: string) => void; signal?: AbortSignal } = {},
 ): Promise<number> => {
+  options = executionDefaults('codex-gui', options)
   const emit = io.emit ?? ((line: string) => process.stdout.write(`${line}\n`))
   let client: DesktopClient | undefined
   try {

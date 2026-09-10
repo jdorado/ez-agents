@@ -1,3 +1,4 @@
+import { CODEX_DEFAULT_MODEL, DEFAULT_EFFORT, assertEffort, allowedEffort } from './model-policy.js'
 import { access, readFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
@@ -32,7 +33,7 @@ export const initialPreset = (cli: string): AiPreset => {
   return {
     id: 'initial', name: `${resolveExecutor(key).name} · current setup`, cli: key,
     ...(key === 'codex' || key === 'codex-gui'
-      ? { model: 'gpt-5.6-terra', effort: 'high' } : {}),
+      ? { model: CODEX_DEFAULT_MODEL, effort: DEFAULT_EFFORT } : {}),
     ...(key === 'opencode'
       ? { model: process.env.OPENCODE_MODEL || 'opencode/nemotron-3.5-lightning-free' } : {}),
   }
@@ -53,7 +54,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
   const efforts = (value: unknown, key: string): string[] =>
-    (Array.isArray(value) ? value : []).map((e: unknown) => record(e)[key]).filter(safe)
+    (Array.isArray(value) ? value : []).map((e: unknown) => record(e)[key]).filter(safe).filter(allowedEffort)
   const json = async (file: string) => {
     try { return record(JSON.parse(await readFile(file, 'utf8'))) } catch { return {} }
   }
@@ -88,6 +89,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
 }
 
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {
+  assertEffort(p.effort)
   if (!isPreset(p) || !(await available(p.cli))) throw new Error('This CLI is not installed.')
   if (!p.model && !p.effort && p.cli !== 'agy') return
   const model = catalog.find((m) => m.cli === p.cli && m.model === p.model)

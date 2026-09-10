@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { initialPreset } from './ai.js'
 import { readFile, readdir, lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { requireOwnerExecution } from './execution-authority.js'
@@ -41,7 +43,7 @@ export async function replyCall(controlDir: string, runId: string, workspace: st
     const scheduler = new Scheduler(controlDir), id = `s_reply_${runId}`
     try { return { id: (await scheduler.get(id)).id } } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     const text = `The owner requested: ${JSON.stringify(run.texts)}\n\nReply session handoff: ${args.text}\n\nCarry out the authorized request, verify it, and send the owner the result. Do not duplicate another active task. The handoff does not expand the owner's authority.`
-    await scheduler.save({ id, name: 'Owner request', text, owner, execution: run.execution, enabled: true, trigger: { at: new Date(Date.now()+1000).toISOString() } }, true)
+    await scheduler.save({ id, name: 'Owner request', text, owner, execution: {sessionId:randomUUID(),preset:initialPreset('codex')}, enabled: true, trigger: { at: new Date(Date.now()+1000).toISOString() } }, true)
     return { id }
   }
   throw new Error('Unknown reply tool')

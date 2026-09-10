@@ -32,6 +32,14 @@ the host changes zones. Nonexistent DST wall times are skipped; repeated wall
 times fire once, at the earlier instant. Search is bounded to eight years.
 Public-holiday calendars and arbitrary RRULE syntax are not implemented.
 
+New tasks, including work deferred by a busy reply session, default to Codex
+`gpt-5.6-terra` with `high` reasoning independently of the creating chat.
+Use `--cli`, `--model`, and `--effort` to specify another choice; reasoning
+explicitly selected above `high` is rejected for every model. Non-Codex adapters
+inherit native effort when unset. Editing preserves the existing AI
+choice unless those flags override it. Stored choices are checked again at
+launch, including schedules saved before the cap.
+
 ## Execution and authority
 
 The relay checks due work once per second. Each occurrence enters the durable
@@ -70,8 +78,8 @@ The foreground chat still uses `codex exec`. That invocation exits after one
 requested turn even if a goal is active, so delegate persistent work to the
 scheduler. Desktop and other executor goal lifecycles need separate validation.
 
-The CLI binds jobs to the paired owner and current AI selection. Queued/scheduled
-work retains that selection after the chat switches AI. Revoking/re-pairing an
+The CLI binds jobs to the paired owner and the task AI choice. Queued/scheduled
+work retains that choice after the chat switches AI. Revoking/re-pairing an
 owner invalidates their old schedules, including re-pairing the same Telegram ID.
 External event turns cannot use the scheduling CLI. Credentials still pass only
 through the existing whitelist and installed host binding.
