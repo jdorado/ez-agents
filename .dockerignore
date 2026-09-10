@@ -23,3 +23,5 @@
 !scripts/release-check.mjs
 !scripts/stage-qa.mjs
 !default-plugins.json
+!scripts/trusted-beta.mjs
+!scripts/generate-publish-caller.mjs

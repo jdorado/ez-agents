@@ -1,0 +1,115 @@
+name: Shared verified npm beta publisher
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        type: string
+        required: true
+      publisher-sha:
+        type: string
+        required: true
+      required-checks:
+        type: string
+        required: true
+      release-id:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+      source-sha:
+        type: string
+        required: true
+      artifact-sha256:
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: npm-beta-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_REPOSITORY: ${{ github.repository }}
+  RELEASE_PACKAGE: ${{ inputs.package }}
+  RELEASE_ID: ${{ inputs.release-id }}
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_SOURCE_SHA: ${{ inputs.source-sha }}
+  RELEASE_SHA256: ${{ inputs.artifact-sha256 }}
+  RELEASE_REQUIRED_CHECKS: ${{ inputs.required-checks }}
+
+jobs:
+  validate:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # GitHub requires push capability to read draft release assets. GET only.
+      contents: write
+      checks: read
+      actions: read
+      pull-requests: read
+    outputs:
+      artifact-id: ${{ steps.bundle.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: jdorado/ez-agents
+          ref: ${{ inputs.publisher-sha }}
+          persist-credentials: false
+          path: publisher
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Validate reviewed source and exact candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node publisher/scripts/trusted-beta.mjs validate "$RUNNER_TEMP/validated-beta"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: bundle
+        with:
+          name: validated-beta-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/validated-beta/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: jdorado/ez-agents
+          ref: ${{ inputs.publisher-sha }}
+          persist-credentials: false
+          path: publisher
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Install OIDC-capable npm
+        run: npm install --global npm@11.19.1 --ignore-scripts --registry https://registry.npmjs.org/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact-id }}
+          path: ${{ runner.temp }}/validated-beta
+          merge-multiple: true
+      - name: Publish once and verify registry bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node publisher/scripts/trusted-beta.mjs publish "$RUNNER_TEMP/validated-beta"
+      - name: Preserve publication readback
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-beta-readback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/validated-beta/*receipt*.json
+          if-no-files-found: ignore
+          retention-days: 90
