@@ -153,6 +153,7 @@ test('approved owner group accepts different members, controls and group deliver
     assert.equal((await new InboxStore(f.dir).status()).pending, 0)
     const status = group(9); status.message!.text = '/status'
     await f.relay.bot.handleUpdate(status)
+    assert.ok(f.replies.some(text => text.includes('🟢 Ez is online')))
     assert.ok(f.replies.some(text => text.includes('Queue:')))
     // Seed the retry fixture only after the relay writer and its timer are idle.
     await f.relay.stop()
@@ -294,7 +295,7 @@ test('slow voice normalization preserves instruction order and leaves controls r
     await downloading
     await f.relay.bot.handleUpdate(message(3, '/status'))
     assert.ok(f.replies.some((text) => text.includes('2 incoming messages')))
-    assert.ok(f.replies.some((text) => text.includes(`Ez relay: ${packageVersion} (running)`)))
+    assert.ok(f.replies.some((text) => text.includes(`Relay: running · v${packageVersion}`)))
     await f.relay.bot.handleUpdate(message(4, 'Next instruction'))
     assert.equal(f.launched.length, 0)
     release()
@@ -324,8 +325,8 @@ test('cancel clears accepted and queued work, never spawns a cancelled run, and 
     assert.equal(f.launched.length, 0)
     assert.equal((await runs.get(run.id))?.status, 'cancelled')
     await f.relay.bot.handleUpdate(message(3, '/status'))
-    assert.match(f.replies.at(-1)!, /0 runs; 0 incoming messages/)
-    assert.match(f.replies.at(-1)!, /1 unknown/)
+    assert.match(f.replies.at(-1)!, /Queue: empty/)
+    assert.match(f.replies.at(-1)!, /1 delivery is awaiting confirmation/)
   } finally {
     await f.close()
   }
