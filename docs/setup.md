@@ -56,12 +56,13 @@ New agents using `codex` or `codex-gui` start with `gpt-5.6-terra` and `high`
 reasoning, including when initialized with `ezenciel-agents-setup init`. This
 Ez default takes precedence over discovered host client defaults. Saved agent
 selections at or below high are preserved; use the AI settings to choose another model or effort.
-Ez rejects reasoning above `high` for every model at selection and execution,
+Ez rejects explicit reasoning above `high` for every model at selection and execution,
 including old saved or queued choices. Unset Codex model/effort resolves to
 Terra/high at launch. This governs Ez-managed launches; it is not an account-wide
 limit on independently launched native clients or executor-created native subagents.
-Antigravity exposes no effort flag, so its inherited native effort is not enforceable
-by this policy; explicit above-high Ez selections are still rejected.
+Other adapters inherit their native effort when none is selected in Ez. That
+inherited configuration is not capped by Ez; explicit above-high Ez selections
+are still rejected. Only Codex adapters receive the default `high` effort.
 
 New scheduled and one-off background tasks default to Codex Terra/high independently
 of the creating chat. Use scheduler `--cli`, `--model`, and `--effort` flags for

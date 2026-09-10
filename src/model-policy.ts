@@ -9,7 +9,7 @@ export function executionDefaults<T extends { model?: string; effort?: string }>
   assertEffort(options.effort)
   return { ...options,
     ...(['codex', 'codex-gui'].includes(cli) ? { model: options.model || CODEX_DEFAULT_MODEL } : {}),
-    ...(['codex', 'codex-gui', 'claude', 'grok', 'opencode'].includes(cli)
+    ...(['codex', 'codex-gui'].includes(cli)
       ? { effort: options.effort || DEFAULT_EFFORT } : {}),
   }
 }

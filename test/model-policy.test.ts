@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { executionDefaults } from '../src/model-policy.js'
 import { startExecutorJob } from '../src/executor.js'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, validateSelection } from '../src/ai.js'
+import { initialPreset, readModels, validateSelection } from '../src/ai.js'
 import { taskArguments } from '../src/task-executor.js'
 import { runCodexSession } from '../src/codex-session.js'
 import { runDesktopTurn } from '../src/desktop-bridge.js'
@@ -42,5 +42,20 @@ test('preset persistence rejects above-high choices without changing current set
     const before = await control.aiState(initialPreset('codex'))
     await assert.rejects(control.savePreset({id:'bad',name:'Bad',cli:'codex',model:'any',effort:'max'}), /capped at high/)
     assert.deepEqual(await control.aiState(initialPreset('codex')), before)
+  } finally { await rm(dir,{recursive:true,force:true}) }
+})
+
+test('non-Codex catalog defaults survive executor normalization and host revalidation', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-adapter-defaults-'))
+  try {
+    const available = async (cli: string) => ['claude', 'opencode', 'agy'].includes(cli)
+    const catalog = await readModels(dir, available)
+    for (const choice of catalog) {
+      const preset = {id:'selected', name:choice.name, cli:choice.cli, model:choice.model}
+      await validateSelection(preset, catalog, available)
+      const normalized = executionDefaults(choice.cli, preset)
+      assert.deepEqual(normalized, preset)
+      await validateSelection(normalized, catalog, available)
+    }
   } finally { await rm(dir,{recursive:true,force:true}) }
 })

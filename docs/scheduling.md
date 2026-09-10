@@ -35,7 +35,8 @@ Public-holiday calendars and arbitrary RRULE syntax are not implemented.
 New tasks, including work deferred by a busy reply session, default to Codex
 `gpt-5.6-terra` with `high` reasoning independently of the creating chat.
 Use `--cli`, `--model`, and `--effort` to specify another choice; reasoning
-above `high` is rejected for every model. Editing preserves the existing AI
+explicitly selected above `high` is rejected for every model. Non-Codex adapters
+inherit native effort when unset. Editing preserves the existing AI
 choice unless those flags override it. Stored choices are checked again at
 launch, including schedules saved before the cap.
 

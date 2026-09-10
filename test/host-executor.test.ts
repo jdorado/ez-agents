@@ -11,6 +11,7 @@ import { isHostRunId } from '../src/host-executor-protocol.js'
 import { EXECUTOR_REGISTRY } from '../src/executor.js'
 import { RunStore } from '../src/runs.js'
 import { packageVersion } from '../src/version.js'
+import { executionDefaults } from '../src/model-policy.js'
 
 test('one installed CLI executes two agent bindings with separate minds and sanitized environment', async () => {
   const root=await mkdtemp(path.join(tmpdir(),'ez-host-'))
@@ -89,7 +90,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     let switchedOutput=''
     switched.stdout.on('data',chunk=>switchedOutput+=chunk)
     switched.stderr.resume()
-    switched.stdin.end(JSON.stringify({texts:['Explicit CLI change'],options:{cli:'claude',timeoutMs:5000}}))
+    switched.stdin.end(JSON.stringify({texts:['Explicit CLI change'],options:executionDefaults('claude',{cli:'claude',timeoutMs:5000,effort:undefined})}))
     assert.equal(await new Promise(resolve=>switched.once('close',resolve)),0)
     assert.ok(JSON.parse(switchedOutput).args.includes('--print'))
     // The bound cache may advertise a model absent from the host's cache.
