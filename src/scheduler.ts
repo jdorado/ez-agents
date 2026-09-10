@@ -1,14 +1,17 @@
+import { needsFailureReview } from './failure.js'
 import { mkdir, readFile, readdir, writeFile, rename, link, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { assertId } from './identity.js'
+import type { Owner } from './control-state.js'
+import { assertId, ownsRun } from './identity.js'
 import { type ExecutionChoice, isExecutionChoice } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
 import { RunStore, type RunRecord } from './runs.js'
 
 export type Schedule = {
+  when?: 'unreviewed-failures'
   version: 1; id: string; revision: string; name: string; text: string; trigger: Trigger; enabled: boolean
-  owner: { telegramUserId: number; telegramChatId: number; pairedAt: string }; execution: ExecutionChoice
+  owner: Owner; execution: ExecutionChoice
 }
 export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string }
 export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
@@ -33,7 +36,7 @@ export class Scheduler {
   async get(id: string): Promise<Schedule> {
     const s = JSON.parse(await readFile(join(this.dir,assertId(id)+'.json'),'utf8')) as Schedule
     if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt}) ||
-      typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' || !s.text.trim() ||
+      (s.when !== undefined && s.when !== 'unreviewed-failures') || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' || !s.text.trim() ||
       !Number.isSafeInteger(s.owner?.telegramUserId) || !Number.isSafeInteger(s.owner?.telegramChatId) || !isExecutionChoice(s.execution))
       throw new Error('Invalid schedule record')
     validateTrigger(s.trigger)
@@ -50,6 +53,7 @@ export class Scheduler {
   }
   async save(input: Omit<Schedule,'version'|'revision'>, exclusive = false): Promise<Schedule> {
     await this.ensure(); assertId(input.id)
+    if (input.when !== undefined && input.when !== 'unreviewed-failures') throw new Error('Unknown schedule condition')
     if (!input.name || !input.text?.trim() || !isExecutionChoice(input.execution)) throw new Error('Schedule needs name, text and an AI selection')
     const s: Schedule = {...input,trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
     if (nextOccurrence(s.trigger,Date.now()-1) === null) throw new Error('Schedule has no future occurrence within eight years')
@@ -110,6 +114,9 @@ export class Scheduler {
         if ((await runs.list()).some(r => r.scheduled?.id === s.id &&
           (['queued','running'].includes(r.status) || (r.interrupted && r.scheduled.revision === s.revision)))) continue
         const future = nextOccurrence(s.trigger,now)
+        if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && ownsRun(owner, r) && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
+          await atomic(cursor,{next:future}); continue
+        }
         await runs.create({id:scheduledRunId(s,next),chatId:s.owner.telegramChatId,
           telegramUserId:s.owner.telegramUserId,texts:[s.text],execution:s.execution,
           scheduled:{id:s.id,revision:s.revision,dueAt:new Date(next).toISOString(),pairedAt:s.owner.pairedAt}})

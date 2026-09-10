@@ -24,6 +24,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     const binary=path.join(root,'cli')
     await writeFile(binary,`#!${process.execPath}\nif(process.env.EZ_RUN_ID==='r_hold')setInterval(()=>{},1000);console.log(JSON.stringify({cwd:process.cwd(),home:process.env.HOME,token:process.env.TELEGRAM_BOT_TOKEN,control:process.env.EZ_CONTROL_DIR,run:process.env.EZ_RUN_ID,args:process.argv.slice(2)}));\n`,{mode:0o700})
     await writeFile(path.join(root,'claude'),await readFile(binary),{mode:0o700})
+    await writeFile(path.join(root,'codex'),await readFile(binary),{mode:0o700})
     process.env.PATH=root+path.delimiter+oldPath
     EXECUTOR_REGISTRY.grok.command=binary
     EXECUTOR_REGISTRY.grok.buildArgs=EXECUTOR_REGISTRY.codex.buildArgs
@@ -54,6 +55,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       assert.equal(result.cwd,await realpath(agent.workspace))
       assert.equal(result.control,agent.controlDir)
       assert.equal(result.token,undefined)
+      assert.match(result.args.join(' '),/you are its repairer/)
       assert.ok(result.args.includes(agent.toolsHome))
       assert.ok(result.args.includes(await realpath(root)))
       assert.ok(!result.args.includes('/wrong'))
@@ -66,9 +68,11 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     let stdout='',stderr=''
     client.stdout.on('data',chunk=>stdout+=chunk)
     client.stderr.on('data',chunk=>stderr+=chunk)
-    client.stdin.end(JSON.stringify({texts:['Telegram message'],options:{cli:'grok',timeoutMs:5000,codexAutoCompactTokens:32000}}))
+    client.stdin.end(JSON.stringify({texts:['Telegram message'],options:{cli:'grok',timeoutMs:5000,codexAutoCompactTokens:32000,repairEnabled:false}}))
     assert.equal(await new Promise(resolve=>client.once('close',resolve)),0,stderr)
     assert.equal(JSON.parse(stdout).run,'tg_6293305')
+    assert.match(JSON.parse(stdout).args.join(' '),/Automatic repair is disabled/)
+    assert.doesNotMatch(JSON.parse(stdout).args.join(' '),/you are its repairer/)
     assert.ok(JSON.parse(stdout).args.includes('model_auto_compact_token_limit=32000'))
     const eventId='event_'+'a'.repeat(64)
     await ownerRun(agents[0].controlDir, eventId, {sourceId:'fixture',bindingId:'binding',eventIds:['1']})
@@ -88,6 +92,18 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     switched.stdin.end(JSON.stringify({texts:['Explicit CLI change'],options:{cli:'claude',timeoutMs:5000}}))
     assert.equal(await new Promise(resolve=>switched.once('close',resolve)),0)
     assert.ok(JSON.parse(switchedOutput).args.includes('--print'))
+    // The bound cache may advertise a model absent from the host's cache.
+    const codexHome=path.join(agents[0].controlDir,'cli','codex')
+    await mkdir(codexHome,{recursive:true})
+    await writeFile(path.join(codexHome,'models_cache.json'),JSON.stringify({models:[{slug:'agent-only-fixture',visibility:'list',display_name:'Agent model',supported_reasoning_levels:[]}]}))
+    await ownerRun(agents[0].controlDir,'tg_6293307')
+    const bound=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),agents[0].controlDir,'tg_6293307'],{stdio:['pipe','pipe','pipe']})
+    let boundOutput='',boundError=''
+    bound.stdout.on('data',chunk=>boundOutput+=chunk)
+    bound.stderr.on('data',chunk=>boundError+=chunk)
+    bound.stdin.end(JSON.stringify({texts:['Switch to agent model'],options:{cli:'codex',model:'agent-only-fixture',timeoutMs:5000}}))
+    assert.equal(await new Promise(resolve=>bound.once('close',resolve)),0,boundError)
+    assert.ok(JSON.parse(boundOutput).args.includes('agent-only-fixture'))
     await assert.rejects(serveHostExecutor({cli:'grok',agents},new AbortController().signal),/already running/)
     const directory=path.join(agents[0].controlDir,'host-executor')
     const submit=async(id:string)=>{await ownerRun(agents[0].controlDir,id);await writeFile(path.join(directory,id+'.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok',timeoutMs:5000}}))}

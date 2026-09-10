@@ -1,3 +1,4 @@
+import { failureEvidence } from './failure.js'
 import { TelegramSource } from './telegram-source.js'
 import { Tasks } from './tasks.js'
 import { taskRequests } from './task-rpc.js'
@@ -14,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { Bot, InlineKeyboard, InputFile, GrammyError, type Context } from 'grammy'
 import type { ChildProcess } from 'node:child_process'
-import { isOwner } from './identity.js'
+import { isOwner, ownsRun } from './identity.js'
 import type { Update } from 'grammy/types'
 import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
@@ -29,14 +30,15 @@ import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
-import { presetLabel } from './ai.js'
+import { presetLabel, statusPreset } from './ai.js'
+import { discoverDefaults } from './client-defaults.js'
 import { initializeWorkspace } from './workspace.js'
 import { softwareStatus } from './software-status.js'
 import { PagerDutyStocksMonitor } from './pagerduty.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
-    let message = error instanceof Error ? error.message : 'Unknown error'
+    let message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unknown error'
     for (const secret of [config.channelBackendToken, config.telegramBotToken, config.geminiApiKey, config.openaiApiKey, config.pagerDutyRoutingKey]) {
       if (secret) message = message.replaceAll(secret, '[redacted]')
     }
@@ -52,7 +54,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const background = new Map<string, ChildProcess>()
   const tasks = new Tasks(config.controlDir)
   const drainTaskRequests = taskRequests(tasks)
-  const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace)
+  const codexHome = join(config.controlDir, 'cli', 'codex')
+  const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
   const pagerDuty = config.pagerDutyRoutingKey && config.pagerDutyStocksHealthUrl
     ? new PagerDutyStocksMonitor({
@@ -66,6 +69,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
   let activeBackend = false
+  let activeReply: ChildProcess | null = null
+  const ownerStopped = new WeakSet<ChildProcess>()
   let activeChild: ChildProcess | null = null
   let shuttingDown = false
   let nextSendAt = 0
@@ -119,9 +124,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // stat uses the effective UID; access uses the relay's isolated real UID.
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
-      if (!run.scheduled && await runs.running(false)) return
+      const busy = Boolean(activeChild || background.size || await runs.running(false))
+      if (!config.channelBackendUrl && busy && /^tg_[0-9]+$/.test(run.id) && !run.external && !run.taskId && run.execution?.preset.cli === 'codex') {
+        if (activeReply) return
+        run = await runs.patch(run.id, { replyOnly: true })
+      }
+      if (!run.scheduled && !run.replyOnly && await runs.running(false)) return
       const owner = (await control.status()).owner
-      if (!owner || owner.telegramUserId !== run.telegramUserId || owner.telegramChatId !== run.chatId) {
+      if (!owner || !ownsRun(owner, run)) {
         await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
         return
       }
@@ -146,7 +156,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         return
       }
       if (run.scheduled && !(await scheduler.get(run.scheduled.id)).enabled) return
-      if (run.scheduled ? background.size >= 4 : activeChild) return
+      if (run.replyOnly ? activeReply : run.scheduled ? background.size >= 4 : activeChild) return
       let texts = run.texts
       if (run.external) {
         // Availability failures leave durable queued work for a later check.
@@ -172,13 +182,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const launchStarted = performance.now()
         const started = await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
         if (!started.execution && !run.taskId) throw new Error('Legacy queued work has no pinned AI. Resend the request after /new.')
-        const session = run.external || run.taskId || run.scheduled
+        const session = run.external || run.taskId || run.scheduled || run.replyOnly
           ? { sessionId: randomUUID(), hasStarted: false, nativeSessionId: undefined }
           : await control.executionSession(started.execution!)
         const selected = run.taskId ? { cli: 'codex', model: undefined, effort: undefined } : started.execution!.preset
         const { child, cleanup } = await launch(texts, {
           workspace: run.scheduled ? await taskWorkspace(config.workspace,run.id) : config.workspace,
           timeoutMs: config.executorTimeoutMs,
+          repairEnabled: config.repairEnabled,
           runId: started.id,
           controlDir: config.controlDir,
           binDir,
@@ -189,13 +200,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           sessionId: session.nativeSessionId || session.sessionId,
           isResume: session.hasStarted,
           eventSource: run.external?.sourceId,
-          onSession: run.scheduled ? async (id) => { await runs.patch(run.id,{nativeSessionId:id}) } : run.external || run.taskId ? undefined : (id) => control.saveNativeSession(session.sessionId, id),
+          onSession: run.external || run.taskId || run.replyOnly ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
         })
         const executionStarted = performance.now()
         console.info('run timing', { run_id: run.id, phase: 'launch',
           queue_ms: Math.max(0, Date.parse(started.startedAt!) - Date.parse(run.createdAt)),
           startup_ms: Math.round(executionStarted - launchStarted), resumed: session.hasStarted })
-        if (run.scheduled) background.set(run.id,child)
+        if (run.replyOnly) activeReply = child
+        else if (run.scheduled) background.set(run.id,child)
         else activeChild = child
         const finished = new Promise<number | null>((resolve) => {
           if (child.exitCode !== null || child.signalCode !== null) resolve(child.exitCode)
@@ -210,12 +222,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           isResume: session.hasStarted,
         })
 
-        if (!run.scheduled && activeTypingTimer) clearInterval(activeTypingTimer)
-        if (!run.external && !run.taskId && !run.scheduled) activeTypingTimer = setInterval(() => {
-          void bot.api.sendChatAction(run.chatId, 'typing').catch(() => {})
+        if (!run.scheduled && !run.replyOnly && activeTypingTimer) clearInterval(activeTypingTimer)
+        if (!run.external && !run.taskId && !run.scheduled && !run.replyOnly) activeTypingTimer = setInterval(() => {
+          if (performance.now() - executionStarted < 30000) void bot.api.sendChatAction(run.chatId, 'typing').catch(() => {})
         }, 4000)
 
+        let failureReason = 'executor-exit', errorTail = ''
         child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+          errorTail = (errorTail + chunk).slice(-16384)
+          if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
           if (chunk.trim()) console.error('executor stderr', started.id, chunk.trim())
         })
         void finished.then((code) => {
@@ -225,13 +240,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             await withStartLock(async () => {
               try {
                 await cleanup()
-                if (code === 0 && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(session.sessionId)
-                await runs.patch(started.id, { status: run.scheduled && await scheduler.cancelled(run.id) ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString() })
+                if (code === 0 && !run.external && !run.taskId && !run.scheduled && !run.replyOnly) await control.markSessionStarted(session.sessionId)
+                await runs.patch(started.id, { status: ownerStopped.has(child) || (run.scheduled && await scheduler.cancelled(run.id)) ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString(), exitCode: code, ...(code !== 0 ? { failureReason, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
               } catch (error) {
-                await runs.patch(started.id, { status: 'failed', endedAt: new Date().toISOString() })
+                await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
                 console.error('Session completion failed', safeError(error))
               } finally {
-                if (run.scheduled) background.delete(run.id)
+                if (run.replyOnly) activeReply = null
+                else if (run.scheduled) background.delete(run.id)
                 else {
                   activeChild = null
                   if (activeTypingTimer) clearInterval(activeTypingTimer)
@@ -245,11 +261,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           })().catch((error) => console.error('Run completion failed', error.message))
         })
       } catch (error) {
-        if (!run.scheduled && activeTypingTimer) {
+        if (!run.scheduled && !run.replyOnly && activeTypingTimer) {
           clearInterval(activeTypingTimer)
           activeTypingTimer = null
         }
-        await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
+        await runs.patch(run.id, { status: 'failed', failureReason: 'executor-start', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
         console.error('run start failed', run.id, safeError(error))
         await sendChat(run.chatId, `Run ${run.id} failed to start. Check the local relay log.`)
         setImmediate(() => {
@@ -326,6 +342,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     item.caption = message?.caption
     item.albumId = message?.media_group_id
     if (message?.media_group_id) item.text = `[Telegram album: ${message.media_group_id}]\n${item.text}`
+    if (message && (message.chat.type === 'group' || message.chat.type === 'supergroup'))
+      item.text = `[Telegram sender ${message.from?.id}, name ${JSON.stringify(message.from?.first_name)}]\n${item.text}`
     if (message && !message.text && message.reply_to_message) {
       const quoted = message.reply_to_message
       item.text = `[Quoted message ${quoted.message_id}]: ${quoted.text || quoted.caption || '[media]'}\n\n${item.text}`
@@ -414,8 +432,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (
             !origin ||
             !owner ||
-            origin.telegramUserId !== owner.telegramUserId ||
-            origin.chatId !== owner.telegramChatId ||
+            !ownsRun(owner, origin) ||
             (origin.scheduled && origin.scheduled.pairedAt !== owner.pairedAt) ||
             item.chatId !== origin.chatId
           )
@@ -490,9 +507,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   }
 
   const checkOwner = async (ctx: Context): Promise<boolean> => {
-    if (!ctx.from || ctx.from.is_bot || ctx.chat?.type !== 'private') return false
+    if (!ctx.from || ctx.from.is_bot || ctx.message?.sender_chat) return false
     const state = await control.status()
     if (!state.owner) {
+      if (ctx.chat?.type !== 'private') return false
       const result = await control.requestPairing(ctx.from.id, ctx.chat.id)
       if (result === 'requested')
         await ctx.reply('Owner approval is pending. Confirm this request through the local setup assistant.')
@@ -518,20 +536,26 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const statusText = async () => {
     const running = await runs.running(false)
     const all = await runs.list()
+    const waitingForHost = running && process.env.EZ_EXECUTOR_TRANSPORT === 'host' && await stat(join(config.controlDir, 'host-executor', running.id + '.request.json')).then(() => true, () => false)
     const incoming = await inbox.status()
     const delivery = await runs.deliveryStatus()
     const session = await control.getActiveSession()
     const ai = await control.aiState(aiMenu.initial)
     const selected = ai.presets.find((p) => p.id === ai.selectedId)!
+    const defaultPreset = ai.presets.find((p) => p.id === ai.defaultId)!
+    const discovered = await discoverDefaults(config.workspace, { codexHome, nativeCodexFallback: true })
+    const displayedSelected = statusPreset(selected, discovered)
+    const displayedDefault = statusPreset(defaultPreset, discovered)
     return [
       ...await softwareStatus(config.controlDir),
-      `AI: ${selected.name} (${presetLabel(selected)})`,
-      `Default: ${ai.presets.find((p) => p.id === ai.defaultId)!.name}`,
+      `AI: ${selected.name} (${presetLabel(displayedSelected)})`,
+      `Default: ${defaultPreset.name} (${presetLabel(displayedDefault)})`,
       `Session: ${session?.sessionId.slice(0, 8) || 'none'}`,
-      `Work: ${running ? `running ${running.id}` : 'idle'}`,
+      `Work: ${running ? `${waitingForHost ? 'waiting for workspace' : 'running'} ${running.id}` : 'idle'}`,
       `Background: ${all.filter(r => r.scheduled && r.status === 'running').map(r=>r.id).join(', ') || 'idle'}`,
       `Queue: ${all.filter((r) => r.status === 'queued').length} runs; ${incoming.pending} incoming messages`,
-      `Failed: ${all.filter((r) => r.status === 'failed').length} runs; ${incoming.failed} incoming batches`,
+      `Failed history: ${all.filter((r) => r.status === 'failed').length} runs; ${incoming.failed} incoming batches`,
+      ...all.filter(r => r.status === 'failed').slice(-6).map(r => `${r.scheduled?.id || r.id} (${(r.endedAt || r.createdAt).slice(0,16)}Z): ${r.interrupted ? 'interrupted by restart' : r.failureReason || 'historical failure; reason not recorded'}${r.exitCode != null ? ` (exit ${r.exitCode})` : ''}`),
       `Blocked: ${all.filter((r) => r.blockReason === 'external-execution-unavailable').length} external runs (isolated execution unavailable)`,
       `Delivery: ${delivery.failed} failed; ${delivery.unknown} unknown/in-flight (inspect before retrying)`,
       ...(unavailableSources.size ? [`Unavailable event sources: ${[...unavailableSources].join(', ')}`] : []),
@@ -559,13 +583,27 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // Returning from the polling handler acknowledges intake, not execution. Only
   // return after the authorized update has reached the atomic local journal.
   bot.use(async (ctx, next) => {
-    if (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') {
+    if (ctx.callbackQuery && (await control.status()).owner?.kind === 'group') {
+      if (!isOwner(ctx, (await control.status()).owner)) return
+      try {
+        const member = await bot.api.getChatMember(ctx.chat!.id, ctx.from!.id)
+        if (!['creator', 'administrator', 'member'].includes(member.status) &&
+          !(member.status === 'restricted' && member.is_member)) return
+      } catch { throw new Error('Group membership verification unavailable; retry the update') }
+    }
+    if ((ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') &&
+      !isOwner(ctx, (await control.status()).owner)) {
       if (config.channelBackendUrl) return
       const owner = (await control.status()).owner
       const message = ctx.message
+      if (!owner && message && !message.sender_chat && ctx.from && !ctx.from.is_bot) {
+        await control.requestPairing(ctx.from.id, ctx.chat.id, ctx.chat.title)
+        return
+      }
       if (!owner || !message?.text || message.sender_chat || !ctx.from || ctx.from.is_bot) return
       await telegramSource.start(owner)
       if (await telegramSource.capture(ctx.update.update_id, message as import('grammy/types').Message.TextMessage, ctx.from)) return
+      if (owner.kind === 'group') return
       if (ctx.from.id !== owner.telegramUserId) return
       if (replay.has(ctx.update)) {
         collected.push({
@@ -576,7 +614,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
     if (replay.has(ctx.update)) {
-      if (isOwner(ctx, (await control.status()).owner)) return next()
+      if (!ctx.message?.sender_chat && isOwner(ctx, (await control.status()).owner)) return next()
       return
     }
     const message = ctx.message
@@ -605,7 +643,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
     if (text === '/retry') {
-      const id = await inbox.retryLatest(ctx.from.id, ctx.chat.id)
+      const id = await inbox.retryLatest(ctx.from.id, ctx.chat.id, (await control.status()).owner)
       if (id) scheduleIntake()
       await ctx.reply(id ? `Incoming batch ${id} queued for retry.` : 'No failed incoming batch to retry.')
       return
@@ -629,8 +667,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const running = await runs.running(false)
       if ((running && running.pid) || background.size) {
         try {
-          if (activeChild) terminateJob(activeChild)
-          for (const [id,child] of background) { await scheduler.cancel(id); terminateJob(child) }
+          if (activeReply) { ownerStopped.add(activeReply); terminateJob(activeReply) }
+          if (activeChild) { ownerStopped.add(activeChild); terminateJob(activeChild) }
+          for (const [id,child] of background) { await scheduler.cancel(id); ownerStopped.add(child); terminateJob(child) }
         } catch {}
         if (activeTypingTimer) {
           clearInterval(activeTypingTimer)
@@ -795,7 +834,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (actionId && (decision === 'approve' || decision === 'deny')) {
         const request = await approvals.getDecision(actionId)
         const run = request?.runId ? await runs.get(request.runId) : null
-        if (!run || run.chatId !== ctx.chat?.id || run.telegramUserId !== ctx.from.id) {
+        if (!run || run.chatId !== ctx.chat?.id || !ownsRun((await control.status()).owner, run) ||
+          ((await control.status()).owner?.kind !== 'group' && run.telegramUserId !== ctx.from.id)) {
           await ctx.answerCallbackQuery({ text: 'Approval unavailable' })
           return
         }
@@ -837,7 +877,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         await aiMenu.list(ctx, action === 'settings')
       } else if (action === 'retry') {
         await ctx.answerCallbackQuery()
-        const id = await inbox.retryLatest(ctx.from.id, ctx.chat!.id)
+        const id = await inbox.retryLatest(ctx.from.id, ctx.chat!.id, (await control.status()).owner)
         if (id) scheduleIntake()
         await ctx.reply(id ? `Incoming batch ${id} queued for retry.` : 'No failed incoming batch to retry.')
       } else if (action === 'new') {
@@ -860,8 +900,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       } else if (action === 'stop') {
         const running = await runs.running(false)
         if ((running && running.pid) || background.size) {
-          if (activeChild) terminateJob(activeChild)
-          for (const [id,child] of background) { await scheduler.cancel(id); terminateJob(child) }
+          if (activeReply) { ownerStopped.add(activeReply); terminateJob(activeReply) }
+          if (activeChild) { ownerStopped.add(activeChild); terminateJob(activeChild) }
+          for (const [id,child] of background) { await scheduler.cancel(id); ownerStopped.add(child); terminateJob(child) }
           await ctx.answerCallbackQuery({ text: 'Run stopped' })
           await ctx.reply(
             '🛑 Stop requested for active work. Queued work remains and will run next. /cancel clears it.',
@@ -884,6 +925,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     shuttingDown = true
     if (intakeTimer) clearTimeout(intakeTimer)
     if (sourceTimer) clearInterval(sourceTimer)
+    if (activeReply) terminateJob(activeReply)
     if (activeChild) terminateJob(activeChild)
     for (const child of background.values()) terminateJob(child)
     if (activeTypingTimer) clearInterval(activeTypingTimer)

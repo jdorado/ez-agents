@@ -22,7 +22,7 @@ export function taskModelCatalog(catalog: { models: Record<string, unknown>[] })
     apply_patch_tool_type: null, experimental_supported_tools: [], multi_agent_version: null,
     supports_search_tool: false, use_responses_lite: false })) };
 }
-export function taskArguments(directory: string, broker: string[], prompt: string) {
+export function taskArguments(directory: string, broker: string[], prompt: string, toolNames = ['context', 'send', 'note', 'report', 'complete']) {
   return ['exec', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--strict-config', '--json', '-C', directory,
     ...taskDisabledFeatures.flatMap(feature => ['--disable', feature]), '--enable', 'skip_host_skill_discovery',
     '-c', `model_catalog_json=${JSON.stringify(join(directory, '..', 'models.json'))}`,
@@ -30,8 +30,8 @@ export function taskArguments(directory: string, broker: string[], prompt: strin
     '-c', 'default_permissions="ez-task"',
     '-c', `permissions.ez-task.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(directory)}="write"}`,
     '-c', 'permissions.ez-task.network.enabled=false',
-    '-c', `mcp_servers.ez={command=${JSON.stringify(broker[0])},args=${JSON.stringify(broker.slice(1))},required=true,enabled_tools=["context","send","note","report","complete"]}`,
-    ...['context', 'send', 'note', 'report', 'complete'].flatMap(name => ['-c', `mcp_servers.ez.tools.${name}.approval_mode="approve"`]),
+    '-c', `mcp_servers.ez={command=${JSON.stringify(broker[0])},args=${JSON.stringify(broker.slice(1))},required=true,enabled_tools=${JSON.stringify(toolNames)}}`,
+    ...toolNames.flatMap(name => ['-c', `mcp_servers.ez.tools.${name}.approval_mode="approve"`]),
     prompt]
 }
 export async function startTaskExecutor(options: ExecutorOptions) {

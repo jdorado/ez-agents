@@ -3,12 +3,15 @@ import path from 'node:path'
 import { isPreset, type AiPreset, type ExecutionChoice } from './ai.js'
 
 export type Owner = {
+  kind?: 'group'
   telegramUserId: number
   telegramChatId: number
   pairedAt: string
 }
 
 export type PairingRequest = {
+  kind?: 'group'
+  title?: string
   telegramUserId: number
   telegramChatId: number
   requestedAt: string
@@ -44,7 +47,9 @@ const isState = (value: unknown): value is ControlState => {
   const identity = (person: unknown): boolean => {
     if (!person || typeof person !== 'object') return false
     const p = person as Owner
-    return isPositiveId(p.telegramUserId) && isPositiveId(p.telegramChatId)
+    return isPositiveId(p.telegramUserId) && (p.kind === 'group'
+      ? Number.isSafeInteger(p.telegramChatId) && p.telegramChatId < 0
+      : p.kind === undefined && isPositiveId(p.telegramChatId))
   }
   return (
     candidate.version === 1 &&
@@ -136,8 +141,11 @@ export class ControlStore {
   async requestPairing(
     telegramUserId: number,
     telegramChatId: number,
+    groupTitle?: string,
   ): Promise<'requested' | 'pending' | 'capacity' | 'owner-exists'> {
-    if (!isPositiveId(telegramUserId) || !isPositiveId(telegramChatId))
+    if (!isPositiveId(telegramUserId) || !(groupTitle !== undefined
+      ? Number.isSafeInteger(telegramChatId) && telegramChatId < 0
+      : isPositiveId(telegramChatId)))
       throw new Error('Telegram identity must be a positive numeric ID')
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
@@ -153,6 +161,7 @@ export class ControlStore {
       if (state.pending.length >= 3) return 'capacity'
       const now = this.clock()
       state.pending.push({
+        ...(groupTitle !== undefined ? {kind: 'group' as const, title: groupTitle.slice(0, 256)} : {}),
         telegramUserId,
         telegramChatId,
         requestedAt: new Date(now).toISOString(),
@@ -163,15 +172,18 @@ export class ControlStore {
     })
   }
 
-  async approveOwner(telegramUserId: number): Promise<Owner> {
-    if (!isPositiveId(telegramUserId)) throw new Error('Telegram user ID must be a positive numeric ID')
+  async approveOwner(telegramUserId: number, group = false): Promise<Owner> {
+    if (!(group ? Number.isSafeInteger(telegramUserId) && telegramUserId < 0 : isPositiveId(telegramUserId))) throw new Error('Supply a positive user ID or negative group ID')
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
       if (state.owner) throw new Error('An owner is already paired; revoke locally before replacing it')
-      const request = state.pending.find((candidate) => candidate.telegramUserId === telegramUserId)
+      const request = state.pending.find((candidate) => group
+        ? candidate.kind === 'group' && candidate.telegramChatId === telegramUserId
+        : candidate.kind === undefined && candidate.telegramUserId === telegramUserId)
       if (!request) throw new Error('No active pairing request exists for that Telegram user ID')
       const owner: Owner = {
-        telegramUserId,
+        ...(group ? {kind: 'group' as const} : {}),
+        telegramUserId: request.telegramUserId,
         telegramChatId: request.telegramChatId,
         pairedAt: new Date(this.clock()).toISOString(),
       }

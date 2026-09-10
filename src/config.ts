@@ -1,3 +1,4 @@
+import { repairEnabled } from './repair-policy.js'
 import path from 'node:path'
 import { homedir } from 'node:os'
 
@@ -7,6 +8,7 @@ export type ControlConfig = {
 }
 
 export type Config = ControlConfig & {
+  repairEnabled?: boolean
   telegramBotToken: string
   workspace: string
   executorTimeoutMs: number
@@ -58,6 +60,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   return {
     ...loadControlConfig(env),
     telegramBotToken,
+    repairEnabled: repairEnabled(env.EZ_REPAIR_ENABLED),
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
     executorTimeoutMs: 0,
     codexAutoCompactTokens: positiveInteger(env.EZ_CODEX_AUTO_COMPACT_TOKENS, 'EZ_CODEX_AUTO_COMPACT_TOKENS', 64000),

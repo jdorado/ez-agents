@@ -1,3 +1,4 @@
+import { redactFailure } from './failure.js'
 import { RunStore } from './runs.js'
 import { Tasks } from './tasks.js'
 import { requireOwnerExecution } from './execution-authority.js'
@@ -15,7 +16,7 @@ import { installedPluginVersions } from './software-status.js'
 export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
 
-export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal) => {
+export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {
   resolveExecutor(installation.cli)
   if (new Set(installation.agents.map(a=>a.workspace)).size !== installation.agents.length ||
       new Set(installation.agents.map(a=>a.controlDir)).size !== installation.agents.length)
@@ -25,6 +26,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const tasks = new Set<Promise<void>>()
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
+  const catalog = (agent: HostBinding) => readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
   try {
     for (const agent of installation.agents) {
       if (![agent.workspace,agent.controlDir,agent.binDir].every(path.isAbsolute)) throw new Error('Host bindings require absolute paths')
@@ -42,7 +44,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid}),{mode:0o600,flag:'wx'})
       locks.push(lock)
-      await writeFile(path.join(directory,'models.json'),JSON.stringify(await readModels()),{mode:0o600})
+      await writeFile(path.join(directory,'models.json'),JSON.stringify(await catalog(agent)),{mode:0o600})
       // A host crash is terminal for a claimed job. Never replay an action.
       for (const file of await readdir(directory)) if (file.endsWith('.running.json')) {
         const base=path.join(directory,file.slice(0,-13))
@@ -61,8 +63,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
       if(parent) { try { process.kill(parent,0) } catch { break } }
       if(Date.now()-catalogAt>30000){
-        const models=JSON.stringify(await readModels())
         for(const agent of installation.agents){
+          const models=JSON.stringify(await catalog(agent))
           const file=path.join(agent.controlDir,'host-executor/models.json')
           await writeFile(file+'.tmp',models,{mode:0o600});await rename(file+'.tmp',file)
         }
@@ -77,7 +79,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           const id=file.slice(0,-13)
           let run
           try {
-            run = id.startsWith('r_schedule_') ? await new RunStore(agent.controlDir).get(id) : null
+            run = await new RunStore(agent.controlDir).get(id)
             if(id.startsWith('r_schedule_') && !run?.scheduled) throw new Error('Missing scheduled run')
           } catch {
             await appendFile(path.join(directory,id+'.events'),JSON.stringify({stream:'exit',code:1})+'\n',{mode:0o600})
@@ -85,7 +87,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             continue
           }
           const sharedWorkspace=sharedWorkspaces.get(agent)
-          const lane=sharedWorkspace ? 'workspace:'+sharedWorkspace : run?.scheduled ? agent.name+':'+id : agent.name
+          const lane=run?.replyOnly ? 'reply:'+agent.name : sharedWorkspace ? 'workspace:'+sharedWorkspace : run?.scheduled ? agent.name+':'+id : agent.name
           if(busy.has(lane) || (run?.scheduled && [...busy].filter(k=>k.startsWith(agent.name+':')).length>=4)) continue
           const base=path.join(directory,id)
           await rename(base+'.request.json',base+'.running.json')
@@ -107,11 +109,11 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               const opts=request.options as ExecutorOptions
               const cli = opts.cli || installation.cli
               resolveExecutor(cli)
-              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,model:opts.model,effort:opts.effort},await readModels())
+              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,model:opts.model,effort:opts.effort},await catalog(agent))
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,cli,
-                runId:path.basename(base),timeoutMs:0,
+                runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort,codexAutoCompactTokens:opts.codexAutoCompactTokens}
-              job=await startExecutorJob(request.texts,options)
+              job=await launch(request.texts,options)
               active.set(lane,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})
               if(signal.aborted)terminateJob(job.child)
@@ -119,11 +121,14 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               job.child.stderr?.on('data',chunk=>emit({stream:'stderr',text:chunk.toString()}))
               cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{})},250)
               const code=await new Promise<number>(resolve=>job!.child.once('close',code=>resolve(code??1)))
+              if (cancellation) clearInterval(cancellation)
+              await job.cleanup()
+              job = undefined
               emit({stream:'exit',code})
-            } catch { emit({stream:'stderr',text:'Host CLI execution failed\n'}); emit({stream:'exit',code:1}) }
+            } catch (error) { emit({stream:'stderr',text:'Host CLI execution failed: '+redactFailure(error instanceof Error ? error.message : 'Unknown error')+'\n'}); emit({stream:'exit',code:1}) }
             finally {
               if(cancellation)clearInterval(cancellation)
-              await job?.cleanup()
+              await job?.cleanup().catch(() => {})
               await writes
               await rm(base+'.running.json',{force:true})
               await rm(base+'.process.json',{force:true})
