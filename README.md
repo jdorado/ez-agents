@@ -111,6 +111,9 @@ services; the existing host CLI and login are shared through one generic
 transport, with separate agent workspaces and sessions. See
 [Docker setup, state and QA](docs/docker-runtime.md).
 
+For optional PagerDuty paging of a critical Stocks outage, see
+[PagerDuty critical-outage paging](docs/pagerduty.md).
+
 Telegram `/status` shows the running relay and host versions plus installed
 plugin versions. The agent's `ez status` adds verified plugin runtime states and
 upgrade job receipts. See [status and upgrades](docs/upgrades.md).
