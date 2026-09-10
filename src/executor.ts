@@ -295,8 +295,14 @@ export const startExecutorJob = async (
       try{await writeFile(path.join(home,'config.toml'),await readFile(path.join(base,'config.toml')),{flag:'wx',mode:0o600})}
       catch(error){if(!['ENOENT','EEXIST'].includes((error as NodeJS.ErrnoException).code || ''))throw error}
     }
-    try { await symlink(path.join(homedir(), '.codex', 'auth.json'), path.join(home, 'auth.json')) }
-    catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    // Tasks inherit this agent's auth binding, including an operator-provisioned
+    // private credential after host migration. Never replace an existing binding.
+    const authLinks = [[path.join(base, 'auth.json'), path.join(homedir(), '.codex', 'auth.json')]]
+    if (nativeSession) authLinks.push([path.join(home, 'auth.json'), path.join(base, 'auth.json')])
+    for (const [link, target] of authLinks) {
+      try { await symlink(target, link) }
+      catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    }
     environment.CODEX_HOME = home
   }
   const child = spawn(invocation.command, invocation.args, {
