@@ -13,8 +13,9 @@ repository. Public docs describe shipped behavior and explicit limitations.
    Packaging/runtime changes also need the Docker checks in docs/releasing.md.
 5. Open a PR explaining the problem, resulting behavior, verification and limits.
    Include a short sanitized reproduction. State which tests were not run.
-6. A maintainer reviews and merges after CI. Maintainers use PRs too. No CLA,
-   ticket requirement, custom commit format or additional approval committee.
+6. Obtain independent review and required CI, then complete the
+   maintainer-authorized merge. Maintainers use PRs too. No CLA, ticket
+   requirement, custom commit format or additional approval committee.
 
 You are responsible for understanding submitted code, including AI-generated
 code, and having the right to contribute it under this repository's license.
@@ -48,8 +49,8 @@ docs/plugin-contributions.md.
   Branch from an unmerged feature only when the dependency is intentional and
   documented; do not quietly include it in an unrelated PR.
 - Open a draft PR when the change is reviewable. Report its scope, exact commit,
-  validation and remaining QA. A completed coding task can remain a draft;
-  implementation completion does not authorize merge or npm publication.
+  validation and remaining QA. Continue through the release handoff below;
+  implementation completion alone does not authorize publication.
 - Before merge, obtain an independent human or agent review of the final diff.
   The implementer's self-check and passing CI are not independent review.
   Reviewers inspect correctness, architecture, state/permissions and negative
@@ -65,6 +66,29 @@ docs/plugin-contributions.md.
   inspect it for uncommitted/untracked files and local-only commits. Remove only
   the clean task worktree after valuable work is preserved; never force cleanup.
   Delete its branch only after confirming merge or authorized abandonment.
+
+## Agent-owned release handoff
+
+The agent owns the engineering work through shipping: implement, run proportional
+checks, obtain independent review, repair findings, verify the packed artifact,
+and prepare the release. Reuse valid final-commit evidence; repeat checks when
+changes or failures invalidate it. Do not leave a ready feature silently in draft
+or ask the maintainer to run commands, coordinate reviewers, or operate CI.
+
+Once the applicable gates pass, proactively present one concise merge/release
+confirmation with the packages, versions, target channel, verification result
+and material limits. Prepare the exact reviewed commits, artifacts and checksums
+before asking. Batch related packages in dependency order. Honor authorization
+already given in the task or an explicit standing release policy; ask only for
+missing authority, never again for an approved step. Merge-only authorization
+does not imply publication or changing a private package's visibility.
+
+After approval, complete the authorized merge, publication and rollout using
+docs/releasing.md, then verify registry metadata, downloaded artifact and the
+installed runtime. Report the outcome. Escalate only a product decision, missing
+credential/2FA, failed gate that cannot be repaired in scope, or material scope
+change. Human attention belongs on product intent and the release decision;
+the agent operates the technical workflow.
 
 Example, substituting a unique task name and an absolute external directory:
 

@@ -3,7 +3,9 @@
 Use the same checks for maintainer and external changes. Each repository versions
 independently with SemVer: patch for compatible fixes, minor for new capabilities;
 before 1.0, breaking CLI/state changes require a minor bump and migration notes.
-No automatic dependency updates, release bot or credentials in pull-request CI.
+No automatic dependency updates or credentials in pull-request CI. The agent
+operates this process under the authorization rules in CONTRIBUTING.md; a
+separate release bot is not required.
 
 1. In an isolated release worktree/PR, finalize package version and CHANGELOG.md;
    update plugin manifest version when present. After lockfile changes, copy
@@ -32,9 +34,10 @@ No automatic dependency updates, release bot or credentials in pull-request CI.
    fill package.json repository, homepage and bugs with the actual public URLs.
    Enable GitHub private vulnerability reporting; verify the route. Protect main
    with CI and independent PR review. Maintainers use the same process.
-7. Record independent review and green CI for the final release PR, then obtain
-   maintainer merge/release authorization for the exact commit, tarball SHA-256,
-   license/third-party obligations and known limits. Merge the release PR and
+7. Record independent review and green CI for the final release PR. Proactively
+   request any missing maintainer merge/release authorization for the prepared
+   commit, tarball SHA-256, license/third-party obligations and known limits in
+   one concise handoff; reuse existing task or standing authorization. Merge the release PR and
    verify its tree matches the reviewed source before tagging `v<version>` and
    publishing that tarball:
    `npm publish /absolute/candidate.tgz --access public --tag beta --registry https://registry.npmjs.org/`
