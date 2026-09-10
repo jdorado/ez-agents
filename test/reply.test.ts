@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { once } from 'node:events'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -76,7 +77,6 @@ test('active work cannot be hidden by newer failures and completed background re
 
 test('reply-only deadline terminates a stalled reply process', async()=>{
  const { spawn }=await import('node:child_process')
- const { once }=await import('node:events')
  const { replyDeadline }=await import('../src/reply-executor.js')
  const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true})
  await once(child,'spawn')
