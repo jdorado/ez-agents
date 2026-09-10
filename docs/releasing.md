@@ -34,10 +34,11 @@ separate release bot is not required.
    fill package.json repository, homepage and bugs with the actual public URLs.
    Enable GitHub private vulnerability reporting; verify the route. Protect main
    with CI and independent PR review. Maintainers use the same process.
-7. Record independent review and green CI for the final release PR. Proactively
-   request any missing maintainer merge/release authorization for the prepared
-   commit, tarball SHA-256, license/third-party obligations and known limits in
-   one concise handoff; reuse existing task or standing authorization. Merge the release PR and
+7. Record independent review and green CI for the final release PR. The
+   maintainer's release request supplies authorization: do not ask for a second
+   approval. Record the prepared commit, tarball SHA-256, third-party obligations
+   and known limits. If release is outside the request, report readiness without
+   publishing. For an authorized release, merge the release PR and
    verify its tree matches the reviewed source before tagging `v<version>` and
    publishing that tarball:
    `npm publish /absolute/candidate.tgz --access public --tag beta --registry https://registry.npmjs.org/`
