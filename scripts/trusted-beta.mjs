@@ -127,22 +127,39 @@ export async function validateSource(expected, api) {
   let tag = (await api(`/repos/${expected.repository}/git/ref/tags/v${expected.version}`)).object;
   for (let depth = 0; tag?.type === 'tag' && depth < 5; depth++) tag = (await api(`/repos/${expected.repository}/git/tags/${tag.sha}`)).object;
   assert(tag?.type === 'commit' && tag.sha === expected.sourceSha, 'Release tag does not identify approved source');
-  const checks = [];
+  // Select CI identity before considering outcomes: tag/PR runs at the same SHA
+  // must neither shadow main CI nor let a failed latest main run fall back.
+  const runs = [];
   for (let page = 1; ; page++) {
-    assert(page <= 100, 'Too many check pages');
-    const result = await api(`/repos/${expected.repository}/commits/${expected.sourceSha}/check-runs?per_page=100&page=${page}`);
-    assert(Array.isArray(result.check_runs), 'Invalid check response');
-    checks.push(...result.check_runs);
-    if (result.check_runs.length < 100) break;
+    assert(page <= 100, 'Too many workflow run pages');
+    const result = await api(`/repos/${expected.repository}/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${expected.sourceSha}&per_page=100&page=${page}`);
+    assert(Array.isArray(result.workflow_runs), 'Invalid workflow run response');
+    runs.push(...result.workflow_runs.filter(run => run.head_sha === expected.sourceSha && run.event === 'push' && run.head_branch === 'main' && run.path === '.github/workflows/ci.yml'));
+    if (result.workflow_runs.length < 100) break;
   }
-  for (const check of validateChecks(checks, expected)) {
-    const prefix = `https://github.com/${expected.repository}/actions/runs/`;
-    assert(typeof check.details_url === 'string' && check.details_url.startsWith(prefix), 'Check does not identify a repository Actions run');
-    const match = check.details_url.slice(prefix.length).match(/^([1-9]\d*)\/job\/[1-9]\d*$/);
-    assert(match, 'Invalid check run evidence URL');
-    const run = await api(`/repos/${expected.repository}/actions/runs/${match[1]}`);
-    assert(run.head_sha === expected.sourceSha && run.event === 'push' && run.head_branch === 'main' && run.path === '.github/workflows/ci.yml' && run.status === 'completed' && run.conclusion === 'success', 'Required check is not successful main push CI');
+  const run = runs.sort((a, b) => b.id - a.id)[0];
+  assert(run && Number.isSafeInteger(run.id) && run.id > 0 && Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0 && run.status === 'completed' && run.conclusion === 'success', 'Required check is not successful main push CI');
+  const jobs = [];
+  for (let page = 1; ; page++) {
+    assert(page <= 100, 'Too many job pages');
+    const result = await api(`/repos/${expected.repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`);
+    assert(Array.isArray(result.jobs), 'Invalid job response');
+    jobs.push(...result.jobs);
+    if (result.jobs.length < 100) break;
   }
+  const checks = [];
+  for (const name of expected.requiredChecks) {
+    const matches = jobs.filter(job => job.name === name);
+    assert(matches.length === 1, `Missing or ambiguous required CI job: ${name}`);
+    const job = matches[0];
+    assert(job.run_id === run.id && job.run_attempt === run.run_attempt && job.head_sha === expected.sourceSha && job.status === 'completed' && job.conclusion === 'success', `Required CI job not successful: ${name}`);
+    const prefix = `https://api.github.com/repos/${expected.repository}/check-runs/`;
+    assert(typeof job.check_run_url === 'string' && job.check_run_url.startsWith(prefix) && /^[1-9]\d*$/.test(job.check_run_url.slice(prefix.length)), 'Invalid job check evidence URL');
+    const check = await api(job.check_run_url.slice('https://api.github.com'.length));
+    assert(check.name === name && check.details_url === `https://github.com/${expected.repository}/actions/runs/${run.id}/job/${job.id}`, 'Check does not identify the required CI job');
+    checks.push(check);
+  }
+  validateChecks(checks, expected);
   return sourceManifest;
 }
 

@@ -10,6 +10,11 @@ const env = { RELEASE_ID: '123', RELEASE_REPOSITORY: 'jdorado/ez-agents', RELEAS
 const expected = identity(env);
 const manifest = { name: expected.package, version: expected.version, repository: { url: 'git+https://github.com/jdorado/ez-agents.git' }, publishConfig: { access: 'public', tag: 'latest' } };
 const receipt = { ...Object.fromEntries(['repository', 'package', 'version', 'sourceSha', 'sha256'].map(key => [key, expected[key]])), independentReviewUrl: 'https://github.com/jdorado/ez-agents/pull/41#issuecomment-123', testEvidenceUrls: ['https://github.com/jdorado/ez-agents/actions/runs/123'] };
+const mainRun = { id: 123, run_attempt: 1, head_sha: expected.sourceSha, event: 'push', head_branch: 'main', path: '.github/workflows/ci.yml', status: 'completed', conclusion: 'success' };
+const runsPath = `/repos/${expected.repository}/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${expected.sourceSha}&per_page=100&page=1`;
+const jobsPath = `/repos/${expected.repository}/actions/runs/123/attempts/1/jobs?per_page=100&page=1`;
+const checkPath = `/repos/${expected.repository}/check-runs/1`;
+const job = { id: 456, run_id: 123, run_attempt: 1, head_sha: expected.sourceSha, name: 'verify (22)', status: 'completed', conclusion: 'success', check_run_url: `https://api.github.com${checkPath}` };
 const check = { id: 1, details_url: 'https://github.com/jdorado/ez-agents/actions/runs/123/job/456', name: 'verify (22)', head_sha: expected.sourceSha, app: { id: 15368 }, status: 'completed', conclusion: 'success' };
 
 test('identity rejects source, repository, trigger, channel and empty check substitution', () => {
@@ -29,13 +34,14 @@ test('checks cannot pass vacuously, from another app/source or an earlier run', 
 
 function sourceApi(overrides = {}) {
   const responses = {
-    '/repos/jdorado/ez-agents/actions/runs/123': { head_sha: expected.sourceSha, event: 'push', head_branch: 'main', path: '.github/workflows/ci.yml', status: 'completed', conclusion: 'success' },
+    [runsPath]: { workflow_runs: [mainRun] },
+    [jobsPath]: { jobs: [job] },
+    [checkPath]: check,
     '/repos/jdorado/ez-agents': { full_name: expected.repository, private: false, visibility: 'public', default_branch: 'main' },
     '/repos/jdorado/ez-agents/contents/docs/plugin-catalog.md?ref=main': { content: Buffer.from('| [Plugin](https://github.com/jdorado/ez-whatsapp) | `@jc_stack/ez-whatsapp` |').toString('base64') },
     '/repos/jdorado/ez-agents/git/ref/heads/main': { object: { sha: expected.sourceSha } },
     [`/repos/jdorado/ez-agents/contents/package.json?ref=${expected.sourceSha}`]: { content: Buffer.from(JSON.stringify(manifest)).toString('base64') },
     [`/repos/jdorado/ez-agents/git/ref/tags/v${expected.version}`]: { object: { type: 'commit', sha: expected.sourceSha } },
-    [`/repos/jdorado/ez-agents/commits/${expected.sourceSha}/check-runs?per_page=100&page=1`]: { check_runs: [check] },
     ...overrides,
   };
   return async path => { assert.ok(path in responses, `Unexpected API request ${path}`); return responses[path]; };
@@ -47,7 +53,7 @@ test('source gates reject private repository, changed main, wrong tag and failed
     { '/repos/jdorado/ez-agents': { full_name: expected.repository, private: true, visibility: 'private', default_branch: 'main' } },
     { '/repos/jdorado/ez-agents/git/ref/heads/main': { object: { sha: 'b'.repeat(40) } } },
     { [`/repos/jdorado/ez-agents/git/ref/tags/v${expected.version}`]: { object: { type: 'commit', sha: 'b'.repeat(40) } } },
-    { [`/repos/jdorado/ez-agents/commits/${expected.sourceSha}/check-runs?per_page=100&page=1`]: { check_runs: [] } },
+    { [jobsPath]: { jobs: [] } },
   ]) await assert.rejects(validateSource(expected, sourceApi(override)));
   await assert.rejects(validateSource({ ...expected, repository: 'jdorado/ez-library', package: '@jc_stack/ez-library' }, async path => path.endsWith('ez-library') ? { full_name: 'jdorado/ez-library', private: false, visibility: 'public', default_branch: 'main' } : { content: Buffer.from('').toString('base64') }), /not enrolled/);
 });
@@ -129,7 +135,7 @@ test('write-started receipt precedes publication and readback records partial fa
 
 test('required check workflow must be main push CI, not a same-named alternate workflow', async () => {
   for (const changed of [{ event: 'pull_request' }, { head_branch: 'feature' }, { path: '.github/workflows/unrelated.yml' }, { conclusion: 'failure' }, { head_sha: 'b'.repeat(40) }]) {
-    await assert.rejects(validateSource(expected, sourceApi({ '/repos/jdorado/ez-agents/actions/runs/123': { head_sha: expected.sourceSha, event: 'push', head_branch: 'main', path: '.github/workflows/ci.yml', status: 'completed', conclusion: 'success', ...changed } })), /main push CI/);
+    await assert.rejects(validateSource(expected, sourceApi({ [runsPath]: { workflow_runs: [{ ...mainRun, ...changed }] } })), /main push CI/);
   }
 });
 
@@ -161,4 +167,58 @@ test('npm publication disables transport retries and scripts, using the explicit
   assert.equal(args[args.indexOf('--tag') + 1], 'latest');
   assert.equal(args[args.indexOf('--registry') + 1], 'https://registry.npmjs.org/');
   assert.notEqual(args[args.indexOf('--userconfig') + 1], args[args.indexOf('--globalconfig') + 1]);
+});
+
+
+test('newer same-SHA tag, PR and alternate workflow runs cannot shadow main CI', async () => {
+  for (const changed of [{ head_branch: 'v1.2.3-beta.1' }, { event: 'pull_request' }, { path: '.github/workflows/other.yml' }, { head_sha: 'b'.repeat(40) }]) {
+    await validateSource(expected, sourceApi({
+      [runsPath]: { workflow_runs: [mainRun, { ...mainRun, id: 124, ...changed }] },
+    }));
+  }
+});
+
+test('latest eligible main CI cannot fall back to older success or missing checks', async () => {
+  for (const changed of [{ conclusion: 'failure' }, { conclusion: 'cancelled' }, { status: 'in_progress', conclusion: null }, { status: 'queued', conclusion: null }]) {
+    await assert.rejects(validateSource(expected, sourceApi({
+      [runsPath]: { workflow_runs: [mainRun, { ...mainRun, id: 124, ...changed }] },
+    })), /main push CI/);
+  }
+  await assert.rejects(validateSource(expected, sourceApi({
+    [runsPath]: { workflow_runs: [mainRun, { ...mainRun, id: 124 }] },
+    [jobsPath.replace('/123/', '/124/')]: { jobs: [] },
+  })), /Missing or ambiguous/);
+});
+
+test('latest attempt cannot borrow successful jobs from prior attempts or runs', async () => {
+  const attemptPath = jobsPath.replace('/attempts/1/', '/attempts/2/');
+  for (const jobs of [[], [job], [{ ...job, run_attempt: 2, run_id: 124 }], [{ ...job, run_attempt: 2, head_sha: 'b'.repeat(40) }], [{ ...job, run_attempt: 2, conclusion: 'failure' }], [{ ...job, run_attempt: 2, status: 'in_progress', conclusion: null }]]) {
+    await assert.rejects(validateSource(expected, sourceApi({
+      [runsPath]: { workflow_runs: [{ ...mainRun, run_attempt: 2 }] },
+      [attemptPath]: { jobs },
+    })), /Missing or ambiguous|not successful/);
+  }
+  await validateSource(expected, sourceApi({
+    [runsPath]: { workflow_runs: [{ ...mainRun, run_attempt: 2 }] },
+    [attemptPath]: { jobs: [{ ...job, run_attempt: 2 }] },
+  }));
+});
+
+test('required job and check evidence cannot substitute repository, identity or outcomes', async () => {
+  for (const changed of [{ check_run_url: job.check_run_url.replace('jdorado/ez-agents', 'attacker/ez-agents') }, { check_run_url: job.check_run_url + '/extra' }, { check_run_url: undefined }, { conclusion: 'skipped' }]) {
+    await assert.rejects(validateSource(expected, sourceApi({ [jobsPath]: { jobs: [{ ...job, ...changed }] } })));
+  }
+  for (const changed of [{ details_url: check.details_url.replace('/123/', '/124/') }, { details_url: undefined }, { name: 'other' }, { app: { id: 1 } }, { head_sha: 'b'.repeat(40) }, { conclusion: 'failure' }]) {
+    await assert.rejects(validateSource(expected, sourceApi({ [checkPath]: { ...check, ...changed } })));
+  }
+  await assert.rejects(validateSource(expected, sourceApi({ [jobsPath]: { jobs: [job, job] } })), /ambiguous/);
+});
+
+test('workflow runs and attempt jobs are paginated before selecting required evidence', async () => {
+  await validateSource(expected, sourceApi({
+    [runsPath]: { workflow_runs: Array.from({ length: 100 }, (_, i) => ({ ...mainRun, id: i + 200, event: 'pull_request' })) },
+    [runsPath.replace('&page=1', '&page=2')]: { workflow_runs: [mainRun] },
+    [jobsPath]: { jobs: Array.from({ length: 100 }, (_, i) => ({ ...job, name: `other-${i}` })) },
+    [jobsPath.replace('&page=1', '&page=2')]: { jobs: [job] },
+  }));
 });
