@@ -262,7 +262,11 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await fs.rm(running);
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));if(j.status==='failed'||j.status==='rolled-back')throw Error(JSON.stringify(j)+first.output());return j.status==='completed';});
  const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);assert(first.p.exitCode===null);
- assert((await read(path.join(f.agent.controlDir,'update-attention.json'))).id);
+ // Completion is persisted before the supervisor publishes its attention receipt.
+ await wait(async()=>{
+  try{return (await read(path.join(f.agent.controlDir,'update-attention.json'))).id===digest(job.id);}
+  catch(error){if(error.code==='ENOENT')return false;throw error;}
+ });
  const closed=new Promise(r=>first.p.once('close',r));first.p.kill('SIGTERM');await closed;
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).packageManager.command,provider);
