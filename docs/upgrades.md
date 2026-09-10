@@ -192,3 +192,8 @@ changes also need supervisor restart and requesting-process-exit tests. Run
 `node docker/upgrade-smoke.mjs` with a local `EZ_WHATSAPP_SOURCE` containing the
 WhatsApp fixture. The smoke uses synthetic transport only. VM installation,
 agent-led upgrades, restart and real account acceptance remain separate QA gates.
+
+Beta policy discovers the newer of npm latest and the legacy beta tag. Stable-only
+policy selects non-deprecated stable versions, even when latest is a prerelease.
+No eligible version is reported as available:null with newer:false. Older installed
+updaters need an exact-version core update to adopt this discovery behavior.

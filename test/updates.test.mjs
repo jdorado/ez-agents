@@ -294,3 +294,21 @@ test('npm candidates verify exact version and integrity; automatic policy is enf
  pkg.dist.integrity='sha512-bad';await assert.rejects(prepare(f.home,'main',{release:'0.1.1'}),/integrity/);
  pkg.version='0.1.2';await assert.rejects(prepare(f.home,'main',{release:'0.1.1'}),/version mismatch/);
 });
+
+test('update discovery follows latest while preserving legacy beta and stable-only policies',async t=>{
+ const {registryCandidate}=await import('../src/updates/artifact.mjs');
+ const name='@ez-test/example',pkg=v=>({name,version:v});
+ const data={name,'dist-tags':{latest:'0.2.0-beta.2',beta:'0.2.0-beta.1'},versions:{'0.1.0':pkg('0.1.0'),'0.2.0-beta.1':pkg('0.2.0-beta.1'),'0.2.0-beta.2':pkg('0.2.0-beta.2')}};
+ const original=globalThis.fetch;globalThis.fetch=async()=>new Response(JSON.stringify(data));t.after(()=>globalThis.fetch=original);
+ assert.equal((await registryCandidate(name,'beta')).version,'0.2.0-beta.2');
+ assert.equal((await registryCandidate(name,'stable')).version,'0.1.0');
+ data['dist-tags']={latest:'0.1.0',beta:'0.2.0-beta.2'};
+ assert.equal((await registryCandidate(name,'beta')).version,'0.2.0-beta.2');
+ delete data.versions['0.1.0'];data['dist-tags']={latest:'0.2.0-beta.2'};
+ assert.equal(await registryCandidate(name,'stable'),null);
+ assert.equal((await registryCandidate(name,'beta')).version,'0.2.0-beta.2');
+ data.versions['0.2.0-beta.2'].deprecated='withdrawn';assert.equal(await registryCandidate(name,'beta'),null);
+ delete data.versions['0.2.0-beta.2'].deprecated;
+ data.versions['0.2.0-beta.2'].name='@wrong/package';await assert.rejects(registryCandidate(name,'beta'),/identity|version mismatch/i);
+ data.name='@wrong/package';await assert.rejects(registryCandidate(name,'beta'),/identity mismatch/i);
+});

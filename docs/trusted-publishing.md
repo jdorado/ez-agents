@@ -96,15 +96,17 @@ package metadata and tarball hash. It transfers the validated bytes using an
 immutable Actions artifact ID. A fresh job revalidates before publication and
 runs npm from a clean directory without package lifecycle scripts.
 
-Only `X.Y.Z-beta.N` versions and the npm `beta` tag are supported. Private
+Only `X.Y.Z-beta.N` versions are supported. Publish to npm `latest` so the
+package page and default installs show the newest approved release. Manifests
+must use `publishConfig.tag: "latest"` (or omit the tag). The version remains a
+SemVer prerelease and the GitHub release remains a prerelease. Private
 packages, wrong package/repository identities and stable versions fail before
-publication. No npm login smoke publication or stable/latest promotion occurs.
+publication. No npm login smoke publication or stable-version release occurs.
 
 ## Readback, failure and release completion
 
-The publisher reads registry metadata, checks the beta tag and downloads the
-published tarball to compare its SHA-256. It also checks that `latest` did not
-change. Preserve the workflow's readback receipt, run URL and source/artifact
+The publisher reads registry metadata, checks that `latest` identifies the released version and downloads the
+published tarball to compare its SHA-256. Preserve the workflow's readback receipt, run URL and source/artifact
 identity on the release PR. A failed command after the publish call may mean npm
 accepted it: inspect registry state first. A rerun may verify an existing exact
 version; if the version is absent it refuses a second write. Reconcile first,
@@ -117,3 +119,19 @@ artifact/checksum and verify its public availability. Perform the clean-host
 installation and runtime/provider checks required by the package's release
 rules. Actions success proves registry delivery only; it does not prove a
 running agent was upgraded. Respect each installation's saved update policy.
+
+## Migration from the legacy beta tag
+
+Existing plugin callers are SHA-pinned: regenerate each caller against the merged
+shared-publisher revision and update its package publishConfig together through
+review. Old pins retain the old behavior. Do not mutate an already staged or
+published artifact; prepare a new version when package metadata changes.
+
+The publisher uses one native npm publish operation with OIDC and `--tag latest`.
+It does not synchronize the legacy `beta` tag: npm trusted publishing does not
+support standalone dist-tag changes. No extra registry token is needed. Ez beta
+update discovery considers both latest and legacy beta during migration; stable-only
+policies select non-deprecated stable versions and cannot automatically install a
+prerelease. Older installed updaters still following only beta require an explicit
+exact-version update to a core release containing this discovery change. Existing
+registry versions/tags are not changed by merging the publisher.

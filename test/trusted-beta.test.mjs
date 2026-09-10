@@ -8,7 +8,7 @@ import { identity, sha256, validateManifest, validateReceipt, validateChecks, ta
 
 const env = { RELEASE_ID: '123', RELEASE_REPOSITORY: 'jdorado/ez-agents', RELEASE_PACKAGE: '@jc_stack/ez-agents', RELEASE_VERSION: '1.2.3-beta.1', RELEASE_SOURCE_SHA: 'a'.repeat(40), RELEASE_SHA256: sha256(Buffer.from('candidate')), RELEASE_REQUIRED_CHECKS: '["verify (22)"]', GITHUB_REPOSITORY: 'jdorado/ez-agents', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: 'a'.repeat(40) };
 const expected = identity(env);
-const manifest = { name: expected.package, version: expected.version, repository: { url: 'git+https://github.com/jdorado/ez-agents.git' }, publishConfig: { access: 'public', tag: 'beta' } };
+const manifest = { name: expected.package, version: expected.version, repository: { url: 'git+https://github.com/jdorado/ez-agents.git' }, publishConfig: { access: 'public', tag: 'latest' } };
 const receipt = { ...Object.fromEntries(['repository', 'package', 'version', 'sourceSha', 'sha256'].map(key => [key, expected[key]])), independentReviewUrl: 'https://github.com/jdorado/ez-agents/pull/41#issuecomment-123', testEvidenceUrls: ['https://github.com/jdorado/ez-agents/actions/runs/123'] };
 const check = { id: 1, details_url: 'https://github.com/jdorado/ez-agents/actions/runs/123/job/456', name: 'verify (22)', head_sha: expected.sourceSha, app: { id: 15368 }, status: 'completed', conclusion: 'success' };
 
@@ -18,7 +18,7 @@ test('identity rejects source, repository, trigger, channel and empty check subs
 
 test('manifest and receipt are bound to independent dispatch identity', () => {
   validateManifest(manifest, expected); validateReceipt(receipt, expected);
-  for (const changed of [{ name: '@jc_stack/other' }, { version: '1.2.3' }, { private: true }, { repository: 'https://github.com/attacker/repo' }, { publishConfig: { tag: 'latest' } }, { publishConfig: { access: 'restricted' } }, { publishConfig: { registry: 'https://evil.example/' } }, { publishConfig: { provenance: false } }]) assert.throws(() => validateManifest({ ...manifest, ...changed }, expected));
+  for (const changed of [{ name: '@jc_stack/other' }, { version: '1.2.3' }, { private: true }, { repository: 'https://github.com/attacker/repo' }, { publishConfig: { tag: 'beta' } }, { publishConfig: { access: 'restricted' } }, { publishConfig: { registry: 'https://evil.example/' } }, { publishConfig: { provenance: false } }]) assert.throws(() => validateManifest({ ...manifest, ...changed }, expected));
   for (const changed of [{ repository: 'jdorado/other' }, { sourceSha: 'b'.repeat(40) }, { sha256: '0'.repeat(64) }, { independentReviewUrl: 'https://evil.example/pull/1' }, { independentReviewUrl: 'https://github.com/jdorado/ez-agents/issues/1' }, { testEvidenceUrls: [] }, { testEvidenceUrls: ['https://github.com/jdorado/ez-agents/actions/runs/1/../../evil'] }]) assert.throws(() => validateReceipt({ ...receipt, ...changed }, expected));
 });
 
@@ -85,15 +85,15 @@ test('registry distinguishes missing version, absent package, server failures an
 
 test('publish writes once and reconciles a timeout using exact registry readback', async () => {
   let writes = 0; let reads = 0;
-  const result = await publishOnce(expected, { readState: async () => reads++ === 0 ? { exists: false, latest: '1.0.0' } : { exists: true, latest: '1.0.0', beta: expected.version }, publishTarball: async () => { writes++; throw new Error('timeout'); }, sleep: async () => {}, report: () => {} });
+  const result = await publishOnce(expected, { readState: async () => reads++ === 0 ? { exists: false, latest: '1.0.0' } : { exists: true, latest: expected.version, beta: 'old' }, publishTarball: async () => { writes++; throw new Error('timeout'); }, sleep: async () => {}, report: () => {} });
   assert.equal(writes, 1); assert.equal(result.status, 'published');
 });
 
 test('existing matching publication is read-only; partial or changed tag never republished', async () => {
   let writes = 0;
-  const options = { readState: async () => ({ exists: true, beta: expected.version }), publishTarball: async () => { writes++; } };
+  const options = { readState: async () => ({ exists: true, latest: expected.version }), publishTarball: async () => { writes++; } };
   assert.equal((await publishOnce(expected, options)).status, 'already-published');
-  await assert.rejects(publishOnce(expected, { ...options, readState: async () => ({ exists: true, beta: 'other' }) }), /reconcile/);
+  await assert.rejects(publishOnce(expected, { ...options, readState: async () => ({ exists: true, latest: 'other' }) }), /reconcile/);
   assert.equal(writes, 0);
   for (const after of [{ exists: true, latest: 'changed', beta: expected.version }, { exists: true, latest: '1.0.0', beta: 'other' }, { exists: false, latest: '1.0.0' }]) {
     let reads = 0;
@@ -116,7 +116,7 @@ test('workflow reruns can verify success but cannot repeat an absent-version wri
   let writes = 0;
   const options = { allowWrite: false, publishTarball: async () => { writes++; } };
   await assert.rejects(publishOnce(expected, { ...options, readState: async () => ({ exists: false }) }), /fresh authorized dispatch/);
-  assert.equal((await publishOnce(expected, { ...options, readState: async () => ({ exists: true, beta: expected.version }) })).status, 'already-published');
+  assert.equal((await publishOnce(expected, { ...options, readState: async () => ({ exists: true, latest: expected.version }) })).status, 'already-published');
   assert.equal(writes, 0);
 });
 
@@ -153,12 +153,12 @@ test('generated caller pins shared code, permits manual dispatch only and reject
   for (const invalid of [{ repository: "jdorado/repo'\nsteps:" }, { packageName: "@jc_stack/p'\nsteps:" }, { publisherSha: 'main' }, { checks: ['a\nsteps:'] }, { checks: [] }]) assert.throws(() => generateCaller({ ...config, ...invalid }));
 });
 
-test('npm publication disables transport retries and scripts, preserving explicit beta registry', async () => {
+test('npm publication disables transport retries and scripts, using the explicit latest tag', async () => {
   const { publishArguments } = await import('../scripts/trusted-beta.mjs');
   const args = publishArguments('/candidate.tgz', '/user-npmrc', '/global-npmrc');
   assert.ok(args.includes('--fetch-retries=0'));
   assert.ok(args.includes('--ignore-scripts'));
-  assert.equal(args[args.indexOf('--tag') + 1], 'beta');
+  assert.equal(args[args.indexOf('--tag') + 1], 'latest');
   assert.equal(args[args.indexOf('--registry') + 1], 'https://registry.npmjs.org/');
   assert.notEqual(args[args.indexOf('--userconfig') + 1], args[args.indexOf('--globalconfig') + 1]);
 });
