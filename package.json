@@ -47,7 +47,8 @@
     "test",
     "tsconfig.json",
     "scripts/assert-local-registry.mjs",
-    ".dockerignore"
+    ".dockerignore",
+    "scripts/smoke-busy-reply.ts"
   ],
   "publishConfig": {
     "access": "public",
