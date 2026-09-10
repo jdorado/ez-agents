@@ -100,11 +100,13 @@ export class InboxStore {
         this.now() - first.receivedAt < 30000
       )
         return
-      const boundary = state.waiting.findIndex((e) => JSON.stringify(e.execution) !== JSON.stringify(first.execution))
+      const chatId = (update: Update) => update.message?.chat.id ?? update.callback_query?.message?.chat.id
+      const boundary = state.waiting.findIndex((e) => JSON.stringify(e.execution) !== JSON.stringify(first.execution) || chatId(e.update) !== chatId(first.update))
       const entries = state.waiting.splice(0, boundary < 0 ? 10 : Math.min(10, boundary))
       // Telegram albums contain at most ten items. Don't split one at the batch boundary.
       const album = entries.at(-1)?.update.message?.media_group_id
       while (album && state.waiting[0]?.update.message?.media_group_id === album &&
+        chatId(state.waiting[0].update) === chatId(first.update) &&
         JSON.stringify(state.waiting[0].execution) === JSON.stringify(first.execution))
         entries.push(state.waiting.shift()!)
       const batch: InboxBatch = { id: `tg_${first.update.update_id}`, entries, status: 'pending' }

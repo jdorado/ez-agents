@@ -142,7 +142,7 @@ test('real Telegram handlers never launch for first DM, another sender, group, o
     await control.approveOwner(101)
     calls.length = 0
     await relay.bot.handleUpdate(message(202))
-    await relay.bot.handleUpdate(message(101, true))
+    await relay.bot.handleUpdate(message(202, true))
     assert.deepEqual(calls, [])
     const original = message(101).message!
     await relay.bot.handleUpdate({
