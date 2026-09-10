@@ -1,3 +1,4 @@
+import { agentGuidance } from './agent-guidance.js'
 import { executionDefaults } from './model-policy.js'
 import { parallelReplyHistory } from './reply-context.js'
 import { startReplyExecutor } from './reply-executor.js'
@@ -77,6 +78,8 @@ export const executorJobPrompt = (
   eventSource?: string,
   repairs = true,
 ): string => `You are the worker for run ${runId}.
+
+${agentGuidance()}
 
 Your current directory is the agent's persistent workspace. Read AGENTS.md
 and follow its workspace reading guidance before acting. Save useful work

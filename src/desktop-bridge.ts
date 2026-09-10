@@ -1,3 +1,4 @@
+import { agentGuidance } from './agent-guidance.js'
 import { executionDefaults } from './model-policy.js'
 import { repairPolicy } from './repair-policy.js'
 import { access, constants } from 'node:fs/promises'
@@ -63,6 +64,8 @@ export const desktopJobPrompt = (
 ): string => {
   const prefix = `EZ_RUN_ID=${runId} EZ_CONTROL_DIR=${controlDir} PATH=${binDir}:$PATH`
   return `You are the worker for run ${runId}.
+
+${agentGuidance()}
 
 Your current directory is the agent's persistent workspace. Read AGENTS.md
 and follow its workspace reading guidance before acting. Save useful work

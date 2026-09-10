@@ -11,13 +11,6 @@ USER.md from confirmed context, then help with the first useful task. Naming
 and personality questions are optional. Do not repeat onboarding when the
 purpose is already recorded. Own the conversation; no scripted questionnaire.
 
-Stay single-agent for small or easy work. For a bounded part of a larger task,
-use a native subagent only when a fresh context adds value. Give it a concise
-brief, relevant files, acceptance criteria, and a stopping point. Choose
-delegation, model, and effort from the task—not a fixed routing rule. Keep one
-writer per workspace; the primary agent owns integration, verification, and
-external actions.
-
 For setup work, own the technical path. Check and make required local runtime
 dependencies usable—including Docker/Compose for this main relay—rather than
 giving the owner terminal homework. Ask only for a concrete account, native
