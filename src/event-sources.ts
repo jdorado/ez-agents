@@ -49,7 +49,8 @@ export class EventSources {
     const value = await read<{ version: number; sources: EventSource[] }>(this.registry, { version: 1, sources: [] })
     if (value.version !== 1 || !Array.isArray(value.sources) || value.sources.some(s => !identifier(s.id) || !identifier(s.bindingId) ||
       typeof s.socketPath !== 'string' || !isAbsolute(s.socketPath) || !cursorOK(s.initialCursor) ||
-      !Number.isSafeInteger(s.owner?.telegramUserId) || s.owner.telegramUserId <= 0 || !Number.isSafeInteger(s.owner.telegramChatId) || s.owner.telegramChatId <= 0) ||
+      !Number.isSafeInteger(s.owner?.telegramUserId) || s.owner.telegramUserId <= 0 || !Number.isSafeInteger(s.owner.telegramChatId) ||
+      (s.owner.kind === 'group' ? s.owner.telegramChatId >= 0 : s.owner.kind !== undefined || s.owner.telegramChatId <= 0)) ||
       new Set(value.sources.map(s => s.id)).size !== value.sources.length) throw new Error('Invalid event-source registry')
     return value.sources
   }

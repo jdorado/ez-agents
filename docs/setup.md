@@ -1,5 +1,27 @@
 # Agent-led setup
 
+## A group as owner
+
+An installer can explicitly approve one Telegram group as the agent's owner.
+Every human member in that group then has owner access, including settings,
+approvals and scheduling. The conversation and replies are shared in that group.
+New members inherit this access. Bots and anonymous sender-chat posts are ignored.
+
+Add the bot to the intended group and send it a message addressed to its username.
+`ezenciel-agents-owner status` shows the pending group title and negative chat ID;
+verify the exact group with the installer, then run
+`ezenciel-agents-owner approve-group <negative-chat-id>`. Pairing never happens
+automatically. The existing `approve <user-id>` command approves DMs only.
+An existing owner must be explicitly revoked before replacement; use a fresh
+deployment when its existing workspace contains information unsuitable for the group.
+
+Make the bot a group admin so Telegram delivers ordinary member messages and
+allows membership verification for approval and control buttons. Group ownership only authorizes
+the exact approved chat, not other groups or members' private DMs. Telegram group
+migration to a new chat ID requires a new explicit binding. Verify a real group
+reply before considering setup complete. All other groups retain their existing
+restricted conversation-grant behavior.
+
 Ez supports two independent, composable uses: an autonomous Telegram agent and
 workspace-scoped plugins called by your existing local CLI/GUI executor.
 For CLI-only requests, follow [standalone setup](standalone-cli.md): no Telegram
