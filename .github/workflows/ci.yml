@@ -24,7 +24,20 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Ensure ffmpeg is available
+        shell: bash
+        run: |
+          if command -v ffmpeg >/dev/null 2>&1; then
+            ffmpeg -version
+            exit 0
+          fi
+          # Ubuntu runners include unrelated vendor feeds. Refresh only the
+          # signed Ubuntu source needed for ffmpeg, preserving apt verification.
+          ubuntu_sources=/etc/apt/sources.list.d/ubuntu.sources
+          test -s "$ubuntu_sources"
+          apt_options=(-o "Dir::Etc::sourcelist=$ubuntu_sources" -o "Dir::Etc::sourceparts=-")
+          sudo apt-get "${apt_options[@]}" update
+          sudo apt-get "${apt_options[@]}" install --no-install-recommends -y ffmpeg
       - run: pnpm verify
       - run: npm run release:check
       - run: git diff --check

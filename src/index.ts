@@ -159,6 +159,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         return
       }
       try {
+        const launchStarted = performance.now()
         const started = await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
         if (!started.execution && !run.taskId) throw new Error('Legacy queued work has no pinned AI. Resend the request after /new.')
         const session = run.external || run.taskId || run.scheduled
@@ -174,11 +175,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           cli: selected.cli,
           model: selected.model,
           effort: selected.effort,
+          codexAutoCompactTokens: config.codexAutoCompactTokens,
           sessionId: session.nativeSessionId || session.sessionId,
           isResume: session.hasStarted,
           eventSource: run.external?.sourceId,
           onSession: run.scheduled ? async (id) => { await runs.patch(run.id,{nativeSessionId:id}) } : run.external || run.taskId ? undefined : (id) => control.saveNativeSession(session.sessionId, id),
         })
+        const executionStarted = performance.now()
+        console.info('run timing', { run_id: run.id, phase: 'launch',
+          queue_ms: Math.max(0, Date.parse(started.startedAt!) - Date.parse(run.createdAt)),
+          startup_ms: Math.round(executionStarted - launchStarted), resumed: session.hasStarted })
         if (run.scheduled) background.set(run.id,child)
         else activeChild = child
         const finished = new Promise<number | null>((resolve) => {
@@ -203,6 +209,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (chunk.trim()) console.error('executor stderr', started.id, chunk.trim())
         })
         void finished.then((code) => {
+          console.info('run timing', { run_id: run.id, phase: 'execution',
+            execution_ms: Math.round(performance.now() - executionStarted), exit_code: code })
           void (async () => {
             await withStartLock(async () => {
               try {
@@ -385,6 +393,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         if (onlyRunId && item.runId !== onlyRunId) continue
         const claimed = await runs.claimOutbox(item.id)
         if (!claimed) continue
+        const deliveryStarted = performance.now()
         let attemptedDelivery = false
         try {
           const replyParams = item.replyToMessageId
@@ -453,6 +462,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             console.info('run message sent', { run_id: item.runId, outbox_id: item.id, message_ids: ids })
           } else throw new Error('Outbox item has no supported payload')
           await runs.markOutboxSent(item.id, receiptIds)
+          console.info('run timing', { run_id: item.runId, outbox_id: item.id, phase: 'delivery',
+            delivery_processing_ms: Math.round(performance.now() - deliveryStarted),
+            run_to_delivery_ms: Math.max(0, Date.now() - Date.parse(origin.createdAt)) })
         } catch (error) {
           console.error('outbox item processing failed', item.id, safeError(error))
           await runs.failOutbox(

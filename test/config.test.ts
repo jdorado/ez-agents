@@ -30,3 +30,10 @@ test('loads executor CLI configuration with agy fallback', () => {
   const customConfig = loadConfig({ TELEGRAM_BOT_TOKEN: 'test', EZ_EXECUTOR_CLI: 'claude' })
   assert.equal(customConfig.executorCli, 'claude')
 })
+
+test('Codex context limit is configurable and rejects invalid values', () => {
+  assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test'}).codexAutoCompactTokens,64000)
+  assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test',EZ_CODEX_AUTO_COMPACT_TOKENS:'32000'}).codexAutoCompactTokens,32000)
+  for(const value of ['0','-1','bad','1.5','9007199254740992'])
+    assert.throws(()=>loadConfig({TELEGRAM_BOT_TOKEN:'test',EZ_CODEX_AUTO_COMPACT_TOKENS:value}),/positive integer/)
+})

@@ -10,6 +10,7 @@ export type Config = ControlConfig & {
   telegramBotToken: string
   workspace: string
   executorTimeoutMs: number
+  codexAutoCompactTokens?: number
   executorCli: string
   channelBackendUrl?: string
   channelBackendToken?: string
@@ -20,7 +21,7 @@ export type Config = ControlConfig & {
 const positiveInteger = (value: string | undefined, name: string, fallback: number): number => {
   if (!value) return fallback
   const parsed = Number(value)
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${name} must be a positive integer`)
   }
   return parsed
@@ -44,6 +45,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     telegramBotToken,
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
     executorTimeoutMs: 0,
+    codexAutoCompactTokens: positiveInteger(env.EZ_CODEX_AUTO_COMPACT_TOKENS, 'EZ_CODEX_AUTO_COMPACT_TOKENS', 64000),
     executorCli: env.EZ_EXECUTOR_CLI?.trim() || 'agy',
     channelBackendUrl: env.EZ_CHANNEL_BACKEND_URL?.trim(),
     channelBackendToken: env.EZ_CHANNEL_BACKEND_TOKEN?.trim(),

@@ -1,7 +1,7 @@
 import { ownerRun } from './helpers/owner-run.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, readFile, writeFile, rm, realpath } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, realpath, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { serveHostExecutor } from '../src/host-executor.js'
@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { isHostRunId } from '../src/host-executor-protocol.js'
 import { EXECUTOR_REGISTRY } from '../src/executor.js'
+import { RunStore } from '../src/runs.js'
 import { packageVersion } from '../src/version.js'
 
 test('one installed CLI executes two agent bindings with separate minds and sanitized environment', async () => {
@@ -27,12 +28,14 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     EXECUTOR_REGISTRY.grok.command=binary
     EXECUTOR_REGISTRY.grok.buildArgs=EXECUTOR_REGISTRY.codex.buildArgs
     process.env.TELEGRAM_BOT_TOKEN='must-not-reach-host-cli'
+    const sharedAlias=path.join(root,'shared-alias')
+    await symlink(root,sharedAlias)
     const agents=await Promise.all(['one','two'].map(async name=>{
       const workspace=path.join(root,name,'mind'),controlDir=path.join(root,name,'control')
       await mkdir(workspace,{recursive:true});await mkdir(controlDir,{recursive:true})
       const toolsHome=path.join(root,name,'tools');await mkdir(toolsHome)
       await writeFile(path.join(toolsHome,'config.json'),JSON.stringify({schemaVersion:1,workspace:await realpath(workspace)}))
-      return {name,workspace,controlDir,binDir:path.join(root,'bin'),toolsHome}
+      return {name,workspace,controlDir,binDir:path.join(root,'bin'),toolsHome,sharedWorkspace:name==='two'?sharedAlias:root}
     }))
     server=serveHostExecutor({cli:'grok',agents},abort.signal)
     for(const agent of agents){
@@ -52,6 +55,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       assert.equal(result.control,agent.controlDir)
       assert.equal(result.token,undefined)
       assert.ok(result.args.includes(agent.toolsHome))
+      assert.ok(result.args.includes(await realpath(root)))
       assert.ok(!result.args.includes('/wrong'))
       assert.equal(result.home,process.env.HOME)
     }
@@ -62,9 +66,10 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     let stdout='',stderr=''
     client.stdout.on('data',chunk=>stdout+=chunk)
     client.stderr.on('data',chunk=>stderr+=chunk)
-    client.stdin.end(JSON.stringify({texts:['Telegram message'],options:{cli:'grok',timeoutMs:5000}}))
+    client.stdin.end(JSON.stringify({texts:['Telegram message'],options:{cli:'grok',timeoutMs:5000,codexAutoCompactTokens:32000}}))
     assert.equal(await new Promise(resolve=>client.once('close',resolve)),0,stderr)
     assert.equal(JSON.parse(stdout).run,'tg_6293305')
+    assert.ok(JSON.parse(stdout).args.includes('model_auto_compact_token_limit=32000'))
     const eventId='event_'+'a'.repeat(64)
     await ownerRun(agents[0].controlDir, eventId, {sourceId:'fixture',bindingId:'binding',eventIds:['1']})
     const eventClient=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),agents[0].controlDir,eventId],{stdio:['pipe','pipe','pipe']})
@@ -88,14 +93,23 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     const submit=async(id:string)=>{await ownerRun(agents[0].controlDir,id);await writeFile(path.join(directory,id+'.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok',timeoutMs:5000}}))}
     await submit('r_hold')
     for(let n=0;n<100;n++){try{await readFile(path.join(directory,'r_hold.process.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
-    await submit('r_queued')
+    await new RunStore(agents[0].controlDir).create({id:'r_schedule_queued',chatId:101,telegramUserId:101,texts:['test'],scheduled:{id:'shared',revision:'v1',dueAt:new Date().toISOString(),pairedAt:new Date().toISOString()}})
+    await new RunStore(agents[0].controlDir).patch('r_schedule_queued',{status:'running'})
+    await writeFile(path.join(directory,'r_schedule_queued.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok',sharedWorkspace:'/wrong'}}))
+    const otherDirectory=path.join(agents[1].controlDir,'host-executor')
+    await ownerRun(agents[1].controlDir,'r_other_shared')
+    await writeFile(path.join(otherDirectory,'r_other_shared.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok'}}))
     await new Promise(r=>setTimeout(r,350))
-    await assert.rejects(readFile(path.join(directory,'r_queued.running.json')),{code:'ENOENT'})
+    await assert.rejects(readFile(path.join(directory,'r_schedule_queued.running.json')),{code:'ENOENT'})
+    await assert.rejects(readFile(path.join(otherDirectory,'r_other_shared.running.json')),{code:'ENOENT'})
+    await assert.rejects(readFile(path.join(otherDirectory,'r_other_shared.events')),{code:'ENOENT'})
     await writeFile(path.join(directory,'r_hold.cancel'),'')
     let output=''
-    for(let n=0;n<200;n++){try{output=await readFile(path.join(directory,'r_queued.events'),'utf8');if(output.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
+    for(let n=0;n<200;n++){try{output=await readFile(path.join(directory,'r_schedule_queued.events'),'utf8');if(output.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
     assert.match(output, /"stream":"exit","code":0/)
     assert.match(await readFile(path.join(directory,'r_hold.events'),'utf8'), /"stream":"exit","code":1/)
+    for(let n=0;n<200;n++){try{output=await readFile(path.join(otherDirectory,'r_other_shared.events'),'utf8');if(output.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
+    assert.match(output, /"stream":"exit","code":0/)
   } finally {
     abort.abort();await server
     EXECUTOR_REGISTRY.grok.command=old
