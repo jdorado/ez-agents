@@ -66,9 +66,10 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     let stdout='',stderr=''
     client.stdout.on('data',chunk=>stdout+=chunk)
     client.stderr.on('data',chunk=>stderr+=chunk)
-    client.stdin.end(JSON.stringify({texts:['Telegram message'],options:{cli:'grok',timeoutMs:5000}}))
+    client.stdin.end(JSON.stringify({texts:['Telegram message'],options:{cli:'grok',timeoutMs:5000,codexAutoCompactTokens:32000}}))
     assert.equal(await new Promise(resolve=>client.once('close',resolve)),0,stderr)
     assert.equal(JSON.parse(stdout).run,'tg_6293305')
+    assert.ok(JSON.parse(stdout).args.includes('model_auto_compact_token_limit=32000'))
     const eventId='event_'+'a'.repeat(64)
     await ownerRun(agents[0].controlDir, eventId, {sourceId:'fixture',bindingId:'binding',eventIds:['1']})
     const eventClient=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),agents[0].controlDir,eventId],{stdio:['pipe','pipe','pipe']})
