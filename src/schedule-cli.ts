@@ -7,6 +7,7 @@ import { ControlStore } from './control-state.js'
 import { RunStore } from './runs.js'
 import { initialPreset } from './ai.js'
 import { Scheduler } from './scheduler.js'
+import { ownsRun } from './identity.js'
 import { nextOccurrence, type Trigger } from './schedule-time.js'
 
 async function main() {
@@ -33,10 +34,10 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
   const runs=new RunStore(config.controlDir), scheduler=new Scheduler(config.controlDir)
   const caller=process.env.EZ_RUN_ID ? await runs.get(process.env.EZ_RUN_ID) : null
   if(process.env.EZ_RUN_ID && (!caller || caller.status!=='running' || caller.external || caller.taskId || caller.replyOnly ||
-    caller.telegramUserId!==owner.telegramUserId || caller.chatId!==owner.telegramChatId ||
+    !ownsRun(owner, caller) ||
     (caller.scheduled && caller.scheduled.pairedAt!==owner.pairedAt)))throw new Error('Scheduling requires an active owner-authorized run')
   const owned=(s:{owner:typeof owner})=>s.owner.telegramUserId===owner.telegramUserId && s.owner.telegramChatId===owner.telegramChatId && s.owner.pairedAt===owner.pairedAt
-  const ownsRun=(r:Awaited<ReturnType<RunStore['get']>>)=>r && r.telegramUserId===owner.telegramUserId && r.chatId===owner.telegramChatId && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt)
+  const ownsFailureRun=(r:Awaited<ReturnType<RunStore['get']>>)=>r && ownsRun(owner,r) && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt)
   const show=async(s:Awaited<ReturnType<Scheduler['get']>>)=>{
     const interruptedRunIds=(await runs.list()).filter(r=>r.scheduled?.id===s.id && r.scheduled.revision===s.revision && r.interrupted).map(r=>r.id)
     const next=s.enabled && !interruptedRunIds.length ? nextOccurrence(s.trigger,Date.now()) : null
@@ -46,12 +47,12 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
   if(action==='failures'){
     const limit=Number(v.limit || 20)
     if(!Number.isSafeInteger(limit) || limit<1 || limit>100)throw new Error('Limit must be 1..100')
-    const matches=(await runs.list()).filter(r=>ownsRun(r) && (v.all ? r.status==='failed' : needsFailureReview(r)))
+    const matches=(await runs.list()).filter(r=>ownsFailureRun(r) && (v.all ? r.status==='failed' : needsFailureReview(r)))
     result={total:matches.length,runs:matches.slice(0,limit).map(r=>({id:r.id,schedule:r.scheduled?.id,failedAt:failureStamp(r),exitCode:r.exitCode,reason:r.failureReason,nativeSessionId:r.nativeSessionId,failure:r.failure,review:r.failureReview}))}
   }else if(action==='run' || action==='review'){
     if(!id)throw new Error('Run ID required')
     const run=await runs.get(id)
-    if(!ownsRun(run))throw new Error('Unknown owner run')
+    if(!ownsFailureRun(run))throw new Error('Unknown owner run')
     if(action==='run')result=run
     else {
       if(!v.diagnosis || !v.recovery || !v.outcome || !v['failed-at'] || !['resolved','attention'].includes(v.status || ''))throw new Error('Review requires --failed-at, --status resolved|attention, --diagnosis, --recovery and --outcome')

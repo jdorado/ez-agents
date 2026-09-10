@@ -103,3 +103,25 @@ test('failure capture, diagnosis, verified recovery and conditional quiet next t
   assert.equal(needsFailureReview((await runs.get('tg_11'))!),false)
  }finally{await relay.stop();for(const child of children)child.kill();await rm(dir,{recursive:true,force:true})}
 })
+
+
+test('group members can inspect failures and wake review without exposing other chats', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'ez-group-failure-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const runs=new RunStore(dir),control=new ControlStore(dir,900000),scheduler=new Scheduler(dir)
+ await control.requestPairing(101,-123,'Fixture');const owner=await control.approveOwner(-123,true)
+ const execution=await control.captureChoice(initialPreset('grok'))
+ await runs.create({id:'tg_1',chatId:-123,telegramUserId:202,texts:['failed'],execution})
+ await runs.patch('tg_1',{status:'failed',endedAt:new Date().toISOString()})
+ await runs.create({id:'tg_2',chatId:-124,telegramUserId:202,texts:['private'],execution})
+ await runs.patch('tg_2',{status:'failed'})
+ await runs.create({id:'tg_3',chatId:-123,telegramUserId:303,texts:['review'],execution})
+ await runs.patch('tg_3',{status:'running'})
+ const env={...process.env,EZ_CONTROL_DIR:dir,EZ_EXECUTOR_CLI:'grok',EZ_RUN_ID:'tg_3'}
+ const result=JSON.parse((await exec(process.execPath,[bin,'failures'],{env})).stdout)
+ assert.deepEqual(result.runs.map((r:any)=>r.id),['tg_1'])
+ const at=Date.now()+1000
+ await scheduler.save({id:'review',name:'Review',text:'Review failures',trigger:{at:new Date(at).toISOString()},when:'unreviewed-failures',enabled:true,owner,execution})
+ await scheduler.tick(owner,runs,at)
+ assert.equal((await runs.list()).filter(r=>r.scheduled).length,1)
+ await assert.rejects(exec(process.execPath,[bin,'run','tg_2'],{env}),/Unknown owner/)
+})

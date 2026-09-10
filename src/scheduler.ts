@@ -2,7 +2,8 @@ import { needsFailureReview } from './failure.js'
 import { mkdir, readFile, readdir, writeFile, rename, link, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { assertId } from './identity.js'
+import type { Owner } from './control-state.js'
+import { assertId, ownsRun } from './identity.js'
 import { type ExecutionChoice, isExecutionChoice } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
 import { RunStore, type RunRecord } from './runs.js'
@@ -10,7 +11,7 @@ import { RunStore, type RunRecord } from './runs.js'
 export type Schedule = {
   when?: 'unreviewed-failures'
   version: 1; id: string; revision: string; name: string; text: string; trigger: Trigger; enabled: boolean
-  owner: { telegramUserId: number; telegramChatId: number; pairedAt: string }; execution: ExecutionChoice
+  owner: Owner; execution: ExecutionChoice
 }
 export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string }
 export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
@@ -113,7 +114,7 @@ export class Scheduler {
         if ((await runs.list()).some(r => r.scheduled?.id === s.id &&
           (['queued','running'].includes(r.status) || (r.interrupted && r.scheduled.revision === s.revision)))) continue
         const future = nextOccurrence(s.trigger,now)
-        if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && r.chatId === owner.telegramChatId && r.telegramUserId === owner.telegramUserId && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
+        if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && ownsRun(owner, r) && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
           await atomic(cursor,{next:future}); continue
         }
         await runs.create({id:scheduledRunId(s,next),chatId:s.owner.telegramChatId,
