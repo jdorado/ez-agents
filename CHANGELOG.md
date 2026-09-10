@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.18
+
+- Await complete relay cleanup after fatal Telegram polling errors and preserve the primary failure.
+- Refresh package-owned shared guidance in owner worker prompts, including resumed and scheduled work, while preserving personal workspace instructions and restricted worker boundaries.
+- Include the reviewed beta.17 fixes. Earlier immutable unpublished candidates and existing beta acceptance limits remain.
+
 ## 0.1.0-beta.17
 
 - Capture executor stderr before asynchronous PID persistence so fast failures retain actionable, redacted diagnostic evidence for agent-owned recovery.
