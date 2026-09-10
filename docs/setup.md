@@ -52,6 +52,11 @@ owner request for standalone plugin development is a separate workflow.
 
 ## Defaults and host prerequisites
 
+New agents using `codex` or `codex-gui` start with `gpt-5.6-terra` and `high`
+reasoning, including when initialized with `ezenciel-agents-setup init`. This
+Ez default takes precedence over discovered host client defaults. Saved agent
+selections are preserved; use the AI settings to choose another model or effort.
+
 Use the existing owner's host account. Unless a layout was supplied, use
 `${XDG_DATA_HOME:-$HOME/.local/share}/ez/packages/<version>/` for extracted main
 packages and `${XDG_DATA_HOME:-$HOME/.local/share}/ez/agents/` for private deployments.

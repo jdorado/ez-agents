@@ -64,13 +64,13 @@ test('missing clients are excluded; unavailable metadata stays client default', 
 })
 
 test('status projects the native client default without pinning the seed', () => {
-  const initial = initialPreset('codex')
+  const initial = { ...initialPreset('codex'), model: undefined, effort: undefined }
   const discovered = { id: 'detected_codex', name: 'codex · fixture', cli: 'codex', model: 'fixture-codex', effort: 'medium' }
   assert.deepEqual(statusPreset(initial, [discovered]), discovered)
   assert.deepEqual(statusPreset({ ...initial, id: 'detected_empty' }, [discovered]), discovered)
   const explicit = { ...discovered, id: 'saved', model: 'chosen-codex', effort: 'high' }
   assert.equal(statusPreset(explicit, [discovered]), explicit)
-  assert.equal(statusPreset(initialPreset('codex-gui'), [{ ...discovered, cli: 'codex-gui' }]).model, undefined)
+  assert.equal(statusPreset(initialPreset('codex-gui'), [{ ...discovered, cli: 'codex-gui' }]).model, 'gpt-5.6-terra')
 })
 
 test('seed uses the configured executor; repeated refresh preserves current/default and queued snapshots', async () => {

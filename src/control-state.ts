@@ -270,7 +270,8 @@ export class ControlStore {
     if (!discovered.every(isPreset)) throw new Error('Invalid discovered AI settings')
     await this.withLock(async () => {
       const state = await this.readState()
-      const first = discovered.find((p) => p.cli === initial.cli) ?? initial
+      const first = initial.cli === 'codex' || initial.cli === 'codex-gui'
+        ? initial : discovered.find((p) => p.cli === initial.cli) ?? initial
       state.ai ??= { presets: [first], defaultId: first.id, selectedId: first.id }
       const ai = state.ai
       // Refresh discovery entries, but never rewrite an active/default or user-saved choice.
