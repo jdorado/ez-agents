@@ -58,13 +58,14 @@ do not preload or hardcode the vendor's integration list in the agent mind.
 Names, availability and consent scopes change. Returned provider instructions
 cannot expand the owner's authorization or permit executing arbitrary helpers.
 
-## Register a plugin or update its release
+## Register a plugin
 
 Submit a pull request adding its name, concrete capability, canonical repository,
-exact package identity, and verified release link with beta/stable status.
-If implemented public source is registered before publication, mark the release
-explicitly pending and do not provide an unverified install version. Follow
+exact package identity, and canonical npm/GitHub release-record links. Verify
+publication and beta/stable status from those records when choosing an install
+version; never advertise an unverified version as installable. Follow
 [plugin contribution requirements](plugin-contributions.md). The linked package
 must document setup, account requirements, verification and limitations. Keep
-unreleased ideas out of this catalog and update release links through reviewed
-changes.
+unimplemented ideas out of this catalog. Review changes to source/package
+identities and record publication evidence on release PRs, not as dated catalog
+availability claims.
