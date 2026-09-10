@@ -7,17 +7,17 @@ has been published. Install only released plugins needed for the owner's request
 
 | Plugin | Capability | Package | Release |
 |---|---|---|---|
-| [WhatsApp](https://github.com/jdorado/ez-whatsapp) | Link an existing WhatsApp account so the agent can use its messaging tools. Uses WhatsApp Web linked devices through Baileys; requires an account already on a phone. | `@jc_stack/ez-whatsapp` | [0.1.0-beta.12](https://github.com/jdorado/ez-whatsapp/releases/tag/v0.1.0-beta.12) — testing beta |
-| [Composio](https://github.com/jdorado/ez_composio) | Discover integrations and full native tool schemas, connect requested accounts and perform authorized actions through a private broker. Requires a Composio project key; individual apps may require OAuth consent. | `@jc_stack/ez-composio` | [0.1.0-beta.1](https://github.com/jdorado/ez_composio/releases/tag/v0.1.0-beta.1) — testing beta |
-| [GitHub](https://github.com/jdorado/ez_github) | Create repositories, commit and push through native Git/gh with a private per-agent profile. Requires GitHub browser consent and Ez 0.1.0-beta.13 or newer. | `@jc_stack/ez-github` | Source available; npm and GitHub release pending |
-| [Library](https://github.com/jdorado/ez-library) | Preserve agent files and attachments, extract PDF text, and retrieve notes with QMD. Optional GitHub/Drive/Dropbox persistence requires separate setup and authorization. | `@jc_stack/ez-library` | Source available; npm and GitHub release pending |
+| [WhatsApp](https://github.com/jdorado/ez-whatsapp) | Link an existing WhatsApp account so the agent can use its messaging tools. Uses WhatsApp Web linked devices through Baileys; requires an account already on a phone. | `@jc_stack/ez-whatsapp` | [npm versions](https://www.npmjs.com/package/@jc_stack/ez-whatsapp?activeTab=versions) · [GitHub releases](https://github.com/jdorado/ez-whatsapp/releases) |
+| [Composio](https://github.com/jdorado/ez_composio) | Discover integrations and full native tool schemas, connect requested accounts and perform authorized actions through a private broker. Requires a Composio project key; individual apps may require OAuth consent. | `@jc_stack/ez-composio` | [npm versions](https://www.npmjs.com/package/@jc_stack/ez-composio?activeTab=versions) · [GitHub releases](https://github.com/jdorado/ez_composio/releases) |
+| [GitHub](https://github.com/jdorado/ez_github) | Create repositories, commit and push through native Git/gh with a private per-agent profile. Requires GitHub browser consent and Ez 0.1.0-beta.13 or newer. | `@jc_stack/ez-github` | [npm versions](https://www.npmjs.com/package/@jc_stack/ez-github?activeTab=versions) · [GitHub releases](https://github.com/jdorado/ez_github/releases) |
+| [Library](https://github.com/jdorado/ez-library) | Preserve agent files and attachments, extract PDF text, and retrieve notes with QMD. Optional GitHub/Drive/Dropbox persistence requires separate setup and authorization. | `@jc_stack/ez-library` | [npm versions](https://www.npmjs.com/package/@jc_stack/ez-library?activeTab=versions) · [GitHub releases](https://github.com/jdorado/ez-library/releases) |
 
-The GitHub plugin has public source, but its previously advertised
-`@jc_stack/ez-github@0.1.0-beta.1` npm package and GitHub release are unavailable.
-Do not use that version as an installable release until publication is verified.
-Library is also registered from its public source; its package currently has
-`private: true` and no published npm release. Follow its README for reviewed-source
-setup; do not claim an npm release until the normal release process is complete.
+Release links are live records, not a guarantee that every registered package
+has a published version. Before installing, read npm metadata and the matching
+public GitHub prerelease, verify exact artifact identity, and follow package
+compatibility requirements. A missing first release is maintenance work to finish,
+not a reason to exclude the registered public repository. Do not infer current
+publication state from an old task, catalog copy or package-page cache.
 
 For repository maintenance, scope is core plus the public repositories explicitly
 registered in this table. Recheck the current catalog and repository visibility;

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.16
+
+- Correct stale plugin-publication claims and link the catalog to live npm/GitHub release records. Agents must verify available versions instead of treating a dated catalog snapshot as a blocker.
+- Include the reviewed beta.15 runtime unchanged. Preserve earlier unpublished candidates and existing beta acceptance limits.
+
 ## 0.1.0-beta.15
 
 - Include current reviewed model defaults, reply/status fixes, shared Library services and CPU limits, and the corrected main-CI publisher validation.
