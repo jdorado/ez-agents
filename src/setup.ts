@@ -146,7 +146,8 @@ export const runCli = async (): Promise<void> => {
     const created = await initializeWorkspace(workspace)
     const config = loadControlConfig()
     await new ControlStore(config.controlDir, config.pairingTtlMs).syncClientPresets(
-      initialPreset(await readActiveExecutor(envFilePath)), await discoverDefaults(workspace))
+      initialPreset(await readActiveExecutor(envFilePath)), await discoverDefaults(workspace,
+        { codexHome: path.join(config.controlDir, 'cli', 'codex') }))
     console.log(JSON.stringify({ workspace, created }))
     return
   }
