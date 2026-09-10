@@ -66,6 +66,8 @@ worker cleanup plus in-flight task/outbox writes before exit. A conflict still
 requires the operator to stop the competing bot poller; the relay does not retry
 around that ownership error. Pending and uncertain deliveries keep their existing
 outbox/receipt semantics; executor stdout is not replayed as a reply.
+Signal and fatal-error paths share one shutdown; a secondary cleanup error is
+reported without replacing the original startup/polling failure.
 
 The separate `control-state.lock` serializes authority JSON updates across CLI
 processes. A forced kill or host crash can orphan this exclusive-create sentinel.

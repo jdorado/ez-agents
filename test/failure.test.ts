@@ -13,6 +13,7 @@ import { ControlStore } from '../src/control-state.js'
 import { Scheduler } from '../src/scheduler.js'
 import { initialPreset } from '../src/ai.js'
 import { createRelay } from '../src/index.js'
+import { TelegramSource } from '../src/telegram-source.js'
 import { packageVersion } from '../src/version.js'
 import type { Update } from 'grammy/types'
 const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
@@ -136,7 +137,7 @@ test('relay shutdown waits for executor cleanup and final run state', async () =
  } finally {release();await relay.stop();await rm(dir,{recursive:true,force:true})}
 })
 
-test('fatal polling conflict waits for worker and authority cleanup without retrying', async () => {
+for (const cleanupFails of [false,true]) test(`fatal polling conflict waits for shared shutdown without retrying (cleanup fails: ${cleanupFails})`, async t => {
  const dir=await mkdtemp(join(tmpdir(),'ez-polling-conflict-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
  let release!:()=>void,entered!:()=>void,releaseDelivery!:()=>void,sending!:()=>void,child:ReturnType<typeof spawn>|undefined,polls=0
  const gate=new Promise<void>(resolve=>{release=resolve}),cleaning=new Promise<void>(resolve=>{entered=resolve})
@@ -145,6 +146,12 @@ test('fatal polling conflict waits for worker and authority cleanup without retr
   child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:['pipe','pipe','pipe']})
   await once(child,'spawn')
   return {child,cleanup:async()=>{entered();await gate;await control.status()},stdout:''}
+ })
+ const stopSource=TelegramSource.prototype.stop
+ let sourceStops=0
+ t.mock.method(TelegramSource.prototype,'stop',async function(this:TelegramSource){
+  sourceStops++;await stopSource.call(this)
+  if(cleanupFails) throw new Error('Synthetic shutdown failure')
  })
  relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
  relay.bot.api.config.use(async(_prev,method)=>{
@@ -165,11 +172,16 @@ test('fatal polling conflict waits for worker and authority cleanup without retr
   let finished=false
   const start=assert.rejects(relay.start(),/409.*Conflict/).then(()=>{finished=true})
   await cleaning
+  const stopping=relay.stop()
+  assert.equal(relay.stop(),stopping,'concurrent stop calls share one promise')
+  const stopped=cleanupFails?assert.rejects(stopping,/Synthetic shutdown failure/):stopping
   assert.equal(finished,false,'polling failure must wait for executor cleanup')
   release()
   await until(async()=>(await runs.get('tg_92'))?.status!=='running')
   assert.equal(finished,false,'polling failure must wait for the in-flight delivery receipt')
-  releaseDelivery();await delivery;await start
+  releaseDelivery();await delivery;await start;await stopped
+  assert.equal(relay.stop(),stopping,'finished shutdown remains idempotent')
+  assert.equal(sourceStops,1)
   assert.deepEqual(JSON.parse(await readFile(join(dir,'outbox',`${item.id}.sent.json`),'utf8')).receipt.messageIds,[1])
   assert.equal(polls,1,'a conflict must not start another polling loop')
   assert.equal(relay.bot.isRunning(),false)
@@ -177,7 +189,7 @@ test('fatal polling conflict waits for worker and authority cleanup without retr
   assert.notEqual((await runs.get('tg_92'))?.status,'running')
   await assert.rejects(readFile(join(dir,'control-state.lock')), {code:'ENOENT'})
   assert.equal((await control.status()).owner?.telegramUserId,101)
- } finally {release();releaseDelivery();child?.kill();await relay.stop();await rm(dir,{recursive:true,force:true})}
+ } finally {release();releaseDelivery();child?.kill();await relay.stop().catch(()=>{});await rm(dir,{recursive:true,force:true})}
 })
 
 for (const intake of [true,false]) test(`relay shutdown terminates an in-flight ${intake?'intake':'scheduled'} launch`, async () => {

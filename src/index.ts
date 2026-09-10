@@ -940,7 +940,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     throw error
   })
 
-  const stop = async () => {
+  let stopWork: Promise<void> | undefined
+  const stop = (): Promise<void> => stopWork ?? (stopWork = (async () => {
     shuttingDown = true
     if (intakeTimer) clearTimeout(intakeTimer)
     if (sourceTimer) clearInterval(sourceTimer)
@@ -962,9 +963,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     } finally {
       await telegramSource.stop()
     }
-  }
+  })())
 
   const start = async () => {
+    let failed = false
     try {
       await initializeWorkspace(config.workspace)
       pagerDuty?.start()
@@ -1006,10 +1008,17 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         drop_pending_updates: false,
         onStart: (botInfo) => console.log(`✓ Bot @${botInfo.username} polling for messages...`),
       })
+    } catch (error) {
+      failed = true
+      throw error
     } finally {
       // Fatal polling errors (including a competing poller's 409) must finish
       // the same worker/state cleanup as a signal before the process exits.
-      await stop()
+      try { await stop() }
+      catch (error) {
+        if (!failed) throw error
+        console.error('Relay shutdown failed', safeError(error))
+      }
     }
   }
   return { bot, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests }
@@ -1019,7 +1028,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const relay = createRelay(loadConfig())
   for (const signal of ['SIGINT', 'SIGTERM'] as const)
     process.once(signal, () => {
-      void relay.stop()
+      // start() awaits this same shutdown and reports its error. Avoid a
+      // second unhandled rejection from the signal callback.
+      void relay.stop().catch(() => { process.exitCode = 1 })
     })
   await relay.start()
 }
