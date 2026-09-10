@@ -82,6 +82,7 @@ test('copied package guidance refreshes on each call and missing guidance fails 
   await mkdir(source, { recursive: true })
   await mkdir(templates, { recursive: true })
   try {
+    await writeFile(path.join(root, 'package.json'), JSON.stringify({ type: 'module' }))
     await writeFile(loaderPath, await readFile(sharedLoaderPath, 'utf8'))
     await writeFile(guidancePath, 'fixture guidance one')
     const code = `
