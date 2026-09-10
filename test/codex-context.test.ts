@@ -51,6 +51,7 @@ send({id:q.id,result:q.method==='thread/goal/get'?{goal:null}:{}});});setInterva
 `,{mode:0o700})
   process.env.HOME=root;process.env.PATH=bin+path.delimiter+priorPath
   await assert.rejects(startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId:'r_schedule_/../../escape',timeoutMs:0}),/Invalid native task run ID/)
+  await ownerRun(controlDir, 'r_pair_fixture')
   await Promise.all(['r_schedule_one','r_schedule_two'].map(async runId=>{
    await ownerRun(controlDir, runId)
    const job=await startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:0})

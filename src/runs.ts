@@ -27,6 +27,9 @@ export type RunRecord = {
   pid?: number
   blockReason?: string
   execution?: ExecutionChoice
+  replyOnly?: boolean
+  exitCode?: number | null
+  failureReason?: string
   interrupted?: boolean
   nativeSessionId?: string
   scheduled?: ScheduledOrigin
@@ -65,6 +68,7 @@ const isRun = (value: unknown): value is RunRecord => {
     ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') &&
     typeof candidate.createdAt === 'string' &&
     Number.isFinite(Date.parse(candidate.createdAt)) &&
+    (candidate.replyOnly === undefined || typeof candidate.replyOnly === 'boolean') &&
     (candidate.backendSubmitted === undefined || typeof candidate.backendSubmitted === 'boolean') &&
     (candidate.pid === undefined || (Number.isSafeInteger(candidate.pid) && candidate.pid > 0)) &&
     (candidate.scheduled === undefined || validScheduledOrigin(candidate.scheduled)) &&
@@ -163,7 +167,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason'>>,
   ): Promise<RunRecord> {
     const prior = this.changes.get(id) || Promise.resolve()
     const work = prior.catch(() => {}).then(async () => {
@@ -200,7 +204,7 @@ export class RunStore {
     for (const run of runs) {
       if (run.status === 'running' && (background === undefined || Boolean(run.scheduled) === background)) {
         if (run.pid && !isPidAlive(run.pid)) {
-          await this.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
+          await this.patch(run.id, { status: 'failed', failureReason: 'worker-process-missing', endedAt: new Date().toISOString() })
           continue
         }
         first ??= run

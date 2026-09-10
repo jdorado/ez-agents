@@ -15,7 +15,7 @@ import { installedPluginVersions } from './software-status.js'
 export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
 
-export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal) => {
+export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {
   resolveExecutor(installation.cli)
   if (new Set(installation.agents.map(a=>a.workspace)).size !== installation.agents.length ||
       new Set(installation.agents.map(a=>a.controlDir)).size !== installation.agents.length)
@@ -78,7 +78,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           const id=file.slice(0,-13)
           let run
           try {
-            run = id.startsWith('r_schedule_') ? await new RunStore(agent.controlDir).get(id) : null
+            run = await new RunStore(agent.controlDir).get(id)
             if(id.startsWith('r_schedule_') && !run?.scheduled) throw new Error('Missing scheduled run')
           } catch {
             await appendFile(path.join(directory,id+'.events'),JSON.stringify({stream:'exit',code:1})+'\n',{mode:0o600})
@@ -86,7 +86,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             continue
           }
           const sharedWorkspace=sharedWorkspaces.get(agent)
-          const lane=sharedWorkspace ? 'workspace:'+sharedWorkspace : run?.scheduled ? agent.name+':'+id : agent.name
+          const lane=run?.replyOnly ? 'reply:'+agent.name : sharedWorkspace ? 'workspace:'+sharedWorkspace : run?.scheduled ? agent.name+':'+id : agent.name
           if(busy.has(lane) || (run?.scheduled && [...busy].filter(k=>k.startsWith(agent.name+':')).length>=4)) continue
           const base=path.join(directory,id)
           await rename(base+'.request.json',base+'.running.json')
@@ -112,7 +112,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,cli,
                 runId:path.basename(base),timeoutMs:0,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort,codexAutoCompactTokens:opts.codexAutoCompactTokens}
-              job=await startExecutorJob(request.texts,options)
+              job=await launch(request.texts,options)
               active.set(lane,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})
               if(signal.aborted)terminateJob(job.child)
@@ -120,11 +120,14 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               job.child.stderr?.on('data',chunk=>emit({stream:'stderr',text:chunk.toString()}))
               cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{})},250)
               const code=await new Promise<number>(resolve=>job!.child.once('close',code=>resolve(code??1)))
+              if (cancellation) clearInterval(cancellation)
+              await job.cleanup()
+              job = undefined
               emit({stream:'exit',code})
             } catch { emit({stream:'stderr',text:'Host CLI execution failed\n'}); emit({stream:'exit',code:1}) }
             finally {
               if(cancellation)clearInterval(cancellation)
-              await job?.cleanup()
+              await job?.cleanup().catch(() => {})
               await writes
               await rm(base+'.running.json',{force:true})
               await rm(base+'.process.json',{force:true})
