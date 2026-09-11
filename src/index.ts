@@ -7,6 +7,7 @@ import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
+import { scheduledTasksText } from './scheduled-tasks.js'
 import { taskWorkspace } from './task-workspace.js'
 import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
@@ -542,6 +543,19 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   ]
   const commands = mainCommands
   const controlCommand = (text?: string) => text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
+  const statusKeyboard = () => new InlineKeyboard()
+    .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
+    .text('Retry failed incoming message', 'menu:retry').row()
+    .text('Scheduled tasks', 'menu:scheduled-tasks')
+  const scheduledTasks = async () => {
+    const owner = (await control.status()).owner
+    if (!owner) return 'Scheduled tasks\n\nNo paired owner.'
+    // This intentionally uses the reader that does not create a schedules directory.
+    return scheduledTasksText(await scheduler.listReadOnly(), owner)
+  }
+  const replyScheduledTasks = async (ctx: Context) => {
+    for (const part of splitTelegramText(await scheduledTasks())) await ctx.reply(part)
+  }
   const statusText = async () => {
     const running = await runs.running(false)
     const all = await runs.list()
@@ -714,9 +728,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
 
     if (text === '/status') {
-      await ctx.reply(await statusText(), { reply_markup: new InlineKeyboard()
-        .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
-        .text('Retry failed incoming message', 'menu:retry') })
+      await ctx.reply(await statusText(), { reply_markup: statusKeyboard() })
       return
     }
 
@@ -909,7 +921,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         )
       } else if (action === 'status') {
         await ctx.answerCallbackQuery()
-        await ctx.reply(await statusText())
+        await ctx.reply(await statusText(), { reply_markup: statusKeyboard() })
+      } else if (action === 'scheduled-tasks') {
+        await ctx.answerCallbackQuery()
+        await replyScheduledTasks(ctx)
       } else if (action === 'cancel') {
         await ctx.answerCallbackQuery()
         await ctx.reply(await cancelPending())

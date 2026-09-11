@@ -45,8 +45,17 @@ export class Scheduler {
   }
   async list(): Promise<Schedule[]> {
     await this.ensure()
+    return this.listReadOnly()
+  }
+  async listReadOnly(): Promise<Schedule[]> {
+    let names: string[]
+    try { names = await readdir(this.dir) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
     const result: Schedule[] = []
-    for (const name of await readdir(this.dir)) {
+    for (const name of names) {
       if (!/^[a-zA-Z0-9_-]+\.json$/.test(name)) continue
       try { result.push(await this.get(name.slice(0,-5))) } catch { console.error('Unreadable schedule',name) }
     }

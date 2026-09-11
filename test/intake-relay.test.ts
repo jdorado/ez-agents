@@ -225,6 +225,10 @@ test('four-item menu is owner-only; saved AI buttons work and forged/stale butto
     assert.match(f.replies.at(-1)!, /Menu expired/)
     await f.relay.bot.handleUpdate(message(7, '/settings'))
     assert.match(f.replies.at(-1)!, /Default for new conversations/)
+    await f.relay.bot.handleUpdate(message(8, '/status'))
+    assert.ok(f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
+    await f.relay.bot.handleUpdate(callback(9, 'menu:scheduled-tasks'))
+    assert.match(f.replies.at(-1)!, /No scheduled tasks for this owner/)
     assert.equal(f.launched.length, 0)
   } finally { await f.close() }
 })
