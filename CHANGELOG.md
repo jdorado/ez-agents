@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.24
+
+- Preserve host-owned private plugin networks across generated Compose services,
+  one-shot commands and compatible updates. Bind routes to reviewed plugin
+  revisions and retain plugin-local connectivity.
+- Support existing deployments on their first upgrade. Network authorization
+  remains outside the agent-writable registry. Existing beta acceptance limits remain.
+
 ## 0.1.0-beta.23
 
 - Identify failed publisher API reads and missing release tags without exposing
