@@ -255,6 +255,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  // A process may die after creating a job directory but before atomically
  // committing its receipt. That directory must not block transport startup.
  await fs.mkdir(path.join(f.home,'updates','d18e847a-bb59-49c6-96f3-27fdc43ca44f'));
+ await fs.mkdir(path.join(f.home,'updates','a'.repeat(36)));
  assert.deepEqual(await jobs(f.home),[]);
  const hostCode=`import fs from 'node:fs';import path from 'node:path';const c=JSON.parse(fs.readFileSync(process.argv[2])).agents[0];const d=path.join(c.controlDir,'host-executor');fs.mkdirSync(d,{recursive:true});const beat=()=>{fs.writeFileSync(path.join(d,'heartbeat.json'),JSON.stringify({pid:process.pid,at:Date.now()}));};beat();const timer=setInterval(()=>{try{process.kill(Number(process.env.EZ_HOST_SUPERVISOR_PID),0)}catch{process.exit(0)}beat()},100);process.on('SIGTERM',()=>{clearInterval(timer);process.exit(0)});`;
  for(const dir of [f.old,f.source]) {
