@@ -279,6 +279,7 @@ export class ControlStore {
       const preserved = ai.presets.filter((p) => !p.id.startsWith('detected_') ||
         p.id === ai.selectedId || p.id === ai.defaultId)
       ai.presets = [...preserved, ...discovered.filter((p) => !preserved.some((old) => old.id === p.id))]
+      if (initial.id === 'chat-default' && !ai.presets.some(p => p.id === initial.id)) ai.presets.push(initial)
       await this.writeState(state)
     })
   }

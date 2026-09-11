@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, readModels, isPreset } from '../src/ai.js'
+import { initialPreset, chatPreset, readModels, isPreset } from '../src/ai.js'
 import { EXECUTOR_REGISTRY, nativeSessionId } from '../src/executor.js'
 import { InboxStore } from '../src/inbox.js'
 import type { Update } from 'grammy/types'
@@ -144,3 +144,39 @@ for (const cli of ['codex', 'codex-gui']) {
     } finally { await rm(dir, { recursive: true, force: true }) }
   })
 }
+
+for (const cli of ['codex', 'codex-gui']) {
+  test(`${cli} separates responsive chat from worker defaults and preserves upgrade choices`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ez-chat-default-'))
+    try {
+      const store = new ControlStore(dir, 1000)
+      await store.syncClientPresets(chatPreset(cli), [])
+      const chat = await store.captureChoice(chatPreset(cli))
+      assert.equal(chat.preset.model, 'gpt-5.6-sol')
+      assert.equal(chat.preset.effort, 'medium')
+      assert.equal(initialPreset(cli).model, 'gpt-5.6-terra')
+      assert.equal(initialPreset(cli).effort, 'high')
+      const old = initialPreset(cli)
+      await store.savePreset(old)
+      await store.defaultPreset(old.id)
+      await store.resetSession()
+      const captured = await store.captureChoice(old)
+      await store.syncClientPresets(chatPreset(cli), [])
+      assert.deepEqual(await store.captureChoice(chatPreset(cli)), captured)
+      assert.equal((await store.aiState(chatPreset(cli))).presets.filter(p => p.id === 'chat-default').length, 1)
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+}
+
+test('upgrades expose responsive chat without replacing an existing default or queued snapshot', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-chat-upgrade-'))
+  try {
+    const store = new ControlStore(dir, 1000), old = initialPreset('codex')
+    const captured = await store.captureChoice(old)
+    await store.syncClientPresets(chatPreset('codex'), [])
+    assert.deepEqual(await store.captureChoice(chatPreset('codex')), captured)
+    const state = await store.aiState(chatPreset('codex'))
+    assert.equal(state.defaultId, old.id)
+    assert.ok(state.presets.some(p => p.id === 'chat-default'))
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

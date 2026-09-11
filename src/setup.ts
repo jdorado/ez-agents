@@ -6,7 +6,7 @@ import { initializeWorkspace } from './workspace.js'
 import { configureInstallation } from './install-config.js'
 import { installService } from './service.js'
 import { discoverDefaults } from './client-defaults.js'
-import { initialPreset } from './ai.js'
+import { chatPreset } from './ai.js'
 import { ControlStore } from './control-state.js'
 import { loadControlConfig } from './config.js'
 import { EXECUTOR_REGISTRY, resolveExecutor, executorKey } from './executor.js'
@@ -146,7 +146,7 @@ export const runCli = async (): Promise<void> => {
     const created = await initializeWorkspace(workspace)
     const config = loadControlConfig()
     await new ControlStore(config.controlDir, config.pairingTtlMs).syncClientPresets(
-      initialPreset(await readActiveExecutor(envFilePath)), await discoverDefaults(workspace,
+      chatPreset(await readActiveExecutor(envFilePath)), await discoverDefaults(workspace,
         { codexHome: path.join(config.controlDir, 'cli', 'codex') }))
     console.log(JSON.stringify({ workspace, created }))
     return

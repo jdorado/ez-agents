@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { InlineKeyboard, type Context } from 'grammy'
 import { ControlStore } from './control-state.js'
-import { initialPreset, presetLabel, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
+import { chatPreset, presetLabel, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 
 export const mainCommands = [
@@ -21,7 +21,7 @@ export const mainKeyboard = () => new InlineKeyboard()
 // Short-lived opaque button IDs: no model names or executable arguments from callbacks.
 // These are operational settings, not a second conversational/agent loop.
 export const createAiMenu = (control: ControlStore, cli: string, catalog = readModels, workspace = process.cwd(), codexHome?: string) => {
-  const initial = initialPreset(cli)
+  const initial = chatPreset(cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   if (host) catalog = async () => JSON.parse(await readFile(path.join(process.env.EZ_CONTROL_DIR!, 'host-executor/models.json'),'utf8'))
   const refresh = async () => control.syncClientPresets(initial, host ? [] : await discoverDefaults(workspace, { codexHome }))

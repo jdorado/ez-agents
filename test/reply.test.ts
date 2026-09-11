@@ -129,3 +129,23 @@ test('a parallel reply delivered during a normal turn is retained for the follow
   assert.deepEqual(await parallelReplyHistory(root,current),[])
  }finally{await rm(root,{recursive:true,force:true})}
 })
+
+
+test('reply handoff accepts independent worker choices and rejects invalid or unauthorized overrides', async () => {
+ const root=await mkdtemp(join(tmpdir(),'ez-reply-worker-')), runs=new RunStore(root)
+ try {
+  await ownerRun(root,'tg_10'); await runs.patch('tg_10',{replyOnly:true, execution:{sessionId:'c5dd1edc-be24-47b8-a579-0bc70f44cf43',preset:{id:'chat',name:'Chat',cli:'codex',model:'gpt-5.6-sol',effort:'medium'}}})
+  for (const args of [{model:42}, {model:'bad model'}, {effort:'ultra'}, {effort:'invalid'}, {cli:'claude'}])
+   await assert.rejects(replyCall(root,'tg_10',root,'defer',{text:'Analyze and verify the result',...args}))
+  await assert.rejects(replyCall(root,'tg_10',root,'send',{text:'Hello',model:'gpt-6-astra'}),/Unexpected/)
+  await replyCall(root,'tg_10',root,'defer',{text:'Analyze and verify the result',model:'gpt-6-astra',effort:'high'})
+  const file=join(root,'schedules','s_reply_tg_10.json')
+  const saved=JSON.parse(await readFile(file,'utf8'))
+  assert.equal(saved.execution.preset.model,'gpt-6-astra')
+  assert.equal(saved.execution.preset.effort,'high')
+  await replyCall(root,'tg_10',root,'defer',{text:'retry',model:'gpt-5.6-sol',effort:'low'})
+  assert.deepEqual(JSON.parse(await readFile(file,'utf8')),saved)
+  await new ControlStore(root,900000).revokeOwner()
+  await assert.rejects(replyCall(root,'tg_10',root,'defer',{text:'after revocation',model:'gpt-6-astra'}),/owner-mismatch/)
+ } finally { await rm(root,{recursive:true,force:true}) }
+})

@@ -30,7 +30,7 @@ import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
-import { presetLabel, statusPreset } from './ai.js'
+import { chatPreset, presetLabel, statusPreset } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 import { initializeWorkspace } from './workspace.js'
 import { softwareStatus } from './software-status.js'
@@ -193,7 +193,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const session = run.external || run.taskId || run.scheduled || run.replyOnly
           ? { sessionId: randomUUID(), hasStarted: false, nativeSessionId: undefined }
           : await control.executionSession(started.execution!)
-        const selected = run.taskId ? { cli: 'codex', model: undefined, effort: undefined } : started.execution!.preset
+        const selected = run.taskId ? chatPreset('codex') : started.execution!.preset
         const { child, cleanup } = await launch(texts, {
           workspace: run.scheduled ? await taskWorkspace(config.workspace,run.id) : config.workspace,
           timeoutMs: config.executorTimeoutMs,

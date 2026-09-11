@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
 import { desktopJobPrompt } from '../src/desktop-bridge.js'
+import { chatGuidance } from '../src/agent-guidance.js'
 import { executorJobPrompt } from '../src/executor.js'
 import { taskArguments } from '../src/task-executor.js'
 import { initializeWorkspace } from '../src/workspace.js'
@@ -27,7 +28,11 @@ test('CLI and desktop prompt builders use current package guidance', async () =>
     ['desktop', desktopJobPrompt('tg_owner_gui', ['owner request'], undefined, '/tmp/bin', '/tmp/control')],
   ] as const
   for (const [kind, prompt] of prompts)
+    {
     assert.ok(prompt.includes(shared), `${kind} prompt is missing the current package guidance`)
+    assert.ok(prompt.includes(chatGuidance()), `${kind} prompt is missing channel guidance`)
+  }
+  assert.ok(!executorJobPrompt('r_schedule_job', ['work']).includes(chatGuidance()))
 })
 
 test('package guidance resolution ignores a workspace shadow file', async () => {
