@@ -11,7 +11,7 @@ import { taskArguments } from '../src/task-executor.js'
 import { runCodexSession } from '../src/codex-session.js'
 import { runDesktopTurn } from '../src/desktop-bridge.js'
 
-test('all model selections and launches reject effort above high before spawning', async () => {
+test('all non-Luna model selections and launches reject effort above high before spawning', async () => {
   for (const cli of ['codex', 'codex-gui', 'grok', 'claude', 'opencode', 'agy']) {
     for (const effort of ['xhigh', 'max', 'ultra', 'unknown']) {
       const preset = { id:'blocked', name:'Blocked', cli, model:'any-model', effort }
@@ -21,6 +21,14 @@ test('all model selections and launches reject effort above high before spawning
   }
   await assert.rejects(runCodexSession({workspace:'/unused',controlDir:'/unused',prompt:'',goal:false,effort:'max'}), /capped at high/)
   await assert.rejects(runDesktopTurn({workspace:'/unused',controlDir:'/unused',binDir:'/unused',runId:'unused',prompt:'',effort:'ultra'}), /capped at high/)
+})
+
+test('Codex Luna accepts xhigh while every other model and CLI remains capped', async () => {
+  const luna = { id:'luna', name:'Luna', cli:'codex', model:'gpt-5.6-luna', effort:'xhigh' }
+  await validateSelection(luna, [{ cli:'codex', model:'gpt-5.6-luna', name:'Luna', efforts:['high','xhigh'] }], async () => true)
+  assert.deepEqual(executionDefaults('codex', { model:'gpt-5.6-luna', effort:'xhigh' }), { model:'gpt-5.6-luna', effort:'xhigh' })
+  assert.throws(() => executionDefaults('grok', { model:'gpt-5.6-luna', effort:'xhigh' }), /capped at high/)
+  assert.throws(() => executionDefaults('codex', { model:'gpt-5.6-terra', effort:'xhigh' }), /capped at high/)
 })
 
 test('restricted tasks pin Terra high, preserve explicit choices and reject higher effort', () => {
