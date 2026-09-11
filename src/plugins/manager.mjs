@@ -5,9 +5,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { readFileSync, realpathSync } from 'node:fs';
 
 const reserved = new Set(['status','updates','plugins','tools','message','owner','approval','react','setup','help','version']);
 const id = value => { if(typeof value !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(value)) throw Error('Invalid identifier'); return value; };
+const dockerNetwork = value => { if(typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value)) throw Error('Invalid Docker network'); return value; };
 const hash = data => createHash('sha256').update(data).digest('hex');
 const json = async file => JSON.parse(await fs.readFile(file,'utf8'));
 const emit = value => console.log(JSON.stringify(value));
@@ -142,9 +144,67 @@ export async function checkFolders(config, record) {
       throw Error('Folder source must remain an existing real directory');
   }
 }
-export function compose(config, record, secrets={}) {
-  const services={}, volumes={};
+const childOf = (candidate, parent) => candidate === parent || candidate.startsWith(parent + path.sep);
+// Host-owned private network bindings remain separate from portable package descriptors.
+// The executor may write toolsHome, so the binding source must stay in its host config.
+export async function hostNetworkBindings(config, record, home) {
+  const configuredHost = config.hostConfig ?? (typeof config.deploymentDir === 'string' && path.isAbsolute(config.deploymentDir) ? path.join(config.deploymentDir, 'host-executor.json') : undefined);
+  if (configuredHost === undefined) return [];
+  if (!home || typeof configuredHost !== 'string' || !path.isAbsolute(configuredHost)) throw Error('Invalid host network binding');
+  home = realpathSync(home);
+  const hostConfig = realpathSync(configuredHost);
+  if (hostConfig !== configuredHost || path.basename(hostConfig) !== 'host-executor.json' || childOf(hostConfig, home))
+    throw Error('Host network bindings require an external host config');
+  const host = JSON.parse(readFileSync(hostConfig, 'utf8'));
+  if (!host || typeof host !== 'object' || !Array.isArray(host.agents)) throw Error('Invalid host network bindings');
+  const candidates = host.agents.filter(agent => agent && typeof agent === 'object' && typeof agent.toolsHome === 'string' && realpathSync(agent.toolsHome) === home);
+  if (candidates.length !== 1) throw Error('Host network binding does not belong to this registry');
+  const agent = candidates[0], deployment = path.dirname(hostConfig);
+  if (typeof agent.workspace !== 'string' || typeof agent.controlDir !== 'string' ||
+      realpathSync(agent.workspace) !== config.workspace || realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
+      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir) ||
+      childOf(hostConfig, config.workspace) || childOf(hostConfig, realpathSync(agent.controlDir)))
+    throw Error('Invalid host network binding deployment');
+  const configured = agent.pluginNetworkBindings;
+  if (configured !== undefined && (!configured || typeof configured !== 'object' || Array.isArray(configured)))
+    throw Error('Invalid host network bindings');
+  const route = configured?.[record.manifest?.id];
+  if (route === undefined) return [];
+  keys(route, ['revisions', 'bindings']);
+  const trusted = await snapshot(record.source);
+  if (record.revision !== trusted.revision || record.source !== trusted.source ||
+      JSON.stringify(record.manifest) !== JSON.stringify(trusted.manifest) ||
+      JSON.stringify(record.deployment) !== JSON.stringify(trusted.deployment))
+    throw Error('Registry plugin identity is not the reviewed source');
+  if (record.manifest.id !== trusted.manifest.id) throw Error('Registry plugin identity is not the reviewed source');
+  if (!Array.isArray(route.revisions) || route.revisions.some(revision => typeof revision !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(revision)) ||
+      !route.revisions.includes(trusted.revision)) throw Error('Host network binding is not pinned to the reviewed plugin revision');
+  const bindings = route.bindings;
+  if (!Array.isArray(bindings)) throw Error('Invalid host network bindings');
+  const seen = new Set();
+  for (const binding of bindings) {
+    keys(binding, ['service', 'network']);
+    id(binding.service); dockerNetwork(binding.network);
+    if (!record.deployment.services[binding.service]) throw Error('Unknown host network service');
+    const key = `${binding.service}\0${binding.network}`;
+    if (seen.has(key)) throw Error('Duplicate host network binding');
+    seen.add(key);
+  }
+  return bindings;
+}
+export async function compose(config, record, secrets={}, home) {
+  const services={}, volumes={}, networks={}, serviceNetworks=new Map();
   const folders = folderMounts(config, record);
+  for (const binding of await hostNetworkBindings(config, record, home)) {
+    // A service with an explicit network list loses Compose's implicit default.
+    // Keep the plugin's own network so bound services retain sibling access.
+    networks.default = {};
+    const key = `host-${hash(binding.network).slice(0,16)}`;
+    networks[key] = { external: true, name: binding.network };
+    const attached = serviceNetworks.get(binding.service) || ['default'];
+    if (!attached.includes(key)) attached.push(key);
+    serviceNetworks.set(binding.service, attached);
+  }
   for(const [name,s] of Object.entries(record.deployment.services)) {
     const mounts=[];
     for(const [volume,target] of Object.entries(s.volumes||{})) { volumes[volume]={};mounts.push({type:'volume',source:volume,target}); }
@@ -156,13 +216,14 @@ export function compose(config, record, secrets={}) {
       ...(s.dependsOn?{depends_on:Object.fromEntries(s.dependsOn.map(dep=>[dep,{condition:'service_healthy'}]))}:{}),
       ...(s.memoryMiB?{mem_limit:`${s.memoryMiB}m`}:{}),
       ...(s.cpus?{cpus:s.cpus}:{}),
+      ...(serviceNetworks.get(name)?.length?{networks:serviceNetworks.get(name)}:{}),
       ...(s.environment?{environment:Object.fromEntries(Object.entries(s.environment).map(([key,value])=>{
         if(typeof value==='string')return [key,value];
         if(!/^[a-f0-9]{64}$/.test(secrets[value.secret]||''))throw Error('Missing or invalid private deployment secret');
         return [key,(value.prefix||'')+secrets[value.secret]+(value.suffix||'')];
       }))}:{}),...(s.command?{command:s.command}:{})};
   }
-  return attachShared({name:record.project,services,volumes}, record);
+  return attachShared({name:record.project,services,volumes,...(Object.keys(networks).length?{networks}:{})}, record);
 }
 function dockerEnv() {
   return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
@@ -205,14 +266,14 @@ async function registry(home) {
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
   if(standalone && hostConfig) throw Error('Standalone setup cannot bind a relay host config');
   if(typeof home!=='string'||typeof workspace!=='string'||!path.isAbsolute(home)||!path.isAbsolute(workspace)||/[\r\n\0$:,]/.test(home+workspace)) throw Error('Explicit absolute home/workspace required');
-  workspace=await fs.realpath(workspace);await privateDir(home);home=await fs.realpath(home);
+  workspace=await fs.realpath(workspace);await privateDir(home);home=await fs.realpath(home);if(hostConfig)hostConfig=await fs.realpath(hostConfig);
   if(await fs.lstat(path.join(home,'registry.json')).catch(()=>null)) throw Error('Registry already exists; refusing replacement');
   catalogFile=path.resolve(catalogFile||fileURLToPath(new URL('../../default-plugins.json',import.meta.url)));
   const sources=await json(catalogFile);
   const catalog={};
   for(const [name,source] of Object.entries(sources)) {id(name);if(typeof source!=='string'||!source)throw Error('Catalog source must be a nonempty path');const resolved=path.resolve(path.dirname(catalogFile),source);const p=await snapshot(resolved).catch(error=>{throw Error(`Cannot load reviewed plugin ${name} from ${resolved}: ${error.message}. Supply its checkout or an explicit --catalog file.`)});if(p.manifest.id!==name) throw Error('Catalog ID mismatch');catalog[name]={source:p.source,revision:p.revision};}
   await locked(home,async()=>{
-    await atomic(path.join(home,'config.json'),{schemaVersion:1,workspace,catalog});
+    await atomic(path.join(home,'config.json'),{schemaVersion:1,workspace,catalog,...(hostConfig&&path.basename(hostConfig)==='host-executor.json'?{hostConfig}:{})});
     await atomic(path.join(home,'registry.json'),{schemaVersion:1,owner:home,plugins:{},commands:{}});
     const bin=path.join(home,'bin');await privateDir(bin);
     await fs.writeFile(path.join(bin,'ez'),`#!${process.execPath}\nimport(${JSON.stringify(new URL('./manager.mjs',import.meta.url).href)}).then(m=>m.main(['--home',${JSON.stringify(home)},...process.argv.slice(2)])).catch(e=>{console.error(e.message);process.exitCode=1});\n`,{mode:0o700,flag:'wx'});
@@ -262,7 +323,7 @@ export async function install(home,config,name,source,revision) {
     let secrets;try{secrets=await json(secretsFile);}catch(error){if(error.code!=='ENOENT')throw error;secrets={};}
     for(const name of p.deployment.secrets||[])if(secrets[name]===undefined)secrets[name]=randomBytes(32).toString('hex');
     if(p.deployment.secrets?.length)await atomic(secretsFile,secrets);
-    await atomic(record.compose,compose(config,record,secrets));
+    await atomic(record.compose,await compose(config,record,secrets,home));
     // Build/pull is explicit installation mechanics. No services start and no onboarding is executed.
     for(const [service,s] of Object.entries(record.deployment.services)) await checked([...composeArgs(record),s.image?'pull':'build',service]);
     r.plugins[name]=record;for(const alias of Object.keys(p.manifest.commands)) r.commands[alias]=name;
@@ -327,7 +388,7 @@ export async function main(args) {
         settings.folders={...settings.folders,[name]:folders};
         await checkFolders(settings,latest);
         const secrets=await json(path.join(home,'packages',name,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
-        const generated=compose(settings,latest,secrets);
+        const generated=await compose(settings,latest,secrets,home);
         await atomic(path.join(home,'config.json'),settings);
         await atomic(latest.compose,generated);
         return emit({ok:true,plugin:name,folders,readOnly:true,started:false});
@@ -345,7 +406,7 @@ export async function main(args) {
         const result = action === 'shared-enable' ? await sharedService(latest, key, 'enable', run) : { state: 'detached' };
         latest.sharedEnabled = [...new Set([...(latest.sharedEnabled || []).filter(k => k !== key), ...(action === 'shared-enable' ? [key] : [])])];
         const secrets = await json(path.join(home, 'packages', name, 'secrets.json')).catch(e => { if (e.code === 'ENOENT') return {}; throw e; });
-        await atomic(latest.compose, compose(currentConfig, latest, secrets));
+        await atomic(latest.compose, await compose(currentConfig, latest, secrets, home));
         // Persist the binding before recreating clients; start can recover an interrupted recreation.
         await atomic(path.join(home, 'registry.json'), current);
         await checked([...composeArgs(latest), 'up', '-d', '--wait']);
@@ -371,7 +432,7 @@ export async function main(args) {
         const currentConfig=await json(path.join(home,'config.json'));
         await checkFolders(currentConfig,current.plugins[name]);
         const secrets=await json(path.join(home,'packages',name,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
-        await atomic(record.compose,compose(currentConfig,current.plugins[name],secrets));
+        await atomic(record.compose,await compose(currentConfig,current.plugins[name],secrets,home));
       }
       await checked([...composeArgs(record),...(action==='start'?['up','-d','--wait']:action==='stop'?['stop']:['down'])]);
       if(action==='uninstall') {delete current.plugins[name];for(const [alias,owner] of Object.entries(current.commands))if(owner===name)delete current.commands[alias];await atomic(path.join(home,'registry.json'),current);}
@@ -384,7 +445,7 @@ export async function main(args) {
   if(!binding)throw Error('Unknown registered CLI');
   await checkFolders(config,record);
   const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
-  await atomic(record.compose,compose(config,record,secrets));
+  await atomic(record.compose,await compose(config,record,secrets,home));
   // Docker exec does not reliably forward cancellation to the in-container process.
   // Run each client as a one-shot Compose container; docker compose run forwards signals.
   const name=`${record.project}-call-${randomUUID()}`;

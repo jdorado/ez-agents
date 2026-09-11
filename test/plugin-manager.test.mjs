@@ -30,8 +30,8 @@ for(const cleanup of ['success','failure','already-removed']) test(`cancel remov
 });
 async function fixture(t) {
  const root=await fs.mkdtemp(path.join(tmpdir(),'ez-tools-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const source=path.join(root,'source'),home=path.join(root,'tools'),workspace=path.join(root,'mind'),fake=path.join(root,'fake');
- for(const d of [source,workspace,fake])await fs.mkdir(d);
+ const source=path.join(root,'source'),home=path.join(root,'tools'),deploymentDir=path.join(root,'deployment'),workspace=path.join(deploymentDir,'mind'),control=path.join(deploymentDir,'control'),hostConfig=path.join(deploymentDir,'host-executor.json'),fake=path.join(root,'fake');
+ for(const d of [source,workspace,control,fake])await fs.mkdir(d,{recursive:true});
  const manifest={schemaVersion:1,id:'sample',version:'0.1.0',description:'Synthetic',commands:{sample:{executable:'client.mjs',args:[]}},skills:['SKILL.md']};
  const deployment={schemaVersion:1,services:{sample:{buildTarget:'runtime',volumes:{data:'/data'},workspace:true,healthcheck:['node','--version']}},commands:{sample:{service:'sample',argv:['node','/app/client.mjs'],suffix:[]}}};
  for(const [name,value]of Object.entries({'package.json':JSON.stringify({files:['client.mjs','SKILL.md']}),'ez-plugin.json':JSON.stringify(manifest),'ez-deployment.json':JSON.stringify(deployment),'Dockerfile':'FROM scratch AS runtime','.dockerignore':'','client.mjs':'','SKILL.md':'Synthetic'}))await fs.writeFile(path.join(source,name),value);
@@ -39,7 +39,7 @@ async function fixture(t) {
  await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nrequire('fs').appendFileSync(${JSON.stringify(log)},JSON.stringify({argv:process.argv.slice(2),secret:process.env.TELEGRAM_BOT_TOKEN})+'\\n');\nif(process.argv.includes('run')){console.log(JSON.stringify(process.argv.slice(process.argv.indexOf('/app/client.mjs')+1)));process.exit(process.argv.includes('fail')?17:0)}\n`,{mode:0o700});
  const env={...process.env,PATH:fake+path.delimiter+process.env.PATH,TELEGRAM_BOT_TOKEN:'must-not-leak'};
  const call=(...args)=>exec(process.execPath,[bin,'--home',home,...args],{env});
- return {root,source,home,workspace,fake,log,manifest,deployment,env,call};
+ return {root,source,home,deploymentDir,workspace,control,hostConfig,fake,log,manifest,deployment,env,call};
 }
 test('catalog paths resolve relative to the catalog and pin each new agent independently',async t=>{
  const f=await fixture(t),catalog=path.join(f.root,'defaults.json');
@@ -95,13 +95,45 @@ test('registry corruption, active writer lock and alias collision fail closed',a
 });
 test('Compose resources are namespaced, private, and restricted to owning workspace',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);
- const c=compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:p.deployment});
+ const c=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:p.deployment});
  assert.equal(c.name,'ezp-synthetic');assert.equal(c.services.sample.ports,undefined);assert.equal(c.services.sample.privileged,undefined);assert.equal(c.services.sample.volumes[1].read_only,true);assert.deepEqual(c.services.sample.cap_drop,['ALL']);
+});
+test('host-owned private networks survive registered-call Compose regeneration',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ const config=JSON.parse(await fs.readFile(path.join(f.home,'config.json'),'utf8'));
+ const binding={service:'sample',network:'stocks-vm_default'};
+ const host={cli:'synthetic',agents:[{name:'sample',workspace:f.workspace,controlDir:f.control,binDir:path.join(f.home,'bin'),toolsHome:f.home,pluginNetworkBindings:{sample:{revisions:[p.revision],bindings:[binding]}}}]};
+ await fs.writeFile(f.hostConfig,JSON.stringify(host));
+ config.hostConfig=await fs.realpath(f.hostConfig);
+ await fs.writeFile(path.join(f.home,'config.json'),JSON.stringify(config));
+ const file=path.join(f.home,'packages/sample/compose.json');await fs.writeFile(file,'{}');
+ await f.call('sample','read');
+ const c=JSON.parse(await fs.readFile(file,'utf8'));
+ assert.deepEqual(c.networks.default,{});
+ const [key,network]=Object.entries(c.networks).find(([name])=>name!=='default');
+ assert.equal(network.name,'stocks-vm_default');assert.equal(network.external,true);
+ assert.deepEqual(c.services.sample.networks,['default',key]);
+ const compromised={...config,hostNetworkBindings:{sample:[{service:'sample',network:'untrusted_default'}]}};
+ assert.deepEqual((await compose(compromised,p,{},f.home)).services.sample.networks,['default',key]);
+ const upgraded={...config,hostConfig:undefined,deploymentDir:path.dirname(config.hostConfig)};
+ assert.deepEqual((await compose(upgraded,p,{},f.home)).services.sample.networks,['default',key]);
+ const unsafeHost=path.join(f.home,'host-executor.json');await fs.writeFile(unsafeHost,JSON.stringify(host));
+ await assert.rejects(compose({...config,hostConfig:unsafeHost},p,{},f.home),/external host config/);
+ const forged=structuredClone(p);forged.manifest.id='forged';
+ host.agents[0].pluginNetworkBindings={forged:{revisions:[p.revision],bindings:[binding]}};await fs.writeFile(f.hostConfig,JSON.stringify(host));
+ await assert.rejects(compose(config,forged,{},f.home),/reviewed source/);
+ for(const bindings of [
+   {sample:[{service:'missing',network:'stocks-vm_default'}]},
+   {sample:[{service:'sample',network:'bad/network'}]},
+   {sample:[{service:'sample',network:'stocks-vm_default'},{service:'sample',network:'stocks-vm_default'}]},
+   'not-a-binding-map'
+ ]) { host.agents[0].pluginNetworkBindings=bindings==='not-a-binding-map'?bindings:{sample:{revisions:[p.revision],bindings}};await fs.writeFile(f.hostConfig,JSON.stringify(host));await assert.rejects(compose(config,{source:p.source,project:'ezp-synthetic',revision:p.revision,manifest:p.manifest,deployment:p.deployment},{},f.home),/host network|Docker network/); }
 });
 test('host onboarding binds local ez without replacing global commands',async t=>{
  const f=await fixture(t),native=path.join(f.root,'native'),config=path.join(f.root,'host.json');await fs.mkdir(native);await fs.writeFile(path.join(native,'native-tool'),'hello');
  await fs.writeFile(config,JSON.stringify({cli:'synthetic',agents:[{name:'demo',workspace:f.workspace,binDir:native}]}));
- await init(f.home,f.workspace,undefined,config);const host=JSON.parse(await fs.readFile(config));assert.equal(host.agents[0].binDir,path.join(await fs.realpath(f.home),'bin'));assert.equal(host.agents[0].toolsHome,await fs.realpath(f.home));assert.equal(await fs.readFile(path.join(host.agents[0].binDir,'native-tool'),'utf8'),'hello');
+ await init(f.home,f.workspace,undefined,config);const host=JSON.parse(await fs.readFile(config));assert.equal(host.agents[0].binDir,path.join(await fs.realpath(f.home),'bin'));assert.equal(host.agents[0].toolsHome,await fs.realpath(f.home));assert.equal((JSON.parse(await fs.readFile(path.join(f.home,'config.json'),'utf8'))).hostConfig,undefined);assert.equal(await fs.readFile(path.join(host.agents[0].binDir,'native-tool'),'utf8'),'hello');
   await assert.rejects(init(f.home,f.workspace),/exists/);
 });
 test('host install exposes runnable public commands without source aliases',async t=>{
@@ -128,10 +160,10 @@ test('v2 supports bounded dependency graphs and generated private secrets',async
  d.services.database={image:'example/database@sha256:'+'a'.repeat(64),user:'999:999',healthcheck:['check'],memoryMiB:128,cpus:2,environment:{PASSWORD:{secret:'db-password'}}};
  d.services.sample.dependsOn=['database'];d.services.sample.environment={URL:{secret:'db-password',prefix:'db://',suffix:'@database'}};
  validate(f.manifest,d,p.files);
- const c=compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d},{'db-password':'b'.repeat(64)});
+ const c=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d},{'db-password':'b'.repeat(64)});
  assert.equal(c.services.database.user,'999:999');assert.equal(c.services.sample.depends_on.database.condition,'service_healthy');assert.equal(c.services.sample.environment.URL,'db://'+'b'.repeat(64)+'@database');
- assert.equal(c.services.database.mem_limit,'128m');assert.throws(()=>compose({workspace:f.workspace}, {source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d}),/Missing/);
- assert.equal(c.services.database.cpus,2);assert.throws(()=>compose({workspace:f.workspace}, {source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d}),/Missing/);
+ assert.equal(c.services.database.mem_limit,'128m');await assert.rejects(compose({workspace:f.workspace}, {source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d}),/Missing/);
+ assert.equal(c.services.database.cpus,2);await assert.rejects(compose({workspace:f.workspace}, {source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d}),/Missing/);
  for(const change of [x=>x.services.database.user='0:0',x=>x.services.database.cpus=0.01,x=>x.services.database.cpus=9,x=>x.services.database.environment.PASSWORD={secret:'undeclared'},x=>x.services.database.environment.PASSWORD='${HOST_SECRET}',x=>x.services.database.dependsOn=['sample'],x=>x.services.sample.dependsOn=['missing'],x=>x.services.sample.ports=['9999:9999']]){const bad=structuredClone(d);change(bad);assert.throws(()=>validate(f.manifest,bad,p.files));}
  const old=structuredClone(d);old.schemaVersion=1;assert.throws(()=>validate(f.manifest,old,p.files));
 });
@@ -252,9 +284,9 @@ test('folder bindings survive compatible descriptors and reject incompatible upd
  const f=await fixture(t);const p=await snapshot(f.source);
  const record={...p,project:'ezp-test-sample'};
  const config={workspace:f.workspace,folders:{sample:[{service:'sample',source:f.workspace,target:'/data/files'}]}};
- assert.equal(compose(config,record).services.sample.volumes.find(v=>v.target==='/data/files').read_only,true);
+ assert.equal((await compose(config,record)).services.sample.volumes.find(v=>v.target==='/data/files').read_only,true);
  const next=structuredClone(record);next.deployment.services.sample.volumes={data:'/new-state'};
- assert.throws(()=>compose(config,next),/child of a declared volume/);
+ await assert.rejects(compose(config,next),/child of a declared volume/);
 });
 
 test('folder rebind rejects every live project container including one-shots',async t=>{

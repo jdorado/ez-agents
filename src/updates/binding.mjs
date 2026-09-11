@@ -11,7 +11,7 @@ export async function bindUpdates(home,hostConfig,packageRoot=fileURLToPath(new 
   if(await fs.realpath(path.join(deploymentDir,'mind'))!==config.workspace||await fs.realpath(path.join(deploymentDir,'control'))!==host.agents[0].controlDir)throw Error('Noncanonical deployment state paths');
   packageRoot=await fs.realpath(packageRoot);
   await fs.mkdir(path.join(home,'updates'),{recursive:true,mode:0o700});
-  await atomic(path.join(home,'config.json'),{...config,packageRoot:packageRoot.replace(/\/$/,''),deploymentDir});
+  await atomic(path.join(home,'config.json'),{...config,hostConfig,packageRoot:packageRoot.replace(/\/$/,''),deploymentDir});
   const pkg=await read(path.join(packageRoot,'package.json')),bin=path.join(home,'bin');
   // Every invocation resolves the active root. Already-running workers retain
   // their old code; the next worker receives the new package after activation.

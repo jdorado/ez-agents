@@ -58,7 +58,7 @@ function envValue(text,key,value) {
 }
 async function backupVolume(run,record,name,directory) {
   const services=Object.entries(record.deployment.services),service=services.find(([,s])=>s.volumes?.[name])?.[0];
-  const c=compose({workspace:'/unused'},record),image=c.services[service].image;
+  const c=await compose({workspace:'/unused'},record),image=c.services[service].image;
   // No writable profile mount, network, Docker socket, provider command or secrets.
   const found=(await run('docker',['volume','ls','--format','{{.Name}}','--filter',`name=^${record.project}_${name}$`])).trim();
   if(!found)return; // Installed but never started: no profile exists yet.
@@ -112,7 +112,7 @@ export async function perform(home,job,hooks) {
       const s=await snapshot(root),candidate={...old,source:root,revision:s.revision,manifest:s.manifest,deployment:s.deployment,sharedRevisions:s.sharedRevisions};
       for (const key of old.sharedEnabled || []) if (sharedIdentity(old, key).fingerprint !== sharedIdentity(candidate, key).fingerprint) throw Error('Shared worker changed; disable this client and coordinate an explicit shared worker upgrade before updating');
       await checkFolders(config,candidate);
-      const stage={...candidate,compose:path.join(dir,'compose.json')};await atomic(stage.compose,compose(config,stage,secrets));
+      const stage={...candidate,compose:path.join(dir,'compose.json')};await atomic(stage.compose,await compose(config,stage,secrets,home));
       for(const [service,spec] of Object.entries(stage.deployment.services))await run('docker',[...pluginArgs(stage),spec.image?'pull':'build',service]);
       const running=Boolean((await run('docker',[...pluginArgs(old),'ps','-q'])).trim());
       job.rollback={record:old,registry:r,compose:await read(old.compose),running};await save();
@@ -120,7 +120,7 @@ export async function perform(home,job,hooks) {
       const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
       const volumes=new Set(Object.values(old.deployment.services).flatMap(s=>Object.keys(s.volumes||{})));
       for(const name of volumes)await backupVolume(run,old,name,backup);
-      await atomic(old.compose,compose(config,candidate,secrets));
+      await atomic(old.compose,await compose(config,candidate,secrets,home));
       if(running)await run('docker',[...pluginArgs(candidate),'up','-d','--wait','--wait-timeout','90','--no-build']);
       r.plugins[job.target]=candidate;await atomic(path.join(home,'registry.json'),r);
       job.runtimeVerified=running;

@@ -198,11 +198,32 @@ Secrets persist privately across reinstall and are never included in registry
 responses. Twenty provides a complete v2 backend example.
 
 Compose JSON is generated, not accepted from untrusted arbitrary Compose input.
-No ports, host network, privileged services, host env inheritance, arbitrary bind mounts,
-Docker socket or raw Compose args can be supplied. Project names include a hash
-of the canonical registry path; networks and volumes inherit that namespace.
+No ports, host-network mode, privileged services, host env inheritance, arbitrary bind mounts,
+Docker socket or raw Compose args can be supplied. Package descriptors cannot select
+Docker networks. Project names include a hash of the canonical registry path;
+networks and volumes inherit that namespace.
 Images use release-specific names. All containers drop capabilities and run as
 UID 1000 by default; v2 can declare another non-root UID:GID. Plugins sharing a profile remain in the same owning deployment.
+
+### Host-owned private networks
+
+Some private deployments need a reviewed plugin service to reach another private
+Compose project. The installation host may save `pluginNetworkBindings` on that
+agent's entry in its host-owned `host-executor.json`, keyed by plugin id. Each
+route records the explicitly approved reviewed plugin `revisions` and literal
+`{service, network}` entries. The manager re-hashes the installed snapshot
+before accepting a route, then emits it for both persistent services and
+one-shot command containers. Bound services keep their plugin's default network
+as well, so they retain access to plugin-local dependencies. Routes therefore
+survive command-time Compose regeneration and restarts. Before a routed plugin
+update, the host adds the inspected candidate revision to that route; both the
+current and candidate revisions may remain authorized during the transition.
+
+This is deployment configuration, not a package-descriptor field or an `ez`
+command: agents and plugins cannot request or alter host networks. The host
+installer owns the binding and must ensure the selected service is stopped
+before changing its network topology. The executor's writable tool registry is
+never a source of network attachment authority.
 
 Commands run in one-shot client containers against their own service's volumes;
 stdin, stdout, stderr, literal arguments and exit codes are preserved. SIGINT/

@@ -44,7 +44,7 @@ async function fixture(t,kind='main') {
  if(kind==='plugin') {
   const s=await snapshot(old),base=path.join(home,'packages',target);await fs.mkdir(base,{recursive:true});
   record={revision:s.revision,source:old,project:`ezp-${digest(home).slice(0,16)}-${target}`,manifest:s.manifest,deployment:s.deployment,compose:path.join(base,'compose.json')};
-  await atomic(record.compose,compose(config,record));
+  await atomic(record.compose,await compose(config,record,{},home));
  }
  await atomic(path.join(home,'registry.json'),{schemaVersion:1,owner:home,plugins:record?{sample:record}:{},commands:record?{sample:'sample'}:{}});
  await fs.cp(old,source,{recursive:true});pkg.version='0.1.1';await atomic(path.join(source,'package.json'),pkg);
