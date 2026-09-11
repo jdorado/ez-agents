@@ -47,6 +47,38 @@ test('a missed check-in alerts once and requires clean check-ins to recover', as
   } finally { await f.close() }
 })
 
+test('a failed recovery notification stays pending and is retried on evaluation', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'workforce-watch-'))
+  let now = 0, failRecovery = true
+  const notices: string[] = []
+  const watch = new WorkforceWatch({ stateDir, enrollmentToken: 'fleet-secret', now: () => now, notify: async text => {
+    if (text.includes('recovered') && failRecovery) throw new Error('Telegram unavailable')
+    notices.push(text)
+  } })
+  try {
+    const enrolled = await watch.enroll('fleet-secret', { workerId: 'dusk-dune', checkInSeconds: 10, graceSeconds: 0 })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'failed', terminal: true })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'ok' })
+    await assert.rejects(() => watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'ok' }), /Telegram unavailable/)
+    assert.ok((await watch.inspect('dusk-dune') as { incident?: unknown }).incident)
+    failRecovery = false; now += 1
+    await watch.evaluate()
+    assert.equal((await watch.inspect('dusk-dune') as { incident?: unknown }).incident, undefined)
+    assert.equal(notices.length, 2)
+  } finally { await rm(stateDir, { recursive: true, force: true }) }
+})
+
+test('an enrollment-authorized token rotation invalidates the prior worker secret', async () => {
+  const f = await fixture()
+  try {
+    const enrolled = await f.watch.enroll('fleet-secret', { workerId: 'aifit', checkInSeconds: 10, graceSeconds: 0 })
+    await assert.rejects(() => f.watch.rotate('wrong', 'aifit'), /Unauthorized/)
+    const rotated = await f.watch.rotate('fleet-secret', 'aifit')
+    await assert.rejects(() => f.watch.checkIn('aifit', enrolled.workerToken, { status: 'ok' }), /Unauthorized/)
+    await f.watch.checkIn('aifit', rotated.workerToken, { status: 'ok' })
+  } finally { await f.close() }
+})
+
 test('HTTP enrollment and check-in endpoints reject secrets not owned by the caller', async () => {
   const f = await fixture(), server = new WorkforceWatchServer(f.watch, 'fleet-secret', () => {})
   try {
@@ -58,5 +90,10 @@ test('HTTP enrollment and check-in endpoints reject secrets not owned by the cal
     const { workerToken } = await enrollment.json() as { workerToken: string }
     assert.equal((await fetch(`${base}/v1/workers/ez-cto/check-in`, { method: 'POST', headers: { authorization: 'Bearer wrong', 'content-type': 'application/json' }, body: '{"status":"ok"}' })).status, 401)
     assert.equal((await fetch(`${base}/v1/workers/ez-cto/check-in`, { method: 'POST', headers: { authorization: `Bearer ${workerToken}`, 'content-type': 'application/json' }, body: '{"status":"ok","activity":"relay started"}' })).status, 200)
+    const rotation = await fetch(`${base}/v1/workers/ez-cto/rotate`, { method: 'POST', headers: { authorization: 'Bearer fleet-secret' } })
+    assert.equal(rotation.status, 200)
+    const rotated = await rotation.json() as { workerToken: string }
+    assert.equal((await fetch(`${base}/v1/workers/ez-cto/check-in`, { method: 'POST', headers: { authorization: `Bearer ${workerToken}`, 'content-type': 'application/json' }, body: '{"status":"ok"}' })).status, 401)
+    assert.equal((await fetch(`${base}/v1/workers/ez-cto/check-in`, { method: 'POST', headers: { authorization: `Bearer ${rotated.workerToken}`, 'content-type': 'application/json' }, body: '{"status":"ok"}' })).status, 200)
   } finally { await server.close(); await f.close() }
 })

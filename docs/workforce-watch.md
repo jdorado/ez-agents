@@ -68,5 +68,16 @@ curl --fail-with-body "$EZ_WATCH_URL/v1/workers" \
   -H "Authorization: Bearer $EZ_WATCH_ENROLL_TOKEN"
 ```
 
+For host replacement or a suspected worker-secret exposure, rotate that worker's
+secret with the enrollment token. The old secret stops working immediately:
+
+```sh
+curl --fail-with-body -X POST "$EZ_WATCH_URL/v1/workers/stocks-production/rotate" \
+  -H "Authorization: Bearer $EZ_WATCH_ENROLL_TOKEN"
+```
+
+Store the returned worker secret in the replacement supervisor before stopping
+the prior one.
+
 The service triggers once for a missed deadline or terminal failure. It sends a
 recovery notice only after two clean check-ins by default to prevent flapping.
