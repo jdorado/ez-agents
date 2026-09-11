@@ -61,11 +61,14 @@ Live smoke uses the same host CLI and requires an actual Telegram receipt.
 Restart preserves pairing and files. One kernel lock excludes relay/smoke
 writers; exit 73 means a writer is active. Do not delete its lock to bypass it.
 Health requires recent polling and host-transport heartbeats, not just a process.
-Fatal Telegram polling errors, including `409 Conflict`, stop intake and await
-worker cleanup plus in-flight task/outbox writes before exit. A conflict still
-requires the operator to stop the competing bot poller; the relay does not retry
-around that ownership error. Pending and uncertain deliveries keep their existing
-outbox/receipt semantics; executor stdout is not replayed as a reply.
+Relay replacement allows one 60-second startup grace: grammY's default 30-second
+long poll may still be draining after the old relay stops. A persistent competing
+poller still remains unhealthy after that grace.
+An interrupted Telegram poller keeps authorized work and in-flight outbox writes
+alive while it retries intake. A `409 Conflict` still requires the operator to
+stop the competing poller; it remains unhealthy after the startup grace. Pending
+and uncertain deliveries keep their existing outbox/receipt semantics; executor
+stdout is not replayed as a reply.
 Signal and fatal-error paths share one shutdown; a secondary cleanup error is
 reported without replacing the original startup/polling failure.
 
