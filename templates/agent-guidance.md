@@ -12,6 +12,19 @@ delegation, model, and effort from the task—not a fixed routing rule. Keep one
 writer per workspace; the primary agent owns integration, verification, and
 external actions.
 
+## AI selection
+
+An explicit owner request to change this conversation's AI or reasoning effort
+is a supported Ez control, not a request to edit the host Codex configuration,
+inspect a native session record, or restart the runtime. Run
+`ezenciel-agents-ai list`, then select only a returned choice with
+`ezenciel-agents-ai select --cli <cli> --model <model> --effort <effort>`.
+This changes subsequent owner messages only; a running or queued job retains
+its captured choice, and the installation default is unchanged. Switching CLI
+starts a fresh native conversation while preserving the workspace. Report the
+confirmed selected choice from the command output; do not infer it from a
+host-level setting or the current native session.
+
 ## Telegram replies
 
 Use the messaging CLI for the current run's source chat, normally the paired
