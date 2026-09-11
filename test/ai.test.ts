@@ -111,6 +111,25 @@ test('Choose AI opens the available installed-model catalog without an Add AI st
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
+test('Choose AI does not expose saved model choices without a catalog to validate them', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-empty-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    await store.aiState(initialPreset('grok'))
+    await store.savePreset({ id: 'saved', name: 'Saved model', cli: 'codex', model: 'fixture-model', effort: 'medium' })
+    const menu = createAiMenu(store, 'grok', async () => [])
+    let reply = ''
+    let keyboard: { inline_keyboard?: Array<Array<{ text: string }>> } | undefined
+    await menu.list({ reply: async (text: string, options?: { reply_markup?: unknown }) => {
+      reply = text
+      keyboard = options?.reply_markup as typeof keyboard
+      return {} as never
+    } } as never)
+    assert.match(reply, /current client setup only/)
+    assert.ok(!keyboard?.inline_keyboard?.flat().some((button) => button.text.includes('Saved model')))
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
 test('model catalog can read an agent-bound Codex home', async () => {
   const home = await mkdtemp(join(tmpdir(), 'ez-catalog-home-'))
   const codexHome = await mkdtemp(join(tmpdir(), 'ez-catalog-codex-'))
