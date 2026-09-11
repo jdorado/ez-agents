@@ -6,12 +6,13 @@ import { join } from 'node:path'
 export type WatchStatus = 'ok' | 'failed'
 export type WatchSeverity = 'warning' | 'critical'
 export type WatchEvent = { at: string; status: WatchStatus; activity?: string; error?: string; runId?: string; logsHint?: string; terminal?: boolean }
-type Incident = { openedAt: number; reason: 'missed-check-in' | 'terminal-failure'; notifiedAt?: number; recoveredAt?: number }
+export type WorkforcePage = { action: 'trigger' | 'resolve'; dedupKey: string; summary: string; severity: WatchSeverity; source: string; customDetails: Record<string, string> }
+type Incident = { openedAt: number; reason: 'missed-check-in' | 'terminal-failure'; notifiedAt?: number; pagerDutyTriggeredAt?: number; recoveredAt?: number; telegramRecoveredAt?: number; pagerDutyResolvedAt?: number }
 type Worker = { id: string; tokenHash: string; checkInMs: number; graceMs: number; severity: WatchSeverity; runbookUrl?: string; createdAt: number; lastSeenAt: number; recoveryChecks: number; history: WatchEvent[]; incident?: Incident }
 type State = { version: 1; workers: Record<string, Worker> }
 export type EnrollRequest = { workerId: string; checkInSeconds: number; graceSeconds: number; severity?: WatchSeverity; runbookUrl?: string }
 export type CheckInRequest = { status: WatchStatus; activity?: string; error?: string; runId?: string; logsHint?: string; terminal?: boolean }
-export type WorkforceWatchOptions = { stateDir: string; enrollmentToken: string; recoveryThreshold?: number; notify?: (message: string) => Promise<void>; now?: () => number; log?: (message: string) => void }
+export type WorkforceWatchOptions = { stateDir: string; enrollmentToken: string; recoveryThreshold?: number; notify?: (message: string) => Promise<void>; page?: (event: WorkforcePage) => Promise<void>; now?: () => number; log?: (message: string) => void }
 
 const WORKER_ID = /^[a-z][a-z0-9-]{0,63}$/
 const MAX_HISTORY = 5, MAX_BODY_BYTES = 8192
@@ -71,10 +72,47 @@ export class WorkforceWatch {
     if (latest?.activity) lines.push(`Last activity: ${latest.activity}`); if (latest?.error) lines.push(`Last error: ${latest.error}`); if (latest?.runId) lines.push(`Run: ${latest.runId}`); if (latest) lines.push(`Last seen: ${latest.at}`); if (latest?.logsHint) lines.push(`Next: ${latest.logsHint}`); if (worker.runbookUrl) lines.push(`Runbook: ${worker.runbookUrl}`)
     return lines.join('\n')
   }
-  private async notifyOpen(state: State, worker: Worker): Promise<void> { if (!worker.incident || worker.incident.notifiedAt !== undefined || !this.options.notify) return; await this.options.notify(this.format(worker, 'opened')); worker.incident.notifiedAt = this.now(); await this.save(state) }
+  private page(worker: Worker, action: 'trigger' | 'resolve'): WorkforcePage {
+    const latest = this.latest(worker), incident = worker.incident!
+    const customDetails: Record<string, string> = { reason: incident.reason, lastSeen: latest?.at ?? new Date(worker.lastSeenAt).toISOString() }
+    if (latest?.activity) customDetails.activity = latest.activity
+    if (latest?.error) customDetails.error = latest.error
+    if (latest?.runId) customDetails.runId = latest.runId
+    if (latest?.logsHint) customDetails.logsHint = latest.logsHint
+    if (worker.runbookUrl) customDetails.runbookUrl = worker.runbookUrl
+    return { action, dedupKey: `ez:workforce:${worker.id}`, summary: `Workforce Watch ${action}: ${worker.id}`, severity: worker.severity, source: 'ez-workforce-watch', customDetails }
+  }
+  private reopen(worker: Worker, now: number, reason: Incident['reason']): void {
+    const incident = worker.incident
+    if (!incident) { worker.incident = { openedAt: now, reason }; return }
+    if (incident.recoveredAt === undefined) return
+    if (incident.pagerDutyResolvedAt !== undefined) delete incident.pagerDutyTriggeredAt
+    if (incident.telegramRecoveredAt !== undefined) delete incident.notifiedAt
+    delete incident.pagerDutyResolvedAt
+    delete incident.telegramRecoveredAt
+    delete incident.recoveredAt
+    incident.openedAt = now
+    incident.reason = reason
+    worker.recoveryChecks = 0
+  }
+  private async notifyOpen(state: State, worker: Worker): Promise<void> {
+    const incident = worker.incident; if (!incident) return
+    let failure: unknown, changed = false
+    if (incident.pagerDutyTriggeredAt === undefined && this.options.page) try { await this.options.page(this.page(worker, 'trigger')); incident.pagerDutyTriggeredAt = this.now(); changed = true } catch (error) { failure ??= error }
+    if (incident.notifiedAt === undefined && this.options.notify) try { await this.options.notify(this.format(worker, 'opened')); incident.notifiedAt = this.now(); changed = true } catch (error) { failure ??= error }
+    if (changed) await this.save(state)
+    if (failure) throw failure
+  }
   private async notifyRecovery(state: State, worker: Worker): Promise<void> {
-    if (worker.incident?.recoveredAt === undefined) return
-    if (worker.incident.notifiedAt !== undefined && this.options.notify) await this.options.notify(this.format(worker, 'recovered'))
+    const incident = worker.incident; if (incident?.recoveredAt === undefined) return
+    let failure: unknown, changed = false
+    if (incident.pagerDutyTriggeredAt !== undefined && incident.pagerDutyResolvedAt === undefined && this.options.page) try { await this.options.page(this.page(worker, 'resolve')); incident.pagerDutyResolvedAt = this.now(); changed = true } catch (error) { failure ??= error }
+    if (incident.notifiedAt !== undefined && incident.telegramRecoveredAt === undefined && this.options.notify) try { await this.options.notify(this.format(worker, 'recovered')); incident.telegramRecoveredAt = this.now(); changed = true } catch (error) { failure ??= error }
+    const pagerDutyComplete = incident.pagerDutyTriggeredAt === undefined || incident.pagerDutyResolvedAt !== undefined
+    const telegramComplete = incident.notifiedAt === undefined || incident.telegramRecoveredAt !== undefined
+    if (changed && !(pagerDutyComplete && telegramComplete)) await this.save(state)
+    if (failure) throw failure
+    if (!(pagerDutyComplete && telegramComplete)) return
     worker.incident = undefined
     worker.recoveryChecks = 0
     await this.save(state)
@@ -87,8 +125,8 @@ export class WorkforceWatch {
   async checkIn(workerId: string, token: string, input: unknown): Promise<{incident:boolean}> {
     if (!WORKER_ID.test(workerId)) throw new Error('Unauthorized'); const request = validateCheckIn(input)
     return this.enqueue(async () => { const state = await this.state(), worker = state.workers[workerId]; if (!worker || !sameSecret(token,worker.tokenHash)) throw new Error('Unauthorized'); const now = this.now(), event:WatchEvent={at:new Date(now).toISOString(),...request}; worker.lastSeenAt=now; worker.history=[...worker.history,event].slice(-MAX_HISTORY)
-      if (request.terminal) { worker.recoveryChecks=0; worker.incident ??= {openedAt:now,reason:'terminal-failure'}; delete worker.incident.recoveredAt }
-      else if (worker.incident?.recoveredAt) { if(request.status==='failed') { delete worker.incident.recoveredAt; worker.recoveryChecks=0 } }
+      if (request.terminal) { worker.recoveryChecks=0; this.reopen(worker,now,'terminal-failure') }
+      else if (worker.incident?.recoveredAt !== undefined) { if(request.status==='failed') this.reopen(worker,now,worker.incident.reason) }
       else if (worker.incident && request.status==='ok') { worker.recoveryChecks += 1; if (worker.recoveryChecks >= this.recoveryThreshold) { worker.incident.recoveredAt=now; await this.save(state); await this.notifyRecovery(state,worker); return {incident:Boolean(worker.incident)} } }
       else if (request.status==='failed') worker.recoveryChecks=0
       await this.save(state); await this.notifyOpen(state,worker); return {incident:Boolean(worker.incident)} })
@@ -97,8 +135,8 @@ export class WorkforceWatch {
     if (!sameSecret(token, hash(this.options.enrollmentToken)) || !WORKER_ID.test(workerId)) throw new Error('Unauthorized')
     return this.enqueue(async () => { const state=await this.state(), worker=state.workers[workerId]; if(!worker) throw new Error('Not found'); const workerToken=randomBytes(32).toString('base64url'); worker.tokenHash=hash(workerToken); worker.lastSeenAt=this.now(); worker.recoveryChecks=0; await this.save(state); return {workerId,workerToken} })
   }
-  async evaluate(): Promise<void> { await this.enqueue(async () => { const state=await this.state(), now=this.now(); let changed=false; for (const worker of Object.values(state.workers)) if (!worker.incident && now > worker.lastSeenAt+worker.checkInMs+worker.graceMs) { worker.incident={openedAt:now,reason:'missed-check-in'}; worker.recoveryChecks=0; changed=true }; if(changed) await this.save(state); for(const worker of Object.values(state.workers)) { if(worker.incident?.recoveredAt !== undefined) await this.notifyRecovery(state,worker); else await this.notifyOpen(state,worker) } }) }
-  async inspect(workerId?: string): Promise<unknown> { return this.enqueue(async () => { const state=await this.state(); const redact=(worker:Worker) => ({id:worker.id,checkInSeconds:worker.checkInMs/1000,graceSeconds:worker.graceMs/1000,severity:worker.severity,runbookUrl:worker.runbookUrl,createdAt:new Date(worker.createdAt).toISOString(),lastSeenAt:new Date(worker.lastSeenAt).toISOString(),incident:worker.incident&&{openedAt:new Date(worker.incident.openedAt).toISOString(),reason:worker.incident.reason,notifiedAt:worker.incident.notifiedAt===undefined?undefined:new Date(worker.incident.notifiedAt).toISOString(),recoveredAt:worker.incident.recoveredAt===undefined?undefined:new Date(worker.incident.recoveredAt).toISOString()},history:worker.history}); if(workerId){const worker=state.workers[workerId];if(!worker)throw new Error('Not found');return redact(worker)} return Object.values(state.workers).map(redact) }) }
+  async evaluate(): Promise<void> { await this.enqueue(async () => { const state=await this.state(), now=this.now(); let changed=false; for (const worker of Object.values(state.workers)) if ((!worker.incident || worker.incident.recoveredAt !== undefined) && now > worker.lastSeenAt+worker.checkInMs+worker.graceMs) { this.reopen(worker,now,'missed-check-in'); worker.recoveryChecks=0; changed=true }; if(changed) await this.save(state); for(const worker of Object.values(state.workers)) { if(worker.incident?.recoveredAt !== undefined) await this.notifyRecovery(state,worker); else await this.notifyOpen(state,worker) } }) }
+  async inspect(workerId?: string): Promise<unknown> { return this.enqueue(async () => { const state=await this.state(); const at=(value:number|undefined):string|undefined=>value===undefined?undefined:new Date(value).toISOString(), redact=(worker:Worker) => ({id:worker.id,checkInSeconds:worker.checkInMs/1000,graceSeconds:worker.graceMs/1000,severity:worker.severity,runbookUrl:worker.runbookUrl,createdAt:new Date(worker.createdAt).toISOString(),lastSeenAt:new Date(worker.lastSeenAt).toISOString(),incident:worker.incident&&{openedAt:at(worker.incident.openedAt),reason:worker.incident.reason,notifiedAt:at(worker.incident.notifiedAt),pagerDutyTriggeredAt:at(worker.incident.pagerDutyTriggeredAt),recoveredAt:at(worker.incident.recoveredAt),telegramRecoveredAt:at(worker.incident.telegramRecoveredAt),pagerDutyResolvedAt:at(worker.incident.pagerDutyResolvedAt)},history:worker.history}); if(workerId){const worker=state.workers[workerId];if(!worker)throw new Error('Not found');return redact(worker)} return Object.values(state.workers).map(redact) }) }
   start(evaluateMs: number): void { if(this.timer)return; void this.evaluate().catch(e=>this.options.log?.(`Initial evaluation failed: ${errorText(e)}`)); this.timer=setInterval(()=>void this.evaluate().catch(e=>this.options.log?.(`Evaluation failed: ${errorText(e)}`)),evaluateMs);this.timer.unref() }
   stop(): void { if(this.timer)clearInterval(this.timer);this.timer=undefined }
 }

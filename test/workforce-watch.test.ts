@@ -47,6 +47,32 @@ test('a missed check-in alerts once and requires clean check-ins to recover', as
   } finally { await f.close() }
 })
 
+test('PagerDuty uses one worker-specific deduplication key and resolves only a triggered incident', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'workforce-watch-'))
+  const pages: Array<{ action: string; dedupKey: string; customDetails: Record<string, string> }> = []
+  const watch = new WorkforceWatch({ stateDir, enrollmentToken: 'fleet-secret', page: async event => { pages.push(event) } })
+  try {
+    const enrolled = await watch.enroll('fleet-secret', { workerId: 'stocks', checkInSeconds: 10, graceSeconds: 0, severity: 'critical' })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'failed', terminal: true, activity: 'broker probe', error: 'gateway unavailable', logsHint: 'journalctl -u stocks' })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'ok' })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'ok' })
+    assert.deepEqual(pages.map(page => [page.action, page.dedupKey]), [['trigger', 'ez:workforce:stocks'], ['resolve', 'ez:workforce:stocks']])
+    assert.equal(pages[0]?.customDetails.error, 'gateway unavailable')
+  } finally { await rm(stateDir, { recursive: true, force: true }) }
+})
+
+test('PagerDuty trigger is not duplicated when supplemental Telegram delivery fails', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'workforce-watch-'))
+  const pages: string[] = []
+  const watch = new WorkforceWatch({ stateDir, enrollmentToken: 'fleet-secret', page: async event => { pages.push(event.action) }, notify: async () => { throw new Error('Telegram unavailable') } })
+  try {
+    const enrolled = await watch.enroll('fleet-secret', { workerId: 'aifit', checkInSeconds: 10, graceSeconds: 0 })
+    await assert.rejects(() => watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'failed', terminal: true }), /Telegram unavailable/)
+    await assert.rejects(() => watch.evaluate(), /Telegram unavailable/)
+    assert.deepEqual(pages, ['trigger'])
+  } finally { await rm(stateDir, { recursive: true, force: true }) }
+})
+
 test('a failed recovery notification stays pending and is retried on evaluation', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'workforce-watch-'))
   let now = 0, failRecovery = true
@@ -114,3 +140,41 @@ test('HTTP enrollment and check-in endpoints reject secrets not owned by the cal
     assert.equal((await fetch(`${base}/v1/workers/ez-cto/check-in`, { method: 'POST', headers: { authorization: `Bearer ${rotated.workerToken}`, 'content-type': 'application/json' }, body: '{"status":"ok"}' })).status, 200)
   } finally { await server.close(); await f.close() }
 })
+
+for (const recoveredChannel of ['pagerduty', 'telegram'] as const) {
+  for (const relapse of ['terminal', 'failed', 'missed'] as const) {
+    test(`a ${relapse} relapse reopens only the recovered ${recoveredChannel} channel after restart`, async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), 'workforce-relapse-'))
+      let now = 0, failRecovery = true
+      const pages: string[] = [], notices: string[] = []
+      const options = { stateDir, enrollmentToken: 'synthetic', now: () => now,
+        page: async (event: { action: string }) => {
+          if (event.action === 'resolve' && recoveredChannel === 'telegram' && failRecovery) throw new Error('recovery unavailable')
+          pages.push(event.action)
+        },
+        notify: async (message: string) => {
+          if (message.includes('recovered') && recoveredChannel === 'pagerduty' && failRecovery) throw new Error('recovery unavailable')
+          notices.push(message.includes('recovered') ? 'resolve' : 'trigger')
+        } }
+      try {
+        let watch = new WorkforceWatch(options)
+        const worker = await watch.enroll('synthetic', { workerId: 'synthetic-worker', checkInSeconds: 10, graceSeconds: 0 })
+        await watch.checkIn(worker.workerId, worker.workerToken, { status: 'failed', terminal: true })
+        await watch.checkIn(worker.workerId, worker.workerToken, { status: 'ok' })
+        await assert.rejects(() => watch.checkIn(worker.workerId, worker.workerToken, { status: 'ok' }), /recovery unavailable/)
+        watch = new WorkforceWatch(options)
+        now = relapse === 'missed' ? 10_001 : 1
+        if (relapse === 'missed') await watch.evaluate()
+        else await watch.checkIn(worker.workerId, worker.workerToken, { status: 'failed', terminal: relapse === 'terminal' })
+        assert.deepEqual(pages, recoveredChannel === 'pagerduty' ? ['trigger', 'resolve', 'trigger'] : ['trigger'])
+        assert.deepEqual(notices, recoveredChannel === 'telegram' ? ['trigger', 'resolve', 'trigger'] : ['trigger'])
+        failRecovery = false
+        await watch.checkIn(worker.workerId, worker.workerToken, { status: 'ok' })
+        await watch.checkIn(worker.workerId, worker.workerToken, { status: 'ok' })
+        assert.equal((await watch.inspect(worker.workerId) as { incident?: unknown }).incident, undefined)
+        assert.equal(pages.at(-1), 'resolve')
+        assert.equal(notices.at(-1), 'resolve')
+      } finally { await rm(stateDir, { recursive: true, force: true }) }
+    })
+  }
+}
