@@ -80,10 +80,13 @@ test('model catalog projects native metadata only, excluding hidden entries and 
       { slug: 'fixture-model', display_name: 'Fixture', visibility: 'list',
         supported_reasoning_levels: [{ effort: 'medium' }, { effort: 'bad value' }],
         model_messages: 'Untrusted instructions must not be imported', api_key: 'fixture-secret' },
+      { slug: 'gpt-5.6-luna', display_name: 'Luna', visibility: 'list',
+        supported_reasoning_levels: [{ effort: 'high' }, { effort: 'xhigh' }, { effort: 'max' }] },
       { slug: 'hidden-model', visibility: 'hide' },
     ] }))
     assert.deepEqual(await readModels(home, async (cli) => cli === 'codex'), [
       { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium'] },
+      { cli: 'codex', model: 'gpt-5.6-luna', name: 'Luna', efforts: ['high', 'xhigh'] },
     ])
     assert.equal(isPreset({ id: 'x', name: 'x', cli: 'grok', model: '--shell escape' }), false)
   } finally { await rm(home, { recursive: true, force: true }) }

@@ -26,7 +26,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
   if (host) catalog = async () => JSON.parse(await readFile(path.join(process.env.EZ_CONTROL_DIR!, 'host-executor/models.json'),'utf8'))
   const refresh = async () => control.syncClientPresets(initial, host ? [] : await discoverDefaults(workspace, { codexHome }))
   const validate = async (preset: AiPreset) => {
-    assertEffort(preset.effort)
+    assertEffort(preset.effort, preset.model, preset.cli)
     if (preset.id === initial.id) return
     if (preset.id.startsWith('detected_')) {
       const detected = await discoverDefaults(workspace, { codexHome })
@@ -79,7 +79,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       button(keyboard, `${model.cli} · ${model.name}`, async (next) => {
         if (!model.efforts.length) return save(next, model)
         const efforts = new InlineKeyboard()
-        for (const effort of model.efforts.filter(allowedEffort)) button(efforts, effort, (last) => save(last, model, effort))
+        for (const effort of model.efforts.filter(effort => allowedEffort(effort, model.model, model.cli))) button(efforts, effort, (last) => save(last, model, effort))
         await next.reply(`${model.name} — effort`, { reply_markup: efforts })
       })
     }

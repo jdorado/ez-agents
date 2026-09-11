@@ -42,7 +42,7 @@ export async function replyCall(controlDir: string, runId: string, workspace: st
     if (!run.execution) throw new Error('Missing execution choice')
     const preset = { ...initialPreset('codex'), ...(args.model !== undefined ? { model: args.model } : {}), ...(args.effort !== undefined ? { effort: args.effort } : {}) }
     if (!isPreset(preset)) throw new Error('Invalid worker model or effort')
-    assertEffort(preset.effort)
+    assertEffort(preset.effort, preset.model, preset.cli)
     const owner = (await new ControlStore(controlDir, 900000).status()).owner!
     const scheduler = new Scheduler(controlDir), id = `s_reply_${runId}`
     try { return { id: (await scheduler.get(id)).id } } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
