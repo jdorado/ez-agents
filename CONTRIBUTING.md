@@ -123,3 +123,10 @@ git worktree add -b feat/task-name /absolute/worktrees/task-name origin/main
 Beta publishing workflow changes follow [trusted publishing](docs/trusted-publishing.md).
 Validate wrong source, repository, package, version and artifact inputs with
 negative tests. Never dispatch publication to test authentication.
+
+Finished work leaves zero task worktrees. Worktrees are temporary for active
+implementation, PR review and specific unfinished acceptance steps. A merged
+change, a completed release or a possible future follow-up is not a reason to
+retain its checkout. Record deferred work in the PR/issue with its next action;
+recreate a worktree from the preserved commit when that work actually resumes.
+Every retained worktree must name an active task or a concrete unfinished gate.
