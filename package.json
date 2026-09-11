@@ -6,6 +6,7 @@
   "description": "A lightweight foundation for persistent business AI assistants using existing AI harnesses, workspaces and plugins.",
   "packageManager": "pnpm@10.30.3",
   "bin": {
+    "ezenciel-agents-approval-channel": "bin/ezenciel-agents-approval-channel.mjs",
     "ezenciel-agents-schedule": "bin/ezenciel-agents-schedule.mjs",
     "ezenciel-agents-install": "bin/ezenciel-agents-install",
     "ezenciel-agents": "bin/ezenciel-agents.mjs",
