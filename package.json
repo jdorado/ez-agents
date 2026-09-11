@@ -20,7 +20,8 @@
     "ezenciel-agents-create": "bin/ezenciel-agents-create",
     "ezenciel-agents-host": "bin/ezenciel-agents-host",
     "ezenciel-agents-tools": "bin/ezenciel-agents-tools.mjs",
-    "ezenciel-agents-ai": "bin/ezenciel-agents-ai.mjs"
+    "ezenciel-agents-ai": "bin/ezenciel-agents-ai.mjs",
+    "ezenciel-agents-watch": "bin/ezenciel-agents-watch.mjs"
   },
   "files": [
     "default-plugins.json",
@@ -35,6 +36,7 @@
     "CONTRIBUTING.md",
     "Dockerfile",
     "compose.yaml",
+    "compose.workforce-watch.yaml",
     "docker",
     "compose.whatsapp.yaml",
     "scripts/smoke.ts",

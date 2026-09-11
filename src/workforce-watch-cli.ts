@@ -1,0 +1,9 @@
+import { WorkforceWatch, WorkforceWatchServer } from './workforce-watch.js'
+const positive=(value:string|undefined,name:string,fallback:number):number=>{if(!value)return fallback;const parsed=Number(value);if(!Number.isSafeInteger(parsed)||parsed<=0)throw new Error(`${name} must be a positive integer`);return parsed}
+const enrollmentToken=process.env.EZ_WATCH_ENROLL_TOKEN?.trim();if(!enrollmentToken)throw new Error('EZ_WATCH_ENROLL_TOKEN is required')
+const telegramToken=process.env.TELEGRAM_BOT_TOKEN?.trim(),telegramChatId=process.env.EZ_WATCH_TELEGRAM_CHAT_ID?.trim();if(Boolean(telegramToken)!==Boolean(telegramChatId))throw new Error('Set both TELEGRAM_BOT_TOKEN and EZ_WATCH_TELEGRAM_CHAT_ID, or neither')
+const notify=telegramToken&&telegramChatId?async(text:string)=>{const response=await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:telegramChatId,text,disable_web_page_preview:true}),redirect:'error',signal:AbortSignal.timeout(10000)});if(!response.ok)throw new Error(`Telegram delivery returned HTTP ${response.status}`)}:undefined
+const watch=new WorkforceWatch({stateDir:process.env.EZ_WATCH_STATE_DIR?.trim()||'/state',enrollmentToken,recoveryThreshold:positive(process.env.EZ_WATCH_RECOVERY_CHECKS,'EZ_WATCH_RECOVERY_CHECKS',2),notify,log:message=>console.error(message)})
+const port=positive(process.env.EZ_WATCH_PORT,'EZ_WATCH_PORT',8080),host=process.env.EZ_WATCH_HOST?.trim()||'0.0.0.0',evaluateMs=positive(process.env.EZ_WATCH_EVALUATE_SECONDS,'EZ_WATCH_EVALUATE_SECONDS',30)*1000,server=new WorkforceWatchServer(watch,enrollmentToken)
+await server.listen(port,host);watch.start(evaluateMs);console.log(`Workforce Watch listening on ${host}:${port}`)
+for(const signal of ['SIGINT','SIGTERM'] as const)process.once(signal,()=>{watch.stop();void server.close().finally(()=>process.exit(0))})
