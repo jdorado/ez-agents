@@ -52,7 +52,7 @@ owner request for standalone plugin development is a separate workflow.
 
 ## Defaults and host prerequisites
 
-New agents using `codex` or `codex-gui` start with `gpt-5.6-terra` and `high`
+New agents using `codex` or `codex-gui` start with `gpt-5.6-sol` and `medium`
 reasoning, including when initialized with `ezenciel-agents-setup init`. This
 Ez default takes precedence over discovered host client defaults. Saved agent
 selections at or below high are preserved; use the AI settings to choose another model or effort.
@@ -62,12 +62,15 @@ Terra/high at launch. This governs Ez-managed launches; it is not an account-wid
 limit on independently launched native clients or executor-created native subagents.
 Other adapters inherit their native effort when none is selected in Ez. That
 inherited configuration is not capped by Ez; explicit above-high Ez selections
-are still rejected. Only Codex adapters receive the default `high` effort.
+are still rejected. Conversation presets pin Sol/medium; the lower-level
+Codex fallback remains Terra/high for work without an explicit choice.
 
 New scheduled and one-off background tasks default to Codex Terra/high independently
 of the creating chat. Use scheduler `--cli`, `--model`, and `--effort` flags for
 explicit overrides. Editing a schedule preserves its settings unless overridden.
-Restricted messaging tasks also use Terra/high when no settings are supplied.
+Restricted messaging tasks use Sol/medium while retaining their approved tool
+and context boundaries. Upgrades add Responsive chat to saved choices without
+replacing the selected/default preset. See [responsive channels](responsive-channels.md).
 
 Use the existing owner's host account. Unless a layout was supplied, use
 `${XDG_DATA_HOME:-$HOME/.local/share}/ez/packages/<version>/` for extracted main
