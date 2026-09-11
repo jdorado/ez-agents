@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlStore } from '../src/control-state.js'
 import { initialPreset, chatPreset, readModels, isPreset } from '../src/ai.js'
+import { createAiMenu } from '../src/menu.js'
 import { EXECUTOR_REGISTRY, nativeSessionId } from '../src/executor.js'
 import { InboxStore } from '../src/inbox.js'
 import type { Update } from 'grammy/types'
@@ -90,6 +91,45 @@ test('model catalog projects native metadata only, excluding hidden entries and 
     ])
     assert.equal(isPreset({ id: 'x', name: 'x', cli: 'grok', model: '--shell escape' }), false)
   } finally { await rm(home, { recursive: true, force: true }) }
+})
+
+test('Choose AI opens the available installed-model catalog without an Add AI step', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-'))
+  try {
+    const menu = createAiMenu(new ControlStore(dir, 1000), 'grok', async () => [{
+      cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium'],
+    }])
+    let reply = ''
+    let keyboard: { inline_keyboard?: Array<Array<{ text: string }>> } | undefined
+    await menu.list({ reply: async (text: string, options?: { reply_markup?: unknown }) => {
+      reply = text
+      keyboard = options?.reply_markup as typeof keyboard
+      return {} as never
+    } } as never)
+    assert.match(reply, /Available models are populated automatically/)
+    assert.deepEqual(keyboard?.inline_keyboard?.flat().map((button) => button.text), ['codex · Fixture'])
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('Choose AI does not expose saved model choices without a catalog to validate them', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-empty-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    await store.aiState(initialPreset('grok'))
+    await store.savePreset({ id: 'saved', name: 'Saved model', cli: 'codex', model: 'fixture-model', effort: 'medium' })
+    await store.savePreset({ id: 'saved-default', name: 'Saved client default', cli: 'claude' })
+    const menu = createAiMenu(store, 'grok', async () => [])
+    let reply = ''
+    let keyboard: { inline_keyboard?: Array<Array<{ text: string }>> } | undefined
+    await menu.list({ reply: async (text: string, options?: { reply_markup?: unknown }) => {
+      reply = text
+      keyboard = options?.reply_markup as typeof keyboard
+      return {} as never
+    } } as never)
+    assert.match(reply, /current client setup only/)
+    assert.ok(!keyboard?.inline_keyboard?.flat().some((button) => button.text.includes('Saved model')))
+    assert.ok(!keyboard?.inline_keyboard?.flat().some((button) => button.text.includes('Saved client default')))
+  } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
 test('model catalog can read an agent-bound Codex home', async () => {

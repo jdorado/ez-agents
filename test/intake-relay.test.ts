@@ -201,7 +201,7 @@ test('owner group discovery routes only to the private chat and rechecks identit
   } finally { await f.close() }
 })
 
-test('four-item menu is owner-only; saved AI buttons work and forged/stale buttons cannot change settings', async () => {
+test('four-item menu is owner-only; available AI choices work and forged/stale buttons cannot change settings', async () => {
   const f = await fixture()
   const callback = (id: number, data: string, user = 101): Update => ({
     update_id: id,
@@ -220,10 +220,18 @@ test('four-item menu is owner-only; saved AI buttons work and forged/stale butto
     await f.relay.bot.handleUpdate(callback(4, 'ai:forged'))
     assert.equal(await store.getActiveSession(), null)
     await f.relay.bot.handleUpdate(callback(5, pick))
+    if (!(await store.getActiveSession())) {
+      let useNow = f.keyboards.at(-1)!.flat().find((button) => button.text === 'Use now')?.callback_data
+      if (!useNow) {
+        await f.relay.bot.handleUpdate(callback(6, f.keyboards.at(-1)!.flat()[0].callback_data))
+        useNow = f.keyboards.at(-1)!.flat().find((button) => button.text === 'Use now')!.callback_data
+      }
+      await f.relay.bot.handleUpdate(callback(7, useNow))
+    }
     assert.ok(await store.getActiveSession())
-    await f.relay.bot.handleUpdate(callback(6, pick))
+    await f.relay.bot.handleUpdate(callback(8, pick))
     assert.match(f.replies.at(-1)!, /Menu expired/)
-    await f.relay.bot.handleUpdate(message(7, '/settings'))
+    await f.relay.bot.handleUpdate(message(9, '/settings'))
     assert.match(f.replies.at(-1)!, /Default for new conversations/)
     await f.relay.bot.handleUpdate(message(8, '/status'))
     assert.ok(f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
