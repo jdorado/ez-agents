@@ -160,6 +160,22 @@ test('client tolerates missing heartbeat and consumes completion before checking
  } finally {client.kill();await closed;await rm(root,{recursive:true,force:true})}
 })
 
+test('client records a relay interruption before exiting 130',async()=>{
+ const root=await mkdtemp(path.join(tmpdir(),'ez-host-interrupt-'))
+ const directory=path.join(root,'host-executor');await mkdir(directory)
+ const client=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),root,'tg_97'],{stdio:['pipe','pipe','pipe']})
+ let stderr='';client.stderr.on('data',chunk=>stderr+=chunk);client.stdout.resume()
+ client.stdin.end(JSON.stringify({texts:['test'],options:{}}))
+ try {
+  for(let n=0;n<100;n++){try{await readFile(path.join(directory,'tg_97.request.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+  const closed=new Promise<number|null>(resolve=>client.once('close',resolve))
+  client.kill('SIGTERM')
+  assert.equal(await closed,130)
+  assert.equal(await readFile(path.join(directory,'tg_97.cancel'),'utf8'),'')
+  assert.match(stderr,/Host executor client interrupted by SIGTERM/)
+ } finally {if(client.exitCode===null && client.signalCode===null)client.kill();await rm(root,{recursive:true,force:true})}
+})
+
 test('client cancels on stale or invalid heartbeat instead of waiting indefinitely',async()=>{
  for(const heartbeat of [{at:Date.now()-60000},{at:'invalid'}]) {
   const root=await mkdtemp(path.join(tmpdir(),'ez-heartbeat-invalid-'))

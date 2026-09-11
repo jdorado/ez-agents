@@ -22,6 +22,13 @@ test('creates a queued run and binds chat id outside the workspace', async () =>
   assert.equal((await store.get(created.id))?.chatId, 101)
 }))
 
+test('running does not reap a process from another executor namespace', async () => fixture(async (store) => {
+  const created = await store.create({ chatId: 101, telegramUserId: 101, texts: ['host-backed'] })
+  await store.patch(created.id, { status: 'running', pid: 999_999_999 })
+  assert.equal((await store.running())?.id, created.id)
+  assert.equal((await store.get(created.id))?.status, 'running')
+}))
+
 test('ez message writes an outbox item for the bound run, not a telegram send', async () => fixture(async (store) => {
   const created = await store.create({ chatId: 9, telegramUserId: 9, texts: ['hello'] })
   await store.patch(created.id, { status: 'running' })

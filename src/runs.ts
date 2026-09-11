@@ -85,15 +85,6 @@ const isRun = (value: unknown): value is RunRecord => {
 
 export const newRunId = (): string => `r_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`
 
-export const isPidAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
 export class RunStore {
   private readonly changes = new Map<string, Promise<unknown>>()
   private readonly runsDir: string
@@ -210,10 +201,6 @@ export class RunStore {
     let first: RunRecord | undefined
     for (const run of runs) {
       if (run.status === 'running' && (background === undefined || Boolean(run.scheduled) === background)) {
-        if (run.pid && !isPidAlive(run.pid)) {
-          await this.patch(run.id, { status: 'failed', failureReason: 'worker-process-missing', endedAt: new Date().toISOString() })
-          continue
-        }
         first ??= run
       }
     }
