@@ -1,3 +1,5 @@
+export const CODEX_CHAT_MODEL = 'gpt-5.6-sol'
+export const CHAT_EFFORT = 'medium'
 export const CODEX_DEFAULT_MODEL = 'gpt-5.6-terra'
 export const DEFAULT_EFFORT = 'high'
 export const allowedEffort = (effort?: string) => effort === undefined ||

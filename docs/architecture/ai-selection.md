@@ -36,10 +36,17 @@ workspace JSON settings; OpenCode reports resolved config. Unknown defaults and
 opaque wrappers remain explicitly “client default”. No credentials are stored,
 no inference runs, no new dependency, and no cross-CLI session transfer.
 
-`/status` resolves the configured model and reasoning effort for the current
-client-default seed from the agent's isolated Codex profile when that metadata
-is available. If the profile has no explicit model, it uses Codex's native
-default-model catalog for display. It displays that snapshot only; setup and
-refresh do not save the fallback, so the seed remains a native client default
-for later conversations. Desktop Codex remains its own opaque client default
-rather than inheriting CLI configuration.
+New Codex CLI and desktop agents seed **Responsive chat** (`gpt-5.6-sol`,
+`medium`). Durable work keeps its independent `gpt-5.6-terra` / `high` default;
+workers can explicitly select another model and effort for the job. Native
+choices for other executors remain unchanged. No fallback is selected when a
+model is unavailable.
+
+Upgrades add the responsive preset to the menu without changing an existing
+selection, default, session, or queued run. Choose it through Choose AI for the
+current conversation or Settings for future conversations. `/status` shows the
+saved selection. Legacy client-default seeds still use native configuration
+metadata for display only.
+
+See [responsive channels](../responsive-channels.md) for the conversational
+policy and the separate boundaries for plugin correspondence and app backends.

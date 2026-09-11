@@ -1,4 +1,4 @@
-import { CODEX_DEFAULT_MODEL, DEFAULT_EFFORT, assertEffort, allowedEffort } from './model-policy.js'
+import { CODEX_DEFAULT_MODEL, DEFAULT_EFFORT, CODEX_CHAT_MODEL, CHAT_EFFORT, assertEffort, allowedEffort } from './model-policy.js'
 import { access, readFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
@@ -37,6 +37,14 @@ export const initialPreset = (cli: string): AiPreset => {
     ...(key === 'opencode'
       ? { model: process.env.OPENCODE_MODEL || 'opencode/nemotron-3.5-lightning-free' } : {}),
   }
+}
+
+// Conversation defaults are independent of durable work and explicit saved choices.
+export const chatPreset = (cli: string): AiPreset => {
+  const preset = initialPreset(cli)
+  return ['codex', 'codex-gui'].includes(preset.cli)
+    ? { ...preset, id: 'chat-default', name: 'Responsive chat', model: CODEX_CHAT_MODEL, effort: CHAT_EFFORT }
+    : preset
 }
 
 export const installed = async (cli: string): Promise<boolean> => {

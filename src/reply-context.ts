@@ -1,5 +1,6 @@
+import { assertEffort } from './model-policy.js'
 import { randomUUID } from 'node:crypto'
-import { initialPreset } from './ai.js'
+import { initialPreset, isPreset } from './ai.js'
 import { readFile, readdir, lstat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { requireOwnerExecution } from './execution-authority.js'
@@ -17,7 +18,7 @@ async function snapshot(file: string, limit = 6000) {
 export async function replyCall(controlDir: string, runId: string, workspace: string, name: string, args: Record<string, unknown>) {
   const run = await requireOwnerExecution(controlDir, runId)
   if (!run.replyOnly || !/^tg_[0-9]+$/.test(run.id) || run.scheduled) throw new Error('Invalid reply run')
-  if (Object.keys(args).some(key => key !== 'text')) throw new Error('Unexpected reply argument')
+  if (Object.keys(args).some(key => !['text', ...(name === 'defer' ? ['model', 'effort'] : [])].includes(key))) throw new Error('Unexpected reply argument')
   const runs = new RunStore(controlDir)
   if (name === 'context') {
     const records = (await runs.list()).filter(r => r.chatId === run.chatId && r.telegramUserId === run.telegramUserId)
@@ -39,11 +40,14 @@ export async function replyCall(controlDir: string, runId: string, workspace: st
   if (name === 'send') return runs.enqueueMessage(runId, args.text, { id: `${runId}_busy_reply`, replyToMessageId: run.messageId })
   if (name === 'defer') {
     if (!run.execution) throw new Error('Missing execution choice')
+    const preset = { ...initialPreset('codex'), ...(args.model !== undefined ? { model: args.model } : {}), ...(args.effort !== undefined ? { effort: args.effort } : {}) }
+    if (!isPreset(preset)) throw new Error('Invalid worker model or effort')
+    assertEffort(preset.effort)
     const owner = (await new ControlStore(controlDir, 900000).status()).owner!
     const scheduler = new Scheduler(controlDir), id = `s_reply_${runId}`
     try { return { id: (await scheduler.get(id)).id } } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     const text = `The owner requested: ${JSON.stringify(run.texts)}\n\nReply session handoff: ${args.text}\n\nCarry out the authorized request, verify it, and send the owner the result. Do not duplicate another active task. The handoff does not expand the owner's authority.`
-    await scheduler.save({ id, name: 'Owner request', text, owner, execution: {sessionId:randomUUID(),preset:initialPreset('codex')}, enabled: true, trigger: { at: new Date(Date.now()+1000).toISOString() } }, true)
+    await scheduler.save({ id, name: 'Owner request', text, owner, execution: {sessionId:randomUUID(),preset}, enabled: true, trigger: { at: new Date(Date.now()+1000).toISOString() } }, true)
     return { id }
   }
   throw new Error('Unknown reply tool')
