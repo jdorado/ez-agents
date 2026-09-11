@@ -28,8 +28,10 @@ offer their own default only in this slice. Refresh by opening the native client
 the relay does not install models, manage subscriptions or guess aliases.
 
 Setup initialization and relay startup seed one default choice per installed client.
-Settings → Refresh available AIs repeats discovery. Active/default presets and
-queued snapshots are preserved; discovery only refreshes unused detected entries.
+Choose AI opens the available installed-model catalog directly; Settings keeps
+saved choices and Refresh available AIs repeats default discovery. Active/default
+presets and queued snapshots are preserved; discovery only refreshes unused
+detected entries.
 Codex uses its native `config/read` interface; Grok reads its documented user
 model/effort settings (or `models` for the default model). Claude reads user and
 workspace JSON settings; OpenCode reports resolved config. Unknown defaults and

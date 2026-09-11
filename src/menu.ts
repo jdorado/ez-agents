@@ -53,6 +53,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       : 'Selected for this conversation. Queued work unchanged.'}`)
   }
   const list = async (ctx: Context, settings = false) => {
+    if (!settings) return available(ctx)
     const state = await control.aiState(initial)
     const keyboard = new InlineKeyboard()
     for (const preset of state.presets) button(keyboard,
@@ -64,13 +65,12 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
           await next.reply(`Default: ${preset.name}. Applies to new conversations only.`)
         } else await choose(next, preset)
       })
-    button(keyboard, 'Add AI…', (next) => available(next))
-    if (settings) button(keyboard, 'Refresh available AIs', async (next) => {
+    button(keyboard, 'Browse available models', (next) => available(next))
+    button(keyboard, 'Refresh available AIs', async (next) => {
       await refresh()
       await list(next, true)
     })
-    await ctx.reply(settings ? 'Default for new conversations\nChoose a saved AI. Current work will not change.'
-      : 'Choose AI\nChanging CLI starts a fresh conversation; files stay.', { reply_markup: keyboard })
+    await ctx.reply('Default for new conversations\nChoose a saved AI. Current work will not change.', { reply_markup: keyboard })
   }
   const available = async (ctx: Context, page = 0) => {
     const models = await catalog()
@@ -86,7 +86,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     if (page > 0) button(keyboard, 'Previous', (next) => available(next, page - 1))
     if (models.length > (page + 1) * 8) button(keyboard, 'Next', (next) => available(next, page + 1))
     await ctx.reply(models.length
-      ? 'Installed client choices. Grok/Codex use their local model catalog; other clients use their own default. Adding saves the choice; it does not switch AI.'
+      ? 'Choose AI\nAvailable models are populated automatically from the installed clients. Grok/Codex use their local catalog; other clients use their own default. Choosing one saves it; it does not switch AI.'
       : 'No client catalog available. Open the installed CLI once, then try again.', { reply_markup: keyboard })
   }
   const save = async (ctx: Context, model: ModelChoice, effort?: string) => {
