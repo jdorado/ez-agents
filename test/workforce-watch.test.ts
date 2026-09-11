@@ -47,6 +47,32 @@ test('a missed check-in alerts once and requires clean check-ins to recover', as
   } finally { await f.close() }
 })
 
+test('PagerDuty uses one worker-specific deduplication key and resolves only a triggered incident', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'workforce-watch-'))
+  const pages: Array<{ action: string; dedupKey: string; customDetails: Record<string, string> }> = []
+  const watch = new WorkforceWatch({ stateDir, enrollmentToken: 'fleet-secret', page: async event => { pages.push(event) } })
+  try {
+    const enrolled = await watch.enroll('fleet-secret', { workerId: 'stocks', checkInSeconds: 10, graceSeconds: 0, severity: 'critical' })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'failed', terminal: true, activity: 'broker probe', error: 'gateway unavailable', logsHint: 'journalctl -u stocks' })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'ok' })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'ok' })
+    assert.deepEqual(pages.map(page => [page.action, page.dedupKey]), [['trigger', 'ez:workforce:stocks'], ['resolve', 'ez:workforce:stocks']])
+    assert.equal(pages[0]?.customDetails.error, 'gateway unavailable')
+  } finally { await rm(stateDir, { recursive: true, force: true }) }
+})
+
+test('PagerDuty trigger is not duplicated when supplemental Telegram delivery fails', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'workforce-watch-'))
+  const pages: string[] = []
+  const watch = new WorkforceWatch({ stateDir, enrollmentToken: 'fleet-secret', page: async event => { pages.push(event.action) }, notify: async () => { throw new Error('Telegram unavailable') } })
+  try {
+    const enrolled = await watch.enroll('fleet-secret', { workerId: 'aifit', checkInSeconds: 10, graceSeconds: 0 })
+    await assert.rejects(() => watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'failed', terminal: true }), /Telegram unavailable/)
+    await assert.rejects(() => watch.evaluate(), /Telegram unavailable/)
+    assert.deepEqual(pages, ['trigger'])
+  } finally { await rm(stateDir, { recursive: true, force: true }) }
+})
+
 test('a failed recovery notification stays pending and is retried on evaluation', async () => {
   const stateDir = await mkdtemp(join(tmpdir(), 'workforce-watch-'))
   let now = 0, failRecovery = true
