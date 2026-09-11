@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.22
+
+- Ignore incomplete or malformed update-receipt directories until a valid,
+  atomically committed `job.json` exists. They have no activation authority and
+  must not take the host executor offline.
+
 ## 0.1.0-beta.21
 
 - Initialize fresh Telegram bots before reading their identity. Beta.19 could
