@@ -93,3 +93,9 @@ the prior one.
 
 The service triggers once for a missed deadline or terminal failure. It sends a
 recovery notice only after two clean check-ins by default to prevent flapping.
+
+If a worker fails again during a partially delivered recovery, channels that
+already accepted recovery receive a fresh trigger. Channels still open retain
+their delivery state, so they do not receive duplicate opening alerts. This
+applies to terminal failures, failed check-ins, and missed check-ins, including
+after a Watch restart.

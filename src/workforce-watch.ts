@@ -82,6 +82,19 @@ export class WorkforceWatch {
     if (worker.runbookUrl) customDetails.runbookUrl = worker.runbookUrl
     return { action, dedupKey: `ez:workforce:${worker.id}`, summary: `Workforce Watch ${action}: ${worker.id}`, severity: worker.severity, source: 'ez-workforce-watch', customDetails }
   }
+  private reopen(worker: Worker, now: number, reason: Incident['reason']): void {
+    const incident = worker.incident
+    if (!incident) { worker.incident = { openedAt: now, reason }; return }
+    if (incident.recoveredAt === undefined) return
+    if (incident.pagerDutyResolvedAt !== undefined) delete incident.pagerDutyTriggeredAt
+    if (incident.telegramRecoveredAt !== undefined) delete incident.notifiedAt
+    delete incident.pagerDutyResolvedAt
+    delete incident.telegramRecoveredAt
+    delete incident.recoveredAt
+    incident.openedAt = now
+    incident.reason = reason
+    worker.recoveryChecks = 0
+  }
   private async notifyOpen(state: State, worker: Worker): Promise<void> {
     const incident = worker.incident; if (!incident) return
     let failure: unknown, changed = false
@@ -112,8 +125,8 @@ export class WorkforceWatch {
   async checkIn(workerId: string, token: string, input: unknown): Promise<{incident:boolean}> {
     if (!WORKER_ID.test(workerId)) throw new Error('Unauthorized'); const request = validateCheckIn(input)
     return this.enqueue(async () => { const state = await this.state(), worker = state.workers[workerId]; if (!worker || !sameSecret(token,worker.tokenHash)) throw new Error('Unauthorized'); const now = this.now(), event:WatchEvent={at:new Date(now).toISOString(),...request}; worker.lastSeenAt=now; worker.history=[...worker.history,event].slice(-MAX_HISTORY)
-      if (request.terminal) { worker.recoveryChecks=0; worker.incident ??= {openedAt:now,reason:'terminal-failure'}; delete worker.incident.recoveredAt }
-      else if (worker.incident?.recoveredAt) { if(request.status==='failed') { delete worker.incident.recoveredAt; worker.recoveryChecks=0 } }
+      if (request.terminal) { worker.recoveryChecks=0; this.reopen(worker,now,'terminal-failure') }
+      else if (worker.incident?.recoveredAt !== undefined) { if(request.status==='failed') this.reopen(worker,now,worker.incident.reason) }
       else if (worker.incident && request.status==='ok') { worker.recoveryChecks += 1; if (worker.recoveryChecks >= this.recoveryThreshold) { worker.incident.recoveredAt=now; await this.save(state); await this.notifyRecovery(state,worker); return {incident:Boolean(worker.incident)} } }
       else if (request.status==='failed') worker.recoveryChecks=0
       await this.save(state); await this.notifyOpen(state,worker); return {incident:Boolean(worker.incident)} })
@@ -122,7 +135,7 @@ export class WorkforceWatch {
     if (!sameSecret(token, hash(this.options.enrollmentToken)) || !WORKER_ID.test(workerId)) throw new Error('Unauthorized')
     return this.enqueue(async () => { const state=await this.state(), worker=state.workers[workerId]; if(!worker) throw new Error('Not found'); const workerToken=randomBytes(32).toString('base64url'); worker.tokenHash=hash(workerToken); worker.lastSeenAt=this.now(); worker.recoveryChecks=0; await this.save(state); return {workerId,workerToken} })
   }
-  async evaluate(): Promise<void> { await this.enqueue(async () => { const state=await this.state(), now=this.now(); let changed=false; for (const worker of Object.values(state.workers)) if (!worker.incident && now > worker.lastSeenAt+worker.checkInMs+worker.graceMs) { worker.incident={openedAt:now,reason:'missed-check-in'}; worker.recoveryChecks=0; changed=true }; if(changed) await this.save(state); for(const worker of Object.values(state.workers)) { if(worker.incident?.recoveredAt !== undefined) await this.notifyRecovery(state,worker); else await this.notifyOpen(state,worker) } }) }
+  async evaluate(): Promise<void> { await this.enqueue(async () => { const state=await this.state(), now=this.now(); let changed=false; for (const worker of Object.values(state.workers)) if ((!worker.incident || worker.incident.recoveredAt !== undefined) && now > worker.lastSeenAt+worker.checkInMs+worker.graceMs) { this.reopen(worker,now,'missed-check-in'); worker.recoveryChecks=0; changed=true }; if(changed) await this.save(state); for(const worker of Object.values(state.workers)) { if(worker.incident?.recoveredAt !== undefined) await this.notifyRecovery(state,worker); else await this.notifyOpen(state,worker) } }) }
   async inspect(workerId?: string): Promise<unknown> { return this.enqueue(async () => { const state=await this.state(); const at=(value:number|undefined):string|undefined=>value===undefined?undefined:new Date(value).toISOString(), redact=(worker:Worker) => ({id:worker.id,checkInSeconds:worker.checkInMs/1000,graceSeconds:worker.graceMs/1000,severity:worker.severity,runbookUrl:worker.runbookUrl,createdAt:new Date(worker.createdAt).toISOString(),lastSeenAt:new Date(worker.lastSeenAt).toISOString(),incident:worker.incident&&{openedAt:at(worker.incident.openedAt),reason:worker.incident.reason,notifiedAt:at(worker.incident.notifiedAt),pagerDutyTriggeredAt:at(worker.incident.pagerDutyTriggeredAt),recoveredAt:at(worker.incident.recoveredAt),telegramRecoveredAt:at(worker.incident.telegramRecoveredAt),pagerDutyResolvedAt:at(worker.incident.pagerDutyResolvedAt)},history:worker.history}); if(workerId){const worker=state.workers[workerId];if(!worker)throw new Error('Not found');return redact(worker)} return Object.values(state.workers).map(redact) }) }
   start(evaluateMs: number): void { if(this.timer)return; void this.evaluate().catch(e=>this.options.log?.(`Initial evaluation failed: ${errorText(e)}`)); this.timer=setInterval(()=>void this.evaluate().catch(e=>this.options.log?.(`Evaluation failed: ${errorText(e)}`)),evaluateMs);this.timer.unref() }
   stop(): void { if(this.timer)clearInterval(this.timer);this.timer=undefined }
