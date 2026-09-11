@@ -7,6 +7,12 @@ No automatic dependency updates or credentials in pull-request CI. The agent
 operates this process under the authorization rules in CONTRIBUTING.md; a
 separate release bot is not required.
 
+Use one release loop: current `main` -> reviewed and tested source -> immutable
+candidate artifact and draft prerelease -> OIDC publication -> registry/digest
+readback -> installed-runtime receipt -> cleanup. A direct release/ship request
+or active maintainer release objective authorizes that loop; do not ask again
+once it is established. A merge alone is not publication authority.
+
 1. In an isolated release worktree/PR, finalize package version and CHANGELOG.md;
    update plugin manifest version when present. After lockfile changes, copy
    `pnpm-lock.yaml` to `docker/pnpm-lock.yaml` (npm omits the root lockfile; CI

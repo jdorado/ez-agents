@@ -53,6 +53,11 @@ docs/plugin-contributions.md.
   is reviewable, before reporting implementation complete. Do not leave completed
   work only in a local branch. Continue through the release handoff below;
   implementation completion alone does not authorize publication.
+- A product/fix request authorizes the normal path through review, required CI,
+  applicable QA and an eligible maintainer merge. Public publication requires a
+  direct release/ship request or an active maintainer release objective. Once
+  either exists, complete the release loop without requesting the same authority
+  again.
 - Every handoff names the repository, worktree, branch, exact commit, PR URL,
   checks, independent-review status and remaining QA with its next action. If
   pushing or PR creation is blocked, report the blocker and preserved local

@@ -88,7 +88,10 @@ Before edits, follow CONTRIBUTING.md's isolated-work rules: one task per dedicat
 worktree/branch/PR, starting from fetched origin/main. Do not switch or mix work in
 another task's checkout. Stage only this task's changes. Keep its worktree through
 review and QA; independent review and green CI precede an authorized merge.
-Never treat task completion as permission to merge or publish.
+Never treat task completion as permission to merge or publish. A direct
+release/ship request or active maintainer release objective is the separate
+authority; once present, complete the documented release handoff without a
+duplicate approval request.
 Own the complete engineering/release handoff in CONTRIBUTING.md. Once ready,
 proactively request only missing merge/release authority, then ship and verify;
 do not leave the maintainer to discover ready drafts or operate the release.
