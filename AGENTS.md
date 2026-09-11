@@ -94,3 +94,9 @@ proactively request only missing merge/release authority, then ship and verify;
 do not leave the maintainer to discover ready drafts or operate the release.
 
 - In channel-backend mode, the application owns native sessions and actions. Forward normalized inputs with stable run IDs, recover only by idempotent backend submission, and deliver replies through the existing outbox. Never launch a fallback CLI or pass relay credentials into an executor.
+
+A coding-task handoff must include the pushed commit and draft PR URL, checks,
+independent-review status and remaining QA. If PR creation is blocked, state the
+blocker and preserved commit. The merging agent owns the post-merge worktree
+cleanup check and reports removal or the specific reason to retain it. Follow
+CONTRIBUTING.md for squash-merge evidence, ignored files and active-use checks.
