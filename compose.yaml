@@ -38,9 +38,7 @@ services:
       test: [CMD, node, /app/docker/healthcheck.mjs]
       interval: 10s
       timeout: 5s
-      # grammY's default long poll can outlive a stopped relay by 30 seconds.
-      # Leave room for it to clear and for the replacement's first heartbeat.
-      start_period: 60s
+      start_period: 30s
       retries: 3
 configs:
   agent_purpose:

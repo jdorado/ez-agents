@@ -140,6 +140,29 @@ test('relay shutdown waits for executor cleanup and final run state', async () =
  } finally {release();await relay.stop();await rm(dir,{recursive:true,force:true})}
 })
 
+test('a fresh relay initializes its bot identity before polling', async () => {
+ const dir=await mkdtemp(join(tmpdir(),'ez-cold-start-'))
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{throw new Error('No executor expected')})
+ const methods:string[]=[]
+ relay.bot.api.config.use(async(_prev,method,_payload,signal)=>{
+  methods.push(method)
+  if(method==='getMe') return {ok:true,result:{id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'}} as any
+  if(method==='getUpdates') {
+   if(signal && !signal.aborted) await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}))
+   return {ok:true,result:[]} as any
+  }
+  return {ok:true,result:true} as any
+ })
+ const started=relay.start()
+ try {
+  await until(async()=>methods.includes('getUpdates'))
+  assert.equal(relay.bot.isRunning(),true)
+  assert.equal(methods.filter(method=>method==='getMe').length,1)
+  assert.ok(methods.indexOf('getMe')<methods.indexOf('getUpdates'))
+ } finally {await relay.stop();await started;await rm(dir,{recursive:true,force:true})}
+ assert.equal(relay.bot.isRunning(),false)
+})
+
 for (const cleanupFails of [false,true]) test(`polling conflict preserves work until an explicit shutdown (cleanup fails: ${cleanupFails})`, async t => {
  const dir=await mkdtemp(join(tmpdir(),'ez-polling-conflict-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
  let release!:()=>void,entered!:()=>void,releaseDelivery!:()=>void,sending!:()=>void,child:ReturnType<typeof spawn>|undefined,polls=0
