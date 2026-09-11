@@ -43,6 +43,14 @@ export async function packageManager(root,run=execute) {
   throw Error(`Upgrade prerequisite unavailable: ${required}. ${failures.join('; ')}. Check the host supervisor service PATH (shell aliases do not count). Reuse its installed pnpm or Corepack; expose the launcher directory to that service and restart it after the current turn. If neither exists, provision the pinned manager first. Do not substitute npm install or reinstall the agent. After repair, prepare/apply a new job when status is failed; recover is only for recovery-required.`);
 }
 export const relayArgs = config => ['compose','--env-file',path.join(config.deploymentDir,'docker.env')];
+const healthCodes = new Set(['RELAY_UNREADABLE','RELAY_NOT_POLLING','RELAY_STALE','HOST_UNREADABLE','HOST_STALE']);
+async function healthEvidence(config,run) {
+  const id=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
+  if(!/^[a-f0-9]{12,64}$/i.test(id))return '';
+  const raw=await run('docker',['inspect','--format','{{json .State.Health}}',id]);
+  const health=JSON.parse(raw),entry=health?.Log?.at(-1),match=typeof entry?.Output==='string'&&entry.Output.match(/^EZ_HEALTH_([A-Z_]+)\s*$/);
+  return match&&healthCodes.has(match[1])?` (health=${match[1].toLowerCase().replaceAll('_','-')})`:'';
+}
 function envValue(text,key,value) {
   if(/[\r\n\0']/.test(value))throw Error('Unsafe deployment value');
   const line=`${key}='${value}'`;
@@ -118,7 +126,11 @@ export async function perform(home,job,hooks) {
       job.runtimeVerified=running;
     }
     job.status='completed';job.endedAt=new Date().toISOString();await save();return job;
-  }catch(error){job.error=error.message;await save();return recover(home,job,hooks);}
+  }catch(error){
+    let message=error.message;
+    if(job.target==='main'&&job.rollback&&/is unhealthy/.test(message))message+=await healthEvidence(config,run).catch(()=> '');
+    job.error=message;await save();return recover(home,job,hooks);
+  }
 }
 export async function recover(home,job,hooks) {
   const run=hooks.execute||execute,{config}=await state(home);

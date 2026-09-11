@@ -86,6 +86,16 @@ test('status distinguishes installed, running, legacy and stale main versions wi
  const result=await exec(process.execPath,[new URL('../bin/ezenciel-agents-tools.mjs',import.meta.url).pathname,'--home',f.home,'status']);
  assert.equal(JSON.parse(result.stdout).main.installedVersion,'0.1.0');
 });
+test('relay healthcheck emits bounded predicate evidence without state contents',async t=>{
+ const root=await fs.realpath(await fs.mkdtemp(path.join(tmpdir(),'ez-healthcheck-')));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const relay=path.join(root,'relay'),host=path.join(root,'host');await fs.mkdir(relay,{recursive:true});await fs.mkdir(path.join(host,'host-executor'),{recursive:true});
+ const check=async()=>exec(process.execPath,[new URL('../docker/healthcheck.mjs',import.meta.url).pathname],{env:{...process.env,EZ_HEALTH_RELAY_CONTROL_DIR:relay,EZ_EXECUTOR_TRANSPORT:'host',EZ_CONTROL_DIR:host}});
+ await fs.writeFile(path.join(relay,'heartbeat.json'),JSON.stringify({polling:true,at:Date.now()}));await fs.writeFile(path.join(host,'host-executor/heartbeat.json'),JSON.stringify({at:Date.now()}));await check();
+ await fs.writeFile(path.join(relay,'heartbeat.json'),JSON.stringify({polling:false,at:Date.now(),private:'must-not-appear'}));
+ await assert.rejects(check(),error=>{assert.match(error.stderr,/EZ_HEALTH_RELAY_NOT_POLLING/);assert.doesNotMatch(error.stderr,/must-not-appear/);return true;});
+ await fs.writeFile(path.join(relay,'heartbeat.json'),JSON.stringify({polling:true,at:Date.now()}));await fs.writeFile(path.join(host,'host-executor/heartbeat.json'),JSON.stringify({at:Date.now()-20000}));
+ await assert.rejects(check(),error=>{assert.match(error.stderr,/EZ_HEALTH_HOST_STALE/);return true;});
+});
 test('plugin status verifies images and reports stopped, mismatched and unreachable runtimes honestly',async t=>{
  const f=await fixture(t,'plugin'),id='a'.repeat(64),image='sha256:'+'b'.repeat(64);
  for(const mode of ['running','ndjson','stopped','missing','mismatched','offline']) {
@@ -156,6 +166,11 @@ test('failed preparation never stops runtime; failed activation rolls back code 
   if(stage==='build')assert(!r.calls.some(c=>c[0]==='stopHost'));
   else assert((await fs.readFile(path.join(f.config.deploymentDir,'docker.env'),'utf8')).includes('sha256:'+'a'.repeat(64)));
  }
+});
+test('main health-gate rollback retains only the recognized sanitized predicate',async t=>{
+ const f=await fixture(t),job=await queued(f),base=runtime(f);let failed=false;
+ const r={...base,execute:async(c,a,o)=>{if(a.includes('up')&&!failed){failed=true;throw Error('container relay is unhealthy');}return a.includes('ps')?'a'.repeat(64):a[0]==='inspect'&&a[2]==='{{json .State.Health}}'?JSON.stringify({Log:[{Output:'EZ_HEALTH_HOST_STALE\n'}]}):base.execute(c,a,o);}};
+ const result=await perform(f.home,job,r);assert.equal(result.status,'rolled-back');assert.match(result.error,/health=host-stale/);assert.doesNotMatch(result.error,/private-test-token/);
 });
 test('plugin transaction preserves named volumes, backs up stopped data and rolls back failed health',async t=>{
  for(const failed of [false,true]) {
