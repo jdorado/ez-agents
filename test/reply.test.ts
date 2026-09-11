@@ -134,7 +134,9 @@ test('a parallel reply delivered during a normal turn is retained for the follow
 test('reply handoff accepts independent worker choices and rejects invalid or unauthorized overrides', async () => {
  const root=await mkdtemp(join(tmpdir(),'ez-reply-worker-')), runs=new RunStore(root)
  try {
-  await ownerRun(root,'tg_10'); await runs.patch('tg_10',{replyOnly:true, execution:{sessionId:'c5dd1edc-be24-47b8-a579-0bc70f44cf43',preset:{id:'chat',name:'Chat',cli:'codex',model:'gpt-5.6-sol',effort:'medium'}}})
+  await ownerRun(root,'owner')
+  await runs.create({id:'tg_10',chatId:101,telegramUserId:101,texts:['Analyze the report'],execution:{sessionId:'c5dd1edc-be24-47b8-a579-0bc70f44cf43',preset:{id:'chat',name:'Chat',cli:'codex',model:'gpt-5.6-sol',effort:'medium'}}})
+  await runs.patch('tg_10',{status:'running',replyOnly:true})
   for (const args of [{model:42}, {model:'bad model'}, {effort:'ultra'}, {effort:'invalid'}, {cli:'claude'}])
    await assert.rejects(replyCall(root,'tg_10',root,'defer',{text:'Analyze and verify the result',...args}))
   await assert.rejects(replyCall(root,'tg_10',root,'send',{text:'Hello',model:'gpt-6-astra'}),/Unexpected/)
