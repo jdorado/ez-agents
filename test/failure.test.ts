@@ -137,7 +137,7 @@ test('relay shutdown waits for executor cleanup and final run state', async () =
  } finally {release();await relay.stop();await rm(dir,{recursive:true,force:true})}
 })
 
-for (const cleanupFails of [false,true]) test(`fatal polling conflict waits for shared shutdown without retrying (cleanup fails: ${cleanupFails})`, async t => {
+for (const cleanupFails of [false,true]) test(`polling conflict preserves work until an explicit shutdown (cleanup fails: ${cleanupFails})`, async t => {
  const dir=await mkdtemp(join(tmpdir(),'ez-polling-conflict-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
  let release!:()=>void,entered!:()=>void,releaseDelivery!:()=>void,sending!:()=>void,child:ReturnType<typeof spawn>|undefined,polls=0
  const gate=new Promise<void>(resolve=>{release=resolve}),cleaning=new Promise<void>(resolve=>{entered=resolve})
@@ -170,20 +170,26 @@ for (const cleanupFails of [false,true]) test(`fatal polling conflict waits for 
   const delivery=relay.drainOutbox()
   await deliveryStarted
   let finished=false
-  const start=assert.rejects(relay.start(),/409.*Conflict/).then(()=>{finished=true})
-  await cleaning
+  const start=relay.start().finally(()=>{finished=true})
+  await until(async()=>polls===1)
+  assert.equal(sourceStops,0,'a polling conflict must not stop the relay')
+  assert.equal((await runs.get('tg_92'))?.status,'running')
+  assert.ok(child && child.exitCode===null && child.signalCode===null)
   const stopping=relay.stop()
   assert.equal(relay.stop(),stopping,'concurrent stop calls share one promise')
   const stopped=cleanupFails?assert.rejects(stopping,/Synthetic shutdown failure/):stopping
-  assert.equal(finished,false,'polling failure must wait for executor cleanup')
+  assert.equal(finished,false,'relay start must wait for the explicit shutdown')
+  await cleaning
   release()
   await until(async()=>(await runs.get('tg_92'))?.status!=='running')
-  assert.equal(finished,false,'polling failure must wait for the in-flight delivery receipt')
-  releaseDelivery();await delivery;await start;await stopped
+  assert.equal(finished,false,'shutdown must wait for the in-flight delivery receipt')
+  releaseDelivery();await delivery
+  if(cleanupFails) await assert.rejects(start,/Synthetic shutdown failure/);else await start
+  await stopped
   assert.equal(relay.stop(),stopping,'finished shutdown remains idempotent')
   assert.equal(sourceStops,1)
   assert.deepEqual(JSON.parse(await readFile(join(dir,'outbox',`${item.id}.sent.json`),'utf8')).receipt.messageIds,[1])
-  assert.equal(polls,1,'a conflict must not start another polling loop')
+  assert.equal(polls,1,'a conflict must not start another polling loop before the retry delay')
   assert.equal(relay.bot.isRunning(),false)
   assert.ok(child && (child.exitCode!==null || child.signalCode!==null))
   assert.notEqual((await runs.get('tg_92'))?.status,'running')

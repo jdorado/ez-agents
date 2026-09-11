@@ -82,6 +82,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const ownerStopped = new WeakSet<ChildProcess>()
   let activeChild: ChildProcess | null = null
   let shuttingDown = false
+  let wakePollRetry: (() => void) | undefined
   let nextSendAt = 0
   const paceSend = async () => {
     const delay = nextSendAt - Date.now()
@@ -214,10 +215,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const executionStarted = performance.now()
         // Attach before disk writes: a fast child can close while PID persistence
         // is pending, and Node drains its remaining pipes during process close.
-        let failureReason = 'executor-exit', errorTail = ''
+        let failureReason = 'executor-exit', errorTail = '', interrupted = false
         child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
           errorTail = (errorTail + chunk).slice(-16384)
           if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
+          if (chunk.includes('Host executor client interrupted by')) {
+            failureReason = 'host-executor-transport-interrupted'
+            interrupted = true
+          }
           if (chunk.trim()) console.error('executor stderr', started.id, chunk.trim())
         })
         console.info('run timing', { run_id: run.id, phase: 'launch',
@@ -252,7 +257,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               try {
                 await cleanup()
                 if (code === 0 && !run.external && !run.taskId && !run.scheduled && !run.replyOnly) await control.markSessionStarted(session.sessionId)
-                await runs.patch(started.id, { status: ownerStopped.has(child) || (run.scheduled && await scheduler.cancelled(run.id)) ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString(), exitCode: code, ...(code !== 0 ? { failureReason, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
+                const cancelled = ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id))
+                await runs.patch(started.id, { status: cancelled ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString(), exitCode: code, ...(code !== 0 && !cancelled ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
               } catch (error) {
                 await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
                 console.error('Session completion failed', safeError(error))
@@ -958,6 +964,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let stopWork: Promise<void> | undefined
   const stop = (): Promise<void> => stopWork ?? (stopWork = (async () => {
     shuttingDown = true
+    wakePollRetry?.()
     if (intakeTimer) clearTimeout(intakeTimer)
     if (sourceTimer) clearInterval(sourceTimer)
     if (taskTimer) clearInterval(taskTimer)
@@ -1014,21 +1021,39 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         }
       }
 
-      await bot.api.deleteWebhook({ drop_pending_updates: false })
-      await bot.api.setMyCommands(commands)
-      await bot.api.setMyCommands(commands, { scope: { type: 'all_private_chats' } })
-      await bot.init()
       scheduleIntake()
-      await bot.start({
-        drop_pending_updates: false,
-        onStart: (botInfo) => console.log(`✓ Bot @${botInfo.username} polling for messages...`),
-      })
+      // Telegram polling is a delivery surface, not the scheduler or executor.
+      // A transient poller conflict must not terminate already-authorized work.
+      while (!shuttingDown) {
+        try {
+          await bot.api.deleteWebhook({ drop_pending_updates: false })
+          await bot.api.setMyCommands(commands)
+          await bot.api.setMyCommands(commands, { scope: { type: 'all_private_chats' } })
+          if (!bot.botInfo) await bot.init()
+          await bot.start({
+            drop_pending_updates: false,
+            onStart: (botInfo) => console.log(`✓ Bot @${botInfo.username} polling for messages...`),
+          })
+          if (!shuttingDown) throw new Error('Telegram polling stopped unexpectedly')
+        } catch (error) {
+          if (shuttingDown) break
+          console.error('Telegram polling interrupted; keeping existing work alive', safeError(error))
+          await new Promise<void>((resolve) => {
+            let timer: ReturnType<typeof setTimeout>
+            const wake = () => {
+              clearTimeout(timer)
+              if (wakePollRetry === wake) wakePollRetry = undefined
+              resolve()
+            }
+            timer = setTimeout(wake, 5000)
+            wakePollRetry = wake
+          })
+        }
+      }
     } catch (error) {
       failed = true
       throw error
     } finally {
-      // Fatal polling errors (including a competing poller's 409) must finish
-      // the same worker/state cleanup as a signal before the process exits.
       try { await stop() }
       catch (error) {
         if (!failed) throw error

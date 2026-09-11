@@ -12,8 +12,14 @@ for await (const chunk of process.stdin) input += chunk
 const base = path.join(directory, id)
 await writeFile(base+'.tmp', input, {mode:0o600, flag:'wx'})
 await rename(base+'.tmp', base+'.request.json')
+let interrupted = false
 for (const signal of ['SIGTERM','SIGINT'] as const) process.once(signal, () => {
-  void writeFile(base+'.cancel', '', {mode:0o600}).finally(() => process.exit(130))
+  if (interrupted) return
+  interrupted = true
+  void writeFile(base+'.cancel', '', {mode:0o600}).catch(() => {}).finally(() => {
+    process.stderr.write(`Host executor client interrupted by ${signal}\n`)
+    process.exit(130)
+  })
 })
 let offset = 0
 let lastHeartbeat = Date.now()
