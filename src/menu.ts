@@ -59,8 +59,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     }
     const state = await control.aiState(initial)
     const keyboard = new InlineKeyboard()
-    const presets = settings ? state.presets : state.presets.filter((preset) =>
-      preset.id === initial.id || (!preset.model && !preset.effort))
+    const presets = settings ? state.presets : state.presets.filter((preset) => preset.id === initial.id)
     for (const preset of presets) button(keyboard,
       `${preset.id === (settings ? state.defaultId : state.selectedId) ? '✓ ' : ''}${preset.name}`,
       async (next) => {

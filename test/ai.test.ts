@@ -117,6 +117,7 @@ test('Choose AI does not expose saved model choices without a catalog to validat
     const store = new ControlStore(dir, 1000)
     await store.aiState(initialPreset('grok'))
     await store.savePreset({ id: 'saved', name: 'Saved model', cli: 'codex', model: 'fixture-model', effort: 'medium' })
+    await store.savePreset({ id: 'saved-default', name: 'Saved client default', cli: 'claude' })
     const menu = createAiMenu(store, 'grok', async () => [])
     let reply = ''
     let keyboard: { inline_keyboard?: Array<Array<{ text: string }>> } | undefined
@@ -127,6 +128,7 @@ test('Choose AI does not expose saved model choices without a catalog to validat
     } } as never)
     assert.match(reply, /current client setup only/)
     assert.ok(!keyboard?.inline_keyboard?.flat().some((button) => button.text.includes('Saved model')))
+    assert.ok(!keyboard?.inline_keyboard?.flat().some((button) => button.text.includes('Saved client default')))
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
