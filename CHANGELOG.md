@@ -1,14 +1,20 @@
 # Changelog
 
+## 0.1.0-beta.21
+
+- Initialize fresh Telegram bots before reading their identity. Beta.19 could
+  retry forever before polling, causing main upgrades to fail their health gate.
+- Restore the unchanged deployment layout required for upgrades from beta.18
+  and beta.19; extending health grace does not fix the initialization failure.
+- Include beta.20 health diagnostics. Preserve the earlier immutable unpublished
+  candidate; existing beta acceptance limits remain.
+
 ## 0.1.0-beta.20
 
 - Retain a bounded, content-free health predicate in a failed main-upgrade
   receipt before rollback replaces the candidate relay. This distinguishes relay
   polling and host-executor heartbeat failures without persisting control-state,
   provider, environment, or Docker diagnostic content.
-- Allow an upgrading relay one grammY long-poll interval to replace a stopped
-  predecessor before its health gate can roll it back. A persistent competing
-  poller still fails health after the bounded grace period.
 
 ## 0.1.0-beta.19
 

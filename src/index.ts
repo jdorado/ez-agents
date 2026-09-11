@@ -1029,7 +1029,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           await bot.api.deleteWebhook({ drop_pending_updates: false })
           await bot.api.setMyCommands(commands)
           await bot.api.setMyCommands(commands, { scope: { type: 'all_private_chats' } })
-          if (!bot.botInfo) await bot.init()
+          await bot.init()
           await bot.start({
             drop_pending_updates: false,
             onStart: (botInfo) => console.log(`✓ Bot @${botInfo.username} polling for messages...`),
