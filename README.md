@@ -115,8 +115,12 @@ For optional PagerDuty paging of a critical Stocks outage, see
 [PagerDuty critical-outage paging](docs/pagerduty.md).
 
 Telegram `/status` shows the running relay and host versions plus installed
-plugin versions. The agent's `ez status` adds verified plugin runtime states and
-upgrade job receipts. See [status and upgrades](docs/upgrades.md).
+plugin versions, and lists titled scheduled tasks with their timing and state.
+It is read-only. Use `/schedule` or the **Schedule task** menu action to create
+a schedule deterministically with an explicit title, task body and timing rule.
+The agent's `ez status` adds verified plugin runtime states and upgrade job
+receipts. See [status and upgrades](docs/upgrades.md) and
+[scheduling](docs/scheduling.md).
 
 ## You are the installing agent
 

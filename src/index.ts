@@ -35,6 +35,8 @@ import { discoverDefaults } from './client-defaults.js'
 import { initializeWorkspace } from './workspace.js'
 import { softwareStatus } from './software-status.js'
 import { PagerDutyStocksMonitor } from './pagerduty.js'
+import { ScheduleIntake } from './schedule-intake.js'
+import { ownsSchedule, scheduleNext, scheduleTiming, scheduleTitle, scheduledTasksText } from './schedule-summary.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
@@ -51,6 +53,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const inbox = new InboxStore(config.controlDir)
   const sources = new EventSources(config.controlDir)
   const scheduler = new Scheduler(config.controlDir)
+  const scheduleDrafts = new ScheduleIntake(config.controlDir)
   const background = new Map<string, ChildProcess>()
   const completions = new Set<Promise<void>>()
   const tasks = new Tasks(config.controlDir)
@@ -534,6 +537,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
   const aliases = [
     { command: 'help', description: 'Show available controls' },
+    { command: 'settings', description: 'Set the default AI for new conversations' },
     { command: 'status', description: 'Work, queue and delivery health' },
     { command: 'stop', description: 'Stop active work; keep queued messages' },
     { command: 'cancel', description: 'Cancel pending messages; keep active work' },
@@ -542,6 +546,45 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   ]
   const commands = mainCommands
   const controlCommand = (text?: string) => text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
+  const ownerSchedules = async () => {
+    const owner = (await control.status()).owner
+    return owner ? (await scheduler.list()).filter((schedule) => ownsSchedule(owner, schedule)) : []
+  }
+  const scheduleTasksText = async () => scheduledTasksText(await ownerSchedules())
+  const startSchedule = async (ctx: Context) => {
+    if (config.channelBackendUrl) {
+      await ctx.reply('Scheduling is unavailable while this channel uses an application backend.')
+      return
+    }
+    const owner = (await control.status()).owner
+    if (!owner) throw new Error('Owner unavailable')
+    await scheduleDrafts.start(ctx.from!.id, ctx.chat!.id, owner.pairedAt)
+    await ctx.reply('Schedule task\n\nSend a short title. It is stored with the task and shown in Status. Send cancel at any step to abandon this draft.')
+  }
+  const acceptScheduleInput = async (ctx: Context, text: string) => {
+    const owner = (await control.status()).owner
+    if (!owner) throw new Error('Owner unavailable')
+    const result = await scheduleDrafts.accept(ctx.from!.id, ctx.chat!.id, owner.pairedAt, text)
+    if (!result.complete) {
+      await ctx.reply(result.reply)
+      return
+    }
+    const schedule = await scheduler.save({
+      id: `s_${randomUUID()}`,
+      name: result.complete.title,
+      text: result.complete.text,
+      trigger: result.complete.trigger,
+      enabled: true,
+      owner,
+      execution: await control.captureChoice(aiMenu.initial),
+    })
+    await scheduleDrafts.cancel(ctx.from!.id, ctx.chat!.id)
+    await ctx.reply(`Scheduled: ${scheduleTitle(schedule)}\n${scheduleTiming(schedule)}\nNext: ${scheduleNext(schedule)}\n\nTask\n${schedule.text}`)
+  }
+  const statusKeyboard = () => new InlineKeyboard()
+    .text('Scheduled tasks', 'menu:schedules').text('Schedule task', 'menu:schedule').row()
+    .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
+    .text('Retry failed incoming message', 'menu:retry')
   const statusText = async () => {
     const running = await runs.running(false)
     const all = await runs.list()
@@ -553,6 +596,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const discovered = await discoverDefaults(config.workspace, { codexHome, nativeCodexFallback: true })
     const displayedSelected = statusPreset(selected, discovered)
     const scheduled = all.filter(run => run.scheduled && run.status === 'running').length
+    const schedules = await ownerSchedules()
     const queued = all.filter(run => run.status === 'queued').length
     const failedRuns = all.filter(run => run.status === 'failed').length
     const blocked = all.filter(run => run.blockReason === 'external-execution-unavailable').length
@@ -576,6 +620,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       `Current: ${running ? (waitingForHost ? 'waiting for the workspace' : 'running') : 'idle'}`,
       `Background: ${scheduled ? `${scheduled} scheduled task${scheduled === 1 ? '' : 's'} running` : 'none'}`,
       `Queue: ${queued || incoming.pending ? `${queued} run${queued === 1 ? '' : 's'}; ${incoming.pending} incoming message${incoming.pending === 1 ? '' : 's'}` : 'empty'}`,
+      ...(schedules.length ? ['', ...scheduledTasksText(schedules).split('\n')] : []),
       ...(attention.length ? ['', 'Needs attention', ...attention] : []),
       '',
       'Controls: /stop stops active work. /cancel clears queued work.',
@@ -639,6 +684,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const message = ctx.message
     const command = controlCommand(message?.text)
     if (command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu').includes(command)) return next()
+    const owner = (await control.status()).owner
+    if (message?.text && owner && (await scheduleDrafts.get(ctx.from?.id ?? 0, ctx.chat?.id ?? 0, owner.pairedAt))) {
+      if (!(await checkOwner(ctx))) return
+      return next()
+    }
     const ordinary = message && (message.text || message.photo || message.document || message.voice)
     const approval = ctx.callbackQuery?.data?.startsWith('approval:')
     if (!ordinary && !approval) return next()
@@ -653,6 +703,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
     if (text === '/ai' || text === '/settings') {
       await aiMenu.list(ctx, text === '/settings')
+      return
+    }
+
+    if (text === '/schedule') {
+      await startSchedule(ctx)
       return
     }
 
@@ -714,9 +769,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
 
     if (text === '/status') {
-      await ctx.reply(await statusText(), { reply_markup: new InlineKeyboard()
-        .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
-        .text('Retry failed incoming message', 'menu:retry') })
+      await ctx.reply(await statusText(), { reply_markup: statusKeyboard() })
       return
     }
 
@@ -726,6 +779,13 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         parse_mode: 'HTML',
         reply_markup: menuKeyboard,
       })
+      return
+    }
+
+    const owner = (await control.status()).owner
+    if (owner && await scheduleDrafts.get(ctx.from.id, ctx.chat.id, owner.pairedAt)) {
+      try { await acceptScheduleInput(ctx, ctx.message.text) }
+      catch (error) { await ctx.reply(`Schedule was not saved: ${safeError(error)}. Correct the task instructions or send cancel.`) }
       return
     }
 
@@ -909,7 +969,13 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         )
       } else if (action === 'status') {
         await ctx.answerCallbackQuery()
-        await ctx.reply(await statusText())
+        await ctx.reply(await statusText(), { reply_markup: statusKeyboard() })
+      } else if (action === 'schedules') {
+        await ctx.answerCallbackQuery()
+        await ctx.reply(await scheduleTasksText())
+      } else if (action === 'schedule') {
+        await ctx.answerCallbackQuery()
+        await startSchedule(ctx)
       } else if (action === 'cancel') {
         await ctx.answerCallbackQuery()
         await ctx.reply(await cancelPending())

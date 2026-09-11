@@ -11,12 +11,12 @@ export const mainCommands = [
   { command: 'new', description: 'New conversation' },
   { command: 'ai', description: 'Choose AI' },
   { command: 'status', description: 'Work status' },
-  { command: 'settings', description: 'Settings' },
+  { command: 'schedule', description: 'Schedule a background task' },
 ]
 
 export const mainKeyboard = () => new InlineKeyboard()
   .text('New conversation', 'menu:new').text('Choose AI', 'menu:ai').row()
-  .text('Work status', 'menu:status').text('Settings', 'menu:settings')
+  .text('Work status', 'menu:status').text('Schedule task', 'menu:schedule')
 
 // Short-lived opaque button IDs: no model names or executable arguments from callbacks.
 // These are operational settings, not a second conversational/agent loop.

@@ -4,6 +4,26 @@ Ask the agent naturally: “Remind me on September 9 next year at 09:00 Dubai ti
 or “Every Tuesday at 09:00, prepare the report.” The agent translates this into a
 core CLI request. No plugin, database or operating-system cron setup is required.
 
+For a fully deterministic Telegram path, open **Schedule task** from `/menu` (or
+send `/schedule`). It collects a required human title, the literal task
+instructions, and then one explicit schedule rule. The title is stored in the
+same native schedule record as `--name`; it is not inferred from the task body.
+Use one of these rules:
+
+```text
+once 2026-09-12T09:00:00+04:00
+daily 09:00 Asia/Dubai
+weekdays 09:00 Asia/Dubai
+weekly mon 09:00 Asia/Dubai
+cron 0 9 * * 1-5 Asia/Dubai
+```
+
+`/status` is read-only: it lists titled schedules with their timing, state and
+next occurrence, and includes a **Scheduled tasks** view. It never creates or
+executes a task. The wizard does not understand natural-language dates; use the
+explicit formats above, or ask the agent to use the CLI when its judgment is
+actually wanted.
+
 ```sh
 ezenciel-agents-schedule create --name Reminder \
   --at 2027-09-09T09:00:00+04:00 --text 'Remind the owner about the renewal.'

@@ -12,6 +12,8 @@ import { RunStore } from '../src/runs.js'
 import { InboxStore } from '../src/inbox.js'
 import { ApprovalStore } from '../src/approval.js'
 import { Tasks } from '../src/tasks.js'
+import { Scheduler } from '../src/scheduler.js'
+import { ScheduleIntake } from '../src/schedule-intake.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { packageVersion } from '../src/version.js'
 
@@ -211,7 +213,7 @@ test('four-item menu is owner-only; saved AI buttons work and forged/stale butto
   try {
     await f.relay.bot.handleUpdate(message(1, '/menu'))
     assert.deepEqual(f.keyboards.at(-1)!.flat().map((b) => b.text),
-      ['New conversation', 'Choose AI', 'Work status', 'Settings'])
+      ['New conversation', 'Choose AI', 'Work status', 'Schedule task'])
     await f.relay.bot.handleUpdate(message(2, '/ai'))
     const pick = f.keyboards.at(-1)!.flat()[0].callback_data
     const store = new ControlStore(f.dir, 1000)
@@ -225,6 +227,38 @@ test('four-item menu is owner-only; saved AI buttons work and forged/stale butto
     assert.match(f.replies.at(-1)!, /Menu expired/)
     await f.relay.bot.handleUpdate(message(7, '/settings'))
     assert.match(f.replies.at(-1)!, /Default for new conversations/)
+    assert.equal(f.launched.length, 0)
+  } finally { await f.close() }
+})
+
+test('deterministic schedule intake stores a titled native schedule and status only reads it', async () => {
+  const f = await fixture()
+  const callback = (id: number, data: string, user = 101): Update => ({
+    update_id: id,
+    callback_query: { id: String(id), chat_instance: 'fixture', data,
+      from: { id: user, first_name: 'Fixture', is_bot: false }, message: message(id).message! },
+  })
+  try {
+    await f.relay.bot.handleUpdate(callback(1, 'menu:schedule', 202))
+    assert.equal(await new ScheduleIntake(f.dir).get(202, 202), undefined)
+    await f.relay.bot.handleUpdate(callback(2, 'menu:schedule'))
+    assert.match(f.replies.at(-1)!, /Send a short title/)
+    await f.relay.bot.handleUpdate(message(3, 'Daily market scan'))
+    assert.match(f.replies.at(-1)!, /Now send the task instructions/)
+    await f.relay.bot.handleUpdate(message(4, 'Check the market and send the owner a concise report.'))
+    assert.match(f.replies.at(-1)!, /Send when this should run/)
+    await f.relay.bot.handleUpdate(message(5, 'weekdays 09:00 Asia/Dubai'))
+    const schedules = await new Scheduler(f.dir).list()
+    assert.equal(schedules.length, 1)
+    assert.equal(schedules[0].name, 'Daily market scan')
+    assert.equal(schedules[0].text, 'Check the market and send the owner a concise report.')
+    assert.ok('cron' in schedules[0].trigger)
+    assert.deepEqual(schedules[0].trigger, { cron: '0 9 * * 1-5', timezone: 'Asia/Dubai', start: schedules[0].trigger.start })
+    assert.equal(f.launched.length, 0)
+    await f.relay.bot.handleUpdate(message(6, '/status'))
+    assert.match(f.replies.at(-1)!, /Daily market scan/)
+    assert.match(f.replies.at(-1)!, /Weekdays at 09:00 · Asia\/Dubai · scheduled/)
+    assert.equal((await new Scheduler(f.dir).list()).length, 1)
     assert.equal(f.launched.length, 0)
   } finally { await f.close() }
 })
