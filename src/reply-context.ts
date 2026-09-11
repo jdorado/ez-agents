@@ -1,4 +1,4 @@
-import { assertEffort } from './model-policy.js'
+import { executionOverrides } from './model-policy.js'
 import { randomUUID } from 'node:crypto'
 import { initialPreset, isPreset } from './ai.js'
 import { readFile, readdir, lstat } from 'node:fs/promises'
@@ -40,9 +40,8 @@ export async function replyCall(controlDir: string, runId: string, workspace: st
   if (name === 'send') return runs.enqueueMessage(runId, args.text, { id: `${runId}_busy_reply`, replyToMessageId: run.messageId })
   if (name === 'defer') {
     if (!run.execution) throw new Error('Missing execution choice')
-    const preset = { ...initialPreset('codex'), ...(args.model !== undefined ? { model: args.model } : {}), ...(args.effort !== undefined ? { effort: args.effort } : {}) }
+    const preset = executionOverrides('codex', initialPreset('codex'), args.model as string | undefined, args.effort as string | undefined)
     if (!isPreset(preset)) throw new Error('Invalid worker model or effort')
-    assertEffort(preset.effort, preset.model, preset.cli)
     const owner = (await new ControlStore(controlDir, 900000).status()).owner!
     const scheduler = new Scheduler(controlDir), id = `s_reply_${runId}`
     try { return { id: (await scheduler.get(id)).id } } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }

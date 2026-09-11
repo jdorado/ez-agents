@@ -31,7 +31,7 @@ import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
-import { chatPreset, presetLabel, statusPreset } from './ai.js'
+import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 import { initializeWorkspace } from './workspace.js'
 import { softwareStatus } from './software-status.js'
@@ -65,6 +65,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let drainTimer: ReturnType<typeof setInterval> | undefined
   const codexHome = join(config.controlDir, 'cli', 'codex')
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
+  const durableWorkerChoice = () => ({ sessionId: randomUUID(), preset: persistedPreset(initialPreset('codex')) })
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
   const pagerDuty = config.pagerDutyRoutingKey && config.pagerDutyStocksHealthUrl
     ? new PagerDutyStocksMonitor({
@@ -310,7 +311,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       for (const task of await tasks.list()) if (task.state === 'pending' || task.state === 'active' || task.unwatchPending) {
         try { await tasks.decide(task.id) } catch { /* Failed or stale grants cannot launch. */ }
       }
-      await queueUpdateAttention(config.controlDir,owner,runs,await control.captureChoice(aiMenu.initial))
+      await queueUpdateAttention(config.controlDir,owner,runs,durableWorkerChoice())
       }
       for (const source of config.channelBackendUrl ? [] : await sources.available(owner)) {
         try {
@@ -327,7 +328,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               await runs.create({
               taskId: task?.id,
               id: eventRunId(source, events), chatId: owner.telegramChatId, telegramUserId: owner.telegramUserId,
-              texts: [], execution: await control.captureChoice(aiMenu.initial),
+              texts: [], execution: durableWorkerChoice(),
               external: { sourceId: source.id, bindingId: source.bindingId, eventIds: events.map(e => e.id) },
             })
             }

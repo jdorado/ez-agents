@@ -3,10 +3,10 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { executionDefaults } from '../src/model-policy.js'
+import { executionDefaults, executionOverrides } from '../src/model-policy.js'
 import { startExecutorJob } from '../src/executor.js'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, readModels, validateSelection } from '../src/ai.js'
+import { initialPreset, persistedPreset, readModels, validateSelection } from '../src/ai.js'
 import { taskArguments } from '../src/task-executor.js'
 import { runCodexSession } from '../src/codex-session.js'
 import { runDesktopTurn } from '../src/desktop-bridge.js'
@@ -46,6 +46,11 @@ test('restricted tasks pin Luna max, preserve explicit choices and reject higher
   assert.deepEqual(executionDefaults('codex', {model:'gpt-5.6-terra'}), {model:'gpt-5.6-terra',effort:'high'})
   assert.deepEqual(executionDefaults('codex', {model:'gpt-5.6-luna'}), {model:'gpt-5.6-luna',effort:'max'})
   assert.deepEqual(executionDefaults('codex', {}), {model:'gpt-5.6-luna',effort:'max'})
+  assert.deepEqual(executionOverrides('codex', {model:'gpt-5.6-luna',effort:'max'}, 'gpt-6-astra'), {model:'gpt-6-astra',effort:'high'})
+  assert.deepEqual(executionOverrides('codex', {model:'gpt-5.6-luna',effort:'max'}, 'gpt-5.6-luna'), {model:'gpt-5.6-luna',effort:'max'})
+  const stored = persistedPreset({id:'luna',name:'Luna',cli:'codex',model:'gpt-5.6-luna',effort:'max'})
+  assert.equal(stored.effort, undefined)
+  assert.deepEqual(executionDefaults('codex', stored), {id:'luna',name:'Luna',cli:'codex',model:'gpt-5.6-luna',effort:'max'})
 })
 
 test('preset persistence rejects above-high choices without changing current settings', async () => {

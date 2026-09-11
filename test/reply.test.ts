@@ -56,10 +56,16 @@ test('reply handoff deduplicates the owner request and defaults independently to
   assert.deepEqual(await replyCall(root,'tg_4',root,'defer',{text:'retry'}),first)
   const saved=JSON.parse(await readFile(join(root,'schedules','s_reply_tg_4.json'),'utf8'))
   assert.equal(saved.execution.preset.model,'gpt-5.6-luna')
-  assert.equal(saved.execution.preset.effort,'max')
+  assert.equal(saved.execution.preset.effort,undefined)
   assert.notEqual(saved.execution.sessionId,execution.sessionId)
   assert.match(saved.text,/Make the report/)
   assert.equal(saved.owner.telegramChatId,101)
+  await runs.create({id:'tg_11',chatId:101,telegramUserId:101,texts:['Use Astra'],execution})
+  await runs.patch('tg_11',{status:'running',replyOnly:true})
+  await replyCall(root,'tg_11',root,'defer',{text:'Use Astra for this worker',model:'gpt-6-astra'})
+  const astra=JSON.parse(await readFile(join(root,'schedules','s_reply_tg_11.json'),'utf8'))
+  assert.equal(astra.execution.preset.model,'gpt-6-astra')
+  assert.equal(astra.execution.preset.effort,'high')
  }finally{await rm(root,{recursive:true,force:true})}
 })
 

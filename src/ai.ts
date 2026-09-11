@@ -39,6 +39,14 @@ export const initialPreset = (cli: string): AiPreset => {
   }
 }
 
+// Keep persisted state readable by older releases. Luna/max is an execution
+// default; the launcher resolves an omitted Luna effort back to max.
+export const persistedPreset = (preset: AiPreset): AiPreset => {
+  if (!['codex', 'codex-gui'].includes(preset.cli) || preset.model !== 'gpt-5.6-luna' || preset.effort !== 'max') return preset
+  const { effort: _effort, ...rollbackReadable } = preset
+  return rollbackReadable
+}
+
 // Conversation defaults are independent of durable work and explicit saved choices.
 export const chatPreset = (cli: string): AiPreset => {
   const preset = initialPreset(cli)

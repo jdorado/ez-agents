@@ -6,6 +6,7 @@ import { loadControlConfig } from './config.js'
 import { ControlStore } from './control-state.js'
 import { RunStore } from './runs.js'
 import { initialPreset, isPreset } from './ai.js'
+import { executionOverrides } from './model-policy.js'
 import { Scheduler } from './scheduler.js'
 import { ownsRun } from './identity.js'
 import { nextOccurrence, type Trigger } from './schedule-time.js'
@@ -73,7 +74,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       v.cron ? {cron:v.cron,timezone:v.timezone!,start,until:v.until} : {everySeconds:Number(v['every-seconds']),start,until:v.until}
     const previous = action === 'edit' ? (await scheduler.get(id!)).execution : undefined
     const base = v.cli ? initialPreset(v.cli) : previous?.preset || initialPreset('codex')
-    const preset = {...base, ...(v.model ? {model:v.model} : {}), ...(v.effort ? {effort:v.effort} : {})}
+    const preset = executionOverrides(base.cli, base, v.model, v.effort)
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
       text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,

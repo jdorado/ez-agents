@@ -8,6 +8,7 @@ import { initialPreset, chatPreset, readModels, isPreset } from '../src/ai.js'
 import { createAiMenu } from '../src/menu.js'
 import { EXECUTOR_REGISTRY, nativeSessionId } from '../src/executor.js'
 import { InboxStore } from '../src/inbox.js'
+import { executionDefaults } from '../src/model-policy.js'
 import type { Update } from 'grammy/types'
 
 test('AI choices pin model, effort and session; defaults and CLI switches do not reroute old work', async () => {
@@ -175,7 +176,8 @@ for (const cli of ['codex', 'codex-gui']) {
       await store.syncClientPresets(initial, discovered)
       const first = await store.captureChoice(initial)
       assert.equal(first.preset.model, 'gpt-5.6-luna')
-      assert.equal(first.preset.effort, 'max')
+      assert.equal(first.preset.effort, undefined)
+      assert.equal(executionDefaults(cli, first.preset).effort, 'max')
       assert.equal(first.preset.cli, cli)
       const saved = { id: 'custom', name: 'Custom', cli, model: 'custom-model', effort: 'medium' }
       await store.savePreset(saved)

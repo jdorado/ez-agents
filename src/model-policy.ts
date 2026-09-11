@@ -17,3 +17,17 @@ export function executionDefaults<T extends { model?: string; effort?: string }>
       ? { effort: options.effort || (model === 'gpt-5.6-luna' ? DEFAULT_EFFORT : 'high') } : {}),
   }
 }
+
+export function executionOverrides<T extends { model?: string; effort?: string }>(
+  cli: string,
+  base: T,
+  model?: string,
+  effort?: string,
+): T {
+  const options = {
+    ...base,
+    ...(model !== undefined ? { model, ...(effort === undefined ? { effort: undefined } : {}) } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+  } as T
+  return executionDefaults(cli, options)
+}
