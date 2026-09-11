@@ -14,3 +14,9 @@ ENV HOME=/state/home EZ_AGENT_WORKSPACE=/workspace EZ_CONTROL_DIR=/state/control
 WORKDIR /workspace
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 CMD ["start"]
+
+FROM dependencies AS workforce-watch
+RUN chmod +x bin/ezenciel-agents-watch.mjs && mkdir /state
+ENV EZ_WATCH_STATE_DIR=/state
+WORKDIR /app
+CMD ["node", "--import", "tsx", "src/workforce-watch-cli.ts"]

@@ -1,0 +1,29 @@
+services:
+  workforce-watch:
+    image: ${EZ_WORKFORCE_WATCH_IMAGE:-ezenciel-agents:local}
+    build:
+      context: .
+      target: workforce-watch
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      EZ_WATCH_PORT: 8080
+      EZ_WATCH_ENROLL_TOKEN: ${EZ_WATCH_ENROLL_TOKEN:?Set a private enrollment token}
+      EZ_WATCH_TELEGRAM_CHAT_ID: ${EZ_WATCH_TELEGRAM_CHAT_ID:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    volumes:
+      - workforce-watch-state:/state
+    tmpfs: [/tmp]
+    ports:
+      - ${EZ_WATCH_BIND_ADDRESS:-127.0.0.1}:${EZ_WATCH_PORT:-9919}:8080
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+volumes:
+  workforce-watch-state:

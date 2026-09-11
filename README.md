@@ -114,6 +114,10 @@ transport, with separate agent workspaces and sessions. See
 For optional PagerDuty paging of a critical Stocks outage, see
 [PagerDuty critical-outage paging](docs/pagerduty.md).
 
+For independent agent check-ins and concise incident context, see
+[Workforce Watch](docs/workforce-watch.md). It runs separately from relays and
+does not receive their executor or provider credentials.
+
 Telegram `/status` shows the running relay and host versions plus installed
 plugin versions. The agent's `ez status` adds verified plugin runtime states and
 upgrade job receipts. See [status and upgrades](docs/upgrades.md).
