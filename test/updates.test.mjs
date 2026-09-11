@@ -7,7 +7,7 @@ import { gzipSync } from 'node:zlib';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
-import { prepare, submit, command, read, jobPath, eligibility } from '../src/updates/control.mjs';
+import { prepare, submit, command, read, jobPath, eligibility, jobs } from '../src/updates/control.mjs';
 import { perform, environment, packageManager } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
@@ -252,6 +252,11 @@ test('missing or broken managers fail with repair guidance before installing or 
 
 for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider} drains work, replaces host PID and recovers after restart`,async t=>{
  const f=await fixture(t),fake=path.join(f.root,'fake');await fs.mkdir(fake);
+ // A process may die after creating a job directory but before atomically
+ // committing its receipt. That directory must not block transport startup.
+ await fs.mkdir(path.join(f.home,'updates','d18e847a-bb59-49c6-96f3-27fdc43ca44f'));
+ await fs.mkdir(path.join(f.home,'updates','a'.repeat(36)));
+ assert.deepEqual(await jobs(f.home),[]);
  const hostCode=`import fs from 'node:fs';import path from 'node:path';const c=JSON.parse(fs.readFileSync(process.argv[2])).agents[0];const d=path.join(c.controlDir,'host-executor');fs.mkdirSync(d,{recursive:true});const beat=()=>{fs.writeFileSync(path.join(d,'heartbeat.json'),JSON.stringify({pid:process.pid,at:Date.now()}));};beat();const timer=setInterval(()=>{try{process.kill(Number(process.env.EZ_HOST_SUPERVISOR_PID),0)}catch{process.exit(0)}beat()},100);process.on('SIGTERM',()=>{clearInterval(timer);process.exit(0)});`;
  for(const dir of [f.old,f.source]) {
   await fs.mkdir(path.join(dir,'node_modules/tsx/dist'),{recursive:true});await fs.writeFile(path.join(dir,'node_modules/tsx/dist/loader.mjs'),'');

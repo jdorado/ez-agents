@@ -7,6 +7,7 @@ import { digest, extract, newer, compatible, version, releaseContract, registryV
 export const read = async file => JSON.parse(await fs.readFile(file,'utf8'));
 export const missing = error => {if(error.code!=='ENOENT')throw error;return null;};
 export const targetId = value => {if(value!=='main'&&!/^[a-z][a-z0-9-]{0,39}$/.test(value))throw Error('Invalid update target');return value;};
+const jobId=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 export const updateHome = home => path.join(home,'updates');
 export async function state(home) {
   const config=await read(path.join(home,'config.json'));
@@ -77,12 +78,15 @@ export async function prepare(home,target,{file,release}) {
   } catch(error){await fs.rm(dir,{recursive:true,force:true});throw error;}
 }
 export function jobPath(home,id) {
-  if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id))throw Error('Invalid upgrade job ID');
+  if(!jobId.test(id))throw Error('Invalid upgrade job ID');
   return path.join(updateHome(home),id);
 }
 export async function jobs(home) {
   const entries=await fs.readdir(updateHome(home),{withFileTypes:true}).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
-  return Promise.all(entries.filter(e=>e.isDirectory()&&/^[a-f0-9-]{36}$/.test(e.name)).map(e=>read(path.join(jobPath(home,e.name),'job.json'))));
+  // A job becomes visible only when its receipt is atomically committed. A crash
+  // before that point leaves no activation authority and must not stop the host.
+  const found=await Promise.all(entries.filter(e=>e.isDirectory()&&jobId.test(e.name)).map(e=>read(path.join(jobPath(home,e.name),'job.json')).catch(missing)));
+  return found.filter(Boolean);
 }
 async function requireSupervisor(directory) {
   const h=await read(path.join(directory,'supervisor.json'));
