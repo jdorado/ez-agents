@@ -4,6 +4,8 @@ import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 assert.equal(readFileSync('docker/pnpm-lock.yaml','utf8'),readFileSync('pnpm-lock.yaml','utf8'),'Refresh docker/pnpm-lock.yaml after dependency changes');
 const p=JSON.parse(readFileSync('package.json','utf8'));
+const compose=readFileSync('compose.yaml','utf8');
+assert.match(compose,/healthcheck:\s+test: \[CMD, node, \/app\/docker\/healthcheck\.mjs\][\s\S]*?interval: 10s[\s\S]*?start_period: 60s[\s\S]*?retries: 3/,'Relay health grace must cover grammY default long polling');
 const [pack]=JSON.parse(execFileSync('npm',['pack','--dry-run','--ignore-scripts','--json'],{encoding:'utf8'}));
 const names=pack.files.map(f=>f.path);
 for(const required of ['LICENSE','README.md','SECURITY.md','CONTRIBUTING.md','CHANGELOG.md','THIRD_PARTY_NOTICES.md','Dockerfile','.dockerignore','docker/pnpm-lock.yaml']) assert(names.includes(required),`Missing ${required}`);

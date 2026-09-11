@@ -6,6 +6,9 @@
   receipt before rollback replaces the candidate relay. This distinguishes relay
   polling and host-executor heartbeat failures without persisting control-state,
   provider, environment, or Docker diagnostic content.
+- Allow an upgrading relay one grammY long-poll interval to replace a stopped
+  predecessor before its health gate can roll it back. A persistent competing
+  poller still fails health after the bounded grace period.
 
 ## 0.1.0-beta.19
 
