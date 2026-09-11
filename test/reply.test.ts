@@ -44,7 +44,7 @@ test('reply native adapter exposes only context send defer with shell and networ
  assert.doesNotMatch(args,/--add-dir/)
 })
 
-test('reply handoff deduplicates the owner request and defaults independently to Terra high', async () => {
+test('reply handoff deduplicates the owner request and defaults independently to Luna max', async () => {
  const root=await mkdtemp(join(tmpdir(),'ez-reply-defer-')), runs=new RunStore(root)
  try {
   const control=new ControlStore(root,900000)
@@ -55,8 +55,8 @@ test('reply handoff deduplicates the owner request and defaults independently to
   const first=await replyCall(root,'tg_4',root,'defer',{text:'Prepare the report using the canonical sources'})
   assert.deepEqual(await replyCall(root,'tg_4',root,'defer',{text:'retry'}),first)
   const saved=JSON.parse(await readFile(join(root,'schedules','s_reply_tg_4.json'),'utf8'))
-  assert.equal(saved.execution.preset.model,'gpt-5.6-terra')
-  assert.equal(saved.execution.preset.effort,'high')
+  assert.equal(saved.execution.preset.model,'gpt-5.6-luna')
+  assert.equal(saved.execution.preset.effort,'max')
   assert.notEqual(saved.execution.sessionId,execution.sessionId)
   assert.match(saved.text,/Make the report/)
   assert.equal(saved.owner.telegramChatId,101)

@@ -33,11 +33,11 @@ times fire once, at the earlier instant. Search is bounded to eight years.
 Public-holiday calendars and arbitrary RRULE syntax are not implemented.
 
 New tasks, including work deferred by a busy reply session, default to Codex
-`gpt-5.6-terra` with `high` reasoning independently of the creating chat.
+`gpt-5.6-luna` with `max` reasoning independently of the creating chat.
 New chats use the separate Sol/medium preset. Busy reply `defer` accepts optional
 `model` and `effort` fields; retries preserve the first saved task choice.
-Use `--cli`, `--model`, and `--effort` to specify another choice. `xhigh` is
-available only with Codex `gpt-5.6-luna`; every other model remains capped at
+Use `--cli`, `--model`, and `--effort` to specify another choice. `xhigh` and
+`max` are available only with Codex `gpt-5.6-luna`; every other model remains capped at
 `high`. Non-Codex adapters inherit native effort when unset. Editing preserves the existing AI
 choice unless those flags override it. Stored choices are checked again at
 launch, including schedules saved before a policy change.

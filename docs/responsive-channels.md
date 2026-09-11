@@ -8,12 +8,12 @@ the handoff is saved, instead of waiting for the worker. This is agent guidance,
 not a keyword classifier, automatic acknowledgement, or latency guarantee.
 
 New Codex agents use Sol / medium for chat. Scheduled work defaults independently
-to Terra / high; the agent can choose another model and effort for complex work.
-`ezenciel-agents-schedule create --now --text-file FILE --model MODEL --effort high`
+to Luna / max; the agent can choose another model and effort for complex work.
+`ezenciel-agents-schedule create --now --text-file FILE --model MODEL --effort max`
 uses the existing scheduler (include `--name` for a useful task label). Busy owner
 reply sessions expose the same independent model/effort choice through `defer`.
 Its retry returns the first saved schedule; changing arguments does not revise
-an accepted job. `xhigh` is available only for Luna; other models remain capped at high.
+an accepted job. `xhigh` and `max` are available only for Luna; other models remain capped at high.
 
 A handoff includes the objective, relevant context and paths, constraints,
 authorized actions, acceptance checks and delivery destination. Background

@@ -87,7 +87,7 @@ test('model catalog projects native metadata only, excluding hidden entries and 
     ] }))
     assert.deepEqual(await readModels(home, async (cli) => cli === 'codex'), [
       { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium'] },
-      { cli: 'codex', model: 'gpt-5.6-luna', name: 'Luna', efforts: ['high', 'xhigh'] },
+      { cli: 'codex', model: 'gpt-5.6-luna', name: 'Luna', efforts: ['high', 'xhigh', 'max'] },
     ])
     assert.equal(isPreset({ id: 'x', name: 'x', cli: 'grok', model: '--shell escape' }), false)
   } finally { await rm(home, { recursive: true, force: true }) }
@@ -165,7 +165,7 @@ test('native executor flags carry the exact model and effort; only structured me
 })
 
 for (const cli of ['codex', 'codex-gui']) {
-  test(`${cli} initializes Terra high ahead of host defaults and preserves saved choices`, async () => {
+  test(`${cli} initializes Luna max ahead of host defaults and preserves saved choices`, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ez-ai-default-'))
     try {
       const store = new ControlStore(dir, 1000)
@@ -174,8 +174,8 @@ for (const cli of ['codex', 'codex-gui']) {
         model: 'host-model', effort: 'low' }]
       await store.syncClientPresets(initial, discovered)
       const first = await store.captureChoice(initial)
-      assert.equal(first.preset.model, 'gpt-5.6-terra')
-      assert.equal(first.preset.effort, 'high')
+      assert.equal(first.preset.model, 'gpt-5.6-luna')
+      assert.equal(first.preset.effort, 'max')
       assert.equal(first.preset.cli, cli)
       const saved = { id: 'custom', name: 'Custom', cli, model: 'custom-model', effort: 'medium' }
       await store.savePreset(saved)
@@ -197,8 +197,8 @@ for (const cli of ['codex', 'codex-gui']) {
       const chat = await store.captureChoice(chatPreset(cli))
       assert.equal(chat.preset.model, 'gpt-5.6-sol')
       assert.equal(chat.preset.effort, 'medium')
-      assert.equal(initialPreset(cli).model, 'gpt-5.6-terra')
-      assert.equal(initialPreset(cli).effort, 'high')
+      assert.equal(initialPreset(cli).model, 'gpt-5.6-luna')
+      assert.equal(initialPreset(cli).effort, 'max')
       const old = initialPreset(cli)
       await store.savePreset(old)
       await store.defaultPreset(old.id)

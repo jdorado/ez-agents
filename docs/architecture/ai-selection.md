@@ -39,7 +39,7 @@ opaque wrappers remain explicitly “client default”. No credentials are store
 no inference runs, no new dependency, and no cross-CLI session transfer.
 
 New Codex CLI and desktop agents seed **Responsive chat** (`gpt-5.6-sol`,
-`medium`). Durable work keeps its independent `gpt-5.6-terra` / `high` default;
+`medium`). Durable work keeps its independent `gpt-5.6-luna` / `max` default;
 workers can explicitly select another model and effort for the job. Native
 choices for other executors remain unchanged. No fallback is selected when a
 model is unavailable.

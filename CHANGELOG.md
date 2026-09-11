@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.25
+
+- Enable Codex Luna `max` reasoning for durable work, schedules and deferred
+  owner handoffs. New durable work defaults to Luna/max while responsive chat
+  remains Sol/medium.
+- Preserve the strict cap for every other model and expose Luna/max from the
+  installed model catalog.
+
 ## 0.1.0-beta.24
 
 - Preserve host-owned private plugin networks across generated Compose services,
