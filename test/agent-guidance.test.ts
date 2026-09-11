@@ -30,6 +30,16 @@ test('CLI and desktop prompt builders use current package guidance', async () =>
     assert.ok(prompt.includes(shared), `${kind} prompt is missing the current package guidance`)
 })
 
+test('shared guidance teaches source-chat delivery and real Telegram line breaks', async () => {
+  const shared = await readFile(sharedGuidancePath, 'utf8')
+  assert.ok(shared.includes("current run's source chat"))
+  assert.match(shared, /actual newline\s+characters/)
+  assert.ok(shared.includes('`\\n`'))
+  assert.ok(shared.includes('`\\\\n`'))
+  assert.ok(shared.includes('`/n`'))
+  assert.ok(shared.includes('ezenciel-agents-message --text-file ./work/reply.md'))
+})
+
 test('package guidance resolution ignores a workspace shadow file', async () => {
   const root = path.join(tmpdir(), `ez-guidance-${randomUUID()}`)
   await mkdir(root, { recursive: true })
