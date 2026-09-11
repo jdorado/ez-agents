@@ -82,7 +82,10 @@ export function jobPath(home,id) {
 }
 export async function jobs(home) {
   const entries=await fs.readdir(updateHome(home),{withFileTypes:true}).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
-  return Promise.all(entries.filter(e=>e.isDirectory()&&/^[a-f0-9-]{36}$/.test(e.name)).map(e=>read(path.join(jobPath(home,e.name),'job.json'))));
+  // A job becomes visible only when its receipt is atomically committed. A crash
+  // before that point leaves no activation authority and must not stop the host.
+  const found=await Promise.all(entries.filter(e=>e.isDirectory()&&/^[a-f0-9-]{36}$/.test(e.name)).map(e=>read(path.join(jobPath(home,e.name),'job.json')).catch(missing)));
+  return found.filter(Boolean);
 }
 async function requireSupervisor(directory) {
   const h=await read(path.join(directory,'supervisor.json'));
