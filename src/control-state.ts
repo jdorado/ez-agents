@@ -325,7 +325,7 @@ export class ControlStore {
 
   async savePreset(preset: AiPreset): Promise<void> {
     if (!isPreset(preset)) throw new Error('Invalid AI preset')
-    assertEffort(preset.effort)
+    assertEffort(preset.effort, preset.model, preset.cli)
     await this.withLock(async () => {
       const state = await this.readState()
       if (!state.ai) throw new Error('AI settings not initialized')
@@ -342,7 +342,7 @@ export class ControlStore {
       const ai = state.ai
       const preset = ai?.presets.find((p) => p.id === id)
       if (!ai || !preset) throw new Error('Saved AI no longer exists')
-      assertEffort(preset.effort)
+      assertEffort(preset.effort, preset.model, preset.cli)
       if ((state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Menu expired. Open Choose AI again.')
       const current = ai.presets.find((p) => p.id === ai.selectedId)!
       if (state.activeSession && (current.cli !== preset.cli || !state.activeSession.cli) && !fresh) return false
@@ -360,7 +360,8 @@ export class ControlStore {
     await this.withLock(async () => {
       const state = await this.readState()
       if (!state.ai?.presets.some((p) => p.id === id)) throw new Error('Unknown AI preset')
-      assertEffort(state.ai.presets.find(p => p.id === id)!.effort)
+      const preset = state.ai.presets.find(p => p.id === id)!
+      assertEffort(preset.effort, preset.model, preset.cli)
       state.ai.defaultId = id
       await this.writeState(state)
     })

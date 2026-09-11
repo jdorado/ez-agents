@@ -13,7 +13,7 @@ to Terra / high; the agent can choose another model and effort for complex work.
 uses the existing scheduler (include `--name` for a useful task label). Busy owner
 reply sessions expose the same independent model/effort choice through `defer`.
 Its retry returns the first saved schedule; changing arguments does not revise
-an accepted job. Explicit effort above high remains rejected by core policy.
+an accepted job. `xhigh` is available only for Luna; other models remain capped at high.
 
 A handoff includes the objective, relevant context and paths, constraints,
 authorized actions, acceptance checks and delivery destination. Background

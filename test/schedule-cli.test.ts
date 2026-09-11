@@ -24,6 +24,8 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
  assert.equal(saved.text,args.at(-1));assert.equal(saved.execution.preset.cli,'codex')
  assert.equal(saved.execution.preset.model,'gpt-5.6-terra');assert.equal(saved.execution.preset.effort,'high')
  await assert.rejects(exec(process.execPath,[bin,'create','blocked','--at','2027-09-09T09:00:00+04:00','--text','test','--effort','xhigh'],{env}),/capped at high/)
+ const luna=JSON.parse((await exec(process.execPath,[bin,'create','luna','--at','2027-09-10T09:00:00+04:00','--text','Luna xhigh task','--model','gpt-5.6-luna','--effort','xhigh'],{env})).stdout)
+ assert.equal(luna.execution.preset.model,'gpt-5.6-luna');assert.equal(luna.execution.preset.effort,'xhigh')
  assert.equal(saved.nextEligibleAt,'2027-09-09T05:00:00.000Z')
  await assert.rejects(exec(process.execPath,[bin,...args],{env}),/exists/)
  assert.equal(JSON.parse((await exec(process.execPath,[bin,'pause','test'],{env})).stdout).enabled,false)

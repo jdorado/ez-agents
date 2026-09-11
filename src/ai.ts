@@ -61,8 +61,8 @@ export const readModels = async (home = homedir(), available = installed, codexH
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
-  const efforts = (value: unknown, key: string): string[] =>
-    (Array.isArray(value) ? value : []).map((e: unknown) => record(e)[key]).filter(safe).filter(allowedEffort)
+  const efforts = (value: unknown, key: string, model?: string, cli?: string): string[] =>
+    (Array.isArray(value) ? value : []).map((e: unknown) => record(e)[key]).filter(safe).filter(effort => allowedEffort(effort, model, cli))
   const json = async (file: string) => {
     try { return record(JSON.parse(await readFile(file, 'utf8'))) } catch { return {} }
   }
@@ -72,7 +72,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
       const info = record(record(entry).info)
       if (info.hidden || !safe(info.id)) continue
       models.push({ cli: 'grok', model: info.id, name: String(info.name || info.id).slice(0, 80),
-        efforts: efforts(info.reasoning_efforts, 'value') })
+        efforts: efforts(info.reasoning_efforts, 'value', info.id, 'grok') })
     }
   }
   if (await available('codex')) {
@@ -81,7 +81,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
       const info = record(entry)
       if (info.visibility !== 'list' || !safe(info.slug)) continue
       models.push({ cli: 'codex', model: info.slug, name: String(info.display_name || info.slug).slice(0, 80),
-        efforts: efforts(info.supported_reasoning_levels, 'effort') })
+        efforts: efforts(info.supported_reasoning_levels, 'effort', info.slug, 'codex') })
     }
   }
   if (await available('codex-gui')) {
@@ -97,7 +97,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
 }
 
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {
-  assertEffort(p.effort)
+  assertEffort(p.effort, p.model, p.cli)
   if (!isPreset(p) || !(await available(p.cli))) throw new Error('This CLI is not installed.')
   if (!p.model && !p.effort && p.cli !== 'agy') return
   const model = catalog.find((m) => m.cli === p.cli && m.model === p.model)

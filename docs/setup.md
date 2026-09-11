@@ -55,14 +55,15 @@ owner request for standalone plugin development is a separate workflow.
 New agents using `codex` or `codex-gui` start with `gpt-5.6-sol` and `medium`
 reasoning, including when initialized with `ezenciel-agents-setup init`. This
 Ez default takes precedence over discovered host client defaults. Saved agent
-selections at or below high are preserved; use the AI settings to choose another model or effort.
-Ez rejects explicit reasoning above `high` for every model at selection and execution,
-including old saved or queued choices. Unset Codex model/effort resolves to
+selections permitted by the current policy are preserved; use the AI settings to choose another model or effort.
+Ez accepts `xhigh` only for `gpt-5.6-luna`; every other model rejects explicit
+reasoning above `high` at selection and execution, including old saved or queued choices.
+Unset Codex model/effort resolves to
 Terra/high at launch. This governs Ez-managed launches; it is not an account-wide
 limit on independently launched native clients or executor-created native subagents.
 Other adapters inherit their native effort when none is selected in Ez. That
 inherited configuration is not capped by Ez; explicit above-high Ez selections
-are still rejected. Conversation presets pin Sol/medium; the lower-level
+are rejected unless they are Codex Luna/xhigh. Conversation presets pin Sol/medium; the lower-level
 Codex fallback remains Terra/high for work without an explicit choice.
 
 New scheduled and one-off background tasks default to Codex Terra/high independently
