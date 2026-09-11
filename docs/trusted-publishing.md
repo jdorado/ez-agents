@@ -65,8 +65,28 @@ jobs from its latest attempt. Tag, PR and other workflow runs cannot shadow it;
 failed, pending or incomplete main CI cannot fall back to an older success.
 
 Create the `vVERSION` tag at that exact source commit and a **draft prerelease**
-with these assets, using native `gh release create --draft --prerelease` and
-`gh release upload` under existing release authority:
+with these assets under existing release authority. **Creating a draft release
+with `--target` does not create a Git tag.** Create and push the tag explicitly,
+then use `--verify-tag` to prevent staging against a missing remote tag:
+
+```sh
+# VERSION and SOURCE_SHA identify the reviewed, current-main candidate.
+git tag "v$VERSION" "$SOURCE_SHA"
+git push origin "refs/tags/v$VERSION"
+git ls-remote origin "refs/tags/v$VERSION"
+# Copy the already tested bytes, without rebuilding, to this exact basename.
+cp /absolute/tested-package.tgz /absolute/release/candidate.tgz
+gh release create "v$VERSION" --repo OWNER/REPO --verify-tag --draft --prerelease \
+  --title "v$VERSION" --notes-file /absolute/release/notes.md \
+  /absolute/release/candidate.tgz /absolute/release/release-receipt.json
+```
+
+If the tag already exists, read and verify its commit (peel annotated tags) rather
+than recreating or force-pushing it. Read back the draft by numeric ID and check
+asset names and downloaded SHA-256 before dispatch. `npm pack`'s default filename
+is not the publisher's asset name; GitHub asset labels do not rename the asset.
+Use `gh release upload` only to add a missing asset, never `--clobber` to replace
+candidate bytes or receipts. The required assets are:
 
 - `candidate.tgz`: the exact Mac-tested bytes from `npm pack --ignore-scripts`.
   Do not rebuild it on Actions.
@@ -114,6 +134,22 @@ identity on the release PR. A failed command after the publish call may mean npm
 accepted it: inspect registry state first. A rerun may verify an existing exact
 version; if the version is absent it refuses a second write. Reconcile first,
 then create a fresh authorized dispatch if appropriate. Never repeat or overwrite that version or silently repair tags.
+When validation fails, use the logged GitHub API path to identify the missing
+input. A tag lookup 404 is not evidence of a draft-release permission problem.
+A draft/asset 404 can mean absent evidence or insufficient access; verify with
+the existing authorized identity before diagnosing credentials. Do not broaden
+token permissions based on a generic 404.
+
+For a failure before the publish job starts, confirm that job was skipped and
+read npm for the exact version. If absent, repair missing staging inputs against
+the same approved commit/bytes, verify tag, asset names and digest, and create a
+fresh dispatch. If main or the package changes, prepare a new reviewed version;
+preserve the old draft instead of moving its tag or replacing its artifact.
+If any npm write may have started, use exact registry/artifact reconciliation
+above first. Publication recovery never means rolling back a running agent.
+Runtime upgrades and `failed`/`rolled-back` versus `recovery-required` recovery
+follow [upgrades](upgrades.md) under the installation's saved policy.
+
 Missing trust or registry access is an external dependency, not a reason to use
 a token workaround.
 

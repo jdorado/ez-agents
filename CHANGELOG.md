@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.23
+
+- Identify failed publisher API reads and missing release tags without exposing
+  credentials or signed asset URLs. Document verified tag/artifact staging and
+  recovery before a fresh publication attempt.
+- Include beta.22 incomplete-update-receipt recovery; the earlier unpublished
+  candidate remains preserved. Existing beta acceptance limits remain.
+
 ## 0.1.0-beta.22
 
 - Ignore incomplete or malformed update-receipt directories until a valid,
