@@ -17,7 +17,10 @@ import { TelegramSource } from '../src/telegram-source.js'
 import { packageVersion } from '../src/version.js'
 import type { Update } from 'grammy/types'
 const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
-const until=async(check:()=>Promise<boolean>)=>{for(let n=0;n<200;n++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Timed out')}
+// This integration test starts subprocesses, persists their receipts, and invokes
+// the schedule CLI. Give a busy CI worker time to settle without changing the
+// production recovery deadline.
+const until=async(check:()=>Promise<boolean>,timeoutMs=15_000)=>{const deadline=Date.now()+timeoutMs;while(!(await check())){if(Date.now()>=deadline)throw new Error(`Timed out after ${timeoutMs}ms`);await new Promise(r=>setTimeout(r,20))}}
 
 test('failure evidence is bounded and redacts configured credentials, headers, tokens, URLs and keys',()=>{
  const token='123456789:abcdefghijklmnopqrstuvwxyz123456789'
