@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-beta.20
+
+- Retain a bounded, content-free health predicate in a failed main-upgrade
+  receipt before rollback replaces the candidate relay. This distinguishes relay
+  polling and host-executor heartbeat failures without persisting control-state,
+  provider, environment, or Docker diagnostic content.
+
 ## 0.1.0-beta.19
 
 - Preserve host-backed run completion and delivery evidence while the relay
