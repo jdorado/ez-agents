@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-beta.19
+
+- Preserve host-backed run completion and delivery evidence while the relay
+  finalizes state, rather than treating the host PID as a relay-local worker
+  process. Interrupted host transport and deliberate schedule cancellation retain
+  their distinct terminal states.
+- Include the reviewed scheduled-task status, Workforce Watch, plugin-folder,
+  scheduler-model, incident-reopening, and catalog updates merged after beta.18.
+
 ## 0.1.0-beta.18.1
 
 - Add explicit read-only existing-folder bindings for plugin services, preserving bindings across compatible updates without copying source files.
