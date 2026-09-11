@@ -53,7 +53,10 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       : 'Selected for this conversation. Queued work unchanged.'}`)
   }
   const list = async (ctx: Context, settings = false) => {
-    if (!settings) return available(ctx)
+    if (!settings) {
+      const models = await catalog()
+      if (models.length) return available(ctx, 0, models)
+    }
     const state = await control.aiState(initial)
     const keyboard = new InlineKeyboard()
     for (const preset of state.presets) button(keyboard,
@@ -70,10 +73,12 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       await refresh()
       await list(next, true)
     })
-    await ctx.reply('Default for new conversations\nChoose a saved AI. Current work will not change.', { reply_markup: keyboard })
+    await ctx.reply(settings
+      ? 'Default for new conversations\nChoose a saved AI. Current work will not change.'
+      : 'Choose AI\nNo client catalog available. Showing saved choices.', { reply_markup: keyboard })
   }
-  const available = async (ctx: Context, page = 0) => {
-    const models = await catalog()
+  const available = async (ctx: Context, page = 0, listed?: ModelChoice[]) => {
+    const models = listed ?? await catalog()
     const keyboard = new InlineKeyboard()
     for (const model of models.slice(page * 8, page * 8 + 8)) {
       button(keyboard, `${model.cli} · ${model.name}`, async (next) => {
