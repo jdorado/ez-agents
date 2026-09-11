@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { atomic, compose, snapshot } from '../plugins/manager.mjs';
+import { atomic, compose, snapshot, checkFolders } from '../plugins/manager.mjs';
 import { read, state, eligibility, jobPath } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
 import { extract, digest } from './artifact.mjs';
@@ -103,6 +103,7 @@ export async function perform(home,job,hooks) {
       const secrets=await read(path.join(home,'packages',job.target,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
       const s=await snapshot(root),candidate={...old,source:root,revision:s.revision,manifest:s.manifest,deployment:s.deployment,sharedRevisions:s.sharedRevisions};
       for (const key of old.sharedEnabled || []) if (sharedIdentity(old, key).fingerprint !== sharedIdentity(candidate, key).fingerprint) throw Error('Shared worker changed; disable this client and coordinate an explicit shared worker upgrade before updating');
+      await checkFolders(config,candidate);
       const stage={...candidate,compose:path.join(dir,'compose.json')};await atomic(stage.compose,compose(config,stage,secrets));
       for(const [service,spec] of Object.entries(stage.deployment.services))await run('docker',[...pluginArgs(stage),spec.image?'pull':'build',service]);
       const running=Boolean((await run('docker',[...pluginArgs(old),'ps','-q'])).trim());

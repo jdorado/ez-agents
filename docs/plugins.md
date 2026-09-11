@@ -239,3 +239,37 @@ A shared entry declares `identity` (stable host resource ID), `buildTarget`, `me
 Docker's unique container name arbitrates concurrent first creation. Existing resources must match ownership and implementation labels. Labels assume a trusted Docker administrator; they are not credentials. Different Docker daemons are separate sharing domains. Stopping/uninstalling a plugin never stops or deletes the shared worker or model volume. Automatic shared-worker upgrades and garbage collection are not implemented; coordinate replacement explicitly after detaching all clients. Uninstall/reinstall resets client opt-in.
 
 Shared workers have a hard Docker CPU quota of half a core by default, across all attached agents combined. This leaves capacity even on a one-core host; it is not 50% of every core. The reviewed descriptor can set a different `cpus` value. Discovery refuses a worker whose actual CPU quota has drifted, rather than silently attaching to an unlimited process. Builds are not covered by the runtime quota.
+
+## Existing local folders
+
+Use operator-owned read-only folder bindings when a plugin needs files that
+already exist on the host. Keep indexes and writable metadata in the plugin's
+normal volume. This uses Docker bind mounts; it copies no source bytes and
+starts no provider sync. File edits remain with the host's existing tools.
+
+Stop the plugin before changing a binding:
+
+```sh
+ez plugins stop library
+ez plugins folder-bind library --service library --source /absolute/existing/notes --target /state/libraries/notes/files
+ez plugins folders library
+ez plugins start library
+```
+
+The target must be a child of a volume declared by that service, without
+colliding with another mount. Sources must be real existing directories outside
+the private tools directory. Missing sources fail instead of creating empty
+folders. Bindings are operator configuration, separate from package snapshots;
+compatible upgrades retain them and incompatible target changes fail validation.
+Use `folder-unbind ID --service NAME --target PATH` while stopped to detach a
+folder. Uninstall retains bindings and volumes. Unbinding reveals any underlying
+volume contents; inspect those before restarting to avoid using stale files.
+Never enable another sync writer for an already synchronized host folder.
+
+For Library, create/select the library name first and retain its QMD state while
+binding the host tree at that library's `files` directory. Keep provider bindings
+disabled for that source. Enable the normal shared embedding worker through
+`plugins shared-enable library embeddings`. Verify `library sources`, real search,
+and original readback from the actual executor. Document any differences between
+indexed snapshots and current originals; do not replace Library with private
+QMD runtimes or edit installed Compose/package files to bypass missing support.

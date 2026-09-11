@@ -115,11 +115,40 @@ export function validate(m,d,files) {
     id(name);keys(e,['service','path']);if(!d.services[e.service]) throw Error('Invalid export service');containerPath(e.path);
   }
 }
+// Operator-owned folder bindings remain separate from portable package descriptors.
+export function folderMounts(config, record) {
+  const mounts = config.folders?.[record.manifest.id] || [];
+  if (!Array.isArray(mounts)) throw Error('Invalid folder bindings');
+  for (const mount of mounts) {
+    keys(mount, ['service', 'source', 'target']);
+    const service = record.deployment.services[mount.service];
+    containerPath(mount.target);
+    if (!service || typeof mount.source !== 'string' || !path.isAbsolute(mount.source) || /[\0\r\n$]/.test(mount.source) ||
+        path.posix.normalize(mount.target) !== mount.target ||
+        !Object.values(service.volumes || {}).some(root => mount.target.startsWith(root + '/')) ||
+        mount.target === '/inference' || mount.target.startsWith('/inference/') ||
+        Object.values(service.volumes || {}).some(root => root === mount.target || root.startsWith(mount.target + '/')) ||
+        (service.workspace && (config.workspace === mount.target || config.workspace.startsWith(mount.target + '/') || mount.target.startsWith(config.workspace + '/'))))
+      throw Error('Folder target must be a child of a declared volume, without mount collisions');
+    if (mounts.some(other => other !== mount && other.service === mount.service &&
+        (other.target === mount.target || other.target.startsWith(mount.target + '/') || mount.target.startsWith(other.target + '/'))))
+      throw Error('Overlapping folder targets');
+  }
+  return mounts;
+}
+export async function checkFolders(config, record) {
+  for (const { source } of folderMounts(config, record)) {
+    if (await fs.realpath(source) !== source || !(await fs.stat(source)).isDirectory())
+      throw Error('Folder source must remain an existing real directory');
+  }
+}
 export function compose(config, record, secrets={}) {
   const services={}, volumes={};
+  const folders = folderMounts(config, record);
   for(const [name,s] of Object.entries(record.deployment.services)) {
     const mounts=[];
     for(const [volume,target] of Object.entries(s.volumes||{})) { volumes[volume]={};mounts.push({type:'volume',source:volume,target}); }
+    for (const folder of folders.filter(f => f.service === name)) mounts.push({type:'bind',source:folder.source,target:folder.target,read_only:true,bind:{create_host_path:false}});
     if(s.workspace) mounts.push({type:'bind',source:config.workspace,target:config.workspace,read_only:true});
     services[name]={...(s.image?{image:s.image}:{image:`${record.project}-${name}:${record.revision.slice(7,23)}`,build:{context:record.source,target:s.buildTarget}}),
       init:true,user:s.user||'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
@@ -256,7 +285,7 @@ export async function main(args) {
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
   if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list|exposure','<registered CLI> ...'],scope:home});
-  if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
+  if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
     if(action==='available'&&group==='plugins') return emit(config.catalog);
@@ -279,6 +308,31 @@ export async function main(args) {
       return emit(await install(home,config,name,source,revision));
     }
     const record=r.plugins[name];if(!record)throw Error('Plugin not installed');
+    if (action === 'folders') { if(args.length) throw Error('Unexpected arguments'); return emit(folderMounts(config, record)); }
+    if (['folder-bind','folder-unbind'].includes(action)) {
+      const service=take('--service'), target=take('--target'), source=take('--source');
+      if(args.length || !service || !target || (action === 'folder-bind' ? !source : source !== undefined))
+        throw Error('Supply --service, --target and, for folder-bind, --source');
+      if(source && (!path.isAbsolute(source) || await fs.realpath(source) !== source || !(await fs.stat(source)).isDirectory()))
+        throw Error('Supply an existing absolute real folder');
+      if(source && (source === '/' || source === home || source.startsWith(home + '/') || home.startsWith(source + '/')))
+        throw Error('Folder must not overlap private plugin state');
+      return locked(home, async () => {
+        const current=await registry(home), latest=current.plugins[name], settings=await json(path.join(home,'config.json'));
+        if(latest?.revision !== record.revision) throw Error('Plugin changed during folder request');
+        if((await checked(['ps','--filter',`label=com.docker.compose.project=${latest.project}`,'--quiet'])).trim())
+          throw Error('Stop the plugin before changing folder bindings');
+        const folders=(settings.folders?.[name] || []).filter(f => f.service !== service || f.target !== target);
+        if(action === 'folder-bind') folders.push({service,source,target});
+        settings.folders={...settings.folders,[name]:folders};
+        await checkFolders(settings,latest);
+        const secrets=await json(path.join(home,'packages',name,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
+        const generated=compose(settings,latest,secrets);
+        await atomic(path.join(home,'config.json'),settings);
+        await atomic(latest.compose,generated);
+        return emit({ok:true,plugin:name,folders,readOnly:true,started:false});
+      });
+    }
     if (['shared-enable','shared-disable','shared-status'].includes(action)) {
       const key = args.shift(); id(key);
       if (args.length || !record.deployment.sharedServices?.[key]) throw Error('Supply a declared shared service');
@@ -286,10 +340,12 @@ export async function main(args) {
       return locked(home, async () => {
         const current = await registry(home), latest = current.plugins[name];
         if (latest?.revision !== record.revision) throw Error('Plugin changed during shared service request');
+        const currentConfig=await json(path.join(home,'config.json'));
+        await checkFolders(currentConfig, latest);
         const result = action === 'shared-enable' ? await sharedService(latest, key, 'enable', run) : { state: 'detached' };
         latest.sharedEnabled = [...new Set([...(latest.sharedEnabled || []).filter(k => k !== key), ...(action === 'shared-enable' ? [key] : [])])];
         const secrets = await json(path.join(home, 'packages', name, 'secrets.json')).catch(e => { if (e.code === 'ENOENT') return {}; throw e; });
-        await atomic(latest.compose, compose(config, latest, secrets));
+        await atomic(latest.compose, compose(currentConfig, latest, secrets));
         // Persist the binding before recreating clients; start can recover an interrupted recreation.
         await atomic(path.join(home, 'registry.json'), current);
         await checked([...composeArgs(latest), 'up', '-d', '--wait']);
@@ -311,16 +367,28 @@ export async function main(args) {
     if(!['start','stop','uninstall'].includes(action))throw Error('Unknown lifecycle command');
     return locked(home,async()=>{
       const current=await registry(home);if(current.plugins[name]?.revision!==record.revision)throw Error('Plugin changed during lifecycle request');
+      if(action==='start') {
+        const currentConfig=await json(path.join(home,'config.json'));
+        await checkFolders(currentConfig,current.plugins[name]);
+        const secrets=await json(path.join(home,'packages',name,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
+        await atomic(record.compose,compose(currentConfig,current.plugins[name],secrets));
+      }
       await checked([...composeArgs(record),...(action==='start'?['up','-d','--wait']:action==='stop'?['stop']:['down'])]);
       if(action==='uninstall') {delete current.plugins[name];for(const [alias,owner] of Object.entries(current.commands))if(owner===name)delete current.commands[alias];await atomic(path.join(home,'registry.json'),current);}
       emit({ok:true,plugin:name,action,dataPreserved:true});
     });
   }
+  return locked(home,async()=>{
+  const config=await json(path.join(home,'config.json'));
   const r=await registry(home),record=r.plugins[r.commands[group]],binding=record?.deployment.commands[group];
   if(!binding)throw Error('Unknown registered CLI');
+  await checkFolders(config,record);
+  const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
+  await atomic(record.compose,compose(config,record,secrets));
   // Docker exec does not reliably forward cancellation to the in-container process.
   // Run each client as a one-shot Compose container; docker compose run forwards signals.
   const name=`${record.project}-call-${randomUUID()}`;
   const result=await run([...composeArgs(record),'run','--rm','--no-deps','-T','--name',name,'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[group].args,...args.slice(1),...(binding.suffix||[])],{container:name});
   process.exitCode=result.code;
+  });
 }
