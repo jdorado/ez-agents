@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.18.1
+
+- Add explicit read-only existing-folder bindings for plugin services, preserving bindings across compatible updates without copying source files.
+
+
 ## 0.1.0-beta.18
 
 - Await complete relay cleanup after fatal Telegram polling errors and preserve the primary failure.

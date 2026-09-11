@@ -225,3 +225,52 @@ test('standalone rejects relay binding and preserves literal plugin arguments ac
  await fs.writeFile(path.join(f.home,'config.json'),JSON.stringify({schemaVersion:1,workspace:f.workspace,catalog:{},deploymentDir:'/missing'}));
  await assert.rejects(exec(launcher,['status']),/deployment-bound/); // never hide a broken relay binding
 });
+
+test('existing folders are read-only, persistent and fail closed when missing', async t => {
+ const f=await fixture(t);await init(f.home,f.workspace);
+ const inspected=JSON.parse((await f.call('plugins','inspect','sample','--source',f.source)).stdout);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',inspected.revision);
+ const source=await fs.realpath(f.workspace);
+ await f.call('plugins','folder-bind','sample','--service','sample','--source',source,'--target','/data/files');
+ const config=JSON.parse(await fs.readFile(path.join(f.home,'config.json'),'utf8'));
+ assert.deepEqual(config.folders.sample,[{service:'sample',source,target:'/data/files'}]);
+ const c=JSON.parse(await fs.readFile(path.join(f.home,'packages/sample/compose.json'),'utf8'));
+ assert.deepEqual(c.services.sample.volumes.find(v=>v.target==='/data/files'),{type:'bind',source,target:'/data/files',read_only:true,bind:{create_host_path:false}});
+ await assert.rejects(f.call('plugins','folder-bind','sample','--service','sample','--source',source,'--target','/data'),/child of a declared volume|Overlapping/);
+ await assert.rejects(f.call('plugins','folder-bind','sample','--service','sample','--source',source,'--target','/data/files/child'),/Overlapping/);
+ await assert.rejects(f.call('plugins','folder-bind','sample','--service','sample','--source',await fs.realpath(f.home),'--target','/data/private'),/private plugin state/);
+ await assert.rejects(f.call('plugins','folder-bind','sample','--service','sample','--source','/','--target','/data/root'),/private plugin state/);
+ await f.call('plugins','start','sample');
+ await fs.rename(f.workspace,f.workspace+'-moved');
+ await assert.rejects(f.call('plugins','start','sample'),/ENOENT/);
+ await assert.rejects(f.call('sample','read'),/ENOENT/);
+ await f.call('plugins','folder-unbind','sample','--service','sample','--target','/data/files');
+ assert.deepEqual(JSON.parse((await f.call('plugins','folders','sample')).stdout),[]);
+});
+
+test('folder bindings survive compatible descriptors and reject incompatible updates',async t=>{
+ const f=await fixture(t);const p=await snapshot(f.source);
+ const record={...p,project:'ezp-test-sample'};
+ const config={workspace:f.workspace,folders:{sample:[{service:'sample',source:f.workspace,target:'/data/files'}]}};
+ assert.equal(compose(config,record).services.sample.volumes.find(v=>v.target==='/data/files').read_only,true);
+ const next=structuredClone(record);next.deployment.services.sample.volumes={data:'/new-state'};
+ assert.throws(()=>compose(config,next),/child of a declared volume/);
+});
+
+test('folder rebind rejects every live project container including one-shots',async t=>{
+ const f=await fixture(t);await init(f.home,f.workspace);const p=await snapshot(f.source);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nif(process.argv[2]==='ps')console.log('paused-or-restarting-or-one-shot');\n`,{mode:0o700});
+ await assert.rejects(f.call('plugins','folder-bind','sample','--service','sample','--source',await fs.realpath(f.workspace),'--target','/data/files'),/Stop the plugin/);
+});
+
+test('registered calls honor registry lock and regenerate stale Compose from current folders',async t=>{
+ const f=await fixture(t);await init(f.home,f.workspace);const p=await snapshot(f.source);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ await f.call('plugins','folder-bind','sample','--service','sample','--source',await fs.realpath(f.workspace),'--target','/data/files');
+ const file=path.join(f.home,'packages/sample/compose.json');await fs.writeFile(file,'{}');
+ await f.call('sample','read');
+ assert.equal(JSON.parse(await fs.readFile(file,'utf8')).services.sample.volumes.find(v=>v.target==='/data/files').read_only,true);
+ await fs.writeFile(path.join(f.home,'registry.lock'),'test');
+ await assert.rejects(f.call('sample','read'),/busy|EEXIST|locked/i);
+});
