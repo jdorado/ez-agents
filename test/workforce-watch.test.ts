@@ -68,6 +68,25 @@ test('a failed recovery notification stays pending and is retried on evaluation'
   } finally { await rm(stateDir, { recursive: true, force: true }) }
 })
 
+test('an incident whose opening alert never delivered resolves quietly', async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), 'workforce-watch-'))
+  let rejectAlert = true
+  const notices: string[] = []
+  const watch = new WorkforceWatch({ stateDir, enrollmentToken: 'fleet-secret', notify: async text => {
+    if (rejectAlert && text.includes('alert')) throw new Error('Telegram unavailable')
+    notices.push(text)
+  } })
+  try {
+    const enrolled = await watch.enroll('fleet-secret', { workerId: 'jc-stack', checkInSeconds: 10, graceSeconds: 0 })
+    await assert.rejects(() => watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'failed', terminal: true }), /Telegram unavailable/)
+    rejectAlert = false
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'ok' })
+    await watch.checkIn(enrolled.workerId, enrolled.workerToken, { status: 'ok' })
+    assert.deepEqual(notices, [])
+    assert.equal((await watch.inspect('jc-stack') as { incident?: unknown }).incident, undefined)
+  } finally { await rm(stateDir, { recursive: true, force: true }) }
+})
+
 test('an enrollment-authorized token rotation invalidates the prior worker secret', async () => {
   const f = await fixture()
   try {

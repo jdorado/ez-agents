@@ -74,7 +74,7 @@ export class WorkforceWatch {
   private async notifyOpen(state: State, worker: Worker): Promise<void> { if (!worker.incident || worker.incident.notifiedAt !== undefined || !this.options.notify) return; await this.options.notify(this.format(worker, 'opened')); worker.incident.notifiedAt = this.now(); await this.save(state) }
   private async notifyRecovery(state: State, worker: Worker): Promise<void> {
     if (worker.incident?.recoveredAt === undefined) return
-    if (this.options.notify) await this.options.notify(this.format(worker, 'recovered'))
+    if (worker.incident.notifiedAt !== undefined && this.options.notify) await this.options.notify(this.format(worker, 'recovered'))
     worker.incident = undefined
     worker.recoveryChecks = 0
     await this.save(state)
