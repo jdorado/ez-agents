@@ -35,7 +35,6 @@ import { discoverDefaults } from './client-defaults.js'
 import { initializeWorkspace } from './workspace.js'
 import { softwareStatus } from './software-status.js'
 import { PagerDutyStocksMonitor } from './pagerduty.js'
-import { telegramMessages, telegramPacer } from './telegram-message.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
@@ -82,8 +81,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const ownerStopped = new WeakSet<ChildProcess>()
   let activeChild: ChildProcess | null = null
   let shuttingDown = false
-  const paceSend = telegramPacer()
-  const messages = telegramMessages(bot.api, paceSend)
+  let nextSendAt = 0
+  const paceSend = async () => {
+    const delay = nextSendAt - Date.now()
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+    nextSendAt = Date.now() + 1000
+  }
   let startLock: Promise<void> = Promise.resolve()
   const withStartLock = (work: () => Promise<void>): Promise<void> => {
     const next = startLock.then(work, work)
@@ -98,11 +101,25 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const ids: number[] = []
     const parts = splitTelegramText(text)
     for (let i = 0; i < parts.length; i++) {
+      await paceSend()
       const part = parts[i]
       const replyParams =
         i === 0 && replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}
-      const sent = await messages.send(chatId, part, replyParams)
-      ids.push(sent.message_id)
+      try {
+        const html = markdownToTelegramHtml(part)
+        const sent = await bot.api.sendMessage(chatId, html, { parse_mode: 'HTML', ...replyParams })
+        ids.push(sent.message_id)
+      } catch (error) {
+        if (
+          !(error instanceof GrammyError) ||
+          error.error_code !== 400 ||
+          !error.description.includes('parse entities')
+        )
+          throw error
+        // Fallback to plain text if HTML parsing fails
+        const sent = await bot.api.sendMessage(chatId, part, { ...replyParams })
+        ids.push(sent.message_id)
+      }
     }
     return ids
   }
