@@ -222,3 +222,63 @@ test('workflow runs and attempt jobs are paginated before selecting required evi
     [jobsPath.replace('&page=1', '&page=2')]: { jobs: [job] },
   }));
 });
+
+test('GitHub errors identify the failed read without exposing credentials or signed URLs', async () => {
+  const missing = githubClient('private-token', async () => new Response('private-body', { status: 404 }));
+  await assert.rejects(missing('/repos/jdorado/ez-agents/git/ref/tags/v1.2.3-beta.1'), /GitHub GET .*\/git\/ref\/tags\/v1\.2\.3-beta\.1: release tag is missing or inaccessible/);
+  await assert.rejects(missing('/repos/jdorado/ez-agents/releases/123'), error => {
+    assert.match(error.message, /HTTP 404.*GitHub GET .*\/releases\/123/);
+    assert.doesNotMatch(error.message, /private-token|private-body|release tag/);
+    return true;
+  });
+  let request = 0;
+  const download = githubClient('private-token', async () => request++ === 0
+    ? new Response('', { status: 302, headers: { location: 'https://release-assets.githubusercontent.com/file?signature=private-signature' } })
+    : new Response('private-body', { status: 403 }));
+  await assert.rejects(download('/repos/jdorado/ez-agents/releases/assets/456', true), error => {
+    assert.match(error.message, /HTTP 403.*\/releases\/assets\/456 asset download/);
+    assert.doesNotMatch(error.message, /private-token|private-body|private-signature|signature=/);
+    return true;
+  });
+});
+
+test('staging recovery requires a real source tag and canonical asset before validating exact bytes', async t => {
+  const { validate } = await import('../scripts/trusted-beta.mjs');
+  const { readFile } = await import('node:fs/promises');
+  const dir = await mkdtemp(join(tmpdir(), 'beta-staging-recovery-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await mkdir(join(dir, 'package'));
+  await writeFile(join(dir, 'package/package.json'), JSON.stringify(manifest));
+  execFileSync('tar', ['-czf', join(dir, 'candidate.tgz'), '-C', dir, 'package/package.json']);
+  const bytes = await readFile(join(dir, 'candidate.tgz'));
+  const candidateEnv = { ...env, RELEASE_SHA256: sha256(bytes) };
+  let tagExists = false, assetName = 'jc_stack-ez-agents-1.2.3-beta.1.tgz';
+  const reads = [];
+  const source = sourceApi();
+  const api = async path => {
+    reads.push(path);
+    if (path.includes('/git/ref/tags/') && !tagExists) {
+      return githubClient('test', async () => new Response('', { status: 404 }))(path);
+    }
+    if (path.endsWith('/releases/123')) return { id: 123, draft: true, prerelease: true, tag_name: `v${expected.version}`, assets: [
+      { id: 456, name: assetName, state: 'uploaded' }, { id: 457, name: 'release-receipt.json', state: 'uploaded' },
+    ] };
+    if (path.endsWith('/releases/assets/456')) return bytes;
+    if (path.endsWith('/releases/assets/457')) return Buffer.from(JSON.stringify({ ...receipt, sha256: candidateEnv.RELEASE_SHA256 }));
+    if (path.endsWith('/pulls/41')) return { merged: true, base: { repo: { full_name: expected.repository }, ref: 'main' }, merge_commit_sha: expected.sourceSha };
+    return source(path);
+  };
+  const output = join(dir, 'validated');
+  await assert.rejects(validate(output, candidateEnv, api), /release tag is missing/);
+  assert.ok(!reads.some(path => path.includes('/releases/')));
+  tagExists = true;
+  await assert.rejects(validate(output, candidateEnv, api), /Missing or ambiguous asset: candidate.tgz/);
+  assert.ok(!reads.some(path => path.includes('/releases/assets/')));
+  assetName = 'candidate.tgz';
+  await assert.rejects(validate(output, { ...candidateEnv, RELEASE_SHA256: '0'.repeat(64) }, api), /SHA256 mismatch/);
+  const result = await validate(output, candidateEnv, api);
+  assert.equal(result.sha256, sha256(bytes));
+  assert.deepEqual(await readFile(join(output, 'candidate.tgz')), bytes);
+  // Retry cannot silently replace an existing validated bundle.
+  await assert.rejects(validate(output, candidateEnv, api), /EEXIST/);
+});

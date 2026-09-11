@@ -87,8 +87,8 @@ export function tarManifest(path) {
   return JSON.parse(execFileSync('tar', ['-xOf', path, 'package/package.json'], { ...options, maxBuffer: 1024 * 1024 }));
 }
 
-async function responseBytes(response, max = MAX_ARTIFACT) {
-  assert(response.ok, `HTTP ${response.status} while reading release evidence`);
+async function responseBytes(response, max = MAX_ARTIFACT, context = 'release evidence') {
+  assert(response.ok, `HTTP ${response.status} while reading ${context}`);
   assert(Number(response.headers.get('content-length') || 0) <= max, 'Response too large');
   let size = 0; const chunks = [];
   for await (const chunk of response.body) { size += chunk.length; assert(size <= max, 'Response too large'); chunks.push(chunk); }
@@ -98,6 +98,8 @@ async function responseBytes(response, max = MAX_ARTIFACT) {
 export function githubClient(token, fetcher = fetch) {
   return async (path, binary = false) => {
     assert(path.startsWith('/repos/'), 'Invalid GitHub API path');
+    // Identify the failed read without logging tokens, response bodies or signed URLs.
+    const context = `GitHub GET ${path.split('?')[0]}`;
     const response = await fetcher(`https://api.github.com${path}`, {
       headers: { Accept: binary ? 'application/octet-stream' : 'application/vnd.github+json', ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-GitHub-Api-Version': '2022-11-28' },
       redirect: 'manual', signal: AbortSignal.timeout(30_000),
@@ -105,9 +107,12 @@ export function githubClient(token, fetcher = fetch) {
     if (binary && [301, 302, 303, 307, 308].includes(response.status)) {
       const location = new URL(response.headers.get('location'));
       assert(location.protocol === 'https:' && (location.hostname === 'release-assets.githubusercontent.com' || location.hostname === 'objects.githubusercontent.com'), 'Unexpected asset redirect');
-      return responseBytes(await fetcher(location, { signal: AbortSignal.timeout(60_000), redirect: 'error' }));
+      return responseBytes(await fetcher(location, { signal: AbortSignal.timeout(60_000), redirect: 'error' }), MAX_ARTIFACT, `${context} asset download`);
     }
-    const bytes = await responseBytes(response, binary ? MAX_ARTIFACT : 8 * 1024 * 1024);
+    if (response.status === 404 && path.includes('/git/ref/tags/')) {
+      throw new Error(`HTTP 404 while reading ${context}: release tag is missing or inaccessible; a draft release does not create its Git tag. Verify the remote tag at the reviewed source before dispatch.`);
+    }
+    const bytes = await responseBytes(response, binary ? MAX_ARTIFACT : 8 * 1024 * 1024, context);
     return binary ? bytes : JSON.parse(bytes.toString());
   };
 }
