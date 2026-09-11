@@ -21,7 +21,9 @@ export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
   const c = v as ExecutionChoice | undefined
   return Boolean(c && /^[0-9a-f-]{36}$/i.test(c.sessionId) && isPreset(c.preset))
 }
-export const presetLabel = (p: AiPreset) => `${p.cli} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
+export const presetLabel = (p: AiPreset) => `${p.cli} · ${p.model || 'client default'} · ${p.effort || (
+  ['codex', 'codex-gui'].includes(p.cli) && p.model === 'gpt-5.6-luna' ? DEFAULT_EFFORT : 'default effort'
+)}`
 // The seed delegates model selection to the native client. Project its resolved
 // settings for status without pinning future conversations to that snapshot.
 export const statusPreset = (preset: AiPreset, discovered: AiPreset[]): AiPreset =>
@@ -37,6 +39,14 @@ export const initialPreset = (cli: string): AiPreset => {
     ...(key === 'opencode'
       ? { model: process.env.OPENCODE_MODEL || 'opencode/nemotron-3.5-lightning-free' } : {}),
   }
+}
+
+// Keep persisted state readable by older releases. Luna/max is an execution
+// default; the launcher resolves an omitted Luna effort back to max.
+export const persistedPreset = (preset: AiPreset): AiPreset => {
+  if (!['codex', 'codex-gui'].includes(preset.cli) || preset.model !== 'gpt-5.6-luna' || preset.effort !== 'max') return preset
+  const { effort: _effort, ...rollbackReadable } = preset
+  return rollbackReadable
 }
 
 // Conversation defaults are independent of durable work and explicit saved choices.

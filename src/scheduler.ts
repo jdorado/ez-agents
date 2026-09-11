@@ -5,7 +5,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Owner } from './control-state.js'
 import { assertId, ownsRun } from './identity.js'
-import { type ExecutionChoice, isExecutionChoice } from './ai.js'
+import { type ExecutionChoice, isExecutionChoice, persistedPreset } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
 import { RunStore, type RunRecord } from './runs.js'
 
@@ -64,9 +64,10 @@ export class Scheduler {
   async save(input: Omit<Schedule,'version'|'revision'>, exclusive = false): Promise<Schedule> {
     await this.ensure(); assertId(input.id)
     if (input.when !== undefined && input.when !== 'unreviewed-failures') throw new Error('Unknown schedule condition')
-    if (!input.name || !input.text?.trim() || !isExecutionChoice(input.execution)) throw new Error('Schedule needs name, text and an AI selection')
-    assertEffort(input.execution.preset.effort, input.execution.preset.model, input.execution.preset.cli)
-    const s: Schedule = {...input,trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
+    const execution: ExecutionChoice = {...input.execution, preset: persistedPreset(input.execution.preset)}
+    if (!input.name || !input.text?.trim() || !isExecutionChoice(execution)) throw new Error('Schedule needs name, text and an AI selection')
+    assertEffort(execution.preset.effort, execution.preset.model, execution.preset.cli)
+    const s: Schedule = {...input, execution, trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
     if (nextOccurrence(s.trigger,Date.now()-1) === null) throw new Error('Schedule has no future occurrence within eight years')
     await atomic(join(this.dir,s.id+'.json'),s,exclusive)
     return s

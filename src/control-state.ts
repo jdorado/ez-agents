@@ -1,7 +1,7 @@
 import { assertEffort } from './model-policy.js'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { isPreset, type AiPreset, type ExecutionChoice } from './ai.js'
+import { isPreset, persistedPreset, type AiPreset, type ExecutionChoice } from './ai.js'
 
 export type Owner = {
   kind?: 'group'
@@ -94,6 +94,7 @@ export class ControlStore {
     try {
       const parsed: unknown = JSON.parse(await readFile(this.statePath, 'utf8'))
       if (!isState(parsed)) throw new Error('Control state has an unsupported shape')
+      if (parsed.ai) parsed.ai.presets = parsed.ai.presets.map(persistedPreset)
       return parsed
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState()
@@ -261,7 +262,7 @@ export class ControlStore {
   async aiState(initial: AiPreset) {
     return this.withLock(async () => {
       const state = await this.readState()
-      state.ai ??= { presets: [initial], defaultId: initial.id, selectedId: initial.id }
+      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
       await this.writeState(state)
       return state.ai
     })
@@ -273,13 +274,13 @@ export class ControlStore {
       const state = await this.readState()
       const first = initial.cli === 'codex' || initial.cli === 'codex-gui'
         ? initial : discovered.find((p) => p.cli === initial.cli) ?? initial
-      state.ai ??= { presets: [first], defaultId: first.id, selectedId: first.id }
+      state.ai ??= { presets: [persistedPreset(first)], defaultId: first.id, selectedId: first.id }
       const ai = state.ai
       // Refresh discovery entries, but never rewrite an active/default or user-saved choice.
       const preserved = ai.presets.filter((p) => !p.id.startsWith('detected_') ||
-        p.id === ai.selectedId || p.id === ai.defaultId)
-      ai.presets = [...preserved, ...discovered.filter((p) => !preserved.some((old) => old.id === p.id))]
-      if (initial.id === 'chat-default' && !ai.presets.some(p => p.id === initial.id)) ai.presets.push(initial)
+        p.id === ai.selectedId || p.id === ai.defaultId).map(persistedPreset)
+      ai.presets = [...preserved, ...discovered.map(persistedPreset).filter((p) => !preserved.some((old) => old.id === p.id))]
+      if (initial.id === 'chat-default' && !ai.presets.some(p => p.id === initial.id)) ai.presets.push(persistedPreset(initial))
       await this.writeState(state)
     })
   }
@@ -287,7 +288,7 @@ export class ControlStore {
   async captureChoice(initial: AiPreset): Promise<ExecutionChoice> {
     return this.withLock(async () => {
       const state = await this.readState()
-      state.ai ??= { presets: [initial], defaultId: initial.id, selectedId: initial.id }
+      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
       const preset = state.ai.presets.find((p) => p.id === state.ai!.selectedId)!
       state.activeSession ??= { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
       if (!state.activeSession.cli && !state.activeSession.hasStarted) state.activeSession.cli = preset.cli
@@ -331,7 +332,7 @@ export class ControlStore {
       if (!state.ai) throw new Error('AI settings not initialized')
       if (state.ai.presets.length >= 12 && !state.ai.presets.some((p) => p.id === preset.id))
         throw new Error('Keep it small: at most 12 saved AIs.')
-      state.ai.presets = [...state.ai.presets.filter((p) => p.id !== preset.id), preset]
+      state.ai.presets = [...state.ai.presets.filter((p) => p.id !== preset.id), persistedPreset(preset)]
       await this.writeState(state)
     })
   }

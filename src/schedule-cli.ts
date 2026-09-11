@@ -6,6 +6,7 @@ import { loadControlConfig } from './config.js'
 import { ControlStore } from './control-state.js'
 import { RunStore } from './runs.js'
 import { initialPreset, isPreset } from './ai.js'
+import { executionOverrides } from './model-policy.js'
 import { Scheduler } from './scheduler.js'
 import { ownsRun } from './identity.js'
 import { nextOccurrence, type Trigger } from './schedule-time.js'
@@ -22,11 +23,11 @@ async function main() {
   review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT
   create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE)
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
-    [--cli EXECUTOR] [--model MODEL] [--effort none|minimal|low|medium|high|xhigh (Luna only)]
+    [--cli EXECUTOR] [--model MODEL] [--effort none|minimal|low|medium|high|xhigh|max (Luna only)]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
 Failures default to unreviewed owner runs. Review records a diagnosis; it never changes execution status or retries work.
 A conditional review schedule consumes no model run when there are no unreviewed failures.
-New tasks default to Codex Terra/high, independently of the current chat. Explicit settings override these defaults; edit preserves existing settings unless overridden.
+New tasks default to Codex Luna/max, independently of the current chat. Explicit settings override these defaults; edit preserves existing settings unless overridden.
 Creates a durable, asynchronous CLI task. Instructions are text, never shell commands.
 Use --now to delegate long work and return to chat. Run completion is not delivery proof.
 Edit replaces the full schedule. Pause/remove affect future work; cancel stops a particular run.
@@ -73,7 +74,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       v.cron ? {cron:v.cron,timezone:v.timezone!,start,until:v.until} : {everySeconds:Number(v['every-seconds']),start,until:v.until}
     const previous = action === 'edit' ? (await scheduler.get(id!)).execution : undefined
     const base = v.cli ? initialPreset(v.cli) : previous?.preset || initialPreset('codex')
-    const preset = {...base, ...(v.model ? {model:v.model} : {}), ...(v.effort ? {effort:v.effort} : {})}
+    const preset = executionOverrides(base.cli, base, v.model, v.effort)
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
       text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,

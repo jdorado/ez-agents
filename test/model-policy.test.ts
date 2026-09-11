@@ -3,10 +3,10 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { executionDefaults } from '../src/model-policy.js'
+import { executionDefaults, executionOverrides } from '../src/model-policy.js'
 import { startExecutorJob } from '../src/executor.js'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, readModels, validateSelection } from '../src/ai.js'
+import { initialPreset, persistedPreset, readModels, validateSelection } from '../src/ai.js'
 import { taskArguments } from '../src/task-executor.js'
 import { runCodexSession } from '../src/codex-session.js'
 import { runDesktopTurn } from '../src/desktop-bridge.js'
@@ -23,24 +23,34 @@ test('all non-Luna model selections and launches reject effort above high before
   await assert.rejects(runDesktopTurn({workspace:'/unused',controlDir:'/unused',binDir:'/unused',runId:'unused',prompt:'',effort:'ultra'}), /capped at high/)
 })
 
-test('Codex Luna accepts xhigh while every other model and CLI remains capped', async () => {
-  const luna = { id:'luna', name:'Luna', cli:'codex', model:'gpt-5.6-luna', effort:'xhigh' }
-  await validateSelection(luna, [{ cli:'codex', model:'gpt-5.6-luna', name:'Luna', efforts:['high','xhigh'] }], async () => true)
-  assert.deepEqual(executionDefaults('codex', { model:'gpt-5.6-luna', effort:'xhigh' }), { model:'gpt-5.6-luna', effort:'xhigh' })
-  assert.throws(() => executionDefaults('grok', { model:'gpt-5.6-luna', effort:'xhigh' }), /capped at high/)
-  assert.throws(() => executionDefaults('codex', { model:'gpt-5.6-terra', effort:'xhigh' }), /capped at high/)
+test('Codex Luna accepts xhigh and max while every other model and CLI remains capped', async () => {
+  for (const effort of ['xhigh', 'max']) {
+    const luna = { id:'luna', name:'Luna', cli:'codex', model:'gpt-5.6-luna', effort }
+    await validateSelection(luna, [{ cli:'codex', model:'gpt-5.6-luna', name:'Luna', efforts:['high','xhigh','max'] }], async () => true)
+    assert.deepEqual(executionDefaults('codex', { model:'gpt-5.6-luna', effort }), { model:'gpt-5.6-luna', effort })
+    assert.throws(() => executionDefaults('grok', { model:'gpt-5.6-luna', effort }), /capped at high/)
+    assert.throws(() => executionDefaults('codex', { model:'gpt-5.6-terra', effort }), /capped at high/)
+  }
 })
 
-test('restricted tasks pin Terra high, preserve explicit choices and reject higher effort', () => {
+test('restricted tasks pin Luna max, preserve explicit choices and reject higher effort', () => {
   const args = taskArguments('/unused', ['broker'], 'prompt')
-  assert.equal(args[args.indexOf('--model')+1], 'gpt-5.6-terra')
-  assert.ok(args.includes('model_reasoning_effort="high"'))
+  assert.equal(args[args.indexOf('--model')+1], 'gpt-5.6-luna')
+  assert.ok(args.includes('model_reasoning_effort="max"'))
   const custom = taskArguments('/unused', ['broker'], 'prompt', undefined, {model:'custom-model',effort:'low'})
   assert.equal(custom[custom.indexOf('--model')+1], 'custom-model')
   assert.ok(custom.includes('model_reasoning_effort="low"'))
   assert.throws(() => taskArguments('/unused', ['broker'], 'prompt', undefined, {effort:'xhigh'}), /capped at high/)
   assert.deepEqual(executionDefaults('codex', {model:'custom-model',effort:'medium'}), {model:'custom-model',effort:'medium'})
-  assert.deepEqual(executionDefaults('codex', {}), {model:'gpt-5.6-terra',effort:'high'})
+  assert.deepEqual(executionDefaults('codex', {model:'gpt-6-astra'}), {model:'gpt-6-astra',effort:'high'})
+  assert.deepEqual(executionDefaults('codex', {model:'gpt-5.6-terra'}), {model:'gpt-5.6-terra',effort:'high'})
+  assert.deepEqual(executionDefaults('codex', {model:'gpt-5.6-luna'}), {model:'gpt-5.6-luna',effort:'max'})
+  assert.deepEqual(executionDefaults('codex', {}), {model:'gpt-5.6-luna',effort:'max'})
+  assert.deepEqual(executionOverrides('codex', {model:'gpt-5.6-luna',effort:'max'}, 'gpt-6-astra'), {model:'gpt-6-astra',effort:'high'})
+  assert.deepEqual(executionOverrides('codex', {model:'gpt-5.6-luna',effort:'max'}, 'gpt-5.6-luna'), {model:'gpt-5.6-luna',effort:'max'})
+  const stored = persistedPreset({id:'luna',name:'Luna',cli:'codex',model:'gpt-5.6-luna',effort:'max'})
+  assert.equal(stored.effort, undefined)
+  assert.deepEqual(executionDefaults('codex', stored), {id:'luna',name:'Luna',cli:'codex',model:'gpt-5.6-luna',effort:'max'})
 })
 
 test('preset persistence rejects above-high choices without changing current settings', async () => {
