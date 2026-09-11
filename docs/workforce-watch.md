@@ -15,9 +15,21 @@ Set private monitor-only values, never agent-workspace or source-control values:
 
 ```text
 EZ_WATCH_ENROLL_TOKEN=<private fleet enrollment secret>
+EZ_WATCH_PAGERDUTY_SECRET_FILE=/absolute/path/to/a-0600-workforce-pagerduty-key
 TELEGRAM_BOT_TOKEN=<alert bot token>
 EZ_WATCH_TELEGRAM_CHAT_ID=<owner chat id>
 ```
+
+PagerDuty is the fleet incident owner. Workforce Watch sends a `trigger` for
+each missed check-in or terminal failure, then a `resolve` with the stable
+deduplication key `ez:workforce:<worker-id>` after sustained recovery. Use one
+approved Events API v2 routing key for the fleet; it may be the existing
+PagerDuty integration when that is the desired escalation policy. Never put it
+in a worker's environment. The secret file contains only that key, is mode
+`0600`, and is mounted as `/run/secrets/workforce_watch_pagerduty`; it is never
+a Compose or container environment value. Telegram is optional, supplementary
+owner visibility. PagerDuty is required: a Watch deployment without its
+routing-key secret fails closed rather than silently running without paging.
 
 The owner may explicitly authorize the CTO bot token temporarily. A dedicated
 alert bot remains preferable because it preserves an independent delivery identity.
@@ -81,3 +93,9 @@ the prior one.
 
 The service triggers once for a missed deadline or terminal failure. It sends a
 recovery notice only after two clean check-ins by default to prevent flapping.
+
+If a worker fails again during a partially delivered recovery, channels that
+already accepted recovery receive a fresh trigger. Channels still open retain
+their delivery state, so they do not receive duplicate opening alerts. This
+applies to terminal failures, failed check-ins, and missed check-ins, including
+after a Watch restart.
