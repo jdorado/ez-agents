@@ -20,7 +20,7 @@ export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
     if (args[i] === '--text-file' && args[i + 1]) {
       textFile = args[++i]
     } else if (args[i] === '--text' && args[i + 1]) {
-      text = args[++i]
+      text = args[++i].replace(/\\(\\|n)/g, (_, escape: string) => escape === 'n' ? '\n' : '\\')
     } else if (args[i] === '--reply-to' && args[i + 1]) {
       const parsed = parseInt(args[++i], 10)
       if (!Number.isNaN(parsed)) replyTo = parsed
