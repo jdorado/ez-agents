@@ -236,7 +236,7 @@ test('four-item menu is owner-only; available AI choices work and forged/stale b
     await f.relay.bot.handleUpdate(message(8, '/status'))
     assert.ok(f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
     await f.relay.bot.handleUpdate(callback(9, 'menu:scheduled-tasks'))
-    assert.match(f.replies.at(-1)!, /No scheduled tasks for this owner/)
+    assert.match(f.replies.at(-1)!, /No active scheduled tasks for this owner/)
     assert.equal(f.launched.length, 0)
   } finally { await f.close() }
 })
