@@ -17,8 +17,9 @@ separate release bot is not required.
 3. Build both Docker targets from a clean checkout:
    `docker build --target test -t ez-release-tests .` and
    `docker build --target runtime -t ez-release-runtime .`.
-   Main: `EZ_RELAY_IMAGE=ez-release-runtime node docker/smoke.mjs`.
-   WhatsApp: `EZ_WHATSAPP_IMAGE=ez-release-runtime node docker/smoke.mjs`.
+   Main relay: `EZ_RELAY_IMAGE=ez-release-runtime node docker/smoke.mjs`.
+   The WhatsApp Compose overlay has no separate relay image; verify its
+   provider integration with the synthetic plugin smoke in `docs/plugins.md`.
 4. Create an artifact with `npm pack --ignore-scripts`. Inspect its file list,
    hash it, extract into a fresh directory, copy `docker/pnpm-lock.yaml` to
    `pnpm-lock.yaml`, and run `pnpm install --frozen-lockfile`.
