@@ -71,7 +71,7 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     send({method:'initialized',params:{}})
     const result=await request('thread/start',{
       cwd:options.workspace,approvalPolicy:'never',sandbox:'workspace-write',model:options.model,
-      config:{'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[]),...(options.sharedWorkspace?[options.sharedWorkspace]:[])],
+      config:{project_root_markers:['AGENTS.md','.git'],'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[]),...(options.sharedWorkspace?[options.sharedWorkspace]:[])],
         'sandbox_workspace_write.network_access':Boolean(options.toolsHome),...(options.effort?{model_reasoning_effort:options.effort}:{})},
     })
     threadId=result.thread?.id

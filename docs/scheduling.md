@@ -42,7 +42,8 @@ available through `ezenciel-agents-schedule context`.
 Due occurrences enter the durable queue with stable IDs and literal task text.
 Background runs use fresh native sessions in `work/tasks/RUN_ID/`. No identity
 files or role instructions are generated there. Existing workspace Markdown
-provides context; the engine chooses what to read. Task folders remain for
+provides context; the engine chooses what to read. Codex uses `AGENTS.md` or `.git`
+as its native project-root marker, so a nested task sees the existing agent scope. Task folders remain for
 inspection and artifact delivery.
 
 One writer runs per task directory. Up to four background tasks can run alongside
