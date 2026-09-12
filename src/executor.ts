@@ -1,5 +1,4 @@
 import { executionDefaults } from './model-policy.js'
-import { startReplyExecutor } from './reply-executor.js'
 import { Tasks } from './tasks.js'
 import { RunStore } from './runs.js'
 import { startTaskExecutor } from './task-executor.js'
@@ -241,7 +240,6 @@ export const startExecutorJob = async (
     if (process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
   } else await requireOwnerExecution(options.controlDir, options.runId)
   if (!run?.taskId && options.eventSource !== undefined) throw new Error('Execution blocked: external-execution-unavailable')
-  if (run?.replyOnly && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startReplyExecutor(options)
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'

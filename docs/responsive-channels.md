@@ -1,22 +1,15 @@
 # Responsive channels
 
-Owner input passes unchanged to the selected engine. When the supported restricted
-busy-reply lane is available, it receives the same literal input and scoped tools:
-context, send and defer. The engine chooses which operation to use. Deferral saves
-the original request with a source-run binding, never a rewritten worker prompt.
-`ezenciel-agents-schedule context` exposes related conversation evidence on demand.
+Owner input passes unchanged to the selected engine. The agent decides when to
+delegate or schedule long work to remain available. ez queues foreground input
+while a foreground run is active; it does not create a separate busy-reply agent.
+Independent scheduled task directories retain deterministic writer isolation.
 
-Model and effort come from captured settings or native defaults, with explicit
-overrides supported. Repeated deferral returns the first saved schedule. The
-writer owns completing its work; the transport preserves ownership, cancellation
-and delivery receipts.
+Background tasks receive literal task text. Their directories contain no generated
+role instructions or copied identity files; native workspace instructions and
+existing Markdown provide context. The agent chooses what to read and when to use
+the message CLI. Native final text is not automatically delivered to Telegram.
 
-Approved contact tasks receive a typed activation/correspondence event and their
-scoped tool schemas. The context tool exposes the approved purpose, shareable
-context and messages. The sandbox and tool handlers enforce contact, operation and
-lifecycle limits; workflow prose is not a security boundary. Restricted sessions
-use audited Codex and do not import unrestricted user configuration.
-
-Maintenance and unbound-group notifications carry typed event data. CLI help owns
-operation contracts; saved policy and deterministic checks own authorization.
-No executor prepends a conversation workflow or repair recipe to these inputs.
+Restricted correspondence receives a typed activation event and scoped tools.
+Authorization, sandboxing and tool handlers enforce contact and lifecycle limits.
+Maintenance and group notifications carry event data; CLI help owns operations.

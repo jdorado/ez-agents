@@ -32,29 +32,25 @@ the host changes zones. Nonexistent DST wall times are skipped; repeated wall
 times fire once, at the earlier instant. Search is bounded to eight years.
 Public-holiday calendars and arbitrary RRULE syntax are not implemented.
 
-New tasks inherit the selected engine settings; busy deferral inherits the captured
-request settings. Explicit `--cli`, `--model` and `--effort` override those choices.
-Omitted values remain omitted for the engine to resolve. Edits preserve existing
-choices, and repeated deferral returns the original saved task.
-
-Busy deferral passes the original owner text unchanged. A source-run binding lets
-`ezenciel-agents-schedule context` retrieve the owner-scoped conversation evidence;
-no assistant-authored handoff is substituted into the task prompt.
+New tasks inherit selected engine settings. Explicit `--cli`, `--model` and
+`--effort` override those choices; omitted values use native defaults. Edits
+preserve existing choices. Historical deferred tasks keep their source context
+available through `ezenciel-agents-schedule context`.
 
 ## Execution and authority
 
-The relay checks due work once per second. Each occurrence enters the durable
-run queue with a stable ID. Background work runs in a fresh native CLI session
-and `work/tasks/RUN_ID/`, with snapshots of the agent's SOUL, USER and TOOLS files.
-Instructions must include any needed context or source paths; full chat history
-is not copied. Task folders remain for inspection and artifact delivery.
+Due occurrences enter the durable queue with stable IDs and literal task text.
+Background runs use fresh native sessions in `work/tasks/RUN_ID/`. No identity
+files or role instructions are generated there. Existing workspace Markdown
+provides context; the engine chooses what to read. Task folders remain for
+inspection and artifact delivery.
 
 One writer runs per task directory. Up to four background tasks can run alongside
-the main conversation. When a Codex owner message arrives while work is busy, a separate restricted session reads recent messages and run progress and answers through the normal outbox. It can queue requested work through the scheduler, but cannot run shell commands, access plugins, or edit the agent workspace. Only one reply session runs at a time and it releases its slot after a 60-second reply deadline; this deadline does not apply to writer jobs. Its context is a bounded snapshot, not a shared native transcript. Delivered parallel replies are available as historical context through `ezenciel-agents-schedule context`; the engine reads them when needed. Codex 0.153.4 and 0.154.0 are supported for this restricted adapter. Other versions fail closed pending tool-surface validation. A recurring schedule has at most one pending
-or active occurrence. Agents should delegate long work with `create --now`, return
-to chat, and inspect `runs` or task progress when asked. Native subagents can be
-used inside the worker. Sharing provider profiles does not make concurrent CRM,
-file or browser writes safe: the agent must coordinate those resources.
+the main conversation. Foreground inputs queue while a foreground turn runs;
+ez does not create another reply agent. The agent can delegate or schedule long
+work and return to chat. It decides when to send through the message CLI.
+A recurring schedule has at most one pending or active occurrence. Shared
+provider resources still need writer coordination.
 
 Production relay/host execution has no wall-clock timeout. The old
 `EZ_EXECUTOR_TIMEOUT_SECONDS` setting is ignored. Individual network/tool waits
@@ -144,16 +140,6 @@ minutes. Verify `finished.txt` and exactly one completion in Telegram. Separatel
 exercise cancellation, downtime catch-up and an explicitly requested native goal
 that needs more than one turn. Synthetic provider evidence does not prove real
 Telegram delivery, and a sleep test does not prove native goal persistence.
-
-Busy-chat regression probe (real Codex, synthetic Telegram):
-
-```sh
-pnpm exec tsx scripts/smoke-busy-reply.ts --transport
-```
-
-The probe holds a writer on a shared workspace, asks an owner question through
-the relay and host transport, and requires the restricted reply to complete
-while the writer remains active. It sends no real Telegram messages.
 
 ## Optional failure review
 
