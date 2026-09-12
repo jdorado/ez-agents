@@ -73,7 +73,7 @@ test('deferred literal input retains owner-scoped conversation through source me
  await runs.patch('tg_1',{status:'completed'})
  await runs.create({id:'tg_2',chatId:101,telegramUserId:101,texts:['Do the same for March'],execution})
  await runs.patch('tg_2',{status:'running',replyOnly:true})
- await new Scheduler(dir).save({id:'legacy-deferred',name:'Owner request',text:'Do the same for March',originRunId:'tg_2',owner:(await control.status()).owner!,execution,enabled:true,trigger:{at:new Date().toISOString()}},true)
+ await new Scheduler(dir).save({id:'legacy-deferred',name:'Owner request',text:'Do the same for March',originRunId:'tg_2',owner:(await control.status()).owner!,execution,enabled:true,trigger:{at:new Date(Date.now()+1000).toISOString()}},true)
  await new Scheduler(dir).tick((await control.status()).owner!,runs,Date.now()+2000)
  const worker=(await runs.list()).find(r=>r.scheduled)!
  assert.deepEqual(worker.texts,['Do the same for March']);assert.equal(worker.scheduled?.originRunId,'tg_2')

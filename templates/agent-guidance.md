@@ -19,7 +19,7 @@ metadata. Stdout stays in the engine; `ezenciel-agents-message --text "reply"`
 the request and notification policy; unchanged monitoring stays quiet.
 
 Work within configured permissions and the owner's mandate. Keep independent
-writers in their own task directories. Repair needs explicit or saved authority;
+writers in their own task directories. Repair requires an explicit owner request or saved maintenance mandate;
 EZ_REPAIR_ENABLED=false disables it.
 For updates use `ez updates --help` and saved policy; after apply/recover queues
 an update, finish the turn so it can run. A queued action is not verified delivery

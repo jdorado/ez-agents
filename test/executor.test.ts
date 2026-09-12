@@ -86,7 +86,6 @@ test('the Grok invocation is headless, workspace-scoped, and token-free', () => 
     '--output-format', 'plain',
     '--always-approve',
     '--verbatim',
-    '--max-turns', '8',
   ])
   assert.equal(invocation.args.includes('TELEGRAM_BOT_TOKEN'), false)
 })
