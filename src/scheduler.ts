@@ -22,6 +22,9 @@ export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
 }
 export const scheduledRunId = (s: Schedule, due: number) => 'r_schedule_' + createHash('sha256')
   .update(JSON.stringify([s.id,s.revision,due])).digest('hex')
+export const holdsSchedule = (s: Schedule, r: RunRecord): boolean =>
+  r.scheduled?.id === s.id && r.scheduled.revision === s.revision &&
+  Boolean(r.interrupted || (s.when === 'unreviewed-failures' && r.status === 'failed'))
 const atomic = async (file: string, value: unknown, exclusive = false) => {
   const tmp = `${file}.${randomUUID()}.tmp`
   try {
@@ -122,9 +125,10 @@ export class Scheduler {
           next = nextOccurrence(s.trigger,-1)
         }
         if (next === null || next > now) continue
-        // Keep one occurrence active/queued per schedule. Coalesce missed ticks on completion.
+        // One occurrence at a time. A failed reviewer stops this revision just like
+        // interrupted work: retain its receipt until an explicit schedule edit.
         if ((await runs.list()).some(r => r.scheduled?.id === s.id &&
-          (['queued','running'].includes(r.status) || (r.interrupted && r.scheduled.revision === s.revision)))) continue
+          (['queued','running'].includes(r.status) || holdsSchedule(s, r)))) continue
         const future = nextOccurrence(s.trigger,now)
         if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && ownsRun(owner, r) && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
           await atomic(cursor,{next:future}); continue

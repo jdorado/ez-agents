@@ -7,7 +7,7 @@ import { ControlStore } from './control-state.js'
 import { RunStore } from './runs.js'
 import { initialPreset, isPreset } from './ai.js'
 import { executionOverrides } from './model-policy.js'
-import { Scheduler } from './scheduler.js'
+import { holdsSchedule, Scheduler } from './scheduler.js'
 import { ownsRun } from './identity.js'
 import { nextOccurrence, type Trigger } from './schedule-time.js'
 
@@ -43,9 +43,12 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
   const owned=(s:{owner:typeof owner})=>s.owner.telegramUserId===owner.telegramUserId && s.owner.telegramChatId===owner.telegramChatId && s.owner.pairedAt===owner.pairedAt
   const ownsFailureRun=(r:Awaited<ReturnType<RunStore['get']>>)=>r && ownsRun(owner,r) && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt)
   const show=async(s:Awaited<ReturnType<Scheduler['get']>>)=>{
-    const interruptedRunIds=(await runs.list()).filter(r=>r.scheduled?.id===s.id && r.scheduled.revision===s.revision && r.interrupted).map(r=>r.id)
-    const next=s.enabled && !interruptedRunIds.length ? nextOccurrence(s.trigger,Date.now()) : null
-    return {...s,interruptedRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString()}
+    const held=(await runs.list()).filter(r=>holdsSchedule(s,r))
+    const interruptedRunIds=held.filter(r=>r.interrupted).map(r=>r.id)
+    const failedReviewRunIds=held.filter(r=>!r.interrupted).map(r=>r.id)
+    const next=s.enabled && !held.length ? nextOccurrence(s.trigger,Date.now()) : null
+    return {...s,interruptedRunIds,failedReviewRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString(),
+      ...(held.length ? {recovery:'Inspect the failed run and explicitly edit this schedule to resume; pause/resume does not clear the stop.'} : {})}
   }
   let result:unknown
   if(action==='failures'){

@@ -37,14 +37,12 @@ This package will be published as an open-source, lightweight Telegram-to-CLI re
 - **Native Node 22+ APIs only:** Use `node:fs/promises`, `node:child_process`, `node:crypto`, `node:path`, and native global `fetch`, `FormData`, and `Blob`.
 - Keep `node_modules` minimal and installable in seconds.
 
-## 2. Zero Deterministic Coding Across the Board (Tools, Flows & Dialog)
-- **The relay is dumb plumbing:** The relay only ingests messages, batches them into runs, spawns the CLI executor, and drains outbox items. It is strictly minimal.
-- **Nothing deterministic—not just dialog:** Do not hardcode multi-step tool pipelines, fallback state machines, parameter translation shims, procedural dialog flows, or canned conversational receipts ("Started run...", "I'll message as I go...").
-- **The debugging reflex trap:** When an integration, tool, or flow doesn't work as expected, developers and LLMs have an overwhelming reflex to patch it by writing deterministic procedural code (`if error X -> hardcode Y -> do Z`). **Resist this completely.**
-- **The real engineering work:** Our job is solely to:
-  1. Build clean, standalone tools that work reliably with clear Unix interfaces (clear args, predictable stdout/stderr, clean exit codes).
-  2. Ensure tools have simple setup and are clearly explained in the agent's workspace so the **agent understands them**.
-  3. Let the agent own all flow orchestration, tool chaining, decision making, and error recovery. Question every line of code—if it can be agentic, keep code out of it.
+## 2. KISS and first-principles engineering
+- Before coding: identify the user outcome and reproduce the failed boundary. Question requirements; delete unnecessary behavior; simplify; shorten feedback; automate last.
+- The relay owns deterministic authorization, atomic state, queues, cancellation and safe delivery. The executor owns reasoning, business workflows, tool selection and conversation. Do not replace transport safeguards with agent judgment.
+- Prompts and wakeups count as control logic. Remove conflicting mandates, duplicate lifecycle owners and self-feeding maintenance before adding retries or another abstraction. Plugins remain standalone CLIs behind generic transport.
+- Prefer existing executor, CLI and Docker capabilities. Every retry needs a recoverable condition or an explicit bound; unchanged blocked maintenance stops quietly until evidence or authority changes.
+- Keep changes focused. State the cause, what was removed, why remaining code is needed, and the observed outcome. Verify the actual failure boundary and relevant negative case; passing tests, queued updates and more betas alone do not prove delivery or an installed fix.
 
 ## 3. Crash-Safe Atomic Disk State
 - All persistent stores (`ControlStore`, `RunStore`, outbox queue) must be disk-backed JSON files.

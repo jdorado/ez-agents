@@ -198,6 +198,8 @@ for (const cleanupFails of [false,true]) test(`polling conflict preserves work u
   let finished=false
   const start=relay.start().finally(()=>{finished=true})
   await until(async()=>polls===1)
+  if(!cleanupFails)await new Promise(resolve=>setTimeout(resolve,5200))
+  assert.equal(polls,1,'permanent conflict must not restart after the old five-second retry interval')
   assert.equal(sourceStops,0,'a polling conflict must not stop the relay')
   assert.equal((await runs.get('tg_92'))?.status,'running')
   assert.ok(child && child.exitCode===null && child.signalCode===null)
@@ -279,4 +281,66 @@ test('group members can inspect failures and wake review without exposing other 
  await scheduler.tick(owner,runs,at)
  assert.equal((await runs.list()).filter(r=>r.scheduled).length,1)
  await assert.rejects(exec(process.execPath,[bin,'run','tg_2'],{env}),/Unknown owner/)
+})
+
+for (const failure of [400,401,503,'programming'] as const) test(`setup failure ${failure} retries only transient errors`,async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-setup-failure-'))
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{throw Error('No executor expected')})
+ let commands=0,polls=0
+ relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
+ relay.bot.api.config.use(async(_prev,method,_payload,signal)=>{
+  if(method==='setMyCommands' && ++commands===1) {
+   if(failure==='programming')throw Error('Synthetic permanent setup fault')
+   return {ok:false,error_code:failure,description:'Synthetic setup failure'} as any
+  }
+  if(method==='getUpdates'){
+   polls++
+   if(signal && !signal.aborted)await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}))
+   return {ok:true,result:[]} as any
+  }
+  return {ok:true,result:true} as any
+ })
+ const started=relay.start()
+ try {
+  await until(async()=>commands>0)
+  if(failure===503){await until(async()=>polls>0);assert.equal(commands,3)}
+  else {await new Promise(resolve=>setTimeout(resolve,5200));assert.equal(commands,1);assert.equal(polls,0)}
+ }finally{await relay.stop();await started;await rm(dir,{recursive:true,force:true})}
+})
+
+test('shutdown aborts a pending bot initialization without starting polling',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-init-stop-'))
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{throw Error('No executor expected')})
+ let initSignal:Parameters<typeof relay.bot.init>[0],polls=0
+ relay.bot.api.config.use(async(_prev,method,_payload,signal)=>{
+  if(method==='getMe'){
+   initSignal=signal
+   if(signal && !signal.aborted)await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}))
+   throw Error('Initialization aborted')
+  }
+  if(method==='getUpdates')polls++
+  return {ok:true,result:true} as any
+ })
+ const started=relay.start()
+ try {await until(async()=>Boolean(initSignal));await relay.stop();await started;assert.equal(initSignal?.aborted,true);assert.equal(polls,0)}
+ finally {await relay.stop();await started;await rm(dir,{recursive:true,force:true})}
+})
+
+test('failed reviewer readback exposes its stop through show, list and resume until explicit edit',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-review-stop-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
+ await control.requestPairing(101,101);const owner=await control.approveOwner(101)
+ const execution=await control.captureChoice(initialPreset('grok')),now=Date.now()+1000
+ const s=await scheduler.save({id:'review',name:'Review',text:'Review failures',trigger:{everySeconds:60,start:new Date(now).toISOString()},when:'unreviewed-failures',enabled:true,owner,execution})
+ await runs.create({id:'r_original',chatId:101,telegramUserId:101,texts:['Work'],execution});await runs.patch('r_original',{status:'failed'})
+ await scheduler.tick(owner,runs,now)
+ const reviewer=(await runs.list()).find(r=>r.scheduled)!
+ await runs.patch(reviewer.id,{status:'failed'})
+ const cli=async(args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env:{...process.env,EZ_CONTROL_DIR:dir,EZ_EXECUTOR_CLI:'grok',EZ_RUN_ID:''}})).stdout)
+ for(const action of ['show','resume']){
+  const result=await cli([action,s.id]);assert.equal(result.nextEligibleAt,null);assert.deepEqual(result.failedReviewRunIds,[reviewer.id]);assert.match(result.recovery,/explicitly edit/)
+ }
+ const listed=await cli(['list']);assert.equal(listed[0].nextEligibleAt,null)
+ await scheduler.save({...s,text:'Repaired reviewer'})
+ const result=await cli(['show',s.id]);assert.notEqual(result.nextEligibleAt,null);assert.deepEqual(result.failedReviewRunIds,[])
 })

@@ -1,16 +1,19 @@
 # Native repair ownership
 
-Every deployed agent is a repairer by default. When an agent finds a core or
-plugin defect, it keeps the context and pursues a tested contribution PR. The
-core injects the same mandate into CLI/native and desktop execution, including
-existing workspaces; it does not replace the agent's mind or implement a repair
-workflow engine. Use native Git/GitHub CLI or the installed GitHub plugin.
+Repair is a capability used by an explicit owner request or owner-saved maintenance
+mandate. Discovering a defect alone does not enroll an ordinary conversation in
+an issue/claim/PR workflow. Preserve useful evidence and continue the requested
+task. The current execution guidance supersedes older default-repair text in
+existing workspaces without rewriting the agent's mind.
 
+The contribution workflow below applies only to authorized repair tasks. Use
+native Git/GitHub CLI or the installed GitHub plugin.
 The agent searches for the same cause, registers a sanitized issue, requests a
 claim, then works in an isolated contribution checkout after the coordinator's
 grant. It resumes the same issue/branch/PR after interruption. The installed
 runtime is never the repair checkout. Missing credentials or coordination remain
-recorded blockers; the default does not invent repository access. Public reports
+recorded blockers; record the next responsible actor and stop until evidence or
+authority changes. Do not schedule repeated checks of an unchanged dependency. Public reports
 must exclude private runtime data and use the security reporting route when needed.
 
 One coordinator grants claims sequentially per repository. Assignment alone is
@@ -26,7 +29,8 @@ separate owner-approved policies. Start from templates/maintainer-purpose.md.
 Set `EZ_REPAIR_ENABLED=false` in the deployment's Docker environment and recreate
 the relay. The resolved setting crosses the host transport and is included in
 every new execution prompt; the default is true and invalid values fail startup.
-This changes the automatic mandate, not filesystem/GitHub permissions, and does
+True makes the capability available; it does not itself grant a repair mandate.
+The setting does not change filesystem/GitHub permissions and does
 not cancel an already running task. Explicitly stop active repair work when needed.
 An owner can also disable repairs globally or for a repository in the agent's
 saved USER.md preferences; carry those restrictions into background task context.

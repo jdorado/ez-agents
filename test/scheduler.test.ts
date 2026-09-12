@@ -102,3 +102,31 @@ test('startup quarantines an interrupted spawn before PID persistence; explicit 
  await f.scheduler.tick(f.owner,f.runs,f.now+700000)
  assert.equal((await f.runs.list()).length,2)
 })
+
+test('a failed reviewer stops its revision even while the original failure remains; explicit edit resumes', async t => {
+ const f=await fixture(t)
+ const s=await f.scheduler.save({...f.input,when:'unreviewed-failures',trigger:{everySeconds:60,start:new Date(f.now).toISOString()}})
+ await f.runs.create({id:'r_original',chatId:101,telegramUserId:101,texts:['Original work']})
+ await f.runs.patch('r_original',{status:'failed'})
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ const review=(await f.runs.list()).find(r=>r.scheduled)!
+ await f.runs.patch(review.id,{status:'failed',exitCode:1})
+ for(const offset of [60000,120000,600000])await new Scheduler(f.dir).tick(f.owner,f.runs,f.now+offset)
+ assert.equal((await f.runs.list()).length,2)
+ assert.equal((await f.runs.get('r_original'))?.status,'failed')
+ await f.scheduler.enable(s.id,false);await f.scheduler.enable(s.id,true)
+ await f.scheduler.tick(f.owner,f.runs,f.now+700000)
+ assert.equal((await f.runs.list()).length,2,'toggling enabled must not replay a failed reviewer')
+ await f.scheduler.save({...s,text:'Review after the owner repaired the prerequisite'})
+ await f.scheduler.tick(f.owner,f.runs,f.now+800000)
+ assert.equal((await f.runs.list()).length,3)
+})
+
+test('ordinary recurring work still runs after a non-interrupted failure', async t => {
+ const f=await fixture(t)
+ await f.scheduler.save({...f.input,trigger:{everySeconds:60,start:new Date(f.now).toISOString()}})
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ const [run]=await f.runs.list();await f.runs.patch(run.id,{status:'failed'})
+ await f.scheduler.tick(f.owner,f.runs,f.now+60000)
+ assert.equal((await f.runs.list()).length,2)
+})
