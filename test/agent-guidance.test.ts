@@ -19,6 +19,12 @@ const runNode = (code: string, cwd: string) => execFileAsync(process.execPath, [
   '--import', tsxLoaderPath, '--input-type=module', '-e', code,
 ], { cwd, encoding: 'utf8' })
 
+test('shared guidance makes direct owner chat replies a native transport action', () => {
+  const guidance = agentGuidance()
+  assert.match(guidance, /Reply to direct owner messages through `ezenciel-agents-message`/)
+  assert.match(guidance, /unchanged scheduled\nmonitoring stays quiet/)
+})
+
 test('package guidance resolution ignores a workspace shadow file', async () => {
   const root = path.join(tmpdir(), `ez-guidance-${randomUUID()}`)
   await mkdir(root, { recursive: true })
