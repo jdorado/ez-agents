@@ -108,8 +108,10 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     assert.ok(JSON.parse(boundOutput).args.includes('agent-only-fixture'))
     await assert.rejects(serveHostExecutor({cli:'grok',agents},new AbortController().signal),/already running/)
     const directory=path.join(agents[0].controlDir,'host-executor')
-    const submit=async(id:string)=>{await ownerRun(agents[0].controlDir,id);await writeFile(path.join(directory,id+'.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok',timeoutMs:5000}}))}
-    await submit('r_hold')
+    const runs=new RunStore(agents[0].controlDir)
+    await runs.create({id:'r_hold',chatId:101,telegramUserId:101,texts:['test'],scheduled:{id:'held',revision:'v1',dueAt:new Date().toISOString(),pairedAt:new Date().toISOString()}})
+    await runs.patch('r_hold',{status:'running'})
+    await writeFile(path.join(directory,'r_hold.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok'}}))
     for(let n=0;n<100;n++){try{await readFile(path.join(directory,'r_hold.process.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     await new RunStore(agents[0].controlDir).create({id:'r_schedule_queued',chatId:101,telegramUserId:101,texts:['test'],scheduled:{id:'shared',revision:'v1',dueAt:new Date().toISOString(),pairedAt:new Date().toISOString()}})
     await new RunStore(agents[0].controlDir).patch('r_schedule_queued',{status:'running'})
@@ -117,17 +119,27 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     const otherDirectory=path.join(agents[1].controlDir,'host-executor')
     await ownerRun(agents[1].controlDir,'r_other_shared')
     await writeFile(path.join(otherDirectory,'r_other_shared.request.json'),JSON.stringify({texts:['test'],options:{cli:'grok'}}))
-    await new Promise(r=>setTimeout(r,350))
-    await assert.rejects(readFile(path.join(directory,'r_schedule_queued.running.json')),{code:'ENOENT'})
-    await assert.rejects(readFile(path.join(otherDirectory,'r_other_shared.running.json')),{code:'ENOENT'})
-    await assert.rejects(readFile(path.join(otherDirectory,'r_other_shared.events')),{code:'ENOENT'})
+    await runs.create({id:'tg_42',chatId:101,telegramUserId:101,messageId:42,texts:['Chat while scheduled work runs']})
+    await runs.patch('tg_42',{status:'running'})
+    await writeFile(path.join(directory,'tg_42.request.json'),JSON.stringify({texts:['Chat while scheduled work runs'],options:{cli:'grok'}}))
+    const completed=async(dir:string,id:string)=>{
+      let output=''
+      for(let n=0;n<200;n++){try{output=await readFile(path.join(dir,id+'.events'),'utf8');if(output.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
+      assert.match(output, /"stream":"exit","code":0/)
+      return output.trim().split('\n').map(line=>JSON.parse(line))
+    }
+    // A running scheduled engine does not reserve either its agent or its
+    // shared workspace, including another binding through a filesystem alias.
+    const [,,chatEvents]=await Promise.all([completed(directory,'r_schedule_queued'),completed(otherDirectory,'r_other_shared'),completed(directory,'tg_42')])
+    const chat=JSON.parse(chatEvents.filter(e=>e.stream==='stdout').map(e=>e.text).join(''))
+    assert.match(chat.args.at(-1),/^Chat while scheduled work runs/)
+    assert.match(chat.args.at(-1),/ezenciel-agents-message/)
+    assert.doesNotMatch(await readFile(path.join(directory,'r_hold.events'),'utf8'),/"stream":"exit"/)
+    await readFile(path.join(directory,'r_hold.running.json'))
     await writeFile(path.join(directory,'r_hold.cancel'),'')
-    let output=''
-    for(let n=0;n<200;n++){try{output=await readFile(path.join(directory,'r_schedule_queued.events'),'utf8');if(output.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
-    assert.match(output, /"stream":"exit","code":0/)
-    assert.match(await readFile(path.join(directory,'r_hold.events'),'utf8'), /"stream":"exit","code":1/)
-    for(let n=0;n<200;n++){try{output=await readFile(path.join(otherDirectory,'r_other_shared.events'),'utf8');if(output.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
-    assert.match(output, /"stream":"exit","code":0/)
+    let heldOutput=''
+    for(let n=0;n<200;n++){heldOutput=await readFile(path.join(directory,'r_hold.events'),'utf8');if(heldOutput.includes('"stream":"exit"'))break;await new Promise(r=>setTimeout(r,20))}
+    assert.match(heldOutput, /"stream":"exit","code":1/)
   } finally {
     abort.abort();await server
     EXECUTOR_REGISTRY.grok.command=old
