@@ -63,14 +63,17 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('../src/task-mcp.ts', import.meta.url)), root, run.id]
     const catalog = await promisify(execFile)('codex', ['debug', 'models', '--bundled'], { maxBuffer: 4 * 1024 * 1024 });
     await writeFile(`${root}/models.json`, JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))));
-    const args = taskArguments(directory, broker, 'Read task context.', undefined, {model:'gpt-6-astra'})
+    const args = taskArguments(directory, broker, JSON.stringify({event:'task_activated',taskId:proposal.id}), undefined, {model:'gpt-6-astra'})
     args.splice(-1, 0, '--disable', 'enable_request_compression', '-c', 'model_provider="fixture"', '-c', `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${(server.address() as any).port}/v1",wire_api="responses",requires_openai_auth=false}`)
-    child = spawn('codex', args, { cwd: directory, env: { PATH: process.env.PATH, HOME: home, CODEX_HOME: home }, stdio: ['ignore', 'pipe', 'pipe'] })
+    child = spawn('codex', args, { cwd: directory, env: { PATH: process.env.PATH, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] })
+    child.stdin!.end(JSON.stringify({event:'task_activated',taskId:proposal.id}));
     let stderr = ''; child.stderr!.on('data', c => { stderr += c }); child.stdout!.resume()
     const code = await new Promise(r => child!.on('close', r))
     assert.equal(code, 0, `Requires audited Codex ${TASK_CODEX_VERSION}: ${stderr}`)
     assert.ok(requests.length === 6, 'Native tool call completed a second model turn')
     assert.ok(!JSON.stringify(requests).includes('PRIVATE_CANARY_DO_NOT_LOAD'))
+    const messages=requests[0].input.filter((v:any)=>v.role==='user')
+    assert.ok(messages.some((m:any)=>m.content.some((c:any)=>c.text===JSON.stringify({event:'task_activated',taskId:proposal.id}))))
     const tools = requests[0].tools ?? requests[0].input.find((v: any) => v.type === 'additional_tools')?.tools
     assert.deepEqual(tools.filter((t: any) => t.type === 'function').map((t: any) => t.name).sort(), ['list_mcp_resource_templates', 'list_mcp_resources', 'read_mcp_resource', 'request_user_input'])
     const namespaces = tools.filter((t: any) => t.type === 'namespace')

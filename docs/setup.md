@@ -52,26 +52,16 @@ owner request for standalone plugin development is a separate workflow.
 
 ## Defaults and host prerequisites
 
-New agents using `codex` or `codex-gui` start with `gpt-5.6-sol` and `medium`
-reasoning, including when initialized with `ezenciel-agents-setup init`. This
-Ez default takes precedence over discovered host client defaults. Saved agent
-selections permitted by the current policy are preserved; use the AI settings to choose another model or effort.
-Ez accepts `xhigh` and `max` only for `gpt-5.6-luna`; every other model rejects explicit
-reasoning above `high` at selection and execution, including old saved or queued choices.
-Unset Codex model/effort resolves to
-Luna/max at launch. This governs Ez-managed launches; it is not an account-wide
-limit on independently launched native clients or executor-created native subagents.
-Other adapters inherit their native effort when none is selected in Ez. That
-inherited configuration is not capped by Ez; explicit above-high Ez selections
-are rejected unless they are Codex Luna/xhigh or Luna/max. Conversation presets pin Sol/medium; the lower-level
-Codex fallback is Luna/max for work without an explicit choice.
+New agents use the selected engine's native model and effort unless a choice is
+explicitly saved. Scheduling inherits the selected engine settings; `--cli`,
+`--model` and `--effort` provide explicit overrides. Edits preserve saved choices.
+The installed client's catalog supplies supported choices; ez imposes no model-specific
+reasoning cap. Optional compaction settings are passed only when explicitly configured.
 
-New scheduled and one-off background tasks default to Codex Luna/max independently
-of the creating chat. Use scheduler `--cli`, `--model`, and `--effort` flags for
-explicit overrides. Editing a schedule preserves its settings unless overridden.
-Restricted messaging tasks use Sol/medium while retaining their approved tool
-and context boundaries. Upgrades add Responsive chat to saved choices without
-replacing the selected/default preset. See [responsive channels](responsive-channels.md).
+Restricted correspondence and busy replies retain their audited Codex adapter and
+isolated tool permissions. They honor explicit model/effort choices; unset values
+use that isolated client's native defaults. Unrestricted user configuration is
+not imported into restricted sessions. No workflow prompt is added to input.
 
 Use the existing owner's host account. Unless a layout was supplied, use
 `${XDG_DATA_HOME:-$HOME/.local/share}/ez/packages/<version>/` for extracted main

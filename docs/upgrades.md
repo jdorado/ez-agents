@@ -185,11 +185,9 @@ written by the new one. Increment it for incompatible writes; this updater will
 refuse that migration. `mainProtocol` identifies the supported updater/registry
 contract, currently 1. Plugin package and manifest versions must match.
 
-The Luna/max durable default keeps this contract: persisted Codex Luna presets
-omit the effort field so older runtimes can read and fail over to their native
-safe default, while the current launcher resolves an omitted Luna effort to
-`max`. The execution choice, rather than the storage encoding, is the policy
-surface.
+Explicit model/effort fields remain stored as selected. Unset values are no longer
+filled by router policy; legacy records with omitted effort use native defaults.
+Upgrading does not invent an explicit setting for an omitted field.
 
 Verify upgrade from the previous supported artifact, retained identity/state,
 failed-health rollback, and rejection of incompatible candidates. Main runtime

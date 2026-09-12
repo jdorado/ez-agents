@@ -170,7 +170,7 @@ test('Codex compaction preserves native resume and validates transported options
  const args=EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',sessionId:'native-id',isResume:true,codexAutoCompactTokens:32000},'', 'hello')
  assert.ok(args.includes('model_auto_compact_token_limit=32000'))
  assert.deepEqual(args.slice(-3),['resume','native-id','-'])
- assert.ok(EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent'},'','hello').includes('model_auto_compact_token_limit=64000'))
+ assert.ok(!EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent'},'','hello').some(a=>a.includes('model_auto_compact_token_limit')))
  for(const value of [0,-1,NaN,1.5]) assert.throws(()=>EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',codexAutoCompactTokens:value},'','hello'),/compaction/)
  assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/agent',codexAutoCompactTokens:32000},'','hello').some(arg=>arg.includes('compact')))
 })

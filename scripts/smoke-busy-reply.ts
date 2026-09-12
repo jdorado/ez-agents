@@ -45,7 +45,7 @@ relay.bot.api.config.use(async(_p,method,payload)=>{if(method==='sendMessage')re
 const msg=(id:number,text:string):Update=>({update_id:id,message:{message_id:id,date:0,text,from:{id:101,is_bot:false,first_name:'Fixture'},chat:{id:101,type:'private',first_name:'Fixture'}}})
 try{
  await relay.bot.handleUpdate(msg(1,'Long work'));await relay.drainInbox(true)
- await relay.bot.handleUpdate(msg(2,'What is running? Also calculate 17 times 19. Use your available reply tools. Do not queue any work.'));await relay.drainInbox(true)
+ await relay.bot.handleUpdate(msg(2,'What is running? Also calculate 17 times 19.'));await relay.drainInbox(true)
  const started=Date.now()
  while(!replies.length && Date.now()-started<120000){await relay.drainOutbox();await new Promise(r=>setTimeout(r,250))}
  if(!replies.some(s=>s.includes('323')))throw new Error('No verified arithmetic reply: '+JSON.stringify(replies))

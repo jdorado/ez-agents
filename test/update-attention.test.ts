@@ -13,7 +13,7 @@ test('maintenance requires an owner, deduplicates wakeups and never grants owner
  const owner={telegramUserId:12,telegramChatId:12,pairedAt:new Date().toISOString()}
  await queueUpdateAttention(dir,owner,runs);await queueUpdateAttention(dir,owner,runs);assert.equal((await runs.list()).length,1)
  const run=(await runs.list())[0];assert.equal(run.telegramUserId,12);assert.equal(run.status,'queued')
- assert.match(run.texts[0],/not a new owner instruction/)
+ assert.deepEqual(JSON.parse(run.texts[0]),{event:'software_update_attention',noticeId:'a'.repeat(64)})
  await queueUpdateAttention(dir,{...owner,telegramUserId:13,telegramChatId:13},runs);assert.equal((await runs.list()).length,2)
  await writeFile(path.join(dir,'update-attention.json'),'{');await assert.rejects(queueUpdateAttention(dir,owner,runs))
  await writeFile(path.join(dir,'update-attention.json'),JSON.stringify({id:'../escape'}));await assert.rejects(queueUpdateAttention(dir,owner,runs))
