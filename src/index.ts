@@ -676,6 +676,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
     const text = controlCommand(ctx.message.text)
 
+    if (config.channelBackendUrl && ['/new', '/ai', '/settings'].includes(text ?? '')) {
+      await ctx.reply('Conversation and model settings are managed in the connected application.')
+      return
+    }
+
     if (text === '/ai') {
       await aiMenu.list(ctx)
       return
@@ -698,11 +703,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     if (text === '/cancel') {
       await ctx.reply(await cancelPending())
-      return
-    }
-
-    if (config.channelBackendUrl && ['/new', '/ai'].includes(text ?? '')) {
-      await ctx.reply('Conversation and model settings are managed in the connected application.')
       return
     }
 
@@ -911,7 +911,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         })
         console.info('Approval decision recorded', { actionId, decision: isApproved ? 'approved' : 'denied' })
       }
-    } else if (config.channelBackendUrl && ['menu:new', 'menu:ai'].includes(data)) {
+    } else if (config.channelBackendUrl && (['menu:new', 'menu:ai', 'menu:settings'].includes(data) || data.startsWith('ai:'))) {
       await ctx.answerCallbackQuery()
       await ctx.reply('Conversation and model settings are managed in the connected application.')
     } else if (await aiMenu.handle(ctx)) {
