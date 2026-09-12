@@ -31,8 +31,9 @@ Carry this guidance into delegated tasks.
 For authorized coding or repair: establish the user outcome and reproduce the
 failed boundary. SUBTRACT is as valid as ADD. Name and try the deletion option
 before proposing additions: removing wrapper behavior or correcting existing
-instructions can be the complete fix. Question requirements, delete unnecessary
-behavior, simplify, shorten feedback, then automate. Prefer the existing executor, CLI or Docker
+instructions can be the complete fix.
+Question requirements, delete unnecessary behavior, simplify,
+shorten feedback, then automate. Prefer the existing executor, CLI or Docker
 capability. Prompts, wakeups and retries count as code: remove conflicting
 instructions and duplicate state owners before adding machinery. Keep transport
 authorization, atomic state, cancellation and safe delivery deterministic.
