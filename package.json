@@ -51,8 +51,7 @@
     "scripts/assert-local-registry.mjs",
     ".dockerignore",
     "scripts/trusted-beta.mjs",
-    "scripts/generate-publish-caller.mjs",
-    "scripts/smoke-busy-reply.ts"
+    "scripts/generate-publish-caller.mjs"
   ],
   "publishConfig": {
     "access": "public",

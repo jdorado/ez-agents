@@ -1,12 +1,6 @@
-import { executionOverrides } from './model-policy.js'
-import { randomUUID } from 'node:crypto'
-import { initialPreset, isPreset } from './ai.js'
 import { readFile, readdir, lstat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { requireOwnerExecution } from './execution-authority.js'
 import { RunStore, type RunRecord } from './runs.js'
-import { ControlStore } from './control-state.js'
-import { Scheduler } from './scheduler.js'
 
 async function snapshot(file: string, limit = 6000) {
   try {
@@ -32,30 +26,6 @@ export async function ownerConversationContext(controlDir: string, run: RunRecor
         hostStarted: await snapshot(join(controlDir, 'host-executor', r.id + '.process.json')) ? true : await snapshot(join(controlDir, 'host-executor', r.id + '.request.json')) ? false : undefined,
         progress: r.scheduled && workspace ? await snapshot(join(workspace, 'work', 'tasks', r.id, 'progress.md'), 1600) : undefined }))) }
 }
-export async function replyCall(controlDir: string, runId: string, workspace: string, name: string, args: Record<string, unknown>) {
-  const run = await requireOwnerExecution(controlDir, runId)
-  if (!run.replyOnly || !/^tg_[0-9]+$/.test(run.id) || run.scheduled) throw new Error('Invalid reply run')
-  if (Object.keys(args).some(key => !['text', ...(name === 'defer' ? ['model', 'effort'] : [])].includes(key))) throw new Error('Unexpected reply argument')
-  const runs = new RunStore(controlDir)
-  if (name === 'context') {
-    return ownerConversationContext(controlDir,run,workspace)
-  }
-  if ((name !== 'defer' || args.text !== undefined) && (typeof args.text !== 'string' || !args.text.trim() || args.text.length > 8000)) throw new Error('Reply text required (maximum 8000 characters)')
-  if (name === 'send') return runs.enqueueMessage(runId, args.text as string, { id: `${runId}_busy_reply`, replyToMessageId: run.messageId })
-  if (name === 'defer') {
-    if (!run.execution) throw new Error('Missing execution choice')
-    const preset = executionOverrides(run.execution.preset.cli, run.execution.preset, args.model as string | undefined, args.effort as string | undefined)
-    if (!isPreset(preset)) throw new Error('Invalid worker model or effort')
-    const owner = (await new ControlStore(controlDir, 900000).status()).owner!
-    const scheduler = new Scheduler(controlDir), id = `s_reply_${runId}`
-    try { return { id: (await scheduler.get(id)).id } } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    const text = run.texts.join('\n\n')
-    await scheduler.save({ id, name: 'Owner request', text, owner, originRunId:run.id, execution: {sessionId:randomUUID(),preset}, enabled: true, trigger: { at: new Date(Date.now()+1000).toISOString() } }, true)
-    return { id }
-  }
-  throw new Error('Unknown reply tool')
-}
-
 // Give the next normal conversation turn the replies it did not see natively.
 export async function parallelReplyHistory(controlDir: string, current: RunRecord) {
   const records = (await new RunStore(controlDir).list()).filter(r => r.chatId === current.chatId && r.telegramUserId === current.telegramUserId && r.id !== current.id)

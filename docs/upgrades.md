@@ -220,7 +220,7 @@ Already running sessions retain their current context until native reload.
 Desktop start/resume configuration binds the current run's sanitized environment;
 message commands no longer require a prose environment prefix. Existing
 credentials, permissions, queues, busy replies, scheduling and monitoring are
-preserved. Restricted contact tasks and busy-reply workers retain their separate
+preserved. Restricted contact tasks retain their separate
 bounded instruction scopes. For delivered busy replies absent from the native
 conversation, the owner engine can call `ezenciel-agents-schedule context`.
 

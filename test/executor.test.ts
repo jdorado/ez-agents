@@ -86,7 +86,6 @@ test('the Grok invocation is headless, workspace-scoped, and token-free', () => 
     '--output-format', 'plain',
     '--always-approve',
     '--verbatim',
-    '--max-turns', '8',
   ])
   assert.equal(invocation.args.includes('TELEGRAM_BOT_TOKEN'), false)
 })
@@ -173,4 +172,11 @@ test('Codex compaction preserves native resume and validates transported options
  assert.ok(!EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent'},'','hello').some(a=>a.includes('model_auto_compact_token_limit')))
  for(const value of [0,-1,NaN,1.5]) assert.throws(()=>EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',codexAutoCompactTokens:value},'','hello'),/compaction/)
  assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/agent',codexAutoCompactTokens:32000},'','hello').some(arg=>arg.includes('compact')))
+})
+
+
+test('adapters do not append instruction files or impose a workflow turn budget', () => {
+ const opts={workspace:'/agent/work/tasks/example'}
+ assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs(opts,'','literal').includes('--append-system-prompt-file'))
+ assert.ok(!EXECUTOR_REGISTRY.grok.buildArgs(opts,'/tmp/prompt','literal').includes('--max-turns'))
 })

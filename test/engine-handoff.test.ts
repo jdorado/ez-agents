@@ -47,7 +47,7 @@ if(args[0]==='app-server'){
    if(['codex','claude'].includes(cli))assert.ok(!captured.args.includes('--help'))
    if(cli==='opencode')assert.equal(captured.args.at(-2),'--')
    if(cli==='agy')assert.ok(captured.args.includes('--print='+text))
-   if(cli==='claude')assert.equal(captured.args[captured.args.indexOf('--append-system-prompt-file')+1],path.join(workspace,'AGENTS.md'))
+   if(cli==='claude')assert.ok(!captured.args.includes('--append-system-prompt-file'))
   }
   for(const [runId,texts] of [['r_schedule_literal',['/goal audit list of files and give me a simple list with filenames']],['r_batch',['first\nline','  second  ']]] as const) {
    await ownerRun(controlDir,runId)

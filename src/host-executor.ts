@@ -90,7 +90,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             continue
           }
           const sharedWorkspace=sharedWorkspaces.get(agent)
-          const lane=run?.replyOnly ? 'reply:'+agent.name : sharedWorkspace ? 'workspace:'+sharedWorkspace : run?.scheduled ? agent.name+':'+id : agent.name
+          const lane=sharedWorkspace ? 'workspace:'+sharedWorkspace : run?.scheduled ? agent.name+':'+id : agent.name
           if(busy.has(lane) || (run?.scheduled && [...busy].filter(k=>k.startsWith(agent.name+':')).length>=4)) continue
           const base=path.join(directory,id)
           await rename(base+'.request.json',base+'.running.json')

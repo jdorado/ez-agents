@@ -44,6 +44,7 @@ if(q.method==='thread/goal/get'){
     return child
   }
   const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',prompt},{launch,emit:line=>output.push(line)})
+  assert.deepEqual(threadConfig.project_root_markers,['AGENTS.md','.git'])
   assert.equal(turnPrompt,prompt,'full input reaches the engine without goal admission or truncation')
   if(mode==='long-goal')assert.ok(prompt.length>4000)
   assert.ok(threadConfig['sandbox_workspace_write.writable_roots'].includes('/canonical'))
