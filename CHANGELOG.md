@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-beta.26
+
+- Start local software-maintenance wakeups in independent ephemeral sessions,
+  including after a relay restart, without trying to resume or persist a
+  normal owner conversation. This prevents successful upgrades from producing
+  false "failed to start" notifications across direct relays.
+
 ## 0.1.0-beta.25
 
 - Enable Codex Luna `max` reasoning for durable work, schedules and deferred
