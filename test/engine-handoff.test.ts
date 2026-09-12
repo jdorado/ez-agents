@@ -6,6 +6,7 @@ import path from 'node:path'
 import { startExecutorJob } from '../src/executor.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { initializeWorkspace } from '../src/workspace.js'
+import { RunStore } from '../src/runs.js'
 
 // Capture the actual subprocess input, not a prompt-building helper.
 test('owner, resumed and native scheduled subprocesses receive literal input and isolated run bindings', async t => {
@@ -54,6 +55,19 @@ if(args[0]==='app-server'){
    const job=await startExecutorJob([...texts],{workspace,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:5000})
    const code=await new Promise(resolve=>job.child.once('close',resolve));await job.cleanup();assert.equal(code,0)
    assert.equal(JSON.parse(await readFile(path.join(workspace,'capture.json'),'utf8')).prompt,texts.join('\n\n'))
+  }
+  for(const isResume of [false,true]) {
+   const runId='tg_chat_'+String(isResume)
+   await new RunStore(controlDir).create({id:runId,chatId:101,telegramUserId:101,texts:['hi'],messageId:42})
+   await new RunStore(controlDir).patch(runId,{status:'running'})
+   const job=await startExecutorJob(['hi'],{workspace,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:5000,isResume,sessionId:'native-existing'})
+   const code=await new Promise(resolve=>job.child.once('close',resolve));await job.cleanup();assert.equal(code,0)
+   const {prompt}=JSON.parse(await readFile(path.join(workspace,'capture.json'),'utf8'))
+   assert.ok(prompt.startsWith('hi\n\n[Chat context]'))
+   assert.equal(prompt.split('[Chat context]').length,2)
+   assert.match(prompt,/ezenciel-agents-message/)
+   assert.match(prompt,/ezenciel-agents-schedule/)
+   assert.match(prompt,/native subagents/)
   }
  }finally{for(const [key,value] of Object.entries(previous))if(value===undefined)delete process.env[key];else process.env[key]=value}
 })
