@@ -158,7 +158,7 @@ test('native executor flags carry the exact model and effort; only structured me
   assert.equal(grok[grok.indexOf('--reasoning-effort') + 1], opts.effort)
   const codex = EXECUTOR_REGISTRY.codex.buildArgs(opts, '', 'fixture')
   assert.ok(codex.includes('model_reasoning_effort="medium"'))
-  assert.deepEqual(codex.slice(-3), ['resume', opts.sessionId, 'fixture'])
+  assert.deepEqual(codex.slice(-3), ['resume', opts.sessionId, '-'])
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'thread.started', thread_id: opts.sessionId })), opts.sessionId)
   assert.equal(nativeSessionId('opencode', JSON.stringify({ type: 'step_start', sessionID: 'ses_fixture' })), 'ses_fixture')
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'text', thread_id: opts.sessionId })), undefined)
