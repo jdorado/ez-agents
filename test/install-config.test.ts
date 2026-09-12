@@ -60,7 +60,7 @@ test('packaged configure accepts token through stdin without echo or extra initi
     const result = spawnSync(process.execPath, [bin, 'configure', 'codex', '--token-stdin'], { cwd: root, input: token, encoding: 'utf8', timeout: 10000 })
     assert.equal(result.status, 0, result.stderr)
     assert.equal((result.stdout + result.stderr).includes(token), false)
-    assert.equal(JSON.parse(result.stdout).created.length, 4)
+    assert.equal(JSON.parse(result.stdout).created.length, 3)
     assert.equal(parseEnv(await readFile(path.join(root, '.env'), 'utf8')).TELEGRAM_BOT_TOKEN, token)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
