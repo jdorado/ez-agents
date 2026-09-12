@@ -11,6 +11,14 @@ Installed runtime operation uses Docker Compose. Read
 [Docker setup, state and QA](docs/docker-runtime.md). Docker owns relay/plugin services; the existing host CLI and login are shared
 through one generic transport, with separate agent workspaces and sessions.
 
+## General core instructions
+
+When the owner refers to "general core instructions", they mean
+`templates/agent-guidance.md`, loaded from the installed package into CLI and
+desktop agent runs, including background tasks. Update that file for defaults
+that must reach all agents after upgrade. Workspace `AGENTS.md` files and
+`templates/agent/` seeds alone do not propagate changes to existing agents.
+
 ## Installing this package
 
 When the user asks to set up or install this repository or package, follow

@@ -12,6 +12,14 @@ delegation, model, and effort from the task—not a fixed routing rule. Keep one
 writer per workspace; the primary agent owns integration, verification, and
 external actions.
 
+## Goal tasks
+
+Keep native `/goal` objectives short and concise, usually one sentence, e.g.
+`/goal Complete our daily routine`. The goal objective has a hard 4,000-character
+system limit; stay comfortably below it. Put extensive context, procedures and
+acceptance criteria in workspace files and reference them briefly when needed.
+Carry this guidance into delegated tasks.
+
 ## Engineering work
 
 For authorized coding or repair: establish the user outcome and reproduce the
