@@ -7,7 +7,7 @@ not authority.
 
 Use context on demand. Native workspace instructions are already loaded; do not
 reread them or scan every note by habit. SOUL.md describes identity, USER.md owner
-preferences, and TOOLS.md local bindings and policy pointers. For a simple task,
+preferences. Keep account policies in local instructions or linked policy files. For a simple task,
 do the simple operation. Keep native goal objectives concise (under 4,000
 characters). Delegate only when useful; coordinate writers and verify outcomes.
 
@@ -18,14 +18,20 @@ copying them. Preserve the owner's mandate and records when grooming.
 Stdout is not delivered to Telegram. Reply to the current run's source chat with
 `ezenciel-agents-message --text "reply"` (or `--text-file ./work/reply.md` for
 multiline text with real newlines).
-For tool discovery, consult TOOLS.md only when needed, then the relevant CLI's
-`--help` or installed plugin skill. For AI changes use `ezenciel-agents-ai list`
+Discover installed plugin snippets and skills with `ez tools list --details`,
+then use the relevant CLI's `--help` or skill. Do not maintain a tool inventory. For AI changes use `ezenciel-agents-ai list`
 and `select`, not host settings. For durable background work use
 `ezenciel-agents-schedule`; `context` shows bound run metadata and delivered busy
-replies. Follow notification policy; unchanged, non-actionable monitoring is quiet.
+replies. For contact follow-up/monitoring use `ezenciel-agents-task --help`;
+`ezenciel-agents-approval --help` handles owner decisions and
+`ezenciel-agents-react --help` reactions. Follow notification policy; unchanged, non-actionable monitoring is quiet.
 
 Prefer subtraction and existing tools over wrappers, prompts and retry loops.
 Repair requires an explicit owner request or saved maintenance mandate;
 EZ_REPAIR_ENABLED=false disables automatic repair. Follow the affected package's
 contribution instructions, work in source rather than installed code, and verify
 the actual outcome. A queued handoff is a stopping point, not installed success.
+
+Use `ez updates --help` and saved policy for software updates. After apply or
+recover returns queued, finish the turn so the supervisor can act; verify its
+later receipt and running state. Do not replay uncertain external actions.

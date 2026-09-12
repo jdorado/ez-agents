@@ -13,7 +13,7 @@ export const initializeWorkspace = async (workspace: string, purposeFile: string
     if (!(await lstat(dir)).isDirectory()) throw new Error(`Workspace directory must not be a symlink: ${dir}`)
   }
   const created: string[] = []
-  for (const name of ['AGENTS.md', 'SOUL.md', 'USER.md', 'TOOLS.md']) {
+  for (const name of ['AGENTS.md', 'SOUL.md', 'USER.md']) {
     const target = path.join(workspace, name)
     const temporary = path.join(workspace, `.${name}.${randomUUID()}.tmp`)
     try {
