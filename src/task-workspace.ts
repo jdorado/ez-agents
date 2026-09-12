@@ -1,3 +1,4 @@
+import { installAgentGuidance } from './agent-guidance.js'
 import { mkdir, lstat, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { assertId } from './identity.js'
@@ -18,5 +19,6 @@ export async function taskWorkspace(workspace: string, id: string): Promise<stri
   }
   try{await writeFile(join(target,'AGENTS.md'),`# Background task\n\nRead SOUL.md, USER.md and TOOLS.md when present. You work for the same owner as the main agent.\nYour task directory is your writable workspace. Keep progress and artifacts here; do not modify the parent agent's mind or other tasks. The main agent may read your progress.\nDelegate through your executor's native tools when useful. For an explicitly persistent objective, use native /goal or ask the executor to set its native goal. Do not pretend plain text alone proved goal activation.\nSend the owner useful progress and the final result using ezenciel-agents-message; stdout is not delivered. Verify the result before claiming completion.\n`,{mode:0o600,flag:'wx'})}
   catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e}
+  await installAgentGuidance(target)
   return target
 }

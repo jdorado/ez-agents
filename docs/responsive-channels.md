@@ -22,10 +22,10 @@ One writer per workspace still applies. Shared external resources require
 coordination even when task directories differ. Status must distinguish a saved
 schedule from actual execution and a verified result from a process exit.
 
-The package loads `templates/chat-guidance.md` at each turn for CLI, desktop,
-busy owner replies and approved plugin messaging tasks. Upgrades refresh this
-behavior without rewriting the agent's personal files. Existing model choices
-remain pinned; an upgrade adds Responsive chat as an available selection.
+The shared owner guidance is installed in native workspace instruction files at
+setup and runtime upgrade. Owner and scheduled requests reach the configured
+engine literally. Restricted busy replies and approved contact tasks keep their
+bounded conversational guidance. Existing model choices remain pinned.
 
 ## Channel and authority boundaries
 

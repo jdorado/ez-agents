@@ -19,6 +19,9 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
  const execution=await control.captureChoice(initialPreset('grok'))
  const run=await runs.create({chatId:101,telegramUserId:101,texts:['owner request'],execution})
  await runs.patch(run.id,{status:'running'});env.EZ_RUN_ID=run.id
+ const context=JSON.parse((await exec(process.execPath,[bin,'context'],{env})).stdout)
+ assert.deepEqual(context.run.texts,['owner request']);assert.deepEqual(context.busyReplies,[])
+ await assert.rejects(exec(process.execPath,[bin,'context'],{env:{...env,EZ_RUN_ID:''}}),/active owner run/)
  const args=['create','test','--at','2027-09-09T09:00:00+04:00','--text','Literal $(do-not-execute) /goal objective']
  const saved=JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
  assert.equal(saved.text,args.at(-1));assert.equal(saved.execution.preset.cli,'codex')
@@ -41,6 +44,7 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
  const external=await runs.create({chatId:101,telegramUserId:101,texts:[],execution,external:{sourceId:'source',bindingId:'binding',eventIds:['event']}})
  await runs.patch(external.id,{status:'running'})
  await assert.rejects(exec(process.execPath,[bin,'list'],{env:{...env,EZ_RUN_ID:external.id}}),/owner-authorized/)
+ await assert.rejects(exec(process.execPath,[bin,'context'],{env:{...env,EZ_RUN_ID:external.id}}),/owner-authorized/)
  const task=await runs.create({taskId:'task_'+'a'.repeat(32),chatId:101,telegramUserId:101,texts:[]})
  await runs.patch(task.id,{status:'running'})
  await assert.rejects(exec(process.execPath,[bin,'list'],{env:{...env,EZ_RUN_ID:task.id}}),/owner-authorized/)

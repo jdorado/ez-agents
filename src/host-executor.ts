@@ -1,3 +1,4 @@
+import { installAgentGuidance } from './agent-guidance.js'
 import { redactFailure } from './failure.js'
 import { RunStore } from './runs.js'
 import { Tasks } from './tasks.js'
@@ -45,6 +46,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid}),{mode:0o600,flag:'wx'})
       locks.push(lock)
+      await installAgentGuidance(agent.workspace)
       await writeFile(path.join(directory,'models.json'),JSON.stringify(await catalog(agent)),{mode:0o600})
       // A host crash is terminal for a claimed job. Never replay an action.
       for (const file of await readdir(directory)) if (file.endsWith('.running.json')) {
