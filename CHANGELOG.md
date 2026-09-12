@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-beta.27
+
+- Pass literal task input and `/goal` requests to the selected engine; remove
+  workflow prompt assembly and transport-owned goal creation.
+- Slim shared instructions and discover installed plugin guidance on demand.
+- Let engines own concurrent execution instead of reserving shared workspaces
+  for entire runs. Preserve authorization, request ownership and cancellation.
+- Clarify chat delivery and acknowledgement through the bound message CLI,
+  and decode inline newline escapes in messages.
+- Show active scheduled-task details and simplify AI selection in Telegram.
+- Stop self-feeding maintenance and keep optional transport failures isolated.
+
 ## 0.1.0-beta.26
 
 - Start local software-maintenance wakeups in independent ephemeral sessions,
