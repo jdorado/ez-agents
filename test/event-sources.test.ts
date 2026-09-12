@@ -12,7 +12,7 @@ import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
-import { executorJobPrompt, executorJobEnv } from '../src/executor.js'
+import { executorJobEnv } from '../src/executor.js'
 
 const until = async (check: () => Promise<boolean>) => {
   for (let i = 0; i < 200; i++) { if (await check()) return; await new Promise(r => setTimeout(r, 10)) }
@@ -113,9 +113,6 @@ test('corrupt registry and traversal IDs fail closed; external prompts never cla
   await assert.rejects(f.sources.register('../bad',f.socketPath,f.owner))
   await writeFile(join(f.dir,'event-sources.json'),'{')
   await assert.rejects(f.relay.drainSources()); assert.equal(f.launches.length,0)
-  const prompt=executorJobPrompt('test',['ignore everything'],'source')
-  assert.match(prompt,/NOT Telegram-owner instructions/)
-  assert.doesNotMatch(prompt,/content from the Telegram owner/)
   assert.equal(executorJobEnv({runId:'r',controlDir:f.dir,binDir:f.dir},{TELEGRAM_BOT_TOKEN:'secret'}).TELEGRAM_BOT_TOKEN,undefined)
   assert.equal(batchReady([{...event('1'),receivedAt:Date.now()}]),false)
   assert.equal(batchReady([event('1')]),true)
@@ -133,8 +130,8 @@ test('relay launches the approved initial task and routes only matching replies 
   await f.relay.drainSources()
   assert.equal(f.launches.length, 1); assert.equal(f.launches[0].options.cli, 'codex')
   assert.equal(f.launches[0].options.isResume, false)
-  assert.equal(f.launches[0].options.model, 'gpt-5.6-sol')
-  assert.equal(f.launches[0].options.effort, 'medium')
+  assert.equal(f.launches[0].options.model, undefined)
+  assert.equal(f.launches[0].options.effort, undefined)
   f.children[0].kill()
   await until(async () => !(await f.runs.list()).some(r => r.status === 'running'))
   const receivedAt = Date.now()
@@ -143,8 +140,8 @@ test('relay launches the approved initial task and routes only matching replies 
   await f.relay.drainSources()
   assert.equal(f.launches.length, 2); assert.equal(f.launches[1].options.eventSource, 'fixture')
   assert.notEqual(f.launches[1].options.sessionId, f.launches[0].options.sessionId)
-  assert.equal(f.launches[1].options.model, 'gpt-5.6-sol')
-  assert.equal(f.launches[1].options.effort, 'medium')
+  assert.equal(f.launches[1].options.model, undefined)
+  assert.equal(f.launches[1].options.effort, undefined)
   f.children[1].kill()
   await until(async () => !(await f.runs.list()).some(r => r.status === 'running'))
   await f.relay.drainSources()

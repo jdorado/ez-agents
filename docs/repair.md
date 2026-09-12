@@ -1,41 +1,42 @@
 # Native repair ownership
 
-Every deployed agent is a repairer by default. When an agent finds a core or
-plugin defect, it keeps the context and pursues a tested contribution PR. The
-core injects the same mandate into CLI/native and desktop execution, including
-existing workspaces; it does not replace the agent's mind or implement a repair
-workflow engine. Use native Git/GitHub CLI or the installed GitHub plugin.
+Repair is a capability used by an explicit owner request or owner-saved maintenance
+mandate. Discovering a defect alone does not enroll an ordinary conversation in
+an issue/claim/PR workflow. Preserve useful evidence and continue the requested
+task. The current execution guidance supersedes older default-repair text in
+existing workspaces without rewriting the agent's mind.
 
-The agent searches for the same cause, registers a sanitized issue, requests a
-claim, then works in an isolated contribution checkout after the coordinator's
-grant. It resumes the same issue/branch/PR after interruption. The installed
-runtime is never the repair checkout. Missing credentials or coordination remain
-recorded blockers; the default does not invent repository access. Public reports
-must exclude private runtime data and use the security reporting route when needed.
+For an authorized repair, use the selected engine with native Git/GitHub tools
+and follow the target repository's CONTRIBUTING.md. Check existing work for the
+same cause and use an isolated contribution checkout; never edit the installed
+runtime as the repair checkout. Resume the same branch/PR after interruption.
+A separate issue, claim service or coordinator grant is not an ez prerequisite.
+Use coordination only where the repository or owner explicitly requires it.
 
-One coordinator grants claims sequentially per repository. Assignment alone is
-not a lock. All participating agents must use that coordinator; this convention
-cannot prevent an unrelated public contributor from opening a competing PR.
-The discovering agent remains the repairer, including when its work moves to a
-background task. The coordinator reconciles duplicates and stalled claims. The
-maintainer independently reviews and tests, then merges/publishes only within
-separate owner-approved policies. Start from templates/maintainer-purpose.md.
+Question the failing wrapper before adding code. Removing behavior or correcting
+existing instructions/tool contracts can fully resolve the defect. Preserve
+useful evidence and verified outcomes, with normal independent review and CI.
+Missing credentials block only operations requiring them; continue useful local
+work and report the precise remaining dependency. Public reports must exclude
+private runtime data and use the security reporting route where appropriate.
+Do not repeatedly check an unchanged dependency.
 
 ## Disable
 
 Set `EZ_REPAIR_ENABLED=false` in the deployment's Docker environment and recreate
 the relay. The resolved setting crosses the host transport and is included in
 every new execution prompt; the default is true and invalid values fail startup.
-This changes the automatic mandate, not filesystem/GitHub permissions, and does
+True makes the capability available; it does not itself grant a repair mandate.
+The setting does not change filesystem/GitHub permissions and does
 not cancel an already running task. Explicitly stop active repair work when needed.
 An owner can also disable repairs globally or for a repository in the agent's
 saved USER.md preferences; carry those restrictions into background task context.
 
 ## Setup boundary
 
-The shipped mandate and maintainer purpose do not provision a GitHub account,
-coordinator service or publishing token. Enroll the allowed repositories and
-configure one maintainer execution lane on the owner's host before unattended
-claims. Reuse authenticated GitHub CLI where authorized. Repository push and PR
-permissions are distinct from package-registry publication and protected-branch
-approval. Never put credentials in prompts, issues or test environments.
+Reuse existing authenticated access within the owner's request or saved mandate.
+ez does not provision a coordinator, GitHub identity or publishing token, and
+none is an implicit prerequisite for local diagnosis or an authorized local fix.
+Repository push/PR access, protected-branch review and package publication are
+separate capabilities and permissions. Follow existing release authority; never
+put credentials in prompts, issues or test environments.

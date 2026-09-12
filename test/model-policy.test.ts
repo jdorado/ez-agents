@@ -11,56 +11,31 @@ import { taskArguments } from '../src/task-executor.js'
 import { runCodexSession } from '../src/codex-session.js'
 import { runDesktopTurn } from '../src/desktop-bridge.js'
 
-test('all non-Luna model selections and launches reject effort above high before spawning', async () => {
-  for (const cli of ['codex', 'codex-gui', 'grok', 'claude', 'opencode', 'agy']) {
-    for (const effort of ['xhigh', 'max', 'ultra', 'unknown']) {
-      const preset = { id:'blocked', name:'Blocked', cli, model:'any-model', effort }
-      await assert.rejects(validateSelection(preset, [], async () => true), /capped at high/)
-      await assert.rejects(startExecutorJob([], { cli, effort, runId:'unused', controlDir:'/unused', workspace:'/unused', binDir:'/unused', timeoutMs:1 }), /capped at high/)
-    }
-  }
-  await assert.rejects(runCodexSession({workspace:'/unused',controlDir:'/unused',prompt:'',goal:false,effort:'max'}), /capped at high/)
-  await assert.rejects(runDesktopTurn({workspace:'/unused',controlDir:'/unused',binDir:'/unused',runId:'unused',prompt:'',effort:'ultra'}), /capped at high/)
+test('engine defaults stay omitted and explicit native settings survive every adapter', async () => {
+ for(const cli of ['codex','codex-gui','grok','claude','opencode','agy']) {
+  assert.deepEqual(executionDefaults(cli,{}),{})
+  const preset={id:'chosen',name:'Chosen',cli,model:'native-model',effort:'ultra'}
+  assert.deepEqual(executionDefaults(cli,preset),preset)
+  await validateSelection(preset,[{cli,model:'native-model',name:'Native',efforts:['ultra']}],async()=>true)
+  await assert.rejects(validateSelection({...preset,effort:'unsupported'},[{cli,model:'native-model',name:'Native',efforts:['ultra']}],async()=>true),/installed client catalog/)
+  assert.throws(()=>executionDefaults(cli,{effort:'bad option'}),/Invalid reasoning effort/)
+ }
+ assert.deepEqual(executionOverrides('codex',{model:'old',effort:'max'},'new'),{model:'new',effort:undefined})
+ const saved={id:'saved',name:'Saved',cli:'codex',model:'chosen',effort:'max'}
+ assert.deepEqual(persistedPreset(saved),saved)
+ const args=taskArguments('/unused',['broker'],'--literal')
+ assert.equal(args.at(-1),'-');assert(!args.includes('--model'));assert(!args.some(s=>s.includes('model_reasoning_effort')))
+ const explicit=taskArguments('/unused',['broker'],'text',undefined,saved)
+ assert(explicit.includes('chosen'));assert(explicit.includes('model_reasoning_effort="max"'))
 })
 
-test('Codex Luna accepts xhigh and max while every other model and CLI remains capped', async () => {
-  for (const effort of ['xhigh', 'max']) {
-    const luna = { id:'luna', name:'Luna', cli:'codex', model:'gpt-5.6-luna', effort }
-    await validateSelection(luna, [{ cli:'codex', model:'gpt-5.6-luna', name:'Luna', efforts:['high','xhigh','max'] }], async () => true)
-    assert.deepEqual(executionDefaults('codex', { model:'gpt-5.6-luna', effort }), { model:'gpt-5.6-luna', effort })
-    assert.throws(() => executionDefaults('grok', { model:'gpt-5.6-luna', effort }), /capped at high/)
-    assert.throws(() => executionDefaults('codex', { model:'gpt-5.6-terra', effort }), /capped at high/)
-  }
-})
-
-test('restricted tasks pin Luna max, preserve explicit choices and reject higher effort', () => {
-  const args = taskArguments('/unused', ['broker'], 'prompt')
-  assert.equal(args[args.indexOf('--model')+1], 'gpt-5.6-luna')
-  assert.ok(args.includes('model_reasoning_effort="max"'))
-  const custom = taskArguments('/unused', ['broker'], 'prompt', undefined, {model:'custom-model',effort:'low'})
-  assert.equal(custom[custom.indexOf('--model')+1], 'custom-model')
-  assert.ok(custom.includes('model_reasoning_effort="low"'))
-  assert.throws(() => taskArguments('/unused', ['broker'], 'prompt', undefined, {effort:'xhigh'}), /capped at high/)
-  assert.deepEqual(executionDefaults('codex', {model:'custom-model',effort:'medium'}), {model:'custom-model',effort:'medium'})
-  assert.deepEqual(executionDefaults('codex', {model:'gpt-6-astra'}), {model:'gpt-6-astra',effort:'high'})
-  assert.deepEqual(executionDefaults('codex', {model:'gpt-5.6-terra'}), {model:'gpt-5.6-terra',effort:'high'})
-  assert.deepEqual(executionDefaults('codex', {model:'gpt-5.6-luna'}), {model:'gpt-5.6-luna',effort:'max'})
-  assert.deepEqual(executionDefaults('codex', {}), {model:'gpt-5.6-luna',effort:'max'})
-  assert.deepEqual(executionOverrides('codex', {model:'gpt-5.6-luna',effort:'max'}, 'gpt-6-astra'), {model:'gpt-6-astra',effort:'high'})
-  assert.deepEqual(executionOverrides('codex', {model:'gpt-5.6-luna',effort:'max'}, 'gpt-5.6-luna'), {model:'gpt-5.6-luna',effort:'max'})
-  const stored = persistedPreset({id:'luna',name:'Luna',cli:'codex',model:'gpt-5.6-luna',effort:'max'})
-  assert.equal(stored.effort, undefined)
-  assert.deepEqual(executionDefaults('codex', stored), {id:'luna',name:'Luna',cli:'codex',model:'gpt-5.6-luna',effort:'max'})
-})
-
-test('preset persistence rejects above-high choices without changing current settings', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'ez-effort-'))
-  try {
-    const control = new ControlStore(dir, 1000)
-    const before = await control.aiState(initialPreset('codex'))
-    await assert.rejects(control.savePreset({id:'bad',name:'Bad',cli:'codex',model:'any',effort:'max'}), /capped at high/)
-    assert.deepEqual(await control.aiState(initialPreset('codex')), before)
-  } finally { await rm(dir,{recursive:true,force:true}) }
+test('invalid setting syntax never mutates a saved choice', async () => {
+ const dir=await mkdtemp(join(tmpdir(),'ez-native-setting-'))
+ try {
+  const control=new ControlStore(dir,1000),before=await control.aiState(initialPreset('codex'))
+  await assert.rejects(control.savePreset({id:'bad',name:'Bad',cli:'codex',effort:'bad option'}),/Invalid AI preset/)
+  assert.deepEqual(await control.aiState(initialPreset('codex')),before)
+ }finally{await rm(dir,{recursive:true,force:true})}
 })
 
 test('non-Codex catalog defaults survive executor normalization and host revalidation', async () => {

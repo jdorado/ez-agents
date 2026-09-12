@@ -120,8 +120,9 @@ does not receive their executor or provider credentials.
 
 Telegram `/status` shows the running relay and host versions plus installed
 plugin versions. Its read-only **Scheduled tasks** control lists the paired
-owner's saved task titles, instructions, timing, state and next run; it never
-creates, changes or runs a task. The agent's `ez status` adds verified plugin
+owner's active schedules in alphabetical order, with their engine/model/effort,
+next occurrence or current queued/running state, and a short preview of the
+saved invocation prompt; it never creates, changes or runs a task. The agent's `ez status` adds verified plugin
 runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).
 
 ## You are the installing agent
@@ -205,8 +206,8 @@ restart and shutdown. The installing agent registers the small host CLI transpor
 
 The selected host CLI runs in this agent's persistent workspace and owns its
 Markdown/work files. New conversations and AI changes preserve those files.
-`AGENTS.md`, `SOUL.md`, `USER.md`, and `TOOLS.md` are seeded; `MEMORY.md` is
-optional. Received files go in `inbox/`, tasks and deliverables in `work/`.
+`AGENTS.md`, `SOUL.md`, and `USER.md` are seeded; `MEMORY.md` is
+optional. Installed plugin snippets and skill paths come from `ez tools list --details`; no tool inventory file needs maintenance. Received files go in `inbox/`, tasks and deliverables in `work/`.
 Credentials and control state stay outside the mind. File separation is not
 OS isolation against a process running as the same user.
 

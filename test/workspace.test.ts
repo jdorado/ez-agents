@@ -6,7 +6,6 @@ import test from 'node:test'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { initializeWorkspace } from '../src/workspace.js'
-import { executorJobPrompt } from '../src/executor.js'
 
 test('packaged launcher help and invalid arguments never start the relay', () => {
   const bin = fileURLToPath(new URL('../bin/ezenciel-agents.mjs', import.meta.url))
@@ -39,7 +38,7 @@ test('fresh mind is private; repeat initialization preserves customization and o
   const root = await mkdtemp(path.join(tmpdir(), 'ez-mind-'))
   const workspace = path.join(root, 'agent')
   try {
-    assert.equal((await initializeWorkspace(workspace)).length, 4)
+    assert.equal((await initializeWorkspace(workspace)).length, 3)
     assert.equal((await stat(path.join(workspace, 'SOUL.md'))).mode & 0o777, 0o600)
     assert.ok(!(await readdir(workspace)).includes('MEMORY.md'))
     await writeFile(path.join(workspace, 'SOUL.md'), 'A customized research partner')
@@ -50,7 +49,7 @@ test('fresh mind is private; repeat initialization preserves customization and o
     assert.equal(await readFile(path.join(workspace, 'MEMORY.md'), 'utf8'), 'Existing knowledge')
     assert.equal(await readFile(path.join(workspace, 'AGENT.md'), 'utf8'), 'Legacy custom guidance')
     assert.ok(!(await readdir(workspace)).some(name => name.endsWith('.tmp')))
-    assert.match(executorJobPrompt('test', ['start']), /Read AGENTS.md/)
+    assert.match(await readFile(path.join(workspace, 'AGENTS.md'), 'utf8'), /ez shared guidance: begin/)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

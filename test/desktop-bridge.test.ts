@@ -5,7 +5,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
-import { DESKTOP_UNAVAILABLE, desktopJobPrompt, runDesktopTurn, type DesktopClient } from '../src/desktop-bridge.js'
+import { DESKTOP_UNAVAILABLE, runDesktopTurn, type DesktopClient } from '../src/desktop-bridge.js'
 import { executorKey, nativeSessionId, startExecutorJob } from '../src/executor.js'
 import { initialPreset, isPreset, readModels } from '../src/ai.js'
 
@@ -39,16 +39,6 @@ const fakeClient = (script: Array<Record<string, unknown>>): DesktopClient & { c
   }
   return client
 }
-
-test('desktop prompt carries run identity and tool paths, never a bot token', () => {
-  const prompt = desktopJobPrompt('r_gui', ['hello'], undefined, '/tmp/bin', '/tmp/control')
-  assert.match(prompt, /EZ_RUN_ID=r_gui/)
-  assert.match(prompt, /EZ_CONTROL_DIR=\/tmp\/control/)
-  assert.match(prompt, /PATH=\/tmp\/bin:\$PATH/)
-  assert.match(prompt, /ezenciel-agents-message/)
-  assert.ok(!prompt.includes('TELEGRAM_BOT_TOKEN'))
-  assert.ok(!prompt.includes('token'))
-})
 
 test('codex-gui is a distinct preset and catalog entry', async () => {
   assert.equal(executorKey('codex-gui'), 'codex-gui')
@@ -175,4 +165,20 @@ test('unlimited desktop waits reject on disconnect and do not miss an early comp
  other.write(Buffer.concat([Buffer.from([0x81,payload.length]),payload]))
  assert.equal((await early.wait(m=>m.method==='turn/completed',0)).method,'turn/completed')
  early.close()
+})
+
+test('desktop fresh and resumed turns bind current run environment without prompt prose',async()=>{
+ for(const isResume of [false,true]) {
+  const text=' /goal audit list of files and give me a simple list with filenames\n'
+  const client=fakeClient([{result:{}},{result:{thread:{id:'native-env'}}},...(!isResume?[{result:{}}]:[]),{result:{turn:{id:'env-turn'}},notify:[{method:'turn/completed',params:{turn:{id:'env-turn',status:'completed'}}}]}])
+  const original=client.request;let nativeConfig:any,submitted:any
+  client.request=async(method,params)=>{if(method===`thread/${isResume?'resume':'start'}`)nativeConfig=(params as any).config;if(method==='turn/start')submitted=params;return original(method,params)}
+  assert.equal(await runDesktopTurn({workspace:'/mind',controlDir:'/control',binDir:'/bin',runId:'r_current',repairEnabled:false,prompt:text,isResume,sessionId:'native-env'},{connect:async()=>client,emit:()=>{}}),0)
+  assert.deepEqual(submitted.input,[{type:'text',text}])
+  assert.equal(nativeConfig['shell_environment_policy.inherit'],'none')
+  assert.equal(nativeConfig['shell_environment_policy.set'].EZ_RUN_ID,'r_current')
+  assert.equal(nativeConfig['shell_environment_policy.set'].EZ_CONTROL_DIR,'/control')
+  assert.equal(nativeConfig['shell_environment_policy.set'].EZ_REPAIR_ENABLED,'false')
+  assert.equal(nativeConfig['shell_environment_policy.set'].TELEGRAM_BOT_TOKEN,undefined)
+ }
 })

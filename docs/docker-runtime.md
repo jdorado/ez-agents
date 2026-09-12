@@ -153,3 +153,12 @@ its polling delay in executor duration; it is not a pure model-inference measure
 Delivery processing includes pacing, media preparation and provider calls. A sent
 message may precede executor exit. No prompt, message body or credentials are added
 to these timing logs.
+
+### Polling faults
+
+Permanent errors escaping Telegram setup/polling (including unauthorized tokens,
+competing pollers and programming errors) stop relay-level retry until explicit
+restart after repair. Existing authorized work and outbox draining remain active;
+polling health remains unhealthy. Transient HTTP, rate-limit and server errors
+may reconnect. grammY still owns reconnect behavior inside its poller; ez does
+not override private library methods or implement a replacement poller.

@@ -11,6 +11,14 @@ Installed runtime operation uses Docker Compose. Read
 [Docker setup, state and QA](docs/docker-runtime.md). Docker owns relay/plugin services; the existing host CLI and login are shared
 through one generic transport, with separate agent workspaces and sessions.
 
+## General core instructions
+
+When the owner refers to "general core instructions", they mean
+`templates/agent-guidance.md`, loaded from the installed package into CLI and
+desktop agent runs, including background tasks. Update that file for defaults
+that must reach all agents after upgrade. Workspace `AGENTS.md` files and
+`templates/agent/` seeds alone do not propagate changes to existing agents.
+
 ## Installing this package
 
 When the user asks to set up or install this repository or package, follow
@@ -37,14 +45,13 @@ This package will be published as an open-source, lightweight Telegram-to-CLI re
 - **Native Node 22+ APIs only:** Use `node:fs/promises`, `node:child_process`, `node:crypto`, `node:path`, and native global `fetch`, `FormData`, and `Blob`.
 - Keep `node_modules` minimal and installable in seconds.
 
-## 2. Zero Deterministic Coding Across the Board (Tools, Flows & Dialog)
-- **The relay is dumb plumbing:** The relay only ingests messages, batches them into runs, spawns the CLI executor, and drains outbox items. It is strictly minimal.
-- **Nothing deterministic—not just dialog:** Do not hardcode multi-step tool pipelines, fallback state machines, parameter translation shims, procedural dialog flows, or canned conversational receipts ("Started run...", "I'll message as I go...").
-- **The debugging reflex trap:** When an integration, tool, or flow doesn't work as expected, developers and LLMs have an overwhelming reflex to patch it by writing deterministic procedural code (`if error X -> hardcode Y -> do Z`). **Resist this completely.**
-- **The real engineering work:** Our job is solely to:
-  1. Build clean, standalone tools that work reliably with clear Unix interfaces (clear args, predictable stdout/stderr, clean exit codes).
-  2. Ensure tools have simple setup and are clearly explained in the agent's workspace so the **agent understands them**.
-  3. Let the agent own all flow orchestration, tool chaining, decision making, and error recovery. Question every line of code—if it can be agentic, keep code out of it.
+## 2. The engine is the core; ez is an ultra-lean gate
+- The selected CLI/GUI engine owns intelligence, context, reasoning, planning, goals, delegation and continuation. ez mainly authorizes inputs, invokes engines/tools and transports results. Keep necessary queue ownership, cancellation, secret isolation and reliable delivery deterministic.
+- Plugins are ordinary CLI tools with explicit inputs, outputs and errors. Packaging a tool does not justify another LLM worker or business workflow owner.
+- **SUBTRACT is as valid as ADD.** Question the requirement; delete unnecessary behavior; simplify; shorten feedback; automate last. Name and try the subtraction option before proposing additions. Removing a wrapper or correcting existing engine instructions/tool contracts can be the complete fix.
+- Add code only for a demonstrated missing transport or tool capability. Prompts, agents, retries and lifecycle owners also count as machinery; do not replace deleted code with a scripted prompt workflow. Prefer existing engine, CLI and Docker capabilities.
+- `/goal do my daily routine` is literal task-prompt text for the engine. ez does not parse it, construct a native objective or own its workflow.
+- Keep changes focused. State what was removed, why anything added is necessary, and which observed outcome proves the simpler system works. Preserve authority and uncertain-delivery safeguards. Unchanged, non-actionable maintenance stops quietly; queued updates and passing tests alone do not prove an installed fix.
 
 ## 3. Crash-Safe Atomic Disk State
 - All persistent stores (`ControlStore`, `RunStore`, outbox queue) must be disk-backed JSON files.

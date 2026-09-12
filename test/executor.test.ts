@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, executorJobPrompt, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, startExecutorJob, terminateJob } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, startExecutorJob, terminateJob } from '../src/executor.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
 
@@ -44,16 +44,6 @@ test('cancellation stops detached tool descendants even after their parent exits
     terminateJob(parent); terminateJob(unrelated)
     await rm(root,{recursive:true,force:true})
   }
-})
-
-test('the job prompt labels channel text as untrusted and requires ez message', () => {
-  const prompt = executorJobPrompt('r_test', ['hello'])
-  assert.match(prompt, /untrusted incoming channel content/)
-  assert.match(prompt, /ezenciel-agents-message/)
-  assert.match(prompt, /--text-file/)
-  assert.match(prompt, /r_test/)
-  assert.match(prompt, /hello/)
-  assert.match(prompt, /Stdout is not sent to Telegram/)
 })
 
 test('Telegram replies are split within the configured message limit', () => {
@@ -96,7 +86,6 @@ test('the Grok invocation is headless, workspace-scoped, and token-free', () => 
     '--output-format', 'plain',
     '--always-approve',
     '--verbatim',
-    '--max-turns', '8',
   ])
   assert.equal(invocation.args.includes('TELEGRAM_BOT_TOKEN'), false)
 })
@@ -105,8 +94,7 @@ test('the antigravity invocation is headless, skips permissions, and uses print 
   const invocation = antigravityInvocation('test prompt')
   assert.equal(invocation.command, 'agy')
   assert.deepEqual(invocation.args, [
-    '--print', 'test prompt',
-    '--dangerously-skip-permissions',
+    '--dangerously-skip-permissions', '--print=test prompt',
   ])
 })
 
@@ -118,6 +106,7 @@ test('the opencode invocation is headless, auto-approves, and sets model and wor
     '--auto',
     '--format',
     'json',
+    '--',
     'test prompt',
   ])
 })
@@ -179,8 +168,15 @@ test('Codex plugin access stays scoped to the explicitly bound registry', () => 
 test('Codex compaction preserves native resume and validates transported options',()=>{
  const args=EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',sessionId:'native-id',isResume:true,codexAutoCompactTokens:32000},'', 'hello')
  assert.ok(args.includes('model_auto_compact_token_limit=32000'))
- assert.deepEqual(args.slice(-3),['resume','native-id','hello'])
- assert.ok(EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent'},'','hello').includes('model_auto_compact_token_limit=64000'))
+ assert.deepEqual(args.slice(-3),['resume','native-id','-'])
+ assert.ok(!EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent'},'','hello').some(a=>a.includes('model_auto_compact_token_limit')))
  for(const value of [0,-1,NaN,1.5]) assert.throws(()=>EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',codexAutoCompactTokens:value},'','hello'),/compaction/)
  assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/agent',codexAutoCompactTokens:32000},'','hello').some(arg=>arg.includes('compact')))
+})
+
+
+test('adapters do not append instruction files or impose a workflow turn budget', () => {
+ const opts={workspace:'/agent/work/tasks/example'}
+ assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs(opts,'','literal').includes('--append-system-prompt-file'))
+ assert.ok(!EXECUTOR_REGISTRY.grok.buildArgs(opts,'/tmp/prompt','literal').includes('--max-turns'))
 })

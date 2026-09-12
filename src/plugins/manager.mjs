@@ -22,6 +22,25 @@ export async function atomic(file, value) {
   await fs.writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});
   await fs.rename(tmp,file);
 }
+// Only a registry locator lives in native instructions. Inventory is generated on read.
+export async function bindToolDiscovery(home,workspace) {
+  home=await fs.realpath(home);workspace=await fs.realpath(workspace);
+  const start='<!-- ez tools: begin -->',end='<!-- ez tools: end -->';
+  for(const name of ['AGENTS.md','AGENTS.override.md']) {
+    const file=path.join(workspace,name);
+    const stat=await fs.lstat(file).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
+    if(!stat && name!=='AGENTS.md')continue;
+    if(stat && !stat.isFile())throw Error('Tool instructions must be a regular file');
+    const prior=stat?await fs.readFile(file,'utf8'):'';
+    const from=prior.indexOf(start),to=prior.indexOf(end);
+    if((from<0)!==(to<0)||(from>=0&&(to<from||prior.indexOf(start,from+start.length)>=0||prior.indexOf(end,to+end.length)>=0)))throw Error('Malformed tool discovery block');
+    const block=start+'\nInstalled plugin snippets and skills: `'+path.join(home,'bin','ez')+' tools list --details`. Use this bound launcher for plugin commands; read the relevant skill when needed.\n'+end;
+    const next=from<0?prior+'\n'+block+'\n':prior.slice(0,from)+block+prior.slice(to+end.length);
+    if(next===prior)continue;
+    const tmp=file+'.'+randomUUID()+'.tmp';
+    try {await fs.writeFile(tmp,next,{mode:0o600,flag:'wx'});await fs.rename(tmp,file);}finally{await fs.rm(tmp,{force:true});}
+  }
+}
 export async function locked(home, fn) {
   const lock = path.join(home,'registry.lock');
   let handle;
@@ -292,9 +311,7 @@ export async function init(home,workspace,catalogFile,hostConfig,standalone=fals
       agent.binDir=bin;agent.toolsHome=home;await atomic(hostConfig,host);
     }
   });
-  const index=path.join(workspace,'TOOLS.md');
-  const prior=await fs.readFile(index,'utf8').catch(e=>{if(e.code==='ENOENT')return fs.readFile(new URL(standalone?'../../templates/standalone-tools.md':'../../templates/agent/TOOLS.md',import.meta.url),'utf8');throw e;});
-  await fs.writeFile(index,prior+'\n## Registered plugins\n\nUse `'+path.join(home,'bin','ez')+'` for this agent only.\nDiscover reviewed packages with `ez plugins available`; inspect with `ez plugins inspect <id>`.\nOn an authorized installation request, run `ez plugins install <id>`, then `ez plugins start <id>`.\nRead the installed skill paths from `ez plugins list` before onboarding or provider operations.\nUse `ez tools list` for aliases and `ez <alias> --help` for native commands.\nInstallation does not grant send authority. The registry is the only plugin installation, command and lifecycle authority. Do not create standalone provider launchers or deployments.\n',{mode:0o600});
+  await bindToolDiscovery(home,workspace);
   if(hostConfig && path.basename(hostConfig)==='host-executor.json') await (await import('../updates/binding.mjs')).bindUpdates(home,hostConfig);
   return {ok:true,launcher:path.join(home,'bin','ez'),workspace};
 }
@@ -336,7 +353,7 @@ export async function main(args) {
   // Only the fixed launcher may supply the leading home binding. Never consume plugin arguments here.
   let home;if(args[0]==='--home') {home=args[1];args=args.slice(2);}
   if(args[0]==='enable-updates') {args.shift();const h=take('--home'),host=take('--host-config');if(args.length||!h||!host)throw Error('Supply --home and --host-config');return emit(await (await import('../updates/binding.mjs')).bindUpdates(h,host));}
-  if(!home && (args.length===0 || (args.length===1 && ['--help','-h'].includes(args[0])))) return emit({usage:'ezenciel-agents-tools init --standalone --home /absolute/tools --workspace /absolute/workspace',relay:'Omit --standalone and supply --host-config for a relay binding',discovery:'Use the returned launcher from any local executor; read workspace/TOOLS.md'});
+  if(!home && (args.length===0 || (args.length===1 && ['--help','-h'].includes(args[0])))) return emit({usage:'ezenciel-agents-tools init --standalone --home /absolute/tools --workspace /absolute/workspace',relay:'Omit --standalone and supply --host-config for a relay binding',discovery:'Use the returned launcher from any local executor; use the bound launcher: tools list --details'});
   if(args[0]==='init') {args.shift();const standalone=args.includes('--standalone');if(standalone)args.splice(args.indexOf('--standalone'),1);const options=[take('--home'),take('--workspace'),take('--catalog'),take('--host-config')];if(args.length)throw Error('Unknown init arguments');return emit(await init(...options,standalone));}
   if(!home || !path.isAbsolute(home)) throw Error('Use the agent-bound launcher, or init --home /absolute/tools --workspace /absolute/mind --catalog /absolute/catalog.json');
   home=await fs.realpath(home);
@@ -345,13 +362,21 @@ export async function main(args) {
   const [group,action,...rest]=args;
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list|exposure','<registered CLI> ...'],scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
     if(action==='available'&&group==='plugins') return emit(config.catalog);
     const r=await registry(home);
-    if(action==='list') return emit(group==='tools'?r.commands:r.plugins);
+    if(action==='list') {
+      if(group==='tools' && args.length===1 && args[0]==='--details')return emit(Object.fromEntries(Object.entries(r.plugins).map(([name,p])=>[name,{
+        description:typeof p.manifest.description==='string'?p.manifest.description.replace(/\s+/g,' ').trim().slice(0,200):'',
+        commands:Object.keys(p.manifest.commands).map(alias=>`ez ${alias} --help`),
+        skills:p.manifest.skills.map(skill=>path.join(p.source,skill)),
+      }])));
+      if(args.length)throw Error('Use tools list [--details] or plugins list');
+      return emit(group==='tools'?r.commands:r.plugins);
+    }
     if(group==='tools' && action==='exposure') {
       if(args.length) throw Error('Use tools exposure without arguments');
       return emit(Object.fromEntries(Object.entries(r.plugins).map(([name, record]) => [name, commandExposure(record.manifest)])));

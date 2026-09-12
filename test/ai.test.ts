@@ -202,7 +202,7 @@ test('native executor flags carry the exact model and effort; only structured me
   assert.equal(grok[grok.indexOf('--reasoning-effort') + 1], opts.effort)
   const codex = EXECUTOR_REGISTRY.codex.buildArgs(opts, '', 'fixture')
   assert.ok(codex.includes('model_reasoning_effort="medium"'))
-  assert.deepEqual(codex.slice(-3), ['resume', opts.sessionId, 'fixture'])
+  assert.deepEqual(codex.slice(-3), ['resume', opts.sessionId, '-'])
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'thread.started', thread_id: opts.sessionId })), opts.sessionId)
   assert.equal(nativeSessionId('opencode', JSON.stringify({ type: 'step_start', sessionID: 'ses_fixture' })), 'ses_fixture')
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'text', thread_id: opts.sessionId })), undefined)
@@ -210,7 +210,7 @@ test('native executor flags carry the exact model and effort; only structured me
 })
 
 for (const cli of ['codex', 'codex-gui']) {
-  test(`${cli} initializes Luna max ahead of host defaults and preserves saved choices`, async () => {
+  test(`${cli} leaves native defaults unpinned and preserves saved choices`, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ez-ai-default-'))
     try {
       const store = new ControlStore(dir, 1000)
@@ -219,9 +219,9 @@ for (const cli of ['codex', 'codex-gui']) {
         model: 'host-model', effort: 'low' }]
       await store.syncClientPresets(initial, discovered)
       const first = await store.captureChoice(initial)
-      assert.equal(first.preset.model, 'gpt-5.6-luna')
+      assert.equal(first.preset.model, undefined)
       assert.equal(first.preset.effort, undefined)
-      assert.equal(executionDefaults(cli, first.preset).effort, 'max')
+      assert.equal(executionDefaults(cli, first.preset).effort, undefined)
       assert.equal(first.preset.cli, cli)
       const saved = { id: 'custom', name: 'Custom', cli, model: 'custom-model', effort: 'medium' }
       await store.savePreset(saved)
@@ -235,16 +235,16 @@ for (const cli of ['codex', 'codex-gui']) {
 }
 
 for (const cli of ['codex', 'codex-gui']) {
-  test(`${cli} separates responsive chat from worker defaults and preserves upgrade choices`, async () => {
+  test(`${cli} uses native chat and worker defaults and preserves upgrade choices`, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ez-chat-default-'))
     try {
       const store = new ControlStore(dir, 1000)
       await store.syncClientPresets(chatPreset(cli), [])
       const chat = await store.captureChoice(chatPreset(cli))
-      assert.equal(chat.preset.model, 'gpt-5.6-sol')
-      assert.equal(chat.preset.effort, 'medium')
-      assert.equal(initialPreset(cli).model, 'gpt-5.6-luna')
-      assert.equal(initialPreset(cli).effort, 'max')
+      assert.equal(chat.preset.model, undefined)
+      assert.equal(chat.preset.effort, undefined)
+      assert.equal(initialPreset(cli).model, undefined)
+      assert.equal(initialPreset(cli).effort, undefined)
       const old = initialPreset(cli)
       await store.savePreset(old)
       await store.defaultPreset(old.id)

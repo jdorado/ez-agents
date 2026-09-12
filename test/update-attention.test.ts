@@ -5,7 +5,6 @@ import {tmpdir} from 'node:os'
 import path from 'node:path'
 import {queueUpdateAttention} from '../src/update-attention.js'
 import {RunStore} from '../src/runs.js'
-import {executorJobPrompt} from '../src/executor.js'
 
 test('maintenance requires an owner, deduplicates wakeups and never grants owner authority',async t=>{
  const dir=await mkdtemp(path.join(tmpdir(),'ez-maintenance-'));t.after(()=>rm(dir,{recursive:true,force:true}));const runs=new RunStore(dir)
@@ -14,7 +13,7 @@ test('maintenance requires an owner, deduplicates wakeups and never grants owner
  const owner={telegramUserId:12,telegramChatId:12,pairedAt:new Date().toISOString()}
  await queueUpdateAttention(dir,owner,runs);await queueUpdateAttention(dir,owner,runs);assert.equal((await runs.list()).length,1)
  const run=(await runs.list())[0];assert.equal(run.telegramUserId,12);assert.equal(run.status,'queued')
- assert.match(executorJobPrompt(run.id,run.texts),/NOT a new owner instruction/)
+ assert.deepEqual(JSON.parse(run.texts[0]),{event:'software_update_attention',noticeId:'a'.repeat(64)})
  await queueUpdateAttention(dir,{...owner,telegramUserId:13,telegramChatId:13},runs);assert.equal((await runs.list()).length,2)
  await writeFile(path.join(dir,'update-attention.json'),'{');await assert.rejects(queueUpdateAttention(dir,owner,runs))
  await writeFile(path.join(dir,'update-attention.json'),JSON.stringify({id:'../escape'}));await assert.rejects(queueUpdateAttention(dir,owner,runs))

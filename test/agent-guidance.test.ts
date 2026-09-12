@@ -7,9 +7,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import test from 'node:test'
-import { desktopJobPrompt } from '../src/desktop-bridge.js'
-import { chatGuidance } from '../src/agent-guidance.js'
-import { executorJobPrompt } from '../src/executor.js'
+import { agentGuidance, installAgentGuidance } from '../src/agent-guidance.js'
 import { taskArguments } from '../src/task-executor.js'
 import { initializeWorkspace } from '../src/workspace.js'
 
@@ -21,41 +19,10 @@ const runNode = (code: string, cwd: string) => execFileAsync(process.execPath, [
   '--import', tsxLoaderPath, '--input-type=module', '-e', code,
 ], { cwd, encoding: 'utf8' })
 
-test('CLI and desktop prompt builders use current package guidance', async () => {
-  const shared = (await readFile(sharedGuidancePath, 'utf8')).trim()
-  const prompts = [
-    ['CLI', executorJobPrompt('tg_owner', ['owner request'])],
-    ['desktop', desktopJobPrompt('tg_owner_gui', ['owner request'], undefined, '/tmp/bin', '/tmp/control')],
-  ] as const
-  for (const [kind, prompt] of prompts)
-    {
-    assert.ok(prompt.includes(shared), `${kind} prompt is missing the current package guidance`)
-    assert.ok(prompt.includes(chatGuidance()), `${kind} prompt is missing channel guidance`)
-  }
-  assert.ok(!executorJobPrompt('r_schedule_job', ['work']).includes(chatGuidance()))
-})
-
-test('shared guidance teaches source-chat delivery and real Telegram line breaks', async () => {
-  const shared = await readFile(sharedGuidancePath, 'utf8')
-  assert.ok(shared.includes("current run's source chat"))
-  assert.match(shared, /actual newline\s+characters/)
-  assert.ok(shared.includes('`\\n`'))
-  assert.ok(shared.includes('`\\\\n`'))
-  assert.ok(shared.includes('`/n`'))
-  assert.ok(shared.includes('ezenciel-agents-message --text-file ./work/reply.md'))
-})
-
-test('shared guidance makes owner AI selection a relay control, not host configuration', async () => {
-  const shared = await readFile(sharedGuidancePath, 'utf8')
-  for (const prompt of [
-    executorJobPrompt('tg_owner', ['change to Terra medium']),
-    desktopJobPrompt('tg_owner_gui', ['change to Terra medium'], undefined, '/tmp/bin', '/tmp/control'),
-  ]) {
-    assert.ok(prompt.includes('`ezenciel-agents-ai list`'))
-    assert.ok(prompt.includes('`ezenciel-agents-ai select --cli <cli> --model <model> --effort <effort>`'))
-    assert.ok(prompt.includes('not a request to edit the host Codex configuration'))
-    assert.match(prompt, /a running or queued job retains\s+its captured choice/)
-  }
+test('shared guidance makes direct owner chat replies a native transport action', () => {
+  const guidance = agentGuidance()
+  assert.match(guidance, /Reply to direct owner messages through `ezenciel-agents-message`/)
+  assert.match(guidance, /unchanged scheduled\nmonitoring stays quiet/)
 })
 
 test('package guidance resolution ignores a workspace shadow file', async () => {
@@ -85,7 +52,10 @@ test('workspace initialization preserves a customized AGENTS.md', async () => {
     const custom = '# Workspace-specific purpose\nKeep this local guidance unchanged.\n'
     await writeFile(path.join(workspace, 'AGENTS.md'), custom)
     await initializeWorkspace(workspace)
-    assert.equal(await readFile(path.join(workspace, 'AGENTS.md'), 'utf8'), custom)
+    assert.ok((await readFile(path.join(workspace, 'AGENTS.md'), 'utf8')).endsWith(custom))
+    const installed = await readFile(path.join(workspace, 'AGENTS.md'), 'utf8')
+    await initializeWorkspace(workspace)
+    assert.equal(await readFile(path.join(workspace, 'AGENTS.md'), 'utf8'), installed)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -135,4 +105,24 @@ test('copied package guidance refreshes on each call and missing guidance fails 
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+
+test('upgrade refreshes only the shared native block, including Codex override scope', async t => {
+  const root = path.join(tmpdir(), `ez-guidance-upgrade-${randomUUID()}`)
+  await mkdir(root); t.after(() => rm(root, { recursive: true, force: true }))
+  const personal = '# Identity\r\nPersonal instructions and trailing spaces.  \r\n'
+  for (const name of ['AGENTS.md', 'AGENTS.override.md']) {
+    await writeFile(path.join(root, name), personal + '<!-- ez shared guidance: begin -->\nold installed defaults\n<!-- ez shared guidance: end -->\nTail stays.')
+  }
+  await installAgentGuidance(root)
+  for (const name of ['AGENTS.md', 'AGENTS.override.md']) {
+    const result = await readFile(path.join(root, name), 'utf8')
+    assert.ok(result.startsWith(personal)); assert.ok(result.endsWith('\nTail stays.'))
+    assert.ok(result.includes(agentGuidance())); assert.ok(!result.includes('old installed defaults'))
+  }
+  const broken = '<!-- ez shared guidance: begin -->\nMy unfinished edit'
+  await writeFile(path.join(root, 'AGENTS.md'), broken)
+  await assert.rejects(installAgentGuidance(root), /Malformed/)
+  assert.equal(await readFile(path.join(root, 'AGENTS.md'), 'utf8'), broken)
 })

@@ -32,30 +32,26 @@ the host changes zones. Nonexistent DST wall times are skipped; repeated wall
 times fire once, at the earlier instant. Search is bounded to eight years.
 Public-holiday calendars and arbitrary RRULE syntax are not implemented.
 
-New tasks, including work deferred by a busy reply session, default to Codex
-`gpt-5.6-luna` with `max` reasoning independently of the creating chat.
-New chats use the separate Sol/medium preset. Busy reply `defer` accepts optional
-`model` and `effort` fields; retries preserve the first saved task choice.
-Use `--cli`, `--model`, and `--effort` to specify another choice. `xhigh` and
-`max` are available only with Codex `gpt-5.6-luna`; every other model remains capped at
-`high`. Non-Codex adapters inherit native effort when unset. Editing preserves the existing AI
-choice unless those flags override it. Stored choices are checked again at
-launch, including schedules saved before a policy change.
+New tasks inherit selected engine settings. Explicit `--cli`, `--model` and
+`--effort` override those choices; omitted values use native defaults. Edits
+preserve existing choices. Historical deferred tasks keep their source context
+available through `ezenciel-agents-schedule context`.
 
 ## Execution and authority
 
-The relay checks due work once per second. Each occurrence enters the durable
-run queue with a stable ID. Background work runs in a fresh native CLI session
-and `work/tasks/RUN_ID/`, with snapshots of the agent's SOUL, USER and TOOLS files.
-Instructions must include any needed context or source paths; full chat history
-is not copied. Task folders remain for inspection and artifact delivery.
+Due occurrences enter the durable queue with stable IDs and literal task text.
+Background runs use fresh native sessions in `work/tasks/RUN_ID/`. No identity
+files or role instructions are generated there. Existing workspace Markdown
+provides context; the engine chooses what to read. Codex uses `AGENTS.md` or `.git`
+as its native project-root marker, so a nested task sees the existing agent scope. Task folders remain for
+inspection and artifact delivery.
 
 One writer runs per task directory. Up to four background tasks can run alongside
-the main conversation. When a Codex owner message arrives while work is busy, a separate restricted session reads recent messages and run progress and answers through the normal outbox. It can queue requested work through the scheduler, but cannot run shell commands, access plugins, or edit the agent workspace. Only one reply session runs at a time and it releases its slot after a 60-second reply deadline; this deadline does not apply to writer jobs. Its context is a bounded snapshot, not a shared native transcript. Delivered parallel replies are included as historical context in the next normal conversation turn. Codex 0.153.4 and 0.154.0 are supported for this restricted adapter. Other versions fail closed pending tool-surface validation. A recurring schedule has at most one pending
-or active occurrence. Agents should delegate long work with `create --now`, return
-to chat, and inspect `runs` or task progress when asked. Native subagents can be
-used inside the worker. Sharing provider profiles does not make concurrent CRM,
-file or browser writes safe: the agent must coordinate those resources.
+the main conversation. Foreground inputs queue while a foreground turn runs;
+ez does not create another reply agent. The agent can delegate or schedule long
+work and return to chat. It decides when to send through the message CLI.
+A recurring schedule has at most one pending or active occurrence. Shared
+provider resources still need writer coordination.
 
 Production relay/host execution has no wall-clock timeout. The old
 `EZ_EXECUTOR_TIMEOUT_SECONDS` setting is ignored. Individual network/tool waits
@@ -64,13 +60,14 @@ are an executor capability, configured through instructions. Ez has no goal API,
 continuation loop or rule equating a process exit with goal achievement.
 
 Scheduled Codex CLI tasks use a dedicated native app-server session, tested with
-CLI 0.153.4. A leading `/goal` in the instruction text maps to the same native
-goal command used by the interactive CLI. Codex automatically starts subsequent
-turns; the transport stays connected until the native goal is complete or stops
-for attention. It sends no continuation prompts and stores no Ez goal state.
-Goals created by the agent's native tools also keep the session alive. Ordinary
-tasks finish after their turn. A blocked, paused or limited goal is not reported
-as successful. Native RPC requests have a response deadline; running tasks do not.
+CLI 0.153.4. Ez forwards the full task as ordinary input without interpreting
+`/goal` or constructing a native goal objective. The engine handles the request,
+context and native goal creation. Codex owns continuation; the transport stays
+connected while a native goal is active and verifies its terminal state. It sends
+no continuation prompts and stores no Ez goal state. Ordinary tasks finish when
+the engine completes its turn without an active goal. A blocked, paused or limited
+goal is not reported as successful. Native RPC requests have a response deadline;
+running tasks do not.
 Each scheduled task has its own Codex state under `control/cli/codex/tasks/RUN_ID`,
 with a snapshot of the agent's Codex configuration and the existing auth link.
 Foreground chat and background tasks do not initialize or migrate one shared
@@ -109,6 +106,15 @@ artifacts are retained. The agent sends through the normal Telegram outbox;
 `completed` means executor exit, while provider delivery is recorded separately.
 A timeout or ambiguous send must not cause blind replay of the whole task.
 
+## Failure-review stop
+
+A schedule using `--when unreviewed-failures` stops dispatching its current
+revision after one of its own runs fails. The failed receipt remains available
+through `runs`/`run`; no new retry queue or automatic repair task is created.
+The paired owner or authorized maintainer diagnoses it and explicitly edits the
+schedule to resume. Marking the failure reviewed or pause/resume alone does not
+clear the stop. Ordinary recurring tasks retain their existing failure behavior.
+
 ## QA
 
 `pnpm verify` covers recurrence/DST, restart deduplication, authority revocation,
@@ -136,16 +142,6 @@ exercise cancellation, downtime catch-up and an explicitly requested native goal
 that needs more than one turn. Synthetic provider evidence does not prove real
 Telegram delivery, and a sleep test does not prove native goal persistence.
 
-Busy-chat regression probe (real Codex, synthetic Telegram):
-
-```sh
-pnpm exec tsx scripts/smoke-busy-reply.ts --transport
-```
-
-The probe holds a writer on a shared workspace, asks an owner question through
-the relay and host transport, and requires the restricted reply to complete
-while the writer remains active. It sends no real Telegram messages.
-
 ## Optional failure review
 
 Create a normal recurring schedule with `--every-seconds 900 --when unreviewed-failures --text-file templates/failure-review.md`. The condition advances empty occurrences without launching an executor. It considers only failures belonging to the paired owner. No separate monitor or automatic retry is introduced.
@@ -153,3 +149,11 @@ Create a normal recurring schedule with `--every-seconds 900 --when unreviewed-f
 `failures [--all] [--limit N]` returns failedAt, reason, exit code, native session, captured error and runtime versions. Capture keeps at most 4 KiB of redacted stderr; historical failures are not backfilled. `run RUN_ID` reads an owned run. `review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT` records the investigation without rewriting execution history. A stale timestamp is rejected; a later failure needs a new review. Restricted reply, external and isolated-task callers cannot review failures. An attention review is handed off, not repeatedly relaunched; another new failure wakes the next review.
 
 The prompt controls diagnosis, authorized recovery and quiet notification behavior. Inspect prior effects and receipts before retrying anything. A failed review run itself remains visible as a new failure for the next occurrence.
+
+The Telegram Scheduled tasks menu lists enabled schedules that still have a pending
+occurrence or a queued/running occurrence. Finished one-time tasks, paused
+schedules and revisions stopped for review are hidden. Each entry shows the
+effective engine/model/effort, next occurrence in UTC (or queued/running state),
+and the first sentence of its saved invocation
+prompt, limited to 140 characters. This is a read-only view; history and full
+prompts remain available through the scheduling CLI.

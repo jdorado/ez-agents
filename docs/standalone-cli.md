@@ -23,12 +23,12 @@ node /absolute/package/bin/ezenciel-agents-tools.mjs init --standalone \
 ```
 
 Init starts nothing, uses an empty catalog by default, preserves existing
-TOOLS.md notes and appends the registry's discovery instructions. A registry
+workspace notes and adds a managed registry locator to AGENTS.md. A registry
 cannot be replaced by rerunning init. Keep the package at its original path:
 the launcher imports it. Status reports `main: null` without a relay binding;
 automated software upgrades currently require a relay deployment.
 
-Have each executor read the workspace's TOOLS.md and the installed plugin skills.
+Use `ez tools list --details` for generated installed-plugin descriptions, help shortcuts and absolute skill paths. Read only the relevant skill.
 Add that instruction to its existing project instructions without replacing them.
 Use the absolute launcher, or prepend its bin directory to that session's PATH.
 Never overwrite another global `ez`; it may belong to a different installation.

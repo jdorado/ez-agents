@@ -20,7 +20,7 @@ visible in `updates check` and private `tools/updates/available.json`.
 
 Use normal setup and initialize the registry with this deployment's
 `host-executor.json`. This binds `ez updates`, the active package root and the
-Software updates guidance in TOOLS.md. Start `ezenciel-agents-host` using the
+native registry discovery guidance in AGENTS.md. Start `ezenciel-agents-host` using the
 normal OS service template. The host service must use the existing user's Node,
 pnpm (or Corepack) and Docker access. Never put tokens in its environment. Keep the original
 package directory: its small bootstrap remains the service entry point and loads
@@ -185,11 +185,9 @@ written by the new one. Increment it for incompatible writes; this updater will
 refuse that migration. `mainProtocol` identifies the supported updater/registry
 contract, currently 1. Plugin package and manifest versions must match.
 
-The Luna/max durable default keeps this contract: persisted Codex Luna presets
-omit the effort field so older runtimes can read and fail over to their native
-safe default, while the current launcher resolves an omitted Luna effort to
-`max`. The execution choice, rather than the storage encoding, is the policy
-surface.
+Explicit model/effort fields remain stored as selected. Unset values are no longer
+filled by router policy; legacy records with omitted effort use native defaults.
+Upgrading does not invent an explicit setting for an omitted field.
 
 Verify upgrade from the previous supported artifact, retained identity/state,
 failed-health rollback, and rejection of incompatible candidates. Main runtime
@@ -206,14 +204,31 @@ updaters need an exact-version core update to adopt this discovery behavior.
 
 ## Shared agent guidance
 
-Ez includes `templates/agent-guidance.md` from the running package in every
-owner-worker prompt, including resumed CLI and desktop conversations and scheduled
-owner work. After the runtime upgrades, the next turn receives the new guidance.
-An already running turn keeps its original prompt. Restricted contact tasks and
-reply-only workers retain their separate, bounded instructions.
+Setup and runtime startup install `templates/agent-guidance.md` into a marked
+section of the workspace's native `AGENTS.md` (and existing `AGENTS.override.md`).
+Upgrade refreshes only that section; personal content outside it is preserved
+byte-for-byte. New scheduled task workspaces receive the same shared guidance.
+Malformed markers and symlinks fail visibly rather than overwriting personal work.
 
-Keep general operating defaults in this package-owned file. Keep agent purpose,
-preferences and local conventions in the workspace's `AGENTS.md`, `SOUL.md`,
-`USER.md` and memory files; upgrades preserve them. Shared guidance does not
-grant permissions, and explicit owner instructions take precedence over its
-defaults within existing execution permissions.
+Codex, agy, Grok and OpenCode discover workspace instructions natively. Claude
+receives the native `--append-system-prompt-file` binding to `AGENTS.md`, alongside
+its own normal instructions. Fresh and resumed owner input is literal; ez does
+not surround it with policies, tool recipes, repair instructions or history.
+The native engine owns instruction loading and its context/token overhead.
+Already running sessions retain their current context until native reload.
+
+Desktop start/resume configuration binds the current run's sanitized environment;
+message commands no longer require a prose environment prefix. Existing
+credentials, permissions, queues, busy replies, scheduling and monitoring are
+preserved. Restricted contact tasks retain their separate
+bounded instruction scopes. For delivered busy replies absent from the native
+conversation, the owner engine can call `ezenciel-agents-schedule context`.
+
+Keep general defaults in the shipped shared file and identity/preferences in
+workspace personal files. Instructions cannot grant permissions; explicit owner
+requests take precedence within existing execution authority.
+
+Update discovery runs independently of active host work. A discovery failure is
+logged locally and retried at the next regular six-hour check; it does not stop
+the host or create a repair task. Inspect `ez updates check` for target diagnostics.
+Actual update transactions retain their existing admission, drain and rollback rules.

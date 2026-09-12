@@ -1,3 +1,4 @@
+import { installAgentGuidance } from './agent-guidance.js'
 import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -12,7 +13,7 @@ export const initializeWorkspace = async (workspace: string, purposeFile: string
     if (!(await lstat(dir)).isDirectory()) throw new Error(`Workspace directory must not be a symlink: ${dir}`)
   }
   const created: string[] = []
-  for (const name of ['AGENTS.md', 'SOUL.md', 'USER.md', 'TOOLS.md']) {
+  for (const name of ['AGENTS.md', 'SOUL.md', 'USER.md']) {
     const target = path.join(workspace, name)
     const temporary = path.join(workspace, `.${name}.${randomUUID()}.tmp`)
     try {
@@ -28,5 +29,6 @@ export const initializeWorkspace = async (workspace: string, purposeFile: string
       await rm(temporary, { force: true })
     }
   }
+  await installAgentGuidance(workspace)
   return created
 }

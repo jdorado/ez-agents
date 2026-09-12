@@ -10,18 +10,23 @@ import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.j
 import { RunStore, type RunRecord } from './runs.js'
 
 export type Schedule = {
+  originRunId?: string
   when?: 'unreviewed-failures'
   version: 1; id: string; revision: string; name: string; text: string; trigger: Trigger; enabled: boolean
   owner: Owner; execution: ExecutionChoice
 }
-export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string }
+export type ActiveSchedule = Schedule & { nextAt: number | null; runState?: 'queued' | 'running' }
+export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string; originRunId?: string }
 export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
   const s = v as ScheduledOrigin
   return Boolean(s && /^[a-zA-Z0-9_-]+$/.test(s.id) && /^[a-zA-Z0-9_-]+$/.test(s.revision) &&
-    Number.isFinite(Date.parse(s.dueAt)) && typeof s.pairedAt === 'string')
+    Number.isFinite(Date.parse(s.dueAt)) && typeof s.pairedAt === 'string' && (s.originRunId === undefined || /^[a-zA-Z0-9_-]+$/.test(s.originRunId)))
 }
 export const scheduledRunId = (s: Schedule, due: number) => 'r_schedule_' + createHash('sha256')
   .update(JSON.stringify([s.id,s.revision,due])).digest('hex')
+export const holdsSchedule = (s: Schedule, r: RunRecord): boolean =>
+  r.scheduled?.id === s.id && r.scheduled.revision === s.revision &&
+  Boolean(r.interrupted || (s.when === 'unreviewed-failures' && r.status === 'failed'))
 const atomic = async (file: string, value: unknown, exclusive = false) => {
   const tmp = `${file}.${randomUUID()}.tmp`
   try {
@@ -36,7 +41,7 @@ export class Scheduler {
   private async ensure() { await mkdir(this.dir,{recursive:true,mode:0o700}) }
   async get(id: string): Promise<Schedule> {
     const s = JSON.parse(await readFile(join(this.dir,assertId(id)+'.json'),'utf8')) as Schedule
-    if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt}) ||
+    if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt,originRunId:s.originRunId}) ||
       (s.when !== undefined && s.when !== 'unreviewed-failures') || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' || !s.text.trim() ||
       !Number.isSafeInteger(s.owner?.telegramUserId) || !Number.isSafeInteger(s.owner?.telegramChatId) || !isExecutionChoice(s.execution))
       throw new Error('Invalid schedule record')
@@ -60,6 +65,31 @@ export class Scheduler {
       try { result.push(await this.get(name.slice(0,-5))) } catch { console.error('Unreadable schedule',name) }
     }
     return result
+  }
+  private async pendingOccurrence(s: Schedule): Promise<number | null> {
+    try {
+      const saved = JSON.parse(await readFile(join(this.dir,`${s.id}.${s.revision}.cursor`),'utf8'))
+      if (saved.next !== null && !Number.isFinite(saved.next)) throw new Error('Invalid schedule cursor')
+      return saved.next
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      return nextOccurrence(s.trigger,-1)
+    }
+  }
+  async listActiveReadOnly(runs: RunRecord[]): Promise<ActiveSchedule[]> {
+    const active: ActiveSchedule[] = []
+    for (const s of await this.listReadOnly()) {
+      if (!s.enabled) continue
+      const current = runs.filter(r => r.scheduled?.id === s.id && r.scheduled.revision === s.revision && ownsRun(s.owner,r))
+      const runState = current.some(r => r.status === 'running') ? 'running' : current.some(r => r.status === 'queued') ? 'queued' : undefined
+      if (!runState && current.some(r => holdsSchedule(s,r))) continue
+      try {
+        const nextAt = await this.pendingOccurrence(s)
+        if (runState || nextAt !== null) active.push({...s,nextAt,runState})
+      }
+      catch { console.error('Unreadable schedule cursor',s.id) }
+    }
+    return active
   }
   async save(input: Omit<Schedule,'version'|'revision'>, exclusive = false): Promise<Schedule> {
     await this.ensure(); assertId(input.id)
@@ -112,26 +142,19 @@ export class Scheduler {
       if (!s.enabled || s.owner.telegramUserId !== owner.telegramUserId || s.owner.telegramChatId !== owner.telegramChatId || s.owner.pairedAt !== owner.pairedAt) continue
       const cursor = join(this.dir,`${s.id}.${s.revision}.cursor`)
       try {
-        let next: number | null
-        try {
-          const saved = JSON.parse(await readFile(cursor,'utf8'))
-          if (saved.next !== null && !Number.isFinite(saved.next)) throw new Error('Invalid schedule cursor')
-          next = saved.next
-        } catch (e) {
-          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
-          next = nextOccurrence(s.trigger,-1)
-        }
+        const next = await this.pendingOccurrence(s)
         if (next === null || next > now) continue
-        // Keep one occurrence active/queued per schedule. Coalesce missed ticks on completion.
+        // One occurrence at a time. A failed reviewer stops this revision just like
+        // interrupted work: retain its receipt until an explicit schedule edit.
         if ((await runs.list()).some(r => r.scheduled?.id === s.id &&
-          (['queued','running'].includes(r.status) || (r.interrupted && r.scheduled.revision === s.revision)))) continue
+          (['queued','running'].includes(r.status) || holdsSchedule(s, r)))) continue
         const future = nextOccurrence(s.trigger,now)
         if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && ownsRun(owner, r) && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
           await atomic(cursor,{next:future}); continue
         }
         await runs.create({id:scheduledRunId(s,next),chatId:s.owner.telegramChatId,
           telegramUserId:s.owner.telegramUserId,texts:[s.text],execution:s.execution,
-          scheduled:{id:s.id,revision:s.revision,dueAt:new Date(next).toISOString(),pairedAt:s.owner.pairedAt}})
+          scheduled:{id:s.id,revision:s.revision,dueAt:new Date(next).toISOString(),pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}})
         // A restart between run creation and this cursor write sees the same occurrence ID.
         await atomic(cursor,{next:future})
       } catch { console.error('Schedule dispatch failed',s.id) }

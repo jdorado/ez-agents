@@ -84,10 +84,16 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       }
       if(Date.now()>=nextCheck) {
         nextCheck=Date.now()+6*60*60*1000;
-        const results=await discover(home);await atomic(path.join(directory,'available.json'),results);
-        const available=results.filter(r=>r.newer&&r.policy.automatic);
-        const key=digest(JSON.stringify(available)),saved=await read(path.join(directory,'discovery.json')).catch(missing);
-        if(available.length&&saved?.key!==key){await notice(agent.controlDir,key);await atomic(path.join(directory,'discovery.json'),{key});}
+        try {
+          const results=await discover(home);await atomic(path.join(directory,'available.json'),results);
+          const available=results.filter(r=>r.newer&&r.policy.automatic);
+          const key=digest(JSON.stringify(available)),saved=await read(path.join(directory,'discovery.json')).catch(missing);
+          if(available.length&&saved?.key!==key){await notice(agent.controlDir,key);await atomic(path.join(directory,'discovery.json'),{key});}
+        } catch {
+          // Discovery is optional; its failure must not terminate the host.
+          // Do not expose registry response bodies or credentials in logs.
+          console.error('Update discovery failed; host remains running. Inspect ez updates check.');
+        }
       }
       await sleep(500);
     }

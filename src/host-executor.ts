@@ -1,3 +1,4 @@
+import { installAgentGuidance } from './agent-guidance.js'
 import { redactFailure } from './failure.js'
 import { RunStore } from './runs.js'
 import { Tasks } from './tasks.js'
@@ -23,7 +24,6 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       new Set(installation.agents.map(a=>a.controlDir)).size !== installation.agents.length)
     throw new Error('Each agent requires a separate workspace and control directory')
   const active = new Map<string, ChildProcess>()
-  const busy = new Set<string>()
   const tasks = new Set<Promise<void>>()
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
@@ -45,6 +45,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid}),{mode:0o600,flag:'wx'})
       locks.push(lock)
+      await installAgentGuidance(agent.workspace)
       await writeFile(path.join(directory,'models.json'),JSON.stringify(await catalog(agent)),{mode:0o600})
       // A host crash is terminal for a claimed job. Never replay an action.
       for (const file of await readdir(directory)) if (file.endsWith('.running.json')) {
@@ -88,11 +89,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             continue
           }
           const sharedWorkspace=sharedWorkspaces.get(agent)
-          const lane=run?.replyOnly ? 'reply:'+agent.name : sharedWorkspace ? 'workspace:'+sharedWorkspace : run?.scheduled ? agent.name+':'+id : agent.name
-          if(busy.has(lane) || (run?.scheduled && [...busy].filter(k=>k.startsWith(agent.name+':')).length>=4)) continue
           const base=path.join(directory,id)
           await rename(base+'.request.json',base+'.running.json')
-          busy.add(lane)
           const task=(async()=>{
             let job: Awaited<ReturnType<typeof startExecutorJob>> | undefined
             let cancellation: ReturnType<typeof setInterval> | undefined
@@ -115,7 +113,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort,codexAutoCompactTokens:opts.codexAutoCompactTokens}
               job=await launch(request.texts,options)
-              active.set(lane,job.child)
+              active.set(base,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})
               if(signal.aborted)terminateJob(job.child)
               job.child.stdout?.on('data',chunk=>emit({stream:'stdout',text:chunk.toString()}))
@@ -134,12 +132,10 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await rm(base+'.running.json',{force:true})
               await rm(base+'.process.json',{force:true})
               await rm(base+'.cancel',{force:true})
-              active.delete(lane)
-              busy.delete(lane)
+              active.delete(base)
             }
           })()
           tasks.add(task); void task.finally(()=>tasks.delete(task))
-          // The lane is reserved before spawning; other task workspaces may start.
         }
       }
       await new Promise(resolve=>setTimeout(resolve,250))

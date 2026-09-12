@@ -70,7 +70,7 @@ test('status projects the native client default without pinning the seed', () =>
   assert.deepEqual(statusPreset({ ...initial, id: 'detected_empty' }, [discovered]), discovered)
   const explicit = { ...discovered, id: 'saved', model: 'chosen-codex', effort: 'high' }
   assert.equal(statusPreset(explicit, [discovered]), explicit)
-  assert.equal(statusPreset(initialPreset('codex-gui'), [{ ...discovered, cli: 'codex-gui' }]).model, 'gpt-5.6-luna')
+  assert.equal(statusPreset(initialPreset('codex-gui'), [{ ...discovered, cli: 'codex-gui' }]).model, discovered.model)
 })
 
 test('seed uses the configured executor; repeated refresh preserves current/default and queued snapshots', async () => {

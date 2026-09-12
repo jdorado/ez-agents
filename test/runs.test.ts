@@ -121,3 +121,16 @@ test('unclaimOutbox restores item for retry on transient failure', async () => f
   await store.unclaimOutbox(item.id)
   assert.equal((await store.pendingOutbox()).length, 1)
 }))
+
+
+test('message inline text decodes newline escapes without changing literal file content', async () => fixture(async (store) => {
+  const input = String.raw`Installed plugins:\n- WhatsApp\n- Library\n- Composio\n- GitHub`
+  const expected = 'Installed plugins:\n- WhatsApp\n- Library\n- Composio\n- GitHub'
+  assert.equal(parseMessageArgs(['--text', input]).text, expected)
+  assert.equal(parseMessageArgs(['--text', expected]).text, expected)
+  assert.equal(parseMessageArgs(['--text', String.raw`literal \\n and \t`]).text, String.raw`literal \n and \t`)
+  const run = await store.create({ chatId: 1, telegramUserId: 1, texts: ['test'] })
+  await store.patch(run.id, { status: 'running' })
+  assert.equal((await sendRunText(store, run.id, expected)).text, expected)
+  assert.equal((await sendRunText(store, run.id, input)).text, input)
+}))
