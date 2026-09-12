@@ -120,8 +120,9 @@ does not receive their executor or provider credentials.
 
 Telegram `/status` shows the running relay and host versions plus installed
 plugin versions. Its read-only **Scheduled tasks** control lists the paired
-owner's saved task titles in alphabetical order; it never
-creates, changes or runs a task. The agent's `ez status` adds verified plugin
+owner's active schedules in alphabetical order, with their engine/model/effort,
+next occurrence or current queued/running state, and a short preview of the
+saved invocation prompt; it never creates, changes or runs a task. The agent's `ez status` adds verified plugin
 runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).
 
 ## You are the installing agent

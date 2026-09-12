@@ -561,7 +561,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const owner = (await control.status()).owner
     if (!owner) return 'Scheduled tasks\n\nNo paired owner.'
     // This intentionally uses the reader that does not create a schedules directory.
-    return scheduledTasksText(await scheduler.listReadOnly(), owner)
+    return scheduledTasksText(await scheduler.listActiveReadOnly(await runs.list()), owner)
   }
   const replyScheduledTasks = async (ctx: Context) => {
     for (const part of splitTelegramText(await scheduledTasks())) await ctx.reply(part)
