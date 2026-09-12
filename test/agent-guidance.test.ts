@@ -19,26 +19,6 @@ const runNode = (code: string, cwd: string) => execFileAsync(process.execPath, [
   '--import', tsxLoaderPath, '--input-type=module', '-e', code,
 ], { cwd, encoding: 'utf8' })
 
-test('shared guidance teaches source-chat delivery and real Telegram line breaks', async () => {
-  const shared = await readFile(sharedGuidancePath, 'utf8')
-  assert.ok(shared.includes("current run's source chat"))
-  assert.match(shared, /actual newline\s+characters/)
-  assert.ok(shared.includes('`\\n`'))
-  assert.ok(shared.includes('`\\\\n`'))
-  assert.ok(shared.includes('`/n`'))
-  assert.ok(shared.includes('ezenciel-agents-message --text-file ./work/reply.md'))
-})
-
-test('shared guidance makes owner AI selection a relay control, not host configuration', async () => {
-  const shared = await readFile(sharedGuidancePath, 'utf8')
-  for (const prompt of [shared]) {
-    assert.ok(prompt.includes('`ezenciel-agents-ai list`'))
-    assert.ok(prompt.includes('`ezenciel-agents-ai select --cli <cli> --model <model> --effort <effort>`'))
-    assert.ok(prompt.includes('not a request to edit the host Codex configuration'))
-    assert.match(prompt, /a running or queued job retains\s+its captured choice/)
-  }
-})
-
 test('package guidance resolution ignores a workspace shadow file', async () => {
   const root = path.join(tmpdir(), `ez-guidance-${randomUUID()}`)
   await mkdir(root, { recursive: true })

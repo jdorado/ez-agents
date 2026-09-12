@@ -27,3 +27,12 @@ test('explicit CLI/model selection preserves installation default and rejects un
   assert.deepEqual(await store.status(),state)
  }finally{await rm(root,{recursive:true,force:true})}
 })
+
+
+test('AI help is available without a bound control directory or installed engines',()=>{
+ const bin=fileURLToPath(new URL('../bin/ezenciel-agents-ai.mjs',import.meta.url))
+ const {EZ_CONTROL_DIR,...env}=process.env
+ const result=spawnSync(process.execPath,[bin,'--help'],{env:{...env,PATH:''},encoding:'utf8'})
+ assert.equal(result.status,0,result.stderr)
+ assert.match(result.stdout,/select --cli/)
+})
