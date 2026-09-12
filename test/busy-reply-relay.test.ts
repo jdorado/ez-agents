@@ -36,6 +36,9 @@ test('owner input queues literally without creating a second agent and rejects o
   assert.equal(children[1].signalCode,null)
   assert.equal((await runs.get('tg_2'))?.replyOnly,undefined)
   assert.deepEqual((await runs.get('tg_2'))?.texts,['status'])
+  children[1].kill()
+  await until(async()=>children.length===3)
+  await until(async()=>(await runs.get('tg_3'))?.status==='running')
   await relay.bot.handleUpdate({...message(6),message:{...message(6).message!,text:'/stop'}} as Update)
   await until(async()=>children.every(c=>c.exitCode!==null || c.signalCode!==null))
  }finally{await relay.stop();for(const c of children)c.kill();await until(async()=>!(await runs.list()).some(r=>r.status==='running'));await rm(root,{recursive:true,force:true})}
