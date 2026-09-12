@@ -294,7 +294,7 @@ export async function init(home,workspace,catalogFile,hostConfig,standalone=fals
   });
   const index=path.join(workspace,'TOOLS.md');
   const prior=await fs.readFile(index,'utf8').catch(e=>{if(e.code==='ENOENT')return fs.readFile(new URL(standalone?'../../templates/standalone-tools.md':'../../templates/agent/TOOLS.md',import.meta.url),'utf8');throw e;});
-  await fs.writeFile(index,prior+'\n## Registered plugins\n\nUse `'+path.join(home,'bin','ez')+'` for this agent only.\nDiscover reviewed packages with `ez plugins available`; inspect with `ez plugins inspect <id>`.\nOn an authorized installation request, run `ez plugins install <id>`, then `ez plugins start <id>`.\nRead the installed skill paths from `ez plugins list` before onboarding or provider operations.\nUse `ez tools list` for aliases and `ez <alias> --help` for native commands.\nInstallation does not grant send authority. The registry is the only plugin installation, command and lifecycle authority. Do not create standalone provider launchers or deployments.\n',{mode:0o600});
+  await fs.writeFile(index,prior+'\n## Registered plugins\n\nAgent-bound launcher: `'+path.join(home,'bin','ez')+'`.\nUse `ez tools list` for installed aliases, `ez plugins list` for package/skill paths, and `ez <alias> --help` for commands. Manage plugins through this registry.\n',{mode:0o600});
   if(hostConfig && path.basename(hostConfig)==='host-executor.json') await (await import('../updates/binding.mjs')).bindUpdates(home,hostConfig);
   return {ok:true,launcher:path.join(home,'bin','ez'),workspace};
 }

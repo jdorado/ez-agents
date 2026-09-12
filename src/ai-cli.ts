@@ -4,7 +4,11 @@ import { join } from 'node:path'
 import { readModels, validateSelection, type AiPreset } from './ai.js'
 import { ControlStore } from './control-state.js'
 
-const {values,positionals}=parseArgs({allowPositionals:true,options:{cli:{type:'string'},model:{type:'string'},effort:{type:'string'}}})
+const {values,positionals}=parseArgs({allowPositionals:true,options:{help:{type:'boolean'},cli:{type:'string'},model:{type:'string'},effort:{type:'string'}}})
+if(values.help){
+  console.log('Usage: ezenciel-agents-ai list | select --cli <installed-cli> [--model <model>] [--effort <effort>]\nChoose only values returned by list. Selection affects subsequent messages; queued work and the installation default are unchanged.')
+  process.exit(0)
+}
 if (!process.env.EZ_CONTROL_DIR) throw new Error('Use this agent’s bound control directory')
 const catalog=await readModels(undefined,undefined,join(process.env.EZ_CONTROL_DIR,'cli','codex'))
 if(positionals[0]==='list')console.log(JSON.stringify(catalog))
