@@ -193,7 +193,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const launchStarted = performance.now()
         const started = await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
         if (!started.execution && !run.taskId) throw new Error('Legacy queued work has no pinned AI. Resend the request after /new.')
-        const session = run.external || run.taskId || run.scheduled || run.replyOnly
+        const maintenanceWakeup = run.id.startsWith('r_update_')
+        const startsOwnSession = Boolean(run.external || run.taskId || run.scheduled || run.replyOnly || maintenanceWakeup)
+        const session = startsOwnSession
           ? { sessionId: randomUUID(), hasStarted: false, nativeSessionId: undefined }
           : await control.executionSession(started.execution!)
         const selected = run.taskId ? chatPreset('codex') : started.execution!.preset
@@ -211,7 +213,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           sessionId: session.nativeSessionId || session.sessionId,
           isResume: session.hasStarted,
           eventSource: run.external?.sourceId,
-          onSession: run.external || run.taskId || run.replyOnly ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
+          onSession: run.external || run.taskId || run.replyOnly || maintenanceWakeup ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
         })
         const executionStarted = performance.now()
         // Attach before disk writes: a fast child can close while PID persistence

@@ -11,8 +11,33 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { Scheduler } from '../src/scheduler.js'
 import { initialPreset } from '../src/ai.js'
+import { randomUUID } from 'node:crypto'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let i=0;i<200;i++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Timed out')}
+
+test('maintenance wakeups use an independent ephemeral session after a relay restart',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-maintenance-session-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
+ let launchSession='',onSessionCalls=0
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(_texts,options)=>{
+  launchSession=options.sessionId ?? ''
+  if(options.onSession){onSessionCalls++;await options.onSession('native-maintenance')}
+  const child=spawn(process.execPath,['-e','setTimeout(()=>{},10)'],{detached:process.platform!=='win32'})
+  await once(child,'spawn')
+  return {child,cleanup:async()=>{},stdout:''}
+ })
+ relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as typeof relay.bot.botInfo
+ relay.bot.api.config.use(async()=>({ok:true,result:{message_id:42}}) as never)
+ try{
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  const execution={sessionId:randomUUID(),preset:initialPreset('codex')}
+  await runs.create({id:'r_update_fixture',chatId:101,telegramUserId:101,texts:['maintenance'],execution})
+  await relay.drainSources()
+  await until(async()=> (await runs.get('r_update_fixture'))?.status==='completed')
+  assert.notEqual(launchSession,execution.sessionId)
+  assert.equal(onSessionCalls,0)
+}finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
+})
+
 test('chat replies through the real ingress/outbox while scheduled CLI remains alive; targeted cancellation',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-scheduler-relay-')), children:ReturnType<typeof spawn>[]=[]
  const runs=new RunStore(dir),scheduler=new Scheduler(dir),control=new ControlStore(dir,1000)
