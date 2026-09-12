@@ -64,17 +64,14 @@ are an executor capability, configured through instructions. Ez has no goal API,
 continuation loop or rule equating a process exit with goal achievement.
 
 Scheduled Codex CLI tasks use a dedicated native app-server session, tested with
-CLI 0.153.4. The expanded worker instructions stay in the private per-run prompt file for
-the lifetime of the session. Goal admission receives a short objective pointing
-to that file, so injected context does not count against the 4,000-character
-objective limit and no workflow instructions are truncated.
-A leading `/goal` in the instruction text maps to the same native
-goal command used by the interactive CLI. Codex automatically starts subsequent
-turns; the transport stays connected until the native goal is complete or stops
-for attention. It sends no continuation prompts and stores no Ez goal state.
-Goals created by the agent's native tools also keep the session alive. Ordinary
-tasks finish after their turn. A blocked, paused or limited goal is not reported
-as successful. Native RPC requests have a response deadline; running tasks do not.
+CLI 0.153.4. Ez forwards the full task as ordinary input without interpreting
+`/goal` or constructing a native goal objective. The engine handles the request,
+context and native goal creation. Codex owns continuation; the transport stays
+connected while a native goal is active and verifies its terminal state. It sends
+no continuation prompts and stores no Ez goal state. Ordinary tasks finish when
+the engine completes its turn without an active goal. A blocked, paused or limited
+goal is not reported as successful. Native RPC requests have a response deadline;
+running tasks do not.
 Each scheduled task has its own Codex state under `control/cli/codex/tasks/RUN_ID`,
 with a snapshot of the agent's Codex configuration and the existing auth link.
 Foreground chat and background tasks do not initialize or migrate one shared

@@ -19,7 +19,7 @@ test('all non-Luna model selections and launches reject effort above high before
       await assert.rejects(startExecutorJob([], { cli, effort, runId:'unused', controlDir:'/unused', workspace:'/unused', binDir:'/unused', timeoutMs:1 }), /capped at high/)
     }
   }
-  await assert.rejects(runCodexSession({workspace:'/unused',controlDir:'/unused',prompt:'',promptFile:'/unused/prompt.txt',goal:false,effort:'max'}), /capped at high/)
+  await assert.rejects(runCodexSession({workspace:'/unused',controlDir:'/unused',prompt:'',effort:'max'}), /capped at high/)
   await assert.rejects(runDesktopTurn({workspace:'/unused',controlDir:'/unused',binDir:'/unused',runId:'unused',prompt:'',effort:'ultra'}), /capped at high/)
 })
 
