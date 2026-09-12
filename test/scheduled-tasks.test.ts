@@ -10,7 +10,7 @@ import { scheduledTasksText } from '../src/scheduled-tasks.js'
 const owner = { telegramUserId: 101, telegramChatId: 101, pairedAt: '2026-09-11T00:00:00.000Z' }
 const execution = { sessionId: randomUUID(), preset: { id: 'fixture', name: 'Fixture', cli: 'codex' } }
 
-test('scheduled task view is read-only, owner-bound, and shows stored task contents', async (t) => {
+test('scheduled task view is read-only, owner-bound, and shows only task titles', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-scheduled-tasks-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   const scheduler = new Scheduler(dir)
@@ -30,13 +30,10 @@ test('scheduled task view is read-only, owner-bound, and shows stored task conte
   const scheduleDir = join(dir, 'schedules')
   const before = await readFile(join(scheduleDir, 'owner-task.json'), 'utf8')
   const entries = await readdir(scheduleDir)
-  const text = scheduledTasksText(await scheduler.listReadOnly(), owner, Date.parse('2026-09-11T00:00:00.000Z'))
+  const text = scheduledTasksText(await scheduler.listReadOnly(), owner)
 
-  assert.match(text, /Title: Daily report/)
-  assert.match(text, /Instructions:\nRead the ledger and send the owner a concise report\./)
-  assert.match(text, /Timing: Cron 0 9 \* \* 1-5 · Asia\/Dubai/)
-  assert.match(text, /State: Scheduled/)
-  assert.match(text, /Next run: 2026-09-11T05:00:00.000Z/)
+  assert.equal(text, 'Scheduled tasks\n\n• Daily report')
+  assert.doesNotMatch(text, /Read the ledger|Instructions|Timing|State|Next run/)
   assert.doesNotMatch(text, /Other owner task|This must never be visible/)
   assert.equal(await readFile(join(scheduleDir, 'owner-task.json'), 'utf8'), before)
   assert.deepEqual(await readdir(scheduleDir), entries)
