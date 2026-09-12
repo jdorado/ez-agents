@@ -6,23 +6,20 @@ an issue/claim/PR workflow. Preserve useful evidence and continue the requested
 task. The current execution guidance supersedes older default-repair text in
 existing workspaces without rewriting the agent's mind.
 
-The contribution workflow below applies only to authorized repair tasks. Use
-native Git/GitHub CLI or the installed GitHub plugin.
-The agent searches for the same cause, registers a sanitized issue, requests a
-claim, then works in an isolated contribution checkout after the coordinator's
-grant. It resumes the same issue/branch/PR after interruption. The installed
-runtime is never the repair checkout. Missing credentials or coordination remain
-recorded blockers; record the next responsible actor and stop until evidence or
-authority changes. Do not schedule repeated checks of an unchanged dependency. Public reports
-must exclude private runtime data and use the security reporting route when needed.
+For an authorized repair, use the selected engine with native Git/GitHub tools
+and follow the target repository's CONTRIBUTING.md. Check existing work for the
+same cause and use an isolated contribution checkout; never edit the installed
+runtime as the repair checkout. Resume the same branch/PR after interruption.
+A separate issue, claim service or coordinator grant is not an ez prerequisite.
+Use coordination only where the repository or owner explicitly requires it.
 
-One coordinator grants claims sequentially per repository. Assignment alone is
-not a lock. All participating agents must use that coordinator; this convention
-cannot prevent an unrelated public contributor from opening a competing PR.
-The discovering agent remains the repairer, including when its work moves to a
-background task. The coordinator reconciles duplicates and stalled claims. The
-maintainer independently reviews and tests, then merges/publishes only within
-separate owner-approved policies. Start from templates/maintainer-purpose.md.
+Question the failing wrapper before adding code. Removing behavior or correcting
+existing instructions/tool contracts can fully resolve the defect. Preserve
+useful evidence and verified outcomes, with normal independent review and CI.
+Missing credentials block only operations requiring them; continue useful local
+work and report the precise remaining dependency. Public reports must exclude
+private runtime data and use the security reporting route where appropriate.
+Do not repeatedly check an unchanged dependency.
 
 ## Disable
 
@@ -37,9 +34,9 @@ saved USER.md preferences; carry those restrictions into background task context
 
 ## Setup boundary
 
-The shipped mandate and maintainer purpose do not provision a GitHub account,
-coordinator service or publishing token. Enroll the allowed repositories and
-configure one maintainer execution lane on the owner's host before unattended
-claims. Reuse authenticated GitHub CLI where authorized. Repository push and PR
-permissions are distinct from package-registry publication and protected-branch
-approval. Never put credentials in prompts, issues or test environments.
+Reuse existing authenticated access within the owner's request or saved mandate.
+ez does not provision a coordinator, GitHub identity or publishing token, and
+none is an implicit prerequisite for local diagnosis or an authorized local fix.
+Repository push/PR access, protected-branch review and package publication are
+separate capabilities and permissions. Follow existing release authority; never
+put credentials in prompts, issues or test environments.
