@@ -163,3 +163,11 @@ Create a normal recurring schedule with `--every-seconds 900 --when unreviewed-f
 `failures [--all] [--limit N]` returns failedAt, reason, exit code, native session, captured error and runtime versions. Capture keeps at most 4 KiB of redacted stderr; historical failures are not backfilled. `run RUN_ID` reads an owned run. `review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT` records the investigation without rewriting execution history. A stale timestamp is rejected; a later failure needs a new review. Restricted reply, external and isolated-task callers cannot review failures. An attention review is handed off, not repeatedly relaunched; another new failure wakes the next review.
 
 The prompt controls diagnosis, authorized recovery and quiet notification behavior. Inspect prior effects and receipts before retrying anything. A failed review run itself remains visible as a new failure for the next occurrence.
+
+The Telegram Scheduled tasks menu lists enabled schedules that still have a pending
+occurrence or a queued/running occurrence. Finished one-time tasks, paused
+schedules and revisions stopped for review are hidden. Each entry shows the
+effective engine/model/effort, next occurrence in UTC (or queued/running state),
+and the first sentence of its saved invocation
+prompt, limited to 140 characters. This is a read-only view; history and full
+prompts remain available through the scheduling CLI.
