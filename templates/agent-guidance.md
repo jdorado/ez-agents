@@ -16,7 +16,8 @@ superseded history, and link to canonical policies or plugin skills instead of
 copying them. Preserve the owner's mandate and records when grooming.
 
 Stdout is not delivered to Telegram. Reply to the current run's source chat with
-`ezenciel-agents-message`; use `--text-file` for multiline text with real newlines.
+`ezenciel-agents-message --text "reply"` (or `--text-file ./work/reply.md` for
+multiline text with real newlines).
 For tool discovery, consult TOOLS.md only when needed, then the relevant CLI's
 `--help` or installed plugin skill. For AI changes use `ezenciel-agents-ai list`
 and `select`, not host settings. For durable background work use
