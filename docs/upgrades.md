@@ -206,17 +206,29 @@ updaters need an exact-version core update to adopt this discovery behavior.
 
 ## Shared agent guidance
 
-Ez includes `templates/agent-guidance.md` from the running package in every
-owner-worker prompt, including resumed CLI and desktop conversations and scheduled
-owner work. After the runtime upgrades, the next turn receives the new guidance.
-An already running turn keeps its original prompt. Restricted contact tasks and
-reply-only workers retain their separate, bounded instructions.
+Setup and runtime startup install `templates/agent-guidance.md` into a marked
+section of the workspace's native `AGENTS.md` (and existing `AGENTS.override.md`).
+Upgrade refreshes only that section; personal content outside it is preserved
+byte-for-byte. New scheduled task workspaces receive the same shared guidance.
+Malformed markers and symlinks fail visibly rather than overwriting personal work.
 
-Keep general operating defaults in this package-owned file. Keep agent purpose,
-preferences and local conventions in the workspace's `AGENTS.md`, `SOUL.md`,
-`USER.md` and memory files; upgrades preserve them. Shared guidance does not
-grant permissions, and explicit owner instructions take precedence over its
-defaults within existing execution permissions.
+Codex, agy, Grok and OpenCode discover workspace instructions natively. Claude
+receives the native `--append-system-prompt-file` binding to `AGENTS.md`, alongside
+its own normal instructions. Fresh and resumed owner input is literal; ez does
+not surround it with policies, tool recipes, repair instructions or history.
+The native engine owns instruction loading and its context/token overhead.
+Already running sessions retain their current context until native reload.
+
+Desktop start/resume configuration binds the current run's sanitized environment;
+message commands no longer require a prose environment prefix. Existing
+credentials, permissions, queues, busy replies, scheduling and monitoring are
+preserved. Restricted contact tasks and busy-reply workers retain their separate
+bounded instruction scopes. For delivered busy replies absent from the native
+conversation, the owner engine can call `ezenciel-agents-schedule context`.
+
+Keep general defaults in the shipped shared file and identity/preferences in
+workspace personal files. Instructions cannot grant permissions; explicit owner
+requests take precedence within existing execution authority.
 
 Update discovery runs independently of active host work. A discovery failure is
 logged locally and retried at the next regular six-hour check; it does not stop

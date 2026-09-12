@@ -23,12 +23,12 @@ test('one installed CLI executes two agent bindings with separate minds and sani
   let server:Promise<void>|undefined
   try {
     const binary=path.join(root,'cli')
-    await writeFile(binary,`#!${process.execPath}\nif(process.env.EZ_RUN_ID==='r_hold')setInterval(()=>{},1000);console.log(JSON.stringify({cwd:process.cwd(),home:process.env.HOME,token:process.env.TELEGRAM_BOT_TOKEN,control:process.env.EZ_CONTROL_DIR,run:process.env.EZ_RUN_ID,args:process.argv.slice(2)}));\n`,{mode:0o700})
+    await writeFile(binary,`#!${process.execPath}\nif(process.env.EZ_RUN_ID==='r_hold')setInterval(()=>{},1000);console.log(JSON.stringify({cwd:process.cwd(),home:process.env.HOME,token:process.env.TELEGRAM_BOT_TOKEN,control:process.env.EZ_CONTROL_DIR,run:process.env.EZ_RUN_ID,repair:process.env.EZ_REPAIR_ENABLED,args:process.argv.slice(2)}));\n`,{mode:0o700})
     await writeFile(path.join(root,'claude'),await readFile(binary),{mode:0o700})
     await writeFile(path.join(root,'codex'),await readFile(binary),{mode:0o700})
     process.env.PATH=root+path.delimiter+oldPath
     EXECUTOR_REGISTRY.grok.command=binary
-    EXECUTOR_REGISTRY.grok.buildArgs=EXECUTOR_REGISTRY.codex.buildArgs
+    EXECUTOR_REGISTRY.grok.buildArgs=(opts,file,prompt)=>[...EXECUTOR_REGISTRY.codex.buildArgs(opts,file,prompt).slice(0,-1),prompt]
     process.env.TELEGRAM_BOT_TOKEN='must-not-reach-host-cli'
     const sharedAlias=path.join(root,'shared-alias')
     await symlink(root,sharedAlias)
@@ -56,9 +56,8 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       assert.equal(result.cwd,await realpath(agent.workspace))
       assert.equal(result.control,agent.controlDir)
       assert.equal(result.token,undefined)
-      assert.match(result.args.join(' '),/Repair capability is available/ )
-      assert.match(result.args.join(' '),/Question requirements, delete unnecessary behavior/ )
-      assert.doesNotMatch(result.args.join(' '),/you are its repairer/)
+      assert.equal(result.args.at(-1),'test')
+      assert.equal(result.repair,'true')
       assert.ok(result.args.includes(agent.toolsHome))
       assert.ok(result.args.includes(await realpath(root)))
       assert.ok(!result.args.includes('/wrong'))
@@ -74,8 +73,8 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     client.stdin.end(JSON.stringify({texts:['Telegram message'],options:{cli:'grok',timeoutMs:5000,codexAutoCompactTokens:32000,repairEnabled:false}}))
     assert.equal(await new Promise(resolve=>client.once('close',resolve)),0,stderr)
     assert.equal(JSON.parse(stdout).run,'tg_6293305')
-    assert.match(JSON.parse(stdout).args.join(' '),/Automatic repair is disabled/)
-    assert.doesNotMatch(JSON.parse(stdout).args.join(' '),/you are its repairer/)
+    assert.equal(JSON.parse(stdout).args.at(-1),'Telegram message')
+    assert.equal(JSON.parse(stdout).repair,'false')
     assert.ok(JSON.parse(stdout).args.includes('model_auto_compact_token_limit=32000'))
     const eventId='event_'+'a'.repeat(64)
     await ownerRun(agents[0].controlDir, eventId, {sourceId:'fixture',bindingId:'binding',eventIds:['1']})
