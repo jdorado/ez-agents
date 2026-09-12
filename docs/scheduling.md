@@ -109,6 +109,15 @@ artifacts are retained. The agent sends through the normal Telegram outbox;
 `completed` means executor exit, while provider delivery is recorded separately.
 A timeout or ambiguous send must not cause blind replay of the whole task.
 
+## Failure-review stop
+
+A schedule using `--when unreviewed-failures` stops dispatching its current
+revision after one of its own runs fails. The failed receipt remains available
+through `runs`/`run`; no new retry queue or automatic repair task is created.
+The paired owner or authorized maintainer diagnoses it and explicitly edits the
+schedule to resume. Marking the failure reviewed or pause/resume alone does not
+clear the stop. Ordinary recurring tasks retain their existing failure behavior.
+
 ## QA
 
 `pnpm verify` covers recurrence/DST, restart deduplication, authority revocation,

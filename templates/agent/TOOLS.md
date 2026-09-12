@@ -60,7 +60,8 @@ with `/goal` followed by the objective. This uses Codex's native persistent sess
 and goal command; Codex owns automatic continuation across turns. Ordinary tasks
 need no goal. Use native subagents when useful. Ez does not implement goals.
 A background task should finish its own work,
-verify the outcome and send the owner its result. Keep task writes in its own
+verify the outcome and follow the task’s notification policy. Send requested
+results; stay quiet on unchanged, non-actionable monitoring. Keep task writes in its own
 directory; coordinate shared files and external records before parallel writes.
 
 `pause`/`remove` stop future occurrences; `cancel RUN_ID` stops that task. `/stop`

@@ -14,7 +14,7 @@ import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { Bot, InlineKeyboard, InputFile, GrammyError, type Context } from 'grammy'
+import { Bot, InlineKeyboard, InputFile, GrammyError, HttpError, type Context } from 'grammy'
 import type { ChildProcess } from 'node:child_process'
 import { isOwner, ownsRun } from './identity.js'
 import type { Update } from 'grammy/types'
@@ -84,6 +84,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let activeChild: ChildProcess | null = null
   let shuttingDown = false
   let wakePollRetry: (() => void) | undefined
+  const pollingAbort = new AbortController()
   let nextSendAt = 0
   const paceSend = async () => {
     const delay = nextSendAt - Date.now()
@@ -967,6 +968,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let stopWork: Promise<void> | undefined
   const stop = (): Promise<void> => stopWork ?? (stopWork = (async () => {
     shuttingDown = true
+    pollingAbort.abort()
     wakePollRetry?.()
     if (intakeTimer) clearTimeout(intakeTimer)
     if (sourceTimer) clearInterval(sourceTimer)
@@ -1026,13 +1028,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
       scheduleIntake()
       // Telegram polling is a delivery surface, not the scheduler or executor.
-      // A transient poller conflict must not terminate already-authorized work.
+      // grammY owns in-poll reconnects. Escaped permanent faults wait for
+      // intervention without restarting setup or terminating authorized work.
       while (!shuttingDown) {
         try {
-          await bot.api.deleteWebhook({ drop_pending_updates: false })
           await bot.api.setMyCommands(commands)
           await bot.api.setMyCommands(commands, { scope: { type: 'all_private_chats' } })
-          await bot.init()
+          // grammY types its Node signal with the older abort-controller shim.
+          await bot.init(pollingAbort.signal as unknown as Parameters<typeof bot.init>[0])
+          if (shuttingDown) break
           await bot.start({
             drop_pending_updates: false,
             onStart: (botInfo) => console.log(`✓ Bot @${botInfo.username} polling for messages...`),
@@ -1040,15 +1044,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (!shuttingDown) throw new Error('Telegram polling stopped unexpectedly')
         } catch (error) {
           if (shuttingDown) break
-          console.error('Telegram polling interrupted; keeping existing work alive', safeError(error))
+          const transient = error instanceof HttpError || (error instanceof GrammyError && (error.error_code === 429 || error.error_code >= 500))
+          console.error(transient ? 'Telegram transport interrupted; retrying' : 'Telegram polling stopped; repair configuration and restart the relay. Existing work remains active', safeError(error))
           await new Promise<void>((resolve) => {
-            let timer: ReturnType<typeof setTimeout>
+            let timer: ReturnType<typeof setTimeout> | undefined
             const wake = () => {
               clearTimeout(timer)
               if (wakePollRetry === wake) wakePollRetry = undefined
               resolve()
             }
-            timer = setTimeout(wake, 5000)
+            if (transient) timer = setTimeout(wake, 5000)
             wakePollRetry = wake
           })
         }

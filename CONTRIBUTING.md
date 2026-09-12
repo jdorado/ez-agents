@@ -8,7 +8,9 @@ repository. Public docs describe shipped behavior and explicit limitations.
 1. Start one coherent change in a dedicated worktree from fetched origin/main,
    following the isolated-work rules below. Preserve unrelated work.
 2. Install Node 22+ and pnpm 10.30.3. Run `pnpm install --frozen-lockfile`.
-3. Change the code, user instructions and focused tests together. Authority,
+3. Apply AGENTS.md’s KISS change gate: identify the failed boundary, remove
+   unnecessary behavior first, and explain why remaining code is needed. Change
+   the code, user instructions and focused tests together. Authority,
    paths, credentials, cancellation and uncertain writes need negative tests.
 4. Run `pnpm verify`, `npm run release:check` and `git diff --check`.
    Packaging/runtime changes also need the Docker checks in docs/releasing.md.

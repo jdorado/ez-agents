@@ -268,7 +268,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await fs.writeFile(path.join(fake,provider),`#!${process.execPath}\nif(${JSON.stringify(provider)}==='corepack'&&process.argv[2]!=='pnpm@10.30.3')throw Error('Unpinned manager');if(process.argv.includes('--version')){console.log('10.30.3');process.exit(0)}const fs=require('fs');fs.mkdirSync('node_modules/tsx/dist',{recursive:true});fs.writeFileSync('node_modules/tsx/dist/loader.mjs','');`,{mode:0o755});
  await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nconst fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a.includes('ps'))console.log('cid');if(a[0]==='inspect')console.log('sha256:'+'a'.repeat(64));`,{mode:0o755});
  const wrapper=path.join(f.root,'supervisor.mjs'),module=new URL('../src/updates/supervisor.mjs',import.meta.url).href;
- await fs.writeFile(wrapper,`import {supervise} from ${JSON.stringify(module)};const a=new AbortController();process.on('SIGTERM',()=>a.abort());await supervise(${JSON.stringify(f.config.deploymentDir)},a.signal,{discover:async()=>[]});`);
+ await fs.writeFile(wrapper,`import {supervise} from ${JSON.stringify(module)};const a=new AbortController();process.on('SIGTERM',()=>a.abort());await supervise(${JSON.stringify(f.config.deploymentDir)},a.signal,{discover:async()=>{${provider==='pnpm' ? "throw Error('Synthetic discovery failure')" : 'return []'}}});`);
  const start=()=>{const p=spawn(process.execPath,[wrapper],{env:{...process.env,PATH:fake},stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);return {p,output:()=>output};};
  const wait=async fn=>{for(let i=0;i<150;i++){const result=await fn();if(result)return result;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out');};
  const first=start();t.after(()=>{first.p.kill('SIGTERM');});
@@ -282,6 +282,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await fs.rm(running);
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));if(j.status==='failed'||j.status==='rolled-back')throw Error(JSON.stringify(j)+first.output());return j.status==='completed';});
  const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);assert(first.p.exitCode===null);
+ if(provider==='pnpm'){assert.match(first.output(),/Update discovery failed; host remains running/);assert.doesNotMatch(first.output(),/Synthetic discovery failure/);}
  // Completion is persisted before the supervisor publishes its attention receipt.
  await wait(async()=>{
   try{return (await read(path.join(f.agent.controlDir,'update-attention.json'))).id===digest(job.id);}

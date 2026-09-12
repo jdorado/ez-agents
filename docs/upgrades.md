@@ -217,3 +217,8 @@ preferences and local conventions in the workspace's `AGENTS.md`, `SOUL.md`,
 `USER.md` and memory files; upgrades preserve them. Shared guidance does not
 grant permissions, and explicit owner instructions take precedence over its
 defaults within existing execution permissions.
+
+Update discovery runs independently of active host work. A discovery failure is
+logged locally and retried at the next regular six-hour check; it does not stop
+the host or create a repair task. Inspect `ez updates check` for target diagnostics.
+Actual update transactions retain their existing admission, drain and rollback rules.
