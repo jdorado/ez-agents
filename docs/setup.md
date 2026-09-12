@@ -199,7 +199,7 @@ node /absolute/ezenciel_agents/bin/ezenciel-agents-tools.mjs init \
 This binds a private `ez` and preserves native command access. The default catalog
 is empty. Do not supply a plugin catalog during first-time main onboarding.
 Initialization
-adds discovery instructions to the mind's TOOLS.md. Verify `tools/bin/ez plugins
+adds discovery instructions to the mind's AGENTS.md. Verify `tools/bin/ez plugins
 available` before the first agent turn. Also execute the agent-bound
 `ezenciel-agents-message --help` through the selected CLI sandbox and verify
 its actual tool output, so absent launchers or blocked execution are detected

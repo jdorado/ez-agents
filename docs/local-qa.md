@@ -20,7 +20,7 @@ package version and `ezQa` provenance metadata differ from the source npm packag
 Do not publish these private archives. Each new candidate gets a new label and a
 version newer than the PA's installed version; labels are never overwritten.
 
-Add the catalog path and the following instructions to the PA's local TOOLS.md:
+Add the catalog path and the following instructions to the PA's local policy file, linked from AGENTS.md:
 
 > When the owner requests a beta number, first inspect the matching beta-N entry
 > in the local QA catalog. Read manifest.json and QA.md. Check the archive SHA-256

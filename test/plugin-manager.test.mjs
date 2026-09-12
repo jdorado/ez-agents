@@ -6,7 +6,7 @@ import path from 'node:path';
 import {execFile,spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {promisify} from 'node:util';
-import {snapshot,init as initManager,validate,compose,locked} from '../src/plugins/manager.mjs';
+import {snapshot,init as initManager,validate,compose,locked,bindToolDiscovery} from '../src/plugins/manager.mjs';
 // Synthetic manager tests explicitly opt out of the product's default packages.
 async function init(home,workspace,catalog,hostConfig) {
  const file=path.join(path.dirname(home),'test-catalog.json');
@@ -53,14 +53,40 @@ test('catalog paths resolve relative to the catalog and pin each new agent indep
  assert.notEqual(first.sample.revision,next.catalog.sample.revision);
  assert.deepEqual(JSON.parse((await f.call('plugins','available')).stdout),first);
 });
-test('initialization seeds tool guidance and preserves existing mind notes',async t=>{
+test('native discovery binding preserves notes and never seeds a tool inventory',async t=>{
+ const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),notes=path.join(f.workspace,'TOOLS.md');
+ await fs.writeFile(instructions,'Owner mandate\n');
+ await init(f.home,f.workspace);
+ await assert.rejects(fs.access(notes),{code:'ENOENT'});
+ const first=await fs.readFile(instructions,'utf8');assert(first.startsWith('Owner mandate\n'));assert(first.includes(f.home+'/bin/ez'));
+ await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(instructions,'utf8'),first);
+ await fs.writeFile(notes,'Legacy policy');
+ await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(notes,'utf8'),'Legacy policy');
+ await fs.writeFile(path.join(f.workspace,'AGENTS.override.md'),'Override mandate');
+ await bindToolDiscovery(f.home,f.workspace);assert.match(await fs.readFile(path.join(f.workspace,'AGENTS.override.md'),'utf8'),/Override mandate/);
+ await fs.writeFile(instructions,'<!-- ez tools: begin -->broken');
+ await assert.rejects(bindToolDiscovery(f.home,f.workspace),/Malformed/);
+ assert.equal(await fs.readFile(instructions,'utf8'),'<!-- ez tools: begin -->broken');
+ await fs.rm(instructions);await fs.symlink(notes,instructions);
+ await assert.rejects(bindToolDiscovery(f.home,f.workspace),/regular file/);
+ assert.equal(await fs.readFile(notes,'utf8'),'Legacy policy');
+});
+test('installed snippets follow install, upgrade and uninstall without files or Docker reads',async t=>{
  const f=await fixture(t);await init(f.home,f.workspace);
- const template=await fs.readFile(new URL('../templates/agent/TOOLS.md',import.meta.url),'utf8');
- const target=path.join(f.workspace,'TOOLS.md');
- assert.ok((await fs.readFile(target,'utf8')).startsWith(template));
- const existing='Owner-maintained tool notes\n';await fs.writeFile(target,existing);
- await init(path.join(f.root,'other-tools'),f.workspace);
- assert.ok((await fs.readFile(target,'utf8')).startsWith(existing));
+ const details=async()=>JSON.parse((await f.call('tools','list','--details')).stdout);
+ assert.deepEqual(await details(),{});
+ for(const description of ['Synthetic capability','Updated capability']) {
+  await fs.writeFile(path.join(f.source,'ez-plugin.json'),JSON.stringify({...f.manifest,description}));
+  const p=await snapshot(f.source);
+  await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+  const before=await fs.readFile(f.log,'utf8'),index=await details();
+  assert.equal(index.sample.description,description);assert.deepEqual(index.sample.commands,['ez sample --help']);
+  assert.equal(await fs.readFile(index.sample.skills[0],'utf8'),'Synthetic');
+  assert.equal(await fs.readFile(f.log,'utf8'),before);
+  assert.deepEqual(JSON.parse((await f.call('tools','list')).stdout),{sample:'sample'});
+  await f.call('plugins','uninstall','sample');assert.deepEqual(await details(),{});
+ }
+ await assert.rejects(fs.access(path.join(f.workspace,'TOOLS.md')),{code:'ENOENT'});
 });
 test('bound launcher installs without startup; literal args and exit codes; scopes and secrets',async t=>{
  const f=await fixture(t);const p=await snapshot(f.source);await init(f.home,f.workspace);
@@ -229,8 +255,8 @@ test('standalone CLI has discoverable setup, independent guidance and status wit
  const help=JSON.parse((await exec(process.execPath,[bin,'--help'])).stdout);
  assert.match(help.usage,/--standalone/);
  await exec(process.execPath,[bin,'init','--standalone','--home',f.home,'--workspace',f.workspace],{env:f.env});
- const notes=await fs.readFile(path.join(f.workspace,'TOOLS.md'),'utf8');
- assert.match(notes,/existing local CLI/);
+ const notes=await fs.readFile(path.join(f.workspace,'AGENTS.md'),'utf8');
+ assert.match(notes,/tools list --details/);
  assert.doesNotMatch(notes,/Finish the main Telegram|ezenciel-agents-message/);
  const launcher=path.join(f.home,'bin','ez');
  const status=JSON.parse((await exec(launcher,['status'],{cwd:f.root,env:f.env})).stdout);

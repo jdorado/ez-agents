@@ -20,7 +20,7 @@ visible in `updates check` and private `tools/updates/available.json`.
 
 Use normal setup and initialize the registry with this deployment's
 `host-executor.json`. This binds `ez updates`, the active package root and the
-Software updates guidance in TOOLS.md. Start `ezenciel-agents-host` using the
+native registry discovery guidance in AGENTS.md. Start `ezenciel-agents-host` using the
 normal OS service template. The host service must use the existing user's Node,
 pnpm (or Corepack) and Docker access. Never put tokens in its environment. Keep the original
 package directory: its small bootstrap remains the service entry point and loads

@@ -38,7 +38,7 @@ test('fresh mind is private; repeat initialization preserves customization and o
   const root = await mkdtemp(path.join(tmpdir(), 'ez-mind-'))
   const workspace = path.join(root, 'agent')
   try {
-    assert.equal((await initializeWorkspace(workspace)).length, 4)
+    assert.equal((await initializeWorkspace(workspace)).length, 3)
     assert.equal((await stat(path.join(workspace, 'SOUL.md'))).mode & 0o777, 0o600)
     assert.ok(!(await readdir(workspace)).includes('MEMORY.md'))
     await writeFile(path.join(workspace, 'SOUL.md'), 'A customized research partner')

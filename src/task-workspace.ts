@@ -17,7 +17,7 @@ export async function taskWorkspace(workspace: string, id: string): Promise<stri
       await writeFile(join(target,name),content,{mode:0o600,flag:'wx'})
     }catch(e){if(!['ENOENT','EEXIST'].includes((e as NodeJS.ErrnoException).code || ''))throw e}
   }
-  try{await writeFile(join(target,'AGENTS.md'),`# Background task\n\nYou work for the same owner as the main agent. Use SOUL.md, USER.md and TOOLS.md only when relevant to this task.\nKeep writes and artifacts in this task directory; do not modify the parent agent's mind or other tasks. Follow the task's notification policy. Send requested results with ezenciel-agents-message and verify delivery before completing the task; native final text does not reach the owner.\n`,{mode:0o600,flag:'wx'})}
+  try{await writeFile(join(target,'AGENTS.md'),`# Background task\n\nYou work for the same owner as the main agent. Use local identity files and the owner policy pointers in ${join(workspace,'AGENTS.md')} only when relevant to this task.\nKeep writes and artifacts in this task directory; do not modify the parent agent's mind or other tasks. Follow the task's notification policy. Send requested results with ezenciel-agents-message and verify delivery before completing the task; native final text does not reach the owner.\n`,{mode:0o600,flag:'wx'})}
   catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e}
   await installAgentGuidance(target)
   return target

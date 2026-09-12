@@ -206,8 +206,8 @@ restart and shutdown. The installing agent registers the small host CLI transpor
 
 The selected host CLI runs in this agent's persistent workspace and owns its
 Markdown/work files. New conversations and AI changes preserve those files.
-`AGENTS.md`, `SOUL.md`, `USER.md`, and `TOOLS.md` are seeded; `MEMORY.md` is
-optional. Received files go in `inbox/`, tasks and deliverables in `work/`.
+`AGENTS.md`, `SOUL.md`, and `USER.md` are seeded; `MEMORY.md` is
+optional. Installed plugin snippets and skill paths come from `ez tools list --details`; no tool inventory file needs maintenance. Received files go in `inbox/`, tasks and deliverables in `work/`.
 Credentials and control state stay outside the mind. File separation is not
 OS isolation against a process running as the same user.
 

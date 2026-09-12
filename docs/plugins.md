@@ -28,7 +28,7 @@ Without `--catalog`, init loads an empty packaged catalog. Keep it empty for
 initial main onboarding; no sibling repository, broker or provider account is
 needed. Finish owner pairing and verify an actual Telegram agent reply first.
 Init creates a private registry and `tools/bin/ez`, adds a
-TOOLS.md discovery entry, and binds the matching host executor to that bin
+managed AGENTS.md registry locator, and binds the matching host executor to that bin
 folder. Native binaries are linked through; an existing `ez` collision fails.
 Run before starting the host executor. For an already running installation,
 place a symlink to the returned launcher in that agent's existing private bin
@@ -294,3 +294,16 @@ disabled for that source. Enable the normal shared embedding worker through
 and original readback from the actual executor. Document any differences between
 indexed snapshots and current originals; do not replace Library with private
 QMD runtimes or edit installed Compose/package files to bypass missing support.
+
+## Generated capability discovery
+
+`ez tools list --details` generates a compact index directly from installed
+`ez-plugin.json` manifests: each plugin supplies its `description`, command aliases
+and `skills`. Descriptions are limited to 200 characters in this view; full
+instructions stay in the skill. Installation, replacement and removal are reflected
+on the next read, without hooks, LLM calls or a cached inventory file.
+
+`ez tools list` retains its alias mapping for existing clients. Native AGENTS.md
+contains only the agent-bound discovery shortcut. New workspaces do not seed
+TOOLS.md; upgrades preserve legacy notes without rewriting them. Keep owner/account
+policies in agent instructions or linked policy files, separate from plugin metadata.
