@@ -10,7 +10,7 @@ background work; keep task prompts and native goals concise (under 4,000 charact
 
 Workspace Markdown holds identity, context and policy. Read what the task needs,
 not everything by default. Keep notes short, current and linked to canonical
-sources. Background task directories inherit the agent's workspace instructions.
+sources. Use the engine's native workspace instruction discovery.
 
 `ez tools list --details` discovers installed plugins and skills; each CLI's
 `--help` describes its operations. `ezenciel-agents-schedule context` exposes run

@@ -122,7 +122,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       } else if (opts.sessionId) {
         args.push('--session-id', opts.sessionId)
       }
-      args.push('--print', '--dangerously-skip-permissions', '--append-system-prompt-file', path.join(opts.workspace, 'AGENTS.md'))
+      args.push('--print', '--dangerously-skip-permissions')
       if (opts.model) args.push('--model', opts.model)
       if (opts.effort) args.push('--effort', opts.effort)
       return args
@@ -147,8 +147,6 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
         'plain',
         '--always-approve',
         '--verbatim',
-        '--max-turns',
-        '8',
       )
       return args
     },
