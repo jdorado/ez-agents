@@ -1,9 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { runCodexSession } from '../src/codex-session.js'
 
-for(const mode of ['goal','plain','tool-goal','blocked','disconnect','approval','late-limit','early-limit','early-clear','missing-goal'])test(`native Codex session: ${mode}`,async()=>{
+for(const mode of ['goal','long-goal','plain','tool-goal','blocked','disconnect','approval','late-limit','early-limit','early-clear','missing-goal'])test(`native Codex session: ${mode}`,async t=>{
+  const root=await mkdtemp(join(tmpdir(),'ez-native-goal-'))
+  t.after(()=>rm(root,{recursive:true,force:true}))
+  const promptFile=join(root,'prompt with spaces.txt')
+  const prompt=mode==='long-goal'?'/goal Complete the research.\n'+'Full workflow context.\n'.repeat(400)+'FINAL_COMPLETION_CRITERION':'test'
+  await writeFile(promptFile,prompt,{mode:0o600})
   const requests:string[]=[],output:string[]=[]
   const program=`
 const rl=require('readline').createInterface({input:process.stdin});
@@ -16,6 +24,7 @@ rl.on('line',line=>{const q=JSON.parse(line);if(!q.id)return;
 if(q.method==='initialize')return send({id:q.id,result:{}});
 if(q.method==='thread/start')return send({id:q.id,result:{thread:{id:'native-test'}}});
 if(q.method==='thread/goal/set'||q.method==='turn/start'){
+ if(q.method==='thread/goal/set' && q.params.objective.length>4000)return send({id:q.id,error:{message:'Goal objective exceeds 4000 characters'}});
  send({id:q.id,result:{turn:{id:'one'}}});
  if(${JSON.stringify(mode)}==='early-limit')return event('thread/goal/updated',{goal:{status:'usageLimited'}});
  if(${JSON.stringify(mode)}==='early-clear')return event('thread/goal/cleared',{});
@@ -33,17 +42,24 @@ if(q.method==='thread/goal/get'){
  }
 }
 });setInterval(()=>{},1000);`
-  let threadConfig:any
+  let threadConfig:any,goalObjective:string|undefined,turnPrompt:string|undefined
   const launch=()=>{
     const child=spawn(process.execPath,['-e',program],{stdio:['pipe','pipe','pipe'],detached:process.platform!=='win32'})
     const write=child.stdin.write.bind(child.stdin)
-    child.stdin.write=((chunk:any,...args:any[])=>{try{requests.push(JSON.parse(String(chunk)).method);if(JSON.parse(String(chunk)).method==='thread/start')threadConfig=JSON.parse(String(chunk)).params.config}catch{};return (write as any)(chunk,...args)}) as typeof child.stdin.write
+    child.stdin.write=((chunk:any,...args:any[])=>{try{const q=JSON.parse(String(chunk));if(q.method==='thread/goal/set')goalObjective=q.params.objective;if(q.method==='turn/start')turnPrompt=q.params.input[0].text;requests.push(q.method);if(JSON.parse(String(chunk)).method==='thread/start')threadConfig=JSON.parse(String(chunk)).params.config}catch{};return (write as any)(chunk,...args)}) as typeof child.stdin.write
     return child
   }
   const plain=['plain','tool-goal'].includes(mode)
-  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',prompt:'test',goal:!plain},{launch,emit:line=>output.push(line)})
+  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',prompt,promptFile,goal:!plain},{launch,emit:line=>output.push(line)})
+  if(plain)assert.equal(turnPrompt,prompt)
+  else {
+    assert.ok(goalObjective && goalObjective.length<=4000)
+    assert.ok(goalObjective.includes(JSON.stringify(promptFile)))
+    assert.equal(await readFile(promptFile,'utf8'),prompt,'full instructions remain available throughout native continuation')
+  }
+  if(mode==='long-goal')assert.ok(prompt.length>4000)
   assert.ok(threadConfig['sandbox_workspace_write.writable_roots'].includes('/canonical'))
-  assert.equal(result,['plain','goal','tool-goal'].includes(mode)?0:1)
+  assert.equal(result,['plain','goal','long-goal','tool-goal'].includes(mode)?0:1)
   assert.equal(requests.filter(x=>x==='turn/start').length,plain?1:0,'transport must not send goal continuation prompts')
   assert.equal(requests.filter(x=>x==='thread/goal/set').length,plain?0:1)
   if(mode==='goal')assert.equal(requests.filter(x=>x==='thread/goal/get').length,2,'must wait for the second turn to complete')

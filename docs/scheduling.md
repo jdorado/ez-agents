@@ -64,7 +64,11 @@ are an executor capability, configured through instructions. Ez has no goal API,
 continuation loop or rule equating a process exit with goal achievement.
 
 Scheduled Codex CLI tasks use a dedicated native app-server session, tested with
-CLI 0.153.4. A leading `/goal` in the instruction text maps to the same native
+CLI 0.153.4. The expanded worker instructions stay in the private per-run prompt file for
+the lifetime of the session. Goal admission receives a short objective pointing
+to that file, so injected context does not count against the 4,000-character
+objective limit and no workflow instructions are truncated.
+A leading `/goal` in the instruction text maps to the same native
 goal command used by the interactive CLI. Codex automatically starts subsequent
 turns; the transport stays connected until the native goal is complete or stops
 for attention. It sends no continuation prompts and stores no Ez goal state.

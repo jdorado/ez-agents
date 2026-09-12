@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { terminateJob } from './executor.js'
 
-type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;model?:string;effort?:string;prompt:string;goal:boolean}
+type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;model?:string;effort?:string;prompt:string;promptFile:string;goal:boolean}
 type Message = {id?:number;method?:string;params?:any;result?:any;error?:{message:string;code?:number}}
 
 // Keep Codex's native session alive. Codex itself starts goal continuation turns;
@@ -78,9 +78,11 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     if(!threadId)throw new Error('Codex did not return a native thread ID')
     emit(JSON.stringify({type:'thread.started',thread_id:threadId}))
     if(options.goal){
+      // Keep the expanded instructions in the existing per-run prompt file;
+      // native goal admission limits the objective to 4,000 characters.
       // This is the native request used by the interactive /goal command.
       // Setting it active starts work in Codex; do not also send turn/start.
-      const result=await request('thread/goal/set',{threadId,objective:options.prompt,status:'active'})
+      const result=await request('thread/goal/set',{threadId,objective:`Complete the task in ${JSON.stringify(options.promptFile)}. Read the full file before acting and follow its instructions and completion criteria.`,status:'active'})
       if(result.goal)settled(result.goal)
     }else await request('turn/start',{threadId,input:[{type:'text',text:options.prompt}],model:options.model,effort:options.effort})
     return await done

@@ -335,7 +335,7 @@ export const startExecutorJob = async (
   })
   child.stdin?.end(host
     ? JSON.stringify({texts,options:{...options,onSession:undefined}})
-    : nativeSession ? JSON.stringify({...options,onSession:undefined,prompt:promptText,goal:/^\s*\/goal\s+\S/.test(texts[0] || '')})
+    : nativeSession ? JSON.stringify({...options,onSession:undefined,prompt:promptText,promptFile,goal:/^\s*\/goal\s+\S/.test(texts[0] || '')})
     : gui ? JSON.stringify({prompt:promptText,options:{...options,onSession:undefined}}) : undefined)
   const timeout = options.timeoutMs > 0 ? setTimeout(() => terminateJob(child), options.timeoutMs) : undefined
   let stdout = ''
