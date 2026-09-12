@@ -14,7 +14,12 @@ runs the normal CLI transport. It checks npm every six hours while running and
 queues an owner-bound maintenance turn only when an automatic channel changes.
 No owner means no maintenance executor. Normal user work and maintenance share
 one serial queue. Checks use the installed scoped npm identity; failures are
-visible in `updates check` and private `tools/updates/available.json`.
+visible in `updates check` and private `tools/updates/available.json`. Plugins marked
+`private: true` in their package metadata are reported as local-source updates
+only, without querying public npm; this does not mean they are up to date.
+Explicit local-file updates retain the existing release-contract checks; plugins
+without that contract use their reviewed local-source installation procedure.
+Public packages still receive discovery checks under a manual policy.
 
 ## Installation and scope
 

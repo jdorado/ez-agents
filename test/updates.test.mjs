@@ -332,3 +332,42 @@ test('update discovery follows latest while preserving legacy beta and stable-on
  data.versions['0.2.0-beta.2'].name='@wrong/package';await assert.rejects(registryCandidate(name,'beta'),/identity|version mismatch/i);
  data.name='@wrong/package';await assert.rejects(registryCandidate(name,'beta'),/identity mismatch/i);
 });
+
+
+test('private plugins skip npm discovery while private main builds and public manual targets still check',async t=>{
+ const f=await fixture(t,'plugin');
+ const pkg=await read(path.join(f.old,'package.json'));pkg.private=true;
+ await atomic(path.join(f.old,'package.json'),pkg);
+ const calls=[];const original=globalThis.fetch;
+ globalThis.fetch=async url=>{calls.push(String(url));return new Response(JSON.stringify({name:pkg.name,'dist-tags':{latest:'0.1.1'},versions:{'0.1.1':{name:pkg.name,version:'0.1.1'}}}));};
+ t.after(()=>globalThis.fetch=original);
+ const results=await command(f.home,['check']);
+ assert.equal(calls.length,1); // fixture main shares the package root; its private flag must not disable core discovery
+ assert.equal(results[0].target,'main');assert.equal(results[0].newer,true);
+ assert.deepEqual(results[1],{target:'sample',installed:'0.1.0',available:null,newer:false,policy:{automatic:true,channel:'beta'},package:pkg.name,updates:'Private plugin; public npm discovery unavailable. Use the reviewed local source.'});
+ for(const privacy of [false,undefined]) {
+  if(privacy===undefined)delete pkg.private;else pkg.private=privacy;
+  await atomic(path.join(f.old,'package.json'),pkg);
+  await command(f.home,['policy','sample','manual']);calls.length=0;
+  const checked=await command(f.home,['check']);assert.equal(calls.length,2);
+  assert.equal(checked[1].newer,true);assert.equal(checked[1].policy.automatic,false);
+ }
+ for(const failure of [404,401,'network']) {
+  globalThis.fetch=async()=>{if(failure==='network')throw Error('network unavailable');return new Response('',{status:failure});};
+  const checked=await command(f.home,['check']);
+  assert.equal(checked[1].error,failure==='network'?'network unavailable':`npm metadata unavailable (${failure})`);
+ }
+});
+
+test('private plugins retain explicit local-file preparation and application guards',async t=>{
+ const f=await fixture(t,'plugin');
+ for(const root of [f.old,f.source]) {
+  const pkg=await read(path.join(root,'package.json'));pkg.private=true;await atomic(path.join(root,'package.json'),pkg);
+ }
+ const job=await prepare(f.home,f.target,{file:await f.pack()});
+ assert.equal(job.status,'prepared');assert.equal(job.version,'0.1.1');
+ await atomic(path.join(f.home,'updates/supervisor.json'),{at:Date.now()});
+ await assert.rejects(submit(f.home,job.id,true),/Local candidates require an explicit upgrade request/);
+ const submitted=await submit(f.home,job.id,false);assert.equal(submitted.status,'queued');
+ const result=await perform(f.home,submitted,runtime(f));assert.equal(result.status,'completed');
+});

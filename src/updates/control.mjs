@@ -34,6 +34,10 @@ export async function check(home) {
   for(const target of ['main',...Object.keys(registry.plugins)]) {
     try {
       const old=await installed(home,target),p=await policy(home,target);
+      if(target!=='main'&&old.pkg.private===true) {
+        results.push({target,installed:old.pkg.version,available:null,newer:false,policy:p,package:old.pkg.name,updates:'Private plugin; public npm discovery unavailable. Use the reviewed local source.'});
+        continue;
+      }
       const candidate=await registryCandidate(old.pkg.name,p.channel);
       results.push({target,installed:old.pkg.version,available:candidate?.version??null,newer:Boolean(candidate&&newer(candidate.version,old.pkg.version)),policy:p,package:old.pkg.name});
     }catch(error){results.push({target,error:error.message});}
