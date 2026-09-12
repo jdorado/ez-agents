@@ -201,7 +201,7 @@ test('owner group discovery routes only to the private chat and rechecks identit
   } finally { await f.close() }
 })
 
-test('four-item menu is owner-only; available AI choices work and forged/stale buttons cannot change settings', async () => {
+test('three-item menu is owner-only and removes the retired settings control', async () => {
   const f = await fixture()
   const callback = (id: number, data: string, user = 101): Update => ({
     update_id: id,
@@ -211,28 +211,9 @@ test('four-item menu is owner-only; available AI choices work and forged/stale b
   try {
     await f.relay.bot.handleUpdate(message(1, '/menu'))
     assert.deepEqual(f.keyboards.at(-1)!.flat().map((b) => b.text),
-      ['New conversation', 'Choose AI', 'Work status', 'Settings'])
-    await f.relay.bot.handleUpdate(message(2, '/ai'))
-    const pick = f.keyboards.at(-1)!.flat()[0].callback_data
-    const store = new ControlStore(f.dir, 1000)
-    await f.relay.bot.handleUpdate(callback(3, pick, 202))
-    assert.equal(await store.getActiveSession(), null)
-    await f.relay.bot.handleUpdate(callback(4, 'ai:forged'))
-    assert.equal(await store.getActiveSession(), null)
-    await f.relay.bot.handleUpdate(callback(5, pick))
-    if (!(await store.getActiveSession())) {
-      let useNow = f.keyboards.at(-1)!.flat().find((button) => button.text === 'Use now')?.callback_data
-      if (!useNow) {
-        await f.relay.bot.handleUpdate(callback(6, f.keyboards.at(-1)!.flat()[0].callback_data))
-        useNow = f.keyboards.at(-1)!.flat().find((button) => button.text === 'Use now')!.callback_data
-      }
-      await f.relay.bot.handleUpdate(callback(7, useNow))
-    }
-    assert.ok(await store.getActiveSession())
-    await f.relay.bot.handleUpdate(callback(8, pick))
-    assert.match(f.replies.at(-1)!, /Menu expired/)
-    await f.relay.bot.handleUpdate(message(9, '/settings'))
-    assert.match(f.replies.at(-1)!, /Default for new conversations/)
+      ['New conversation', 'Choose AI', 'Work status'])
+    await f.relay.bot.handleUpdate(message(2, '/settings'))
+    assert.match(f.replies.at(-1)!, /Settings was removed.*Use \/ai/)
     await f.relay.bot.handleUpdate(message(8, '/status'))
     assert.ok(f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
     await f.relay.bot.handleUpdate(callback(9, 'menu:scheduled-tasks'))

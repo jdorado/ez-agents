@@ -550,6 +550,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     { command: 'retry', description: 'Retry the latest failed incoming batch' },
     { command: 'new', description: 'New conversation; keep workspace files' },
   ]
+  // Keep the retired command from becoming an agent prompt while old clients catch up.
+  const retiredCommands = ['/settings']
   const commands = mainCommands
   const controlCommand = (text?: string) => text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
   const statusKeyboard = () => new InlineKeyboard()
@@ -661,7 +663,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     const message = ctx.message
     const command = controlCommand(message?.text)
-    if (command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu').includes(command)) return next()
+    if (command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu', ...retiredCommands).includes(command)) return next()
     const ordinary = message && (message.text || message.photo || message.document || message.voice)
     const approval = ctx.callbackQuery?.data?.startsWith('approval:')
     if (!ordinary && !approval) return next()
@@ -674,8 +676,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
     const text = controlCommand(ctx.message.text)
 
-    if (text === '/ai' || text === '/settings') {
-      await aiMenu.list(ctx, text === '/settings')
+    if (text === '/ai') {
+      await aiMenu.list(ctx)
+      return
+    }
+    if (text === '/settings') {
+      await ctx.reply('Settings was removed. Use /ai to choose the client, model, and reasoning level.')
       return
     }
 
@@ -695,7 +701,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
 
-    if (config.channelBackendUrl && ['/new', '/ai', '/settings'].includes(text ?? '')) {
+    if (config.channelBackendUrl && ['/new', '/ai'].includes(text ?? '')) {
       await ctx.reply('Conversation and model settings are managed in the connected application.')
       return
     }
@@ -905,16 +911,19 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         })
         console.info('Approval decision recorded', { actionId, decision: isApproved ? 'approved' : 'denied' })
       }
-    } else if (config.channelBackendUrl && ['menu:new', 'menu:ai', 'menu:settings'].includes(data)) {
+    } else if (config.channelBackendUrl && ['menu:new', 'menu:ai'].includes(data)) {
       await ctx.answerCallbackQuery()
       await ctx.reply('Conversation and model settings are managed in the connected application.')
     } else if (await aiMenu.handle(ctx)) {
       return
     } else if (data.startsWith('menu:')) {
       const action = data.slice(5)
-      if (action === 'ai' || action === 'settings') {
+      if (action === 'ai') {
         await ctx.answerCallbackQuery()
-        await aiMenu.list(ctx, action === 'settings')
+        await aiMenu.list(ctx)
+      } else if (action === 'settings') {
+        await ctx.answerCallbackQuery({ text: 'Settings was removed; use Choose AI.' })
+        await aiMenu.list(ctx)
       } else if (action === 'retry') {
         await ctx.answerCallbackQuery()
         const id = await inbox.retryLatest(ctx.from.id, ctx.chat!.id, (await control.status()).owner)
