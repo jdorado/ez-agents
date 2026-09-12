@@ -8,6 +8,7 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
   console.log(
     'Usage: ezenciel-agents-message [--text-file <path> | --text <text>] [--document <path>] [--voice <text>] [--reply-to <id>]',
   )
+  console.log('Text: --text decodes \\n as a newline and \\\\ as a literal backslash; --text-file preserves file content.')
   process.exit(0)
 }
 
