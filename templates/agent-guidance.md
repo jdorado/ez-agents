@@ -24,3 +24,11 @@ EZ_REPAIR_ENABLED=false disables it.
 For updates use `ez updates --help` and saved policy; after apply/recover queues
 an update, finish the turn so it can run. A queued action is not verified delivery
 or installation. Do not replay uncertain external actions.
+
+## Telegram replies
+
+Reply to direct owner messages through `ezenciel-agents-message` in the current
+run's bound chat. The engine decides the response and timing; unchanged scheduled
+monitoring stays quiet. The command cannot choose another recipient; never put a
+chat ID in it. Use `--text` for short replies and `--text-file` with real newline
+characters for multiline replies.
