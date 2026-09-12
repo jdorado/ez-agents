@@ -1,4 +1,4 @@
-import { CODEX_DEFAULT_MODEL, DEFAULT_EFFORT, CODEX_CHAT_MODEL, CHAT_EFFORT, assertEffort, allowedEffort } from './model-policy.js'
+import { assertEffort, allowedEffort } from './model-policy.js'
 import { access, readFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
@@ -21,41 +21,19 @@ export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
   const c = v as ExecutionChoice | undefined
   return Boolean(c && /^[0-9a-f-]{36}$/i.test(c.sessionId) && isPreset(c.preset))
 }
-export const presetLabel = (p: AiPreset) => `${p.cli} · ${p.model || 'client default'} · ${p.effort || (
-  ['codex', 'codex-gui'].includes(p.cli) && p.model === 'gpt-5.6-luna' ? DEFAULT_EFFORT : 'default effort'
-)}`
+export const presetLabel = (p: AiPreset) => `${p.cli} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
 // The seed delegates model selection to the native client. Project its resolved
 // settings for status without pinning future conversations to that snapshot.
 export const statusPreset = (preset: AiPreset, discovered: AiPreset[]): AiPreset =>
-  preset.cli === 'codex' && !preset.model && !preset.effort
+  ['codex','codex-gui'].includes(preset.cli) && !preset.model && !preset.effort
     ? discovered.find((candidate) => candidate.cli === preset.cli) ?? preset
     : preset
 export const initialPreset = (cli: string): AiPreset => {
   const key = executorKey(cli)
-  return {
-    id: 'initial', name: `${resolveExecutor(key).name} · current setup`, cli: key,
-    ...(key === 'codex' || key === 'codex-gui'
-      ? { model: CODEX_DEFAULT_MODEL, effort: DEFAULT_EFFORT } : {}),
-    ...(key === 'opencode'
-      ? { model: process.env.OPENCODE_MODEL || 'opencode/nemotron-3.5-lightning-free' } : {}),
-  }
+  return {id:'initial', name:`${resolveExecutor(key).name} · current setup`, cli:key,...(key==='opencode' && process.env.OPENCODE_MODEL ? {model:process.env.OPENCODE_MODEL} : {})}
 }
-
-// Keep persisted state readable by older releases. Luna/max is an execution
-// default; the launcher resolves an omitted Luna effort back to max.
-export const persistedPreset = (preset: AiPreset): AiPreset => {
-  if (!['codex', 'codex-gui'].includes(preset.cli) || preset.model !== 'gpt-5.6-luna' || preset.effort !== 'max') return preset
-  const { effort: _effort, ...rollbackReadable } = preset
-  return rollbackReadable
-}
-
-// Conversation defaults are independent of durable work and explicit saved choices.
-export const chatPreset = (cli: string): AiPreset => {
-  const preset = initialPreset(cli)
-  return ['codex', 'codex-gui'].includes(preset.cli)
-    ? { ...preset, id: 'chat-default', name: 'Responsive chat', model: CODEX_CHAT_MODEL, effort: CHAT_EFFORT }
-    : preset
-}
+export const persistedPreset = (preset: AiPreset): AiPreset => preset
+export const chatPreset = (cli: string): AiPreset => ({...initialPreset(cli),id:'chat-default',name:'Current engine'})
 
 export const installed = async (cli: string): Promise<boolean> => {
   if (cli === 'codex-gui') return Boolean(await desktopCodexPath())

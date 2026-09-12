@@ -32,7 +32,7 @@ test('scheduled task view is read-only, owner-bound, and shows active task promp
   const entries = await readdir(scheduleDir)
   const text = scheduledTasksText(await scheduler.listActiveReadOnly([]), owner)
 
-  assert.equal(text, 'Active scheduled tasks\n\n• Daily report\n  codex · gpt-5.6-luna · max\n  Next: 2026-01-01 05:00:00 UTC\n  Read the ledger and send the owner a concise report.')
+  assert.equal(text, 'Active scheduled tasks\n\n• Daily report\n  codex · client default · default effort\n  Next: 2026-01-01 05:00:00 UTC\n  Read the ledger and send the owner a concise report.')
   assert.doesNotMatch(text, /Other owner task|This must never be visible/)
   assert.equal(await readFile(join(scheduleDir, 'owner-task.json'), 'utf8'), before)
   assert.deepEqual(await readdir(scheduleDir), entries)

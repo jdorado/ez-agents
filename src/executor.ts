@@ -86,9 +86,11 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
     name: 'codex', command: 'codex', description: 'Codex CLI',
     buildArgs: (opts, _file, prompt) => {
       const args = ['exec', '--skip-git-repo-check', '--json', '--sandbox', 'workspace-write', '--disable', 'memories', '--enable', 'skip_host_skill_discovery', '-c', 'approval_policy="never"']
-      const limit = opts.codexAutoCompactTokens ?? 64000
-      if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid Codex compaction token limit')
-      args.push('-c', `model_auto_compact_token_limit=${limit}`)
+      const limit = opts.codexAutoCompactTokens
+      if (limit !== undefined) {
+        if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid Codex compaction token limit')
+        args.push('-c', `model_auto_compact_token_limit=${limit}`)
+      }
       if (opts.controlDir) args.push('--add-dir', opts.controlDir)
       if (opts.sharedWorkspace) args.push('--add-dir', opts.sharedWorkspace)
       if (opts.toolsHome) args.push('--add-dir', opts.toolsHome, '-c', 'sandbox_workspace_write.network_access=true')

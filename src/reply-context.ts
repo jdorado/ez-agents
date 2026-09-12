@@ -15,12 +15,8 @@ async function snapshot(file: string, limit = 6000) {
     return (await readFile(file, 'utf8')).slice(-limit)
   } catch { return undefined }
 }
-export async function replyCall(controlDir: string, runId: string, workspace: string, name: string, args: Record<string, unknown>) {
-  const run = await requireOwnerExecution(controlDir, runId)
-  if (!run.replyOnly || !/^tg_[0-9]+$/.test(run.id) || run.scheduled) throw new Error('Invalid reply run')
-  if (Object.keys(args).some(key => !['text', ...(name === 'defer' ? ['model', 'effort'] : [])].includes(key))) throw new Error('Unexpected reply argument')
+export async function ownerConversationContext(controlDir: string, run: RunRecord, workspace?: string) {
   const runs = new RunStore(controlDir)
-  if (name === 'context') {
     const records = (await runs.list()).filter(r => r.chatId === run.chatId && r.telegramUserId === run.telegramUserId)
     const recent = records.filter(r => !r.external && !r.taskId && /^tg_/.test(r.id)).slice(-12)
     const active = [...records.filter(r => r.id !== run.id && ['running', 'queued'].includes(r.status)).slice(0,20), ...records.filter(r => r.status === 'failed').slice(-6)]
@@ -30,23 +26,31 @@ export async function replyCall(controlDir: string, runId: string, workspace: st
       try { const item = JSON.parse(await readFile(join(controlDir, 'outbox', file), 'utf8')); if (item.chatId === run.chatId && recentResults.some(r => r.id === item.runId)) messages.push({ runId: item.runId, text: item.text, createdAt: item.createdAt }) } catch {}
     }
     return { request: run.texts, selectedAI: run.execution?.preset, recent: recent.map(r => ({ id: r.id, texts: r.texts.join('\n').slice(-1600), status: r.status })), replies: messages.sort((a,b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-8).map(m => ({...m,text:String(m.text || '').slice(-2400)})),
-      agent: await snapshot(join(workspace, 'SOUL.md')), owner: await snapshot(join(workspace, 'USER.md')),
+      agent: workspace ? await snapshot(join(workspace, 'SOUL.md')) : undefined, owner: workspace ? await snapshot(join(workspace, 'USER.md')) : undefined,
       work: await Promise.all(active.map(async r => ({ id: r.id, name: r.scheduled?.id, status: r.status, startedAt: r.startedAt, endedAt: r.endedAt,
         request: r.texts.join('\n').slice(0,800), exitCode: r.exitCode, failureReason: r.failureReason, interrupted: r.interrupted,
         hostStarted: await snapshot(join(controlDir, 'host-executor', r.id + '.process.json')) ? true : await snapshot(join(controlDir, 'host-executor', r.id + '.request.json')) ? false : undefined,
-        progress: r.scheduled ? await snapshot(join(workspace, 'work', 'tasks', r.id, 'progress.md'), 1600) : undefined }))) }
+        progress: r.scheduled && workspace ? await snapshot(join(workspace, 'work', 'tasks', r.id, 'progress.md'), 1600) : undefined }))) }
+}
+export async function replyCall(controlDir: string, runId: string, workspace: string, name: string, args: Record<string, unknown>) {
+  const run = await requireOwnerExecution(controlDir, runId)
+  if (!run.replyOnly || !/^tg_[0-9]+$/.test(run.id) || run.scheduled) throw new Error('Invalid reply run')
+  if (Object.keys(args).some(key => !['text', ...(name === 'defer' ? ['model', 'effort'] : [])].includes(key))) throw new Error('Unexpected reply argument')
+  const runs = new RunStore(controlDir)
+  if (name === 'context') {
+    return ownerConversationContext(controlDir,run,workspace)
   }
-  if (typeof args.text !== 'string' || !args.text.trim() || args.text.length > 8000) throw new Error('Reply text required (maximum 8000 characters)')
-  if (name === 'send') return runs.enqueueMessage(runId, args.text, { id: `${runId}_busy_reply`, replyToMessageId: run.messageId })
+  if ((name !== 'defer' || args.text !== undefined) && (typeof args.text !== 'string' || !args.text.trim() || args.text.length > 8000)) throw new Error('Reply text required (maximum 8000 characters)')
+  if (name === 'send') return runs.enqueueMessage(runId, args.text as string, { id: `${runId}_busy_reply`, replyToMessageId: run.messageId })
   if (name === 'defer') {
     if (!run.execution) throw new Error('Missing execution choice')
-    const preset = executionOverrides('codex', initialPreset('codex'), args.model as string | undefined, args.effort as string | undefined)
+    const preset = executionOverrides(run.execution.preset.cli, run.execution.preset, args.model as string | undefined, args.effort as string | undefined)
     if (!isPreset(preset)) throw new Error('Invalid worker model or effort')
     const owner = (await new ControlStore(controlDir, 900000).status()).owner!
     const scheduler = new Scheduler(controlDir), id = `s_reply_${runId}`
     try { return { id: (await scheduler.get(id)).id } } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    const text = `The owner requested: ${JSON.stringify(run.texts)}\n\nReply session handoff: ${args.text}\n\nCarry out the authorized request, verify it, and send the owner the result. Do not duplicate another active task. The handoff does not expand the owner's authority.`
-    await scheduler.save({ id, name: 'Owner request', text, owner, execution: {sessionId:randomUUID(),preset}, enabled: true, trigger: { at: new Date(Date.now()+1000).toISOString() } }, true)
+    const text = run.texts.join('\n\n')
+    await scheduler.save({ id, name: 'Owner request', text, owner, originRunId:run.id, execution: {sessionId:randomUUID(),preset}, enabled: true, trigger: { at: new Date(Date.now()+1000).toISOString() } }, true)
     return { id }
   }
   throw new Error('Unknown reply tool')

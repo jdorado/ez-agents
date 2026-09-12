@@ -191,7 +191,7 @@ test('owner group discovery routes only to the private chat and rechecks identit
     const run = (await new RunStore(f.dir).list())[0]
     assert.equal(run.chatId, 101)
     assert.equal(run.messageId, undefined)
-    assert.match(run.texts[0], /Reply privately/)
+    assert.deepEqual(JSON.parse(run.texts[0]),{event:'owner_message_in_unbound_group',chatId:-101,title:'Family',messageId:3,text:'Hi from the group'})
     assert.match(run.texts[0], /"chatId":-101/)
     assert.equal(f.launched.length, 1)
     await f.relay.bot.handleUpdate(group(4))

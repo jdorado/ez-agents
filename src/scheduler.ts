@@ -10,16 +10,17 @@ import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.j
 import { RunStore, type RunRecord } from './runs.js'
 
 export type Schedule = {
+  originRunId?: string
   when?: 'unreviewed-failures'
   version: 1; id: string; revision: string; name: string; text: string; trigger: Trigger; enabled: boolean
   owner: Owner; execution: ExecutionChoice
 }
 export type ActiveSchedule = Schedule & { nextAt: number | null; runState?: 'queued' | 'running' }
-export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string }
+export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string; originRunId?: string }
 export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
   const s = v as ScheduledOrigin
   return Boolean(s && /^[a-zA-Z0-9_-]+$/.test(s.id) && /^[a-zA-Z0-9_-]+$/.test(s.revision) &&
-    Number.isFinite(Date.parse(s.dueAt)) && typeof s.pairedAt === 'string')
+    Number.isFinite(Date.parse(s.dueAt)) && typeof s.pairedAt === 'string' && (s.originRunId === undefined || /^[a-zA-Z0-9_-]+$/.test(s.originRunId)))
 }
 export const scheduledRunId = (s: Schedule, due: number) => 'r_schedule_' + createHash('sha256')
   .update(JSON.stringify([s.id,s.revision,due])).digest('hex')
@@ -40,7 +41,7 @@ export class Scheduler {
   private async ensure() { await mkdir(this.dir,{recursive:true,mode:0o700}) }
   async get(id: string): Promise<Schedule> {
     const s = JSON.parse(await readFile(join(this.dir,assertId(id)+'.json'),'utf8')) as Schedule
-    if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt}) ||
+    if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt,originRunId:s.originRunId}) ||
       (s.when !== undefined && s.when !== 'unreviewed-failures') || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' || !s.text.trim() ||
       !Number.isSafeInteger(s.owner?.telegramUserId) || !Number.isSafeInteger(s.owner?.telegramChatId) || !isExecutionChoice(s.execution))
       throw new Error('Invalid schedule record')
@@ -153,7 +154,7 @@ export class Scheduler {
         }
         await runs.create({id:scheduledRunId(s,next),chatId:s.owner.telegramChatId,
           telegramUserId:s.owner.telegramUserId,texts:[s.text],execution:s.execution,
-          scheduled:{id:s.id,revision:s.revision,dueAt:new Date(next).toISOString(),pairedAt:s.owner.pairedAt}})
+          scheduled:{id:s.id,revision:s.revision,dueAt:new Date(next).toISOString(),pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}})
         // A restart between run creation and this cursor write sees the same occurrence ID.
         await atomic(cursor,{next:future})
       } catch { console.error('Schedule dispatch failed',s.id) }

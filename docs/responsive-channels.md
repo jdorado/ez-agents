@@ -1,57 +1,22 @@
 # Responsive channels
 
-Ez treats conversational channels as places to answer, clarify and hand off
-work. A simple question uses the current conversation; a small authorized action
-uses its canonical receipt. Substantial work gets a durable task with enough
-context to finish and verify the job. The agent returns to conversation after
-the handoff is saved, instead of waiting for the worker. This is agent guidance,
-not a keyword classifier, automatic acknowledgement, or latency guarantee.
+Owner input passes unchanged to the selected engine. When the supported restricted
+busy-reply lane is available, it receives the same literal input and scoped tools:
+context, send and defer. The engine chooses which operation to use. Deferral saves
+the original request with a source-run binding, never a rewritten worker prompt.
+`ezenciel-agents-schedule context` exposes related conversation evidence on demand.
 
-New Codex agents use Sol / medium for chat. Scheduled work defaults independently
-to Luna / max; the agent can choose another model and effort for complex work.
-`ezenciel-agents-schedule create --now --text-file FILE --model MODEL --effort max`
-uses the existing scheduler (include `--name` for a useful task label). Busy owner
-reply sessions expose the same independent model/effort choice through `defer`.
-Its retry returns the first saved schedule; changing arguments does not revise
-an accepted job. `xhigh` and `max` are available only for Luna; other models remain capped at high.
+Model and effort come from captured settings or native defaults, with explicit
+overrides supported. Repeated deferral returns the first saved schedule. The
+writer owns completing its work; the transport preserves ownership, cancellation
+and delivery receipts.
 
-A handoff includes the objective, relevant context and paths, constraints,
-authorized actions, acceptance checks and delivery destination. Background
-sessions own verification and final delivery, and may use native subagents.
-One writer per workspace still applies. Shared external resources require
-coordination even when task directories differ. Status must distinguish a saved
-schedule from actual execution and a verified result from a process exit.
+Approved contact tasks receive a typed activation/correspondence event and their
+scoped tool schemas. The context tool exposes the approved purpose, shareable
+context and messages. The sandbox and tool handlers enforce contact, operation and
+lifecycle limits; workflow prose is not a security boundary. Restricted sessions
+use audited Codex and do not import unrestricted user configuration.
 
-The shared owner guidance is installed in native workspace instruction files at
-setup and runtime upgrade. Owner and scheduled requests reach the configured
-engine literally. Restricted busy replies and approved contact tasks keep their
-bounded conversational guidance. Existing model choices remain pinned.
-
-## Channel and authority boundaries
-
-Telegram owner conversations can schedule work under the owner's authority.
-The existing restricted busy-reply session keeps Codex chat available while a
-writer is active. Other executors retain their existing concurrency behavior.
-
-WhatsApp and other plugin contacts use the approved messaging task's isolated
-context and tools. They receive the conversational guidance and Sol / medium
-selection, but cannot invoke owner schedules, shell tools or native subagents.
-They report work outside their capabilities to the owner; that report is not
-an instruction or permission to execute. Full delegation from a plugin contact
-needs an explicitly scoped worker capability and return route; this update does
-not grant one. The plugin name alone never confers owner authority.
-
-An application using `channelBackendUrl` owns its conversation, model and job
-lifecycle. The relay does not inject prompts or override the app's model. Such
-backends (including AI Fit) must adopt the same handoff policy in their own
-runtime to benefit. Reuse their canonical job system; do not create a second
-agent in the transport. Telegram polling and app-side queue waits still count
-toward user-visible latency.
-
-## Verification
-
-Tests cover independent worker settings, preserved selections across upgrades,
-idempotent handoffs, invalid settings, revocation and restricted tool boundaries.
-Existing scheduler/host tests cover a conversational reply while work remains
-active. Measure time to the first useful reply and verified task completion
-separately on the deployed provider before claiming a performance improvement.
+Maintenance and unbound-group notifications carry typed event data. CLI help owns
+operation contracts; saved policy and deterministic checks own authorization.
+No executor prepends a conversation workflow or repair recipe to these inputs.

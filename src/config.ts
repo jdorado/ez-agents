@@ -24,8 +24,8 @@ export type Config = ControlConfig & {
   pagerDutyFailureThreshold?: number
 }
 
-const positiveInteger = (value: string | undefined, name: string, fallback: number): number => {
-  if (!value) return fallback
+const positiveInteger = (value: string | undefined, name: string, fallback?: number): number => {
+  if (!value && fallback !== undefined) return fallback
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${name} must be a positive integer`)
@@ -63,7 +63,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     repairEnabled: repairEnabled(env.EZ_REPAIR_ENABLED),
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
     executorTimeoutMs: 0,
-    codexAutoCompactTokens: positiveInteger(env.EZ_CODEX_AUTO_COMPACT_TOKENS, 'EZ_CODEX_AUTO_COMPACT_TOKENS', 64000),
+    codexAutoCompactTokens: !env.EZ_CODEX_AUTO_COMPACT_TOKENS?.trim() ? undefined : positiveInteger(env.EZ_CODEX_AUTO_COMPACT_TOKENS, 'EZ_CODEX_AUTO_COMPACT_TOKENS'),
     executorCli: env.EZ_EXECUTOR_CLI?.trim() || 'agy',
     channelBackendUrl: env.EZ_CHANNEL_BACKEND_URL?.trim(),
     channelBackendToken: env.EZ_CHANNEL_BACKEND_TOKEN?.trim(),

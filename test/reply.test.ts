@@ -44,7 +44,7 @@ test('reply native adapter exposes only context send defer with shell and networ
  assert.doesNotMatch(args,/--add-dir/)
 })
 
-test('reply handoff deduplicates the owner request and defaults independently to Luna max', async () => {
+test('reply handoff deduplicates the owner request and inherits captured settings without rewriting input', async () => {
  const root=await mkdtemp(join(tmpdir(),'ez-reply-defer-')), runs=new RunStore(root)
  try {
   const control=new ControlStore(root,900000)
@@ -55,17 +55,17 @@ test('reply handoff deduplicates the owner request and defaults independently to
   const first=await replyCall(root,'tg_4',root,'defer',{text:'Prepare the report using the canonical sources'})
   assert.deepEqual(await replyCall(root,'tg_4',root,'defer',{text:'retry'}),first)
   const saved=JSON.parse(await readFile(join(root,'schedules','s_reply_tg_4.json'),'utf8'))
-  assert.equal(saved.execution.preset.model,'gpt-5.6-luna')
-  assert.equal(saved.execution.preset.effort,undefined)
+  assert.equal(saved.execution.preset.model,'gpt-6-astra')
+  assert.equal(saved.execution.preset.effort,'low')
   assert.notEqual(saved.execution.sessionId,execution.sessionId)
-  assert.match(saved.text,/Make the report/)
+  assert.equal(saved.text,'Make the report');assert.equal(saved.originRunId,'tg_4')
   assert.equal(saved.owner.telegramChatId,101)
   await runs.create({id:'tg_11',chatId:101,telegramUserId:101,texts:['Use Astra'],execution})
   await runs.patch('tg_11',{status:'running',replyOnly:true})
   await replyCall(root,'tg_11',root,'defer',{text:'Use Astra for this worker',model:'gpt-6-astra'})
   const astra=JSON.parse(await readFile(join(root,'schedules','s_reply_tg_11.json'),'utf8'))
   assert.equal(astra.execution.preset.model,'gpt-6-astra')
-  assert.equal(astra.execution.preset.effort,'high')
+  assert.equal(astra.execution.preset.effort,undefined)
  }finally{await rm(root,{recursive:true,force:true})}
 })
 
@@ -143,7 +143,7 @@ test('reply handoff accepts independent worker choices and rejects invalid or un
   await ownerRun(root,'owner')
   await runs.create({id:'tg_10',chatId:101,telegramUserId:101,texts:['Analyze the report'],execution:{sessionId:'c5dd1edc-be24-47b8-a579-0bc70f44cf43',preset:{id:'chat',name:'Chat',cli:'codex',model:'gpt-5.6-sol',effort:'medium'}}})
   await runs.patch('tg_10',{status:'running',replyOnly:true})
-  for (const args of [{model:42}, {model:'bad model'}, {effort:'ultra'}, {effort:'invalid'}, {cli:'claude'}])
+  for (const args of [{model:42}, {model:'bad model'}, {effort:'bad option'}, {effort:';invalid'}, {cli:'claude'}])
    await assert.rejects(replyCall(root,'tg_10',root,'defer',{text:'Analyze and verify the result',...args}))
   await assert.rejects(replyCall(root,'tg_10',root,'send',{text:'Hello',model:'gpt-6-astra'}),/Unexpected/)
   await replyCall(root,'tg_10',root,'defer',{text:'Analyze and verify the result',model:'gpt-6-astra',effort:'high'})
