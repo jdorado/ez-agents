@@ -4,23 +4,29 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { InlineKeyboard, type Context } from 'grammy'
 import { ControlStore } from './control-state.js'
-import { chatPreset, presetLabel, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
+import { chatPreset, installed, persistedPreset, presetLabel, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 
 export const mainCommands = [
   { command: 'new', description: 'New conversation' },
   { command: 'ai', description: 'Choose AI' },
   { command: 'status', description: 'Work status' },
-  { command: 'settings', description: 'Settings' },
 ]
 
 export const mainKeyboard = () => new InlineKeyboard()
   .text('New conversation', 'menu:new').text('Choose AI', 'menu:ai').row()
-  .text('Work status', 'menu:status').text('Settings', 'menu:settings')
+  .text('Work status', 'menu:status')
+
+const clientLabel = (cli: string) => cli === 'codex-gui' ? 'codex-gui (desktop)' : cli
+
+const matchesModel = (preset: AiPreset, model: ModelChoice) =>
+  model.cli === preset.cli && (preset.model === undefined || model.model === preset.model) &&
+  (preset.effort === undefined || model.efforts.includes(preset.effort))
 
 // Short-lived opaque button IDs: no model names or executable arguments from callbacks.
 // These are operational settings, not a second conversational/agent loop.
-export const createAiMenu = (control: ControlStore, cli: string, catalog = readModels, workspace = process.cwd(), codexHome?: string) => {
+export const createAiMenu = (control: ControlStore, cli: string, catalog = readModels, workspace = process.cwd(), codexHome?: string,
+  isInstalled = installed) => {
   const initial = chatPreset(cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   if (host) catalog = async () => JSON.parse(await readFile(path.join(process.env.EZ_CONTROL_DIR!, 'host-executor/models.json'),'utf8'))
@@ -31,7 +37,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     if (preset.id.startsWith('detected_')) {
       const detected = await discoverDefaults(workspace, { codexHome })
       if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. Refresh available AIs and select the updated choice.')
-    } else await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : undefined)
+    } else await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
   }
   const buttons = new Map<string, { expires: number; action: (ctx: Context) => Promise<void> }>()
   const button = (keyboard: InlineKeyboard, label: string, action: (ctx: Context) => Promise<void>) => {
@@ -52,63 +58,61 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       ? 'CLI changed: fresh conversation. Files kept; queued work unchanged.'
       : 'Selected for this conversation. Queued work unchanged.'}`)
   }
-  const list = async (ctx: Context, settings = false) => {
-    if (!settings) {
-      const models = await catalog()
-      if (models.length) return available(ctx, 0, models)
-    }
+  const list = async (ctx: Context) => {
+    const models = await catalog()
     const state = await control.aiState(initial)
     const keyboard = new InlineKeyboard()
-    const presets = settings ? state.presets : state.presets.filter((preset) => preset.id === initial.id)
-    for (const preset of presets) button(keyboard,
-      `${preset.id === (settings ? state.defaultId : state.selectedId) ? '✓ ' : ''}${preset.name}`,
-      async (next) => {
-        if (settings) {
-          await validate(preset)
-          await control.defaultPreset(preset.id)
-          await next.reply(`Default: ${preset.name}. Applies to new conversations only.`)
-        } else await choose(next, preset)
-      })
-    button(keyboard, 'Browse available models', (next) => available(next))
+    if (models.length) {
+      const recent = (state.recentIds ?? [])
+        .map((id) => state.presets.find((preset) => preset.id === id))
+        .filter((preset): preset is AiPreset => Boolean(preset))
+        .filter((preset) => models.some((model) => matchesModel(preset, model)))
+        .slice(0, 3)
+      for (const preset of recent) button(keyboard,
+        `${preset.id === state.selectedId ? '✓ ' : ''}Recent · ${clientLabel(preset.cli)} · ${preset.name}`,
+        (next) => choose(next, preset))
+      for (const cli of [...new Set(models.map((model) => model.cli))].sort((a, b) => clientLabel(a).localeCompare(clientLabel(b))))
+        button(keyboard, clientLabel(cli), (next) => available(next, cli, 0, models))
+    } else {
+      const current = state.presets.find((preset) => preset.id === initial.id)
+      if (current) button(keyboard, `✓ ${current.name}`, (next) => choose(next, current))
+    }
     button(keyboard, 'Refresh available AIs', async (next) => {
       await refresh()
-      await list(next, true)
+      await list(next)
     })
-    await ctx.reply(settings
-      ? 'Default for new conversations\nChoose a saved AI. Current work will not change.'
+    await ctx.reply(models.length
+      ? 'Choose AI\nUse a recent choice or select an installed client, then choose its model and reasoning level.'
       : 'Choose AI\nNo client catalog available. Showing the current client setup only.', { reply_markup: keyboard })
   }
-  const available = async (ctx: Context, page = 0, listed?: ModelChoice[]) => {
-    const models = listed ?? await catalog()
+  const available = async (ctx: Context, cli: string, page = 0, listed?: ModelChoice[]) => {
+    const models = (listed ?? await catalog()).filter((model) => model.cli === cli)
     const keyboard = new InlineKeyboard()
     for (const model of models.slice(page * 8, page * 8 + 8)) {
-      button(keyboard, `${model.cli} · ${model.name}`, async (next) => {
-        if (!model.efforts.length) return save(next, model)
-        const efforts = new InlineKeyboard()
-        for (const effort of model.efforts.filter(effort => allowedEffort(effort, model.model, model.cli))) button(efforts, effort, (last) => save(last, model, effort))
-        await next.reply(`${model.name} — effort`, { reply_markup: efforts })
+      button(keyboard, model.name, async (next) => {
+        const supportedEfforts = model.efforts.filter(effort => allowedEffort(effort, model.model, model.cli))
+        if (!supportedEfforts.length) return save(next, model)
+        const effortKeyboard = new InlineKeyboard()
+        for (const effort of supportedEfforts) button(effortKeyboard, effort, (last) => save(last, model, effort))
+        button(effortKeyboard, 'Back to models', (last) => available(last, cli, page, listed))
+        await next.reply(`${clientLabel(cli)} · ${model.name}\nChoose reasoning level`, { reply_markup: effortKeyboard })
       })
     }
-    if (page > 0) button(keyboard, 'Previous', (next) => available(next, page - 1))
-    if (models.length > (page + 1) * 8) button(keyboard, 'Next', (next) => available(next, page + 1))
-    await ctx.reply(models.length
-      ? 'Choose AI\nAvailable models are populated automatically from the installed clients. Grok/Codex use their local catalog; other clients use their own default. Choosing one saves it; it does not switch AI.'
-      : 'No client catalog available. Open the installed CLI once, then try again.', { reply_markup: keyboard })
+    if (page > 0) button(keyboard, 'Previous', (next) => available(next, cli, page - 1, listed))
+    if (models.length > (page + 1) * 8) button(keyboard, 'Next', (next) => available(next, cli, page + 1, listed))
+    button(keyboard, 'Back to clients', (next) => list(next))
+    await ctx.reply(`${clientLabel(cli)}\nChoose a model`, { reply_markup: keyboard })
   }
   const save = async (ctx: Context, model: ModelChoice, effort?: string) => {
     const state = await control.aiState(initial)
-    const existing = state.presets.find((p) => p.cli === model.cli && p.model === model.model && p.effort === effort)
-    const preset: AiPreset = existing ?? { id: randomBytes(8).toString('hex'),
+    const candidate: AiPreset = { id: randomBytes(8).toString('hex'),
       name: `${model.name}${effort ? ` · ${effort}` : ''}`.slice(0, 80), cli: model.cli, model: model.model, effort }
-    await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : undefined)
+    const stored = persistedPreset(candidate)
+    const existing = state.presets.find((preset) => preset.cli === stored.cli && preset.model === stored.model && preset.effort === stored.effort)
+    const preset = existing ?? candidate
+    await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
     await control.savePreset(preset)
-    const keyboard = new InlineKeyboard()
-    button(keyboard, 'Use now', (next) => choose(next, preset))
-    button(keyboard, 'Make default', async (next) => {
-      await control.defaultPreset(preset.id)
-      await next.reply(`Default: ${preset.name}. Applies to new conversations only.`)
-    })
-    await ctx.reply(`Saved: ${preset.name}\n${presetLabel(preset)}`, { reply_markup: keyboard })
+    await choose(ctx, preset)
   }
   return {
     initial,
@@ -119,7 +123,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       if (!data?.startsWith('ai:')) return false
       const entry = buttons.get(data.slice(3))
       await ctx.answerCallbackQuery().catch(() => {})
-      if (!entry || entry.expires < Date.now()) await ctx.reply('Menu expired. Open /ai or /settings again.')
+      if (!entry || entry.expires < Date.now()) await ctx.reply('Menu expired. Open /ai again.')
       else {
         buttons.delete(data.slice(3))
         try { await entry.action(ctx) }

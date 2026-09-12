@@ -36,6 +36,20 @@ test('AI choices pin model, effort and session; defaults and CLI switches do not
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
+test('AI selection keeps the three most recently used choices', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-recent-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    let choice = await store.captureChoice(initialPreset('grok'))
+    for (const id of ['first', 'second', 'third', 'fourth']) {
+      await store.savePreset({ id, name: id, cli: 'codex', model: id, effort: 'medium' })
+      await store.selectPreset(id, choice.sessionId, true)
+      choice = await store.captureChoice(initialPreset('grok'))
+    }
+    assert.deepEqual((await store.status()).ai?.recentIds, ['fourth', 'third', 'second'])
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
 test('inbox never batches messages across an AI switch', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-inbox-'))
   try {
@@ -94,21 +108,51 @@ test('model catalog projects native metadata only, excluding hidden entries and 
   } finally { await rm(home, { recursive: true, force: true }) }
 })
 
-test('Choose AI opens the available installed-model catalog without an Add AI step', async () => {
+test('Choose AI lists recent choices and installed clients before model and effort selection', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-'))
   try {
-    const menu = createAiMenu(new ControlStore(dir, 1000), 'grok', async () => [{
-      cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium'],
-    }])
-    let reply = ''
-    let keyboard: { inline_keyboard?: Array<Array<{ text: string }>> } | undefined
-    await menu.list({ reply: async (text: string, options?: { reply_markup?: unknown }) => {
-      reply = text
-      keyboard = options?.reply_markup as typeof keyboard
-      return {} as never
-    } } as never)
-    assert.match(reply, /Available models are populated automatically/)
-    assert.deepEqual(keyboard?.inline_keyboard?.flat().map((button) => button.text), ['codex · Fixture'])
+    const store = new ControlStore(dir, 1000)
+    const initial = initialPreset('grok')
+    await store.aiState(initial)
+    await store.savePreset({ id: 'recent', name: 'Recent', cli: 'codex', model: 'fixture-model', effort: 'medium' })
+    const first = await store.captureChoice(initial)
+    await store.selectPreset('recent', first.sessionId, true)
+    const menu = createAiMenu(store, 'grok', async () => [
+      { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium', 'high'] },
+      { cli: 'codex', model: 'second-model', name: 'Second', efforts: ['low'] },
+      { cli: 'codex-gui', model: 'fixture-model', name: 'Desktop Fixture', efforts: ['medium'] },
+      { cli: 'claude', name: 'claude · client default', efforts: [] },
+    ], undefined, undefined, async (name) => name === 'codex')
+    const replies: Array<{ text: string; buttons: Array<{ text: string; callback_data: string }> }> = []
+    const context = (data?: string) => ({
+      callbackQuery: data ? { data } : undefined,
+      answerCallbackQuery: async () => ({}),
+      reply: async (text: string, options?: { reply_markup?: { inline_keyboard?: Array<Array<{ text: string; callback_data: string }>> } }) => {
+        replies.push({ text, buttons: options?.reply_markup?.inline_keyboard?.flat() ?? [] })
+        return {} as never
+      },
+    })
+    await menu.list(context() as never)
+    assert.match(replies.at(-1)!.text, /recent choice|installed client/i)
+    assert.deepEqual(replies.at(-1)!.buttons.map((button) => button.text), [
+      '✓ Recent · codex · Recent', 'claude', 'codex', 'codex-gui (desktop)', 'Refresh available AIs',
+    ])
+
+    const client = replies.at(-1)!.buttons.find((button) => button.text === 'codex')!
+    await menu.handle(context(client.callback_data) as never)
+    assert.deepEqual(replies.at(-1)!.buttons.map((button) => button.text), ['Fixture', 'Second', 'Back to clients'])
+
+    const model = replies.at(-1)!.buttons.find((button) => button.text === 'Fixture')!
+    await menu.handle(context(model.callback_data) as never)
+    assert.deepEqual(replies.at(-1)!.buttons.map((button) => button.text), ['medium', 'high', 'Back to models'])
+    const effort = replies.at(-1)!.buttons.find((button) => button.text === 'high')!
+    await menu.handle(context(effort.callback_data) as never)
+    const state = await store.status()
+    const selected = state.ai!.presets.find((preset) => preset.id === state.ai!.selectedId)!
+    assert.deepEqual({ cli: selected.cli, model: selected.model, effort: selected.effort }, {
+      cli: 'codex', model: 'fixture-model', effort: 'high',
+    })
+    assert.match(replies.at(-1)!.text, /Selected for this conversation/)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 

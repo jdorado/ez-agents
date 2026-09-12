@@ -14,6 +14,7 @@ import { ApprovalStore } from '../src/approval.js'
 import { Tasks } from '../src/tasks.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { packageVersion } from '../src/version.js'
+import type { Config } from '../src/config.js'
 
 const message = (id: number, text = 'hello'): Update => ({
   update_id: id,
@@ -25,7 +26,7 @@ const message = (id: number, text = 'hello'): Update => ({
     chat: { id: 101, type: 'private', first_name: 'Fixture' },
   },
 })
-const fixture = async () => {
+const fixture = async (overrides: Partial<Config> = {}) => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-intake-relay-'))
   const launched: string[][] = []
   const replies: string[] = []
@@ -40,6 +41,7 @@ const fixture = async () => {
     executorCli: 'grok' as const,
     telegramBotToken: 'fixture',
     geminiApiKey: 'fixture',
+    ...overrides,
   }
   const make = () => {
     const relay = createRelay(config, async (texts) => {
@@ -201,7 +203,7 @@ test('owner group discovery routes only to the private chat and rechecks identit
   } finally { await f.close() }
 })
 
-test('four-item menu is owner-only; available AI choices work and forged/stale buttons cannot change settings', async () => {
+test('three-item menu is owner-only and removes the retired settings control', async () => {
   const f = await fixture()
   const callback = (id: number, data: string, user = 101): Update => ({
     update_id: id,
@@ -211,32 +213,53 @@ test('four-item menu is owner-only; available AI choices work and forged/stale b
   try {
     await f.relay.bot.handleUpdate(message(1, '/menu'))
     assert.deepEqual(f.keyboards.at(-1)!.flat().map((b) => b.text),
-      ['New conversation', 'Choose AI', 'Work status', 'Settings'])
-    await f.relay.bot.handleUpdate(message(2, '/ai'))
-    const pick = f.keyboards.at(-1)!.flat()[0].callback_data
+      ['New conversation', 'Choose AI', 'Work status'])
+    await f.relay.bot.handleUpdate(message(2, '/settings'))
+    assert.match(f.replies.at(-1)!, /Settings was removed.*Use \/ai/)
+    await f.relay.bot.handleUpdate(message(3, '/ai'))
+    const pick = f.keyboards.at(-1)!.flat().find((button) => button.text === 'Refresh available AIs')!.callback_data
     const store = new ControlStore(f.dir, 1000)
-    await f.relay.bot.handleUpdate(callback(3, pick, 202))
-    assert.equal(await store.getActiveSession(), null)
-    await f.relay.bot.handleUpdate(callback(4, 'ai:forged'))
-    assert.equal(await store.getActiveSession(), null)
-    await f.relay.bot.handleUpdate(callback(5, pick))
-    if (!(await store.getActiveSession())) {
-      let useNow = f.keyboards.at(-1)!.flat().find((button) => button.text === 'Use now')?.callback_data
-      if (!useNow) {
-        await f.relay.bot.handleUpdate(callback(6, f.keyboards.at(-1)!.flat()[0].callback_data))
-        useNow = f.keyboards.at(-1)!.flat().find((button) => button.text === 'Use now')!.callback_data
-      }
-      await f.relay.bot.handleUpdate(callback(7, useNow))
-    }
-    assert.ok(await store.getActiveSession())
-    await f.relay.bot.handleUpdate(callback(8, pick))
+    const before = await store.status()
+    const keyboardCount = f.keyboards.length
+    await f.relay.bot.handleUpdate(callback(4, pick, 202))
+    assert.equal(f.keyboards.length, keyboardCount)
+    assert.deepEqual(await store.status(), before)
+    await f.relay.bot.handleUpdate(callback(5, 'ai:forged'))
     assert.match(f.replies.at(-1)!, /Menu expired/)
-    await f.relay.bot.handleUpdate(message(9, '/settings'))
-    assert.match(f.replies.at(-1)!, /Default for new conversations/)
+    assert.deepEqual(await store.status(), before)
+    await f.relay.bot.handleUpdate(callback(6, pick))
+    assert.equal(f.keyboards.length, keyboardCount + 1)
+    const refreshed = await store.status()
+    await f.relay.bot.handleUpdate(callback(7, pick))
+    assert.match(f.replies.at(-1)!, /Menu expired/)
+    assert.deepEqual(await store.status(), refreshed)
     await f.relay.bot.handleUpdate(message(8, '/status'))
     assert.ok(f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
     await f.relay.bot.handleUpdate(callback(9, 'menu:scheduled-tasks'))
     assert.match(f.replies.at(-1)!, /No active scheduled tasks for this owner/)
+    assert.equal(f.launched.length, 0)
+  } finally { await f.close() }
+})
+
+test('application-backed channels keep AI and retired settings controls in the application', async () => {
+  const f = await fixture({ channelBackendUrl: 'http://127.0.0.1:1', channelBackendToken: 'fixture' })
+  try {
+    const store = new ControlStore(f.dir, 1000)
+    const before = await store.status()
+    let id = 1
+    for (const text of ['/ai', '/settings', '/new']) {
+      await f.relay.bot.handleUpdate(message(id++, text))
+      assert.match(f.replies.at(-1)!, /managed in the connected application/)
+    }
+    for (const data of ['menu:ai', 'menu:settings', 'menu:new', 'ai:old-button']) {
+      await f.relay.bot.handleUpdate({ update_id: id, callback_query: {
+        id: String(id), chat_instance: 'fixture', data,
+        from: { id: 101, first_name: 'Fixture', is_bot: false }, message: message(id++).message!,
+      } })
+      assert.match(f.replies.at(-1)!, /managed in the connected application/)
+    }
+    assert.deepEqual(await store.status(), before)
+    assert.equal(f.keyboards.length, 0)
     assert.equal(f.launched.length, 0)
   } finally { await f.close() }
 })
