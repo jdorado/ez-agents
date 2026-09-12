@@ -31,7 +31,7 @@ type ControlState = {
   owner: Owner | null
   pending: PairingRequest[]
   activeSession?: SessionState | null
-  ai?: { presets: AiPreset[]; defaultId: string; selectedId: string }
+  ai?: { presets: AiPreset[]; defaultId: string; selectedId: string; recentIds?: string[] }
   sessions?: SessionState[]
 }
 
@@ -41,6 +41,10 @@ const emptyState = (): ControlState => ({ version: 1, owner: null, pending: [] }
 
 const isPositiveId = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+
+const isRecentIds = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.length <= 3 && new Set(value).size === value.length &&
+  value.every((id) => typeof id === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(id))
 
 const isState = (value: unknown): value is ControlState => {
   if (!value || typeof value !== 'object') return false
@@ -60,7 +64,8 @@ const isState = (value: unknown): value is ControlState => {
     (candidate.ai === undefined || (Array.isArray(candidate.ai.presets) &&
       candidate.ai.presets.every(isPreset) &&
       candidate.ai.presets.some((p) => p.id === candidate.ai!.defaultId) &&
-      candidate.ai.presets.some((p) => p.id === candidate.ai!.selectedId))) &&
+      candidate.ai.presets.some((p) => p.id === candidate.ai!.selectedId) &&
+      (candidate.ai.recentIds === undefined || isRecentIds(candidate.ai.recentIds)))) &&
     (candidate.sessions === undefined || (Array.isArray(candidate.sessions) && candidate.sessions.every(
       (s) => /^[0-9a-f-]{36}$/i.test(s.sessionId) && typeof s.hasStarted === 'boolean'))) &&
     (candidate.activeSession == null ||
@@ -94,7 +99,12 @@ export class ControlStore {
     try {
       const parsed: unknown = JSON.parse(await readFile(this.statePath, 'utf8'))
       if (!isState(parsed)) throw new Error('Control state has an unsupported shape')
-      if (parsed.ai) parsed.ai.presets = parsed.ai.presets.map(persistedPreset)
+      if (parsed.ai) {
+        parsed.ai.presets = parsed.ai.presets.map(persistedPreset)
+        parsed.ai.recentIds = (parsed.ai.recentIds ?? [parsed.ai.selectedId])
+          .filter((id) => parsed.ai!.presets.some((preset) => preset.id === id))
+          .slice(0, 3)
+      }
       return parsed
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState()
@@ -262,7 +272,7 @@ export class ControlStore {
   async aiState(initial: AiPreset) {
     return this.withLock(async () => {
       const state = await this.readState()
-      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
+      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id, recentIds: [] }
       await this.writeState(state)
       return state.ai
     })
@@ -274,12 +284,13 @@ export class ControlStore {
       const state = await this.readState()
       const first = initial.cli === 'codex' || initial.cli === 'codex-gui'
         ? initial : discovered.find((p) => p.cli === initial.cli) ?? initial
-      state.ai ??= { presets: [persistedPreset(first)], defaultId: first.id, selectedId: first.id }
+      state.ai ??= { presets: [persistedPreset(first)], defaultId: first.id, selectedId: first.id, recentIds: [] }
       const ai = state.ai
       // Refresh discovery entries, but never rewrite an active/default or user-saved choice.
       const preserved = ai.presets.filter((p) => !p.id.startsWith('detected_') ||
         p.id === ai.selectedId || p.id === ai.defaultId).map(persistedPreset)
       ai.presets = [...preserved, ...discovered.map(persistedPreset).filter((p) => !preserved.some((old) => old.id === p.id))]
+      ai.recentIds = (ai.recentIds ?? []).filter((id) => ai.presets.some((preset) => preset.id === id)).slice(0, 3)
       if (initial.id === 'chat-default' && !ai.presets.some(p => p.id === initial.id)) ai.presets.push(persistedPreset(initial))
       await this.writeState(state)
     })
@@ -288,7 +299,7 @@ export class ControlStore {
   async captureChoice(initial: AiPreset): Promise<ExecutionChoice> {
     return this.withLock(async () => {
       const state = await this.readState()
-      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
+      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id, recentIds: [] }
       const preset = state.ai.presets.find((p) => p.id === state.ai!.selectedId)!
       state.activeSession ??= { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
       if (!state.activeSession.cli && !state.activeSession.hasStarted) state.activeSession.cli = preset.cli
@@ -352,6 +363,7 @@ export class ControlStore {
         state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
       }
       ai.selectedId = id
+      ai.recentIds = [id, ...(ai.recentIds ?? []).filter((recentId) => recentId !== id)].slice(0, 3)
       await this.writeState(state)
       return true
     })

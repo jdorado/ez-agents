@@ -28,8 +28,11 @@ offer their own default only in this slice. Refresh by opening the native client
 the relay does not install models, manage subscriptions or guess aliases.
 
 Setup initialization and relay startup seed one default choice per installed client.
-Choose AI opens the available installed-model catalog directly; Settings keeps
-saved choices and Refresh available AIs repeats default discovery. Active/default
+Choose AI shows the three most recent valid choices and installed clients, then
+the selected client's models and reasoning levels. Selecting a model and reasoning
+level applies that choice immediately. The retired Settings control points to
+Choose AI; application-backed channels keep these controls in their application.
+Refresh available AIs repeats default discovery. Active/default
 presets and queued snapshots are preserved; discovery only refreshes unused
 detected entries.
 Codex uses its native `config/read` interface; Grok reads its documented user
