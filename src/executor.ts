@@ -243,9 +243,9 @@ export const startExecutorJob = async (
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   const gui = !host && key === 'codex-gui'
   const nativeSession = !host && key === 'codex' && options.runId.startsWith('r_schedule_')
-  // PA chat-mode experiment: only direct chat input at the engine boundary.
+  // Chat-mode experiment: only direct chat input at the engine boundary.
   const chatReminder = !host && !run?.taskId && run?.messageId !== undefined
-    ? '\n\n[Chat context] You are replying in chat. Send replies with ezenciel-agents-message --text "..."; your final answer alone is not delivered. Keep chat responsive: use ezenciel-agents-schedule for long-running work and native subagents for useful independent parts. Decide when to delegate and what to send.'
+    ? '\n\n[Chat context] You are replying in chat. Send replies with ezenciel-agents-message --text "..."; your final answer alone is not delivered. Before lengthy tool or repository work, briefly acknowledge through that CLI. Keep chat responsive: use ezenciel-agents-schedule for long-running work and native subagents for useful independent parts. Decide when to delegate and what to send.'
     : ''
   const promptText = texts.join('\n\n') + chatReminder
   const promptFile = path.join(outputDirectory, 'prompt.txt')
