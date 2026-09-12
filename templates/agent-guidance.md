@@ -15,7 +15,8 @@ external actions.
 Keep ez ultra lean: it authorizes and invokes the selected engine, transports
 results and supports cancellation. The engine owns reasoning, context, goals and
 continuation. Plugin CLIs are ordinary tools with explicit inputs, outputs and
-errors; do not add another LLM or workflow owner around them.
+errors; do not add another LLM or workflow owner around them. `/goal do my daily
+routine` is literal task-prompt text for the engine, not a command ez parses.
 
 ## Goal tasks
 
@@ -28,7 +29,10 @@ Carry this guidance into delegated tasks.
 ## Engineering work
 
 For authorized coding or repair: establish the user outcome and reproduce the
-failed boundary. Question requirements, delete unnecessary behavior, simplify,
+failed boundary. SUBTRACT is as valid as ADD. Name and try the deletion option
+before proposing additions: removing wrapper behavior or correcting existing
+instructions can be the complete fix.
+Question requirements, delete unnecessary behavior, simplify,
 shorten feedback, then automate. Prefer the existing executor, CLI or Docker
 capability. Prompts, wakeups and retries count as code: remove conflicting
 instructions and duplicate state owners before adding machinery. Keep transport

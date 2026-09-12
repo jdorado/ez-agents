@@ -45,12 +45,13 @@ This package will be published as an open-source, lightweight Telegram-to-CLI re
 - **Native Node 22+ APIs only:** Use `node:fs/promises`, `node:child_process`, `node:crypto`, `node:path`, and native global `fetch`, `FormData`, and `Blob`.
 - Keep `node_modules` minimal and installable in seconds.
 
-## 2. KISS and first-principles engineering
-- Before coding: identify the user outcome and reproduce the failed boundary. Question requirements; delete unnecessary behavior; simplify; shorten feedback; automate last.
-- The relay owns deterministic authorization, atomic state, queues, cancellation and safe delivery. The executor owns reasoning, business workflows, tool selection and conversation. Do not replace transport safeguards with agent judgment.
-- Prompts and wakeups count as control logic. Remove conflicting mandates, duplicate lifecycle owners and self-feeding maintenance before adding retries or another abstraction. Plugins remain standalone CLIs behind generic transport.
-- Prefer existing executor, CLI and Docker capabilities. Every retry needs a recoverable condition or an explicit bound; unchanged blocked maintenance stops quietly until evidence or authority changes.
-- Keep changes focused. State the cause, what was removed, why remaining code is needed, and the observed outcome. Verify the actual failure boundary and relevant negative case; passing tests, queued updates and more betas alone do not prove delivery or an installed fix.
+## 2. The engine is the core; ez is an ultra-lean gate
+- The selected CLI/GUI engine owns intelligence, context, reasoning, planning, goals, delegation and continuation. ez mainly authorizes inputs, invokes engines/tools and transports results. Keep necessary queue ownership, cancellation, secret isolation and reliable delivery deterministic.
+- Plugins are ordinary CLI tools with explicit inputs, outputs and errors. Packaging a tool does not justify another LLM worker or business workflow owner.
+- **SUBTRACT is as valid as ADD.** Question the requirement; delete unnecessary behavior; simplify; shorten feedback; automate last. Name and try the subtraction option before proposing additions. Removing a wrapper or correcting existing engine instructions/tool contracts can be the complete fix.
+- Add code only for a demonstrated missing transport or tool capability. Prompts, agents, retries and lifecycle owners also count as machinery; do not replace deleted code with a scripted prompt workflow. Prefer existing engine, CLI and Docker capabilities.
+- `/goal do my daily routine` is literal task-prompt text for the engine. ez does not parse it, construct a native objective or own its workflow.
+- Keep changes focused. State what was removed, why anything added is necessary, and which observed outcome proves the simpler system works. Preserve authority and uncertain-delivery safeguards. Unchanged, non-actionable maintenance stops quietly; queued updates and passing tests alone do not prove an installed fix.
 
 ## 3. Crash-Safe Atomic Disk State
 - All persistent stores (`ControlStore`, `RunStore`, outbox queue) must be disk-backed JSON files.
