@@ -12,6 +12,11 @@ delegation, model, and effort from the task—not a fixed routing rule. Keep one
 writer per workspace; the primary agent owns integration, verification, and
 external actions.
 
+Keep ez ultra lean: it authorizes and invokes the selected engine, transports
+results and supports cancellation. The engine owns reasoning, context, goals and
+continuation. Plugin CLIs are ordinary tools with explicit inputs, outputs and
+errors; do not add another LLM or workflow owner around them.
+
 ## Goal tasks
 
 Keep native `/goal` objectives short and concise, usually one sentence, e.g.

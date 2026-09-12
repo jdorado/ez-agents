@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { terminateJob } from './executor.js'
 
-type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;model?:string;effort?:string;prompt:string;goal:boolean}
+type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;model?:string;effort?:string;prompt:string}
 type Message = {id?:number;method?:string;params?:any;result?:any;error?:{message:string;code?:number}}
 
 // Keep Codex's native session alive. Codex itself starts goal continuation turns;
@@ -14,7 +14,7 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
   options = executionDefaults('codex', options)
   const child=io.launch?.() ?? spawn('codex',['app-server','--stdio','--disable','memories','--enable','skip_host_skill_discovery'],{cwd:options.workspace,env:process.env,stdio:['pipe','pipe','pipe']})
   const emit=io.emit ?? (line=>process.stdout.write(line+'\n'))
-  let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=options.goal
+  let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=false
   let resolveDone!:(code:number)=>void
   const done=new Promise<number>(resolve=>{resolveDone=resolve})
   const pending=new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
@@ -77,12 +77,7 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     threadId=result.thread?.id
     if(!threadId)throw new Error('Codex did not return a native thread ID')
     emit(JSON.stringify({type:'thread.started',thread_id:threadId}))
-    if(options.goal){
-      // This is the native request used by the interactive /goal command.
-      // Setting it active starts work in Codex; do not also send turn/start.
-      const result=await request('thread/goal/set',{threadId,objective:options.prompt,status:'active'})
-      if(result.goal)settled(result.goal)
-    }else await request('turn/start',{threadId,input:[{type:'text',text:options.prompt}],model:options.model,effort:options.effort})
+    await request('turn/start',{threadId,input:[{type:'text',text:options.prompt}],model:options.model,effort:options.effort})
     return await done
   }catch(error){fail(error);return 1}
   finally{
