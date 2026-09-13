@@ -27,6 +27,7 @@ export type ExecutorOptions = {
   eventSource?: string
   model?: string
   effort?: string
+  codexSandbox?: 'external'
   codexAutoCompactTokens?: number
   onSession?: (id: string) => Promise<void>
 }
@@ -74,7 +75,7 @@ export type CliAdapter = {
   command: string
   description: string
   buildArgs: (
-    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'codexAutoCompactTokens'> & { controlDir?: string },
+    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'codexAutoCompactTokens' | 'codexSandbox'> & { controlDir?: string },
     promptFile: string,
     promptText: string,
   ) => string[]
@@ -84,7 +85,8 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
   codex: {
     name: 'codex', command: 'codex', description: 'Codex CLI',
     buildArgs: (opts, _file, prompt) => {
-      const args = ['exec', '--skip-git-repo-check', '--json', '--sandbox', 'workspace-write', '--disable', 'memories', '--enable', 'skip_host_skill_discovery', '-c', 'approval_policy="never"']
+      if (opts.codexSandbox !== undefined && opts.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
+      const args = ['exec', '--skip-git-repo-check', '--json', '--sandbox', opts.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write', '--disable', 'memories', '--enable', 'skip_host_skill_discovery', '-c', 'approval_policy="never"']
       const limit = opts.codexAutoCompactTokens
       if (limit !== undefined) {
         if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid Codex compaction token limit')
@@ -232,6 +234,7 @@ export const startExecutorJob = async (
   options = executionDefaults(executorKey(options.cli), options)
   if(options.runId.startsWith('r_schedule_') && !/^[a-zA-Z0-9_-]+$/.test(options.runId))throw new Error('Invalid native task run ID')
   const run = await new RunStore(options.controlDir).get(options.runId)
+  if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_TELEGRAM_ENABLED !== 'false' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || !run?.application || run.taskId || run.scheduled || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an application-only local foreground run')
   if (run?.taskId) {
     if (run.status !== 'running') throw new Error('No active task run')
     await new Tasks(options.controlDir).authorize(run, process.env.EZ_EXECUTOR_TRANSPORT === 'host')
@@ -301,7 +304,7 @@ export const startExecutorJob = async (
     throw error
   })
   child.stdin?.end(host
-    ? JSON.stringify({texts,options:{...options,onSession:undefined}})
+    ? JSON.stringify({texts,options:{...options,onSession:undefined,codexSandbox:undefined}})
     : nativeSession ? JSON.stringify({...options,onSession:undefined,prompt:promptText})
     : gui ? JSON.stringify({prompt:promptText,options:{...options,onSession:undefined}})
     : ['codex', 'claude'].includes(key) ? promptText : undefined)

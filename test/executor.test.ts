@@ -180,3 +180,28 @@ test('adapters do not append instruction files or impose a workflow turn budget'
  assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs(opts,'','literal').includes('--append-system-prompt-file'))
  assert.ok(!EXECUTOR_REGISTRY.grok.buildArgs(opts,'/tmp/prompt','literal').includes('--max-turns'))
 })
+
+test('Codex external isolation changes only explicit sandbox argv and never enters child environment', () => {
+  const args = EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',codexSandbox:'external',sessionId:'native-id',isResume:true},'', 'hello')
+  assert.equal(args[args.indexOf('--sandbox')+1], 'danger-full-access')
+  assert.ok(args.includes('native-id'))
+  assert.equal(executorEnvironment({EZ_CODEX_SANDBOX:'external'}).EZ_CODEX_SANDBOX, undefined)
+})
+
+test('external Codex isolation cannot launch ordinary or host runs', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-external-sandbox-'))
+  t.after(() => rm(root,{recursive:true,force:true}))
+  await ownerRun(root,'r_sandbox')
+  const previous = {transport:process.env.EZ_EXECUTOR_TRANSPORT,telegram:process.env.EZ_TELEGRAM_ENABLED}
+  try {
+    process.env.EZ_TELEGRAM_ENABLED='false'
+    for (const transport of ['local','host']) {
+      process.env.EZ_EXECUTOR_TRANSPORT=transport
+      await assert.rejects(startExecutorJob(['Hello'],{workspace:root,controlDir:root,binDir:root,runId:'r_sandbox',timeoutMs:0,cli:'codex',codexSandbox:'external'}), /application-only local foreground/)
+    }
+  } finally {
+    for (const [key,value] of [['EZ_EXECUTOR_TRANSPORT',previous.transport],['EZ_TELEGRAM_ENABLED',previous.telegram]]) {
+      if (value === undefined) delete process.env[key!]; else process.env[key!]=value
+    }
+  }
+})

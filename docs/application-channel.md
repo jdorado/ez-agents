@@ -263,3 +263,13 @@ Application agents must finish and reply in their admitted turn; ordinary native
 subagents remain available. Background scheduling with application delivery is
 not implemented here. Do not switch an active Telegram deployment to this mode
 as a substitute for migrating its pending work.
+
+When a private application-only container supplies the isolation boundary and
+Codex cannot create its nested sandbox, its installing administrator may set
+`EZ_CODEX_SANDBOX=external` together with `EZ_TELEGRAM_ENABLED=false` and
+`EZ_EXECUTOR_TRANSPORT=local`. Only local foreground Codex application turns use
+`--sandbox danger-full-access`. The default remains `workspace-write`.
+Keep the container's private mounts, non-root UID, dropped capabilities and
+no-new-privileges policy; the agent can access everything mounted into it.
+This setting is rejected for Telegram or host execution and cannot be selected
+by an application request. It is not forwarded to the host executor.

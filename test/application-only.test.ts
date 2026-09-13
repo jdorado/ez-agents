@@ -72,6 +72,7 @@ test('botless daemon executes application turn and rejects Telegram-origin work/
   await waitFor(async()=>relay.isRunning())
   const unauthorized=await fetch(`http://127.0.0.1:${port}/v1/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestId:'bad',scope:'main',text:'bad'})})
   assert.equal(unauthorized.status,401)
+  await assert.rejects(relay.applicationChannel.submit(binding.bindingId,{requestId:'sandbox-override',scope:'main',text:'Hello',codexSandbox:'external'}), /Invalid application request/)
   const run=await relay.applicationChannel.submit(binding.bindingId,{requestId:'good',scope:'main',text:'Hello'})
   await waitFor(async()=> (await runs.get(run.id))?.status==='completed')
   await waitFor(async()=> (await relay.applicationChannel.snapshot(binding.bindingId,run.id)).messages.length>0)
