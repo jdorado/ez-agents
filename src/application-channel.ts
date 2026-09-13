@@ -14,6 +14,10 @@ const sameOwner = (left: Owner, right: Owner | null) => !!right && left.telegram
 export const applicationScope = (bindingId: string, scope: string) => hash(JSON.stringify([bindingId, scope]))
 type Binding = { id: string; bindingId: string; tokenHash: string; owner: Owner; shareTelegram?: boolean }
 
+export function validateApplicationRegistration(id: string, token: string | null): void {
+  if (!applicationId(id) || (token !== null && !/^[A-Za-z0-9_-]{43,200}$/.test(token))) throw new Error('Use a simple application ID and a random token of at least 256 bits encoded as base64url')
+}
+
 export class ApplicationBindings {
   constructor(private controlDir: string) {}
   async list(): Promise<Binding[]> {
@@ -24,7 +28,7 @@ export class ApplicationBindings {
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
   }
   async register(id: string, token: string | null, owner: Owner, shareTelegram = false): Promise<Binding | undefined> {
-    if (!applicationId(id) || (token !== null && !/^[A-Za-z0-9_-]{43,200}$/.test(token))) throw new Error('Use a simple application ID and a random token of at least 256 bits encoded as base64url')
+    validateApplicationRegistration(id, token)
     await mkdir(this.controlDir, { recursive: true, mode: 0o700 })
     const file = join(this.controlDir, 'application-bindings.json')
     const lock = await open(`${file}.lock`, 'wx', 0o600)

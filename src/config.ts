@@ -9,6 +9,7 @@ export type ControlConfig = {
 
 export type Config = ControlConfig & {
   repairEnabled?: boolean
+  telegramEnabled?: boolean
   telegramBotToken: string
   workspace: string
   executorTimeoutMs: number
@@ -44,8 +45,11 @@ export const loadControlConfig = (env: NodeJS.ProcessEnv = process.env): Control
 }
 
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
-  const telegramBotToken = env.TELEGRAM_BOT_TOKEN?.trim()
-  if (!telegramBotToken) throw new Error('TELEGRAM_BOT_TOKEN is required')
+  if (env.EZ_TELEGRAM_ENABLED !== undefined && !['true', 'false'].includes(env.EZ_TELEGRAM_ENABLED)) throw new Error('EZ_TELEGRAM_ENABLED must be true or false')
+  const telegramEnabled = env.EZ_TELEGRAM_ENABLED !== 'false'
+  const telegramBotToken = telegramEnabled ? env.TELEGRAM_BOT_TOKEN?.trim() || '' : ''
+  if (!telegramEnabled && !env.EZ_APPLICATION_PORT) throw new Error('Application-only execution requires EZ_APPLICATION_PORT')
+  if (telegramEnabled && !telegramBotToken) throw new Error('TELEGRAM_BOT_TOKEN is required')
 
   if (env.EZ_CHANNEL_BACKEND_URL && !env.EZ_CHANNEL_BACKEND_TOKEN?.trim()) throw new Error('EZ_CHANNEL_BACKEND_TOKEN is required')
   if (env.EZ_APPLICATION_PORT && env.EZ_CHANNEL_BACKEND_URL) throw new Error('Application input requires the native Ez executor, not a channel backend')
@@ -62,6 +66,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   }
   return {
     ...loadControlConfig(env),
+    telegramEnabled,
     telegramBotToken,
     repairEnabled: repairEnabled(env.EZ_REPAIR_ENABLED),
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
