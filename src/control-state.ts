@@ -24,6 +24,9 @@ export type SessionState = {
   hasStarted: boolean
   cli?: string
   nativeSessionId?: string
+  title?: string
+  archived?: boolean
+  preset?: AiPreset
 }
 
 type ControlState = {
@@ -56,6 +59,10 @@ const isState = (value: unknown): value is ControlState => {
       ? Number.isSafeInteger(p.telegramChatId) && p.telegramChatId < 0
       : p.kind === undefined && isPositiveId(p.telegramChatId))
   }
+  const session = (s: SessionState) => s && /^[0-9a-f-]{36}$/i.test(s.sessionId) && typeof s.hasStarted === 'boolean' &&
+    (s.title === undefined || (typeof s.title === 'string' && s.title.length <= 80)) &&
+    (s.archived === undefined || typeof s.archived === 'boolean') &&
+    (s.preset === undefined || (isPreset(s.preset) && s.preset.cli === s.cli))
   return (
     candidate.version === 1 &&
     Array.isArray(candidate.pending) &&
@@ -67,12 +74,19 @@ const isState = (value: unknown): value is ControlState => {
       candidate.ai.presets.some((p) => p.id === candidate.ai!.selectedId) &&
       (candidate.ai.recentIds === undefined || isRecentIds(candidate.ai.recentIds)))) &&
     (candidate.sessions === undefined || (Array.isArray(candidate.sessions) && candidate.sessions.every(
-      (s) => /^[0-9a-f-]{36}$/i.test(s.sessionId) && typeof s.hasStarted === 'boolean'))) &&
+      session))) &&
     (candidate.activeSession == null ||
-      (typeof candidate.activeSession.sessionId === 'string' &&
-        /^[0-9a-f-]{36}$/i.test(candidate.activeSession.sessionId) &&
-        typeof candidate.activeSession.hasStarted === 'boolean'))
+      session(candidate.activeSession))
   )
+}
+
+export const sessionTitle = (session: SessionState): string =>
+  session.title || `Conversation ${session.sessionId.slice(0, 8)}`
+
+const rememberPreset = (state: ControlState) => {
+  const preset = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
+  if (state.activeSession && preset && state.activeSession.cli === preset.cli)
+    state.activeSession.preset = preset
 }
 
 const wait = (milliseconds: number): Promise<void> =>
@@ -253,6 +267,68 @@ export class ControlStore {
     })
   }
 
+  async listSessions(): Promise<SessionState[]> {
+    const state = await this.status()
+    return [...(state.activeSession ? [state.activeSession] : []), ...(state.sessions ?? []).slice().reverse()]
+  }
+
+  async switchSession(sessionId: string): Promise<SessionState> {
+    return this.withLock(async () => {
+      const state = await this.readState()
+      if (state.activeSession?.sessionId === sessionId) return state.activeSession
+      const session = state.sessions?.find(s => s.sessionId === sessionId)
+      if (!session || session.archived) throw new Error('Conversation unavailable. Open /chats again.')
+      if (session.cli === 'agy')
+        throw new Error('Antigravity only resumes its latest conversation; selecting an older session is not supported.')
+      const ai = state.ai
+      // Older sessions did not record their model. Reuse a known preset for the
+      // same CLI; never resume an engine ID through a different client.
+      const preset = session.preset ?? ai?.presets.find(p => p.cli === session.cli)
+      if (!ai || !preset || preset.cli !== session.cli)
+        throw new Error('This older conversation has no saved AI binding. Start a new conversation.')
+      if (session.hasStarted && ['codex', 'codex-gui', 'opencode'].includes(session.cli!) && !session.nativeSessionId)
+        throw new Error('This conversation has no native session ID. Start a new conversation.')
+      assertEffort(preset.effort, preset.model, preset.cli)
+      rememberPreset(state)
+      state.sessions = state.sessions!.filter(s => s.sessionId !== sessionId)
+      if (state.activeSession) state.sessions.push(state.activeSession)
+      state.activeSession = session
+      ai.presets = [...ai.presets.filter(p => p.id !== preset.id), persistedPreset(preset)]
+      ai.selectedId = preset.id
+      await this.writeState(state)
+      return session
+    })
+  }
+
+  async archiveSession(sessionId: string, archived: boolean): Promise<void> {
+    await this.withLock(async () => {
+      const state = await this.readState()
+      const session = state.activeSession?.sessionId === sessionId ? state.activeSession
+        : state.sessions?.find(s => s.sessionId === sessionId)
+      if (!session) throw new Error('Conversation unavailable. Open /chats again.')
+      if (archived && state.activeSession === session) {
+        rememberPreset(state)
+        state.sessions ??= []
+        state.sessions.push(session)
+        state.activeSession = null
+        if (state.ai) state.ai.selectedId = state.ai.defaultId
+      }
+      session.archived = archived
+      await this.writeState(state)
+    })
+  }
+
+  async renameSession(title: string): Promise<void> {
+    title = title.replace(/\s+/g, ' ').trim()
+    if (!title || title.length > 80) throw new Error('Use /rename followed by a name of 1–80 characters.')
+    await this.withLock(async () => {
+      const state = await this.readState()
+      if (!state.activeSession) throw new Error('Open a conversation first with /chats or /new.')
+      state.activeSession.title = title
+      await this.writeState(state)
+    })
+  }
+
   async resetSession(): Promise<SessionState> {
     return this.withLock(async () => {
       const state = await this.readState()
@@ -261,6 +337,7 @@ export class ControlStore {
         hasStarted: false,
         cli: state.ai?.presets.find((p) => p.id === state.ai!.defaultId)?.cli,
       }
+      rememberPreset(state)
       if (state.activeSession) (state.sessions ??= []).push(state.activeSession)
       if (state.ai) state.ai.selectedId = state.ai.defaultId
       state.activeSession = next
@@ -296,13 +373,16 @@ export class ControlStore {
     })
   }
 
-  async captureChoice(initial: AiPreset): Promise<ExecutionChoice> {
+  async captureChoice(initial: AiPreset, title?: string): Promise<ExecutionChoice> {
     return this.withLock(async () => {
       const state = await this.readState()
       state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id, recentIds: [] }
       const preset = state.ai.presets.find((p) => p.id === state.ai!.selectedId)!
       state.activeSession ??= { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
       if (!state.activeSession.cli && !state.activeSession.hasStarted) state.activeSession.cli = preset.cli
+      if (state.activeSession.cli === preset.cli) state.activeSession.preset = preset
+      if (!state.activeSession.title && title?.trim())
+        state.activeSession.title = title.replace(/\s+/g, ' ').trim().slice(0, 80)
       await this.writeState(state)
       return { sessionId: state.activeSession.sessionId, preset }
     })
@@ -359,6 +439,7 @@ export class ControlStore {
       const current = ai.presets.find((p) => p.id === ai.selectedId)!
       if (state.activeSession && (current.cli !== preset.cli || !state.activeSession.cli) && !fresh) return false
       if (fresh || !state.activeSession) {
+        rememberPreset(state)
         if (state.activeSession) (state.sessions ??= []).push(state.activeSession)
         state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
       }

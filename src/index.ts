@@ -30,6 +30,7 @@ import { sanitizeFileName, stageIncomingFile, workspaceFile } from './files.js'
 import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
+import { createConversationMenu } from './conversation-menu.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
 import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
@@ -64,6 +65,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let taskTimer: ReturnType<typeof setInterval> | undefined
   let drainTimer: ReturnType<typeof setInterval> | undefined
   const codexHome = join(config.controlDir, 'cli', 'codex')
+  const conversationMenu = createConversationMenu(control)
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
   const durableWorkerChoice = () => control.captureChoice(aiMenu.initial)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
@@ -546,7 +548,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // Keep the retired command from becoming an agent prompt while old clients catch up.
   const retiredCommands = ['/settings']
   const commands = mainCommands
-  const controlCommand = (text?: string) => text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
+  const controlCommand = (text?: string) => /^\/rename(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text?.trim() ?? '')
+    ? '/rename' : text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
   const statusKeyboard = () => new InlineKeyboard()
     .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
     .text('Retry failed incoming message', 'menu:retry').row()
@@ -647,7 +650,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           updateId: ctx.update.update_id, chatId: owner.telegramChatId, fromId: owner.telegramUserId,
           text: JSON.stringify({event:'owner_message_in_unbound_group',chatId:ctx.chat.id,title:ctx.chat.title,messageId:message.message_id,text:message.text}),
         })
-      } else if (await inbox.accept(ctx.update, await control.captureChoice(aiMenu.initial))) scheduleIntake()
+      } else if (await inbox.accept(ctx.update, await control.captureChoice(aiMenu.initial, message?.text || message?.caption))) scheduleIntake()
       return
     }
     if (replay.has(ctx.update)) {
@@ -661,7 +664,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const approval = ctx.callbackQuery?.data?.startsWith('approval:')
     if (!ordinary && !approval) return next()
     if (!(await checkOwner(ctx))) return
-    if (await inbox.accept(ctx.update, await control.captureChoice(aiMenu.initial))) scheduleIntake()
+    if (await inbox.accept(ctx.update, await control.captureChoice(aiMenu.initial, message?.text || message?.caption))) scheduleIntake()
   })
 
   bot.on('message:text', async (ctx) => {
@@ -669,11 +672,22 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
     const text = controlCommand(ctx.message.text)
 
-    if (config.channelBackendUrl && ['/new', '/ai', '/settings'].includes(text ?? '')) {
+    if (config.channelBackendUrl && ['/new', '/chats', '/rename', '/ai', '/settings'].includes(text ?? '')) {
       await ctx.reply('Conversation and model settings are managed in the connected application.')
       return
     }
 
+    if (text === '/chats') {
+      await conversationMenu.list(ctx)
+      return
+    }
+    if (text === '/rename') {
+      try {
+        await control.renameSession(ctx.message.text.trim().replace(/^\/rename(?:@[a-zA-Z0-9_]+)?(?:\s+|$)/, ''))
+        await ctx.reply('Conversation renamed.')
+      } catch (error) { await ctx.reply(error instanceof Error ? error.message : 'Rename failed.') }
+      return
+    }
     if (text === '/ai') {
       await aiMenu.list(ctx)
       return
@@ -903,14 +917,19 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         })
         console.info('Approval decision recorded', { actionId, decision: isApproved ? 'approved' : 'denied' })
       }
-    } else if (config.channelBackendUrl && (['menu:new', 'menu:ai', 'menu:settings'].includes(data) || data.startsWith('ai:'))) {
+    } else if (config.channelBackendUrl && (['menu:new', 'menu:chats', 'menu:ai', 'menu:settings'].includes(data) || data.startsWith('ai:') || data.startsWith('chat:'))) {
       await ctx.answerCallbackQuery()
       await ctx.reply('Conversation and model settings are managed in the connected application.')
+    } else if (await conversationMenu.handle(ctx)) {
+      return
     } else if (await aiMenu.handle(ctx)) {
       return
     } else if (data.startsWith('menu:')) {
       const action = data.slice(5)
-      if (action === 'ai') {
+      if (action === 'chats') {
+        await ctx.answerCallbackQuery()
+        await conversationMenu.list(ctx)
+      } else if (action === 'ai') {
         await ctx.answerCallbackQuery()
         await aiMenu.list(ctx)
       } else if (action === 'settings') {
