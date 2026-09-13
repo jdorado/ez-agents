@@ -7,10 +7,32 @@ const image = process.env.EZ_RELAY_IMAGE || 'ezenciel-agents:local';
 const dir = mkdtempSync(join(tmpdir(), 'ez-docker-qa-'));
 const holder = `ez-main-lock-qa-${process.pid}`;
 const volume = `${holder}-control`;
+const application = `${holder}-application`;
 const marker = 'qa-private-secret-never-in-executor';
 writeFileSync(join(dir, 'relay.env'), `TELEGRAM_BOT_TOKEN=${marker}\n`, { mode: 0o600 });
+writeFileSync(join(dir, 'node'), `#!/bin/sh\nIFS= read -r value <&3\n[ "$value" = "TELEGRAM_BOT_TOKEN=${marker}" ] || exit 91\nexec /usr/local/bin/node "$@"\n`, { mode: 0o555 });
 const run = (args) => spawnSync('docker', args, { encoding: 'utf8', timeout: 60000 });
 try {
+  const inherited = run(['run','--rm','--mount',`type=bind,src=${join(dir,'relay.env')},dst=/run/secrets/relay_env,readonly`,
+    '--mount',`type=bind,src=${join(dir,'node')},dst=/qa/node,readonly`,'-e','PATH=/qa:/usr/local/bin:/usr/bin:/bin',image,'application','--help']);
+  assert.equal(inherited.status,0,inherited.stderr);
+  const nonroot = ['--user','20000:20000','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
+    '--tmpfs','/tmp:mode=1777','--tmpfs','/state/control:uid=20000,gid=20000,mode=700',
+    '--tmpfs','/state/home:uid=20000,gid=20000,mode=700','--tmpfs','/workspace:uid=20000,gid=20000,mode=700',
+    '-e','EZ_TELEGRAM_ENABLED=false','-e','EZ_APPLICATION_PORT=8110','-e','EZ_EXECUTOR_TRANSPORT=local','-e','EZ_EXECUTOR_CLI=codex'];
+  const help = run(['run','--rm',...nonroot,image,'application','--help']);
+  assert.equal(help.status,0,help.stderr);
+  assert.match(help.stdout,/ezenciel-agents-application/);
+  const started = run(['run','-d','--name',application,...nonroot,image,'start']);
+  assert.equal(started.status,0,started.stderr);
+  let ready = false;
+  for (let n=0;n<60;n++) {
+    if (run(['exec',application,'node','/app/docker/healthcheck.mjs']).status===0) { ready=true; break; }
+    await new Promise(resolve=>setTimeout(resolve,200));
+  }
+  assert.ok(ready,run(['logs',application]).stderr);
+  assert.equal(run(['stop','--time','10',application]).status,0);
+  assert.equal(run(['inspect','--format','{{.State.ExitCode}}',application]).stdout.trim(),'0');
   const probe = `
     const fs = require('fs'), assert = require('assert/strict');
     assert.equal(process.getuid(), 1000);
@@ -43,5 +65,5 @@ try {
   assert.equal(run(['kill',holder]).status,0);
   const recovered=run(['run','--rm','-v',`${volume}:/state/control`,image,'exec','node','-e','process.exit(0)']);
   assert.equal(recovered.status,0,recovered.stderr);
-  console.log('Docker smoke passed: non-root executor, private secret mount/environment, literal argv, exit code, no Docker socket, duplicate writer rejection and crash lock release.');
-} finally { run(['rm','-f',holder]); run(['volume','rm',volume]); rmSync(dir, {recursive:true, force:true}); }
+  console.log('Docker smoke passed: direct non-root application help/start/health/stop, inherited private descriptor, non-root executor, private secret isolation, literal argv, exit code, no Docker socket, duplicate writer rejection and crash lock release.');
+} finally { run(['rm','-f',holder,application]); run(['volume','rm',volume]); rmSync(dir, {recursive:true, force:true}); }
