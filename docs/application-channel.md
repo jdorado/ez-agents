@@ -105,3 +105,49 @@ Do this before submitting work for that scope. Import does not copy transcripts,
 change the model preset, or merge histories. Verify the next real native turn
 recalls the intended history and the app renders its reply before removing the
 old deployment. Keep exactly one executor owner throughout the cutover.
+
+## Reviewed deployment migration
+
+The first upgrade adding the two optional application listener environment lines
+changes `compose.yaml`. The existing updater deliberately rejects that runtime
+shape change with “Runtime deployment changed; a separately reviewed migration is
+required.” Keep this guard. Installation requires a separately reviewed deployment
+migration before subsequent ordinary updates can use the new baseline.
+
+The operator verifies the immutable archive's SHA-256, extracts it into a new
+versioned package directory, copies `docker/pnpm-lock.yaml` to `pnpm-lock.yaml`,
+and installs frozen dependencies **inside that package root**. Verify the new
+application CLI and root-local `tsx` resolve. Build its runtime image without
+stopping or changing the existing agent. Then the authorized deployment owner
+switches the saved package/image binding using the standard host/update setup,
+preserving the agent's existing workspace, control, native engine state, owner
+pairing and plugin registry. Do not copy another agent's state or disable the
+updater's deployment compatibility check.
+
+For Docker applications, a deployment-owned overlay can attach the ordinary relay
+to an explicitly created private network shared with the application backend:
+
+```yaml
+services:
+  relay:
+    environment:
+      EZ_APPLICATION_PORT: "8787"
+      EZ_APPLICATION_HOST: "0.0.0.0"
+    networks:
+      default: {}
+      application:
+        aliases: [standard-agent]
+networks:
+  application:
+    external: true
+    name: ${EZ_APPLICATION_NETWORK:?Set the deployment-owned application network}
+```
+
+Create that network once through normal Docker administration; attach the backend
+to the same external network in its own deployment overlay. Preserve the default
+network. The backend connects to `http://standard-agent:8787`; no `ports` entry or
+host listener is required. Keep the overlay outside the package, owned by the
+deployment, and include it in that deployment's saved Compose invocation. This is
+an explicit network configuration, not a second runtime or automatic discovery
+service. Read back the loaded package/image and verify a real authenticated app
+request after switching; preparation and image build alone are not rollout.
