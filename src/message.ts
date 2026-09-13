@@ -2,17 +2,37 @@ import { readFile } from 'node:fs/promises'
 import { loadControlConfig } from './config.js'
 import { parseMessageArgs, sendRunDocument, sendRunText, sendRunVoice } from './message-send.js'
 import { RunStore } from './runs.js'
+import { parseArgs } from 'node:util'
+import { deliveredMessages } from './message-history.js'
 
 const rawArgs = process.argv.slice(2)
 if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
   console.log(
     'Usage: ezenciel-agents-message [--text-file <path> | --text <text>] [--document <path>] [--voice <text>] [--reply-to <id>]',
   )
+  console.log('History: ezenciel-agents-message history [--limit 1..50] [--message-id ID] (read-only, bound Telegram chat, across sessions)')
   console.log('Text: --text decodes \\n as a newline and \\\\ as a literal backslash; --text-file preserves file content.')
   process.exit(0)
 }
 
 const runId = process.env.EZ_RUN_ID?.trim()
+if (rawArgs[0] === 'history') {
+  try {
+    const { values } = parseArgs({ args: rawArgs.slice(1), options: {
+      limit: { type: 'string' }, 'message-id': { type: 'string' },
+    } })
+    if (!runId) throw new Error('EZ_RUN_ID is required')
+    const result = await deliveredMessages(loadControlConfig().controlDir, runId, {
+      limit: values.limit === undefined ? undefined : Number(values.limit),
+      messageId: values['message-id'] === undefined ? undefined : Number(values['message-id']),
+    })
+    await new Promise<void>((resolve, reject) => process.stdout.write(JSON.stringify(result) + '\n', error => error ? reject(error) : resolve()))
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
+  process.exit(0)
+}
 const args = parseMessageArgs(rawArgs)
 if (!runId) {
   console.error('EZ_RUN_ID is required')

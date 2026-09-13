@@ -220,6 +220,15 @@ history; **Archived conversations → select a name → Restore conversation** b
 leaves the next message to start a fresh one. Running and queued work stays bound
 to its original conversation; archive does not cancel work.
 
+Agents can inspect what was sent to the bound Telegram chat across conversations
+with `ezenciel-agents-message history` (latest 8 deliveries), `--limit N` (1–50),
+or `--message-id ID` for a specific message, including a chunk of a longer report.
+This read-only command requires an active owner Telegram run and returns confirmed
+local receipts with message IDs, delivery times and source run/session references.
+It does not change the selected conversation or inject history into prompts.
+Only retained receipts from the current owner binding are available; Telegram
+edits/deletions and attachment contents are not fetched.
+
 Existing conversations without a title show their first saved message and date when
 available. Empty routing placeholders are omitted from history; + New conversation
 is the create action. Back updates the current menu without creating a conversation. Use /rename for a custom name. Older
