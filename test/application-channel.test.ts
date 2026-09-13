@@ -240,3 +240,44 @@ test('HTTP admission errors distinguish absent work from an existing conflicting
   const error = await conflict.json() as { admitted: boolean; runId: string }
   assert.equal(error.admitted, true); assert.equal(error.runId, run.id)
 })
+
+test('following Telegram uses current conversation and model, but retries retain admitted work', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-app-follow-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const owned = await owner(root), control = new ControlStore(root, 1000)
+  const initial = initialPreset('codex')
+  const channel = new ApplicationChannel({ controlDir: root, initial, wake: () => {}, cancel: async () => {} })
+  const binding = (await channel.bindings.register('app', token(), owned, true))!
+  const input = { requestId: 'first', scope: 'main', text: 'Continue', followTelegram: true }
+  const current = await control.captureChoice(initial)
+  const first = await channel.submit(binding.bindingId, input)
+  assert.deepEqual(first.execution, current)
+  await control.resetSession()
+  const selected = { ...initial, id: 'different', name: 'Different', model: 'gpt-6-astra', effort: 'high' }
+  await control.savePreset(selected)
+  await control.selectPreset(selected.id, (await control.getActiveSession())!.sessionId)
+  const next = await channel.submit(binding.bindingId, { ...input, requestId: 'second' })
+  assert.notEqual(next.execution!.sessionId, first.execution!.sessionId)
+  assert.equal(next.execution!.preset.effort, 'high')
+  assert.equal(next.execution!.preset.model, 'gpt-6-astra')
+  assert.deepEqual((await channel.submit(binding.bindingId, input)).execution, first.execution)
+  await assert.rejects(channel.submit(binding.bindingId, { ...input, followTelegram: false }), /conflicts/)
+  const detail = await channel.submit(binding.bindingId, { requestId: 'detail', scope: 'exercise', text: 'Discuss' })
+  assert.notEqual(detail.execution!.sessionId, next.execution!.sessionId)
+  assert.equal((await control.getActiveSession())!.sessionId, next.execution!.sessionId)
+})
+
+test('following Telegram requires an explicit sharing grant and cannot override selected state', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-app-follow-authority-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const owned = await owner(root)
+  const channel = new ApplicationChannel({ controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {} })
+  const binding = (await channel.bindings.register('app', token(), owned))!
+  const input = { requestId: 'one', scope: 'main', text: 'Continue', followTelegram: true }
+  await assert.rejects(channel.submit(binding.bindingId, input), /authority/)
+  const shared = (await channel.bindings.register('shared', token(), owned, true))!
+  for (const extra of [{ ai: { cli: 'codex' } }, { activateTelegram: true }, { expectedNativeSessionId: 'old' }, { followTelegram: 'true' }]) {
+    await assert.rejects(channel.submit(shared.bindingId, { ...input, ...extra }), /Invalid application/)
+  }
+  assert.equal((await new RunStore(root).list()).length, 0)
+})
