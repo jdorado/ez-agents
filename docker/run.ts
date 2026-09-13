@@ -47,6 +47,6 @@ if (command === 'start') {
   child.on('exit', (code) => { process.exitCode = code ?? 1 })
 } else if (command === 'setup') {
   await (await import('../src/setup.js')).runCli()
-} else if (['owner', 'source', 'message', 'react'].includes(command)) {
-  await import(`../src/${command === 'source' ? 'source-cli' : command}.js`)
+} else if (['owner', 'source', 'application', 'message', 'react'].includes(command)) {
+  await import(`../src/${command === 'source' ? 'source-cli' : command === 'application' ? 'application-cli' : command}.js`)
 } else throw new Error('Use start, smoke, exec, setup, owner, source, message or react')

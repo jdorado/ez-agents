@@ -21,7 +21,8 @@
     "ezenciel-agents-host": "bin/ezenciel-agents-host",
     "ezenciel-agents-tools": "bin/ezenciel-agents-tools.mjs",
     "ezenciel-agents-ai": "bin/ezenciel-agents-ai.mjs",
-    "ezenciel-agents-watch": "bin/ezenciel-agents-watch.mjs"
+    "ezenciel-agents-watch": "bin/ezenciel-agents-watch.mjs",
+    "ezenciel-agents-application": "bin/ezenciel-agents-application.mjs"
   },
   "files": [
     "default-plugins.json",
