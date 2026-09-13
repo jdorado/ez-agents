@@ -16,6 +16,8 @@ export type Config = ControlConfig & {
   executorCli: string
   channelBackendUrl?: string
   channelBackendToken?: string
+  applicationPort?: number
+  applicationHost?: string
   geminiApiKey?: string
   openaiApiKey?: string
   pagerDutyRoutingKey?: string
@@ -46,6 +48,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   if (!telegramBotToken) throw new Error('TELEGRAM_BOT_TOKEN is required')
 
   if (env.EZ_CHANNEL_BACKEND_URL && !env.EZ_CHANNEL_BACKEND_TOKEN?.trim()) throw new Error('EZ_CHANNEL_BACKEND_TOKEN is required')
+  if (env.EZ_APPLICATION_PORT && env.EZ_CHANNEL_BACKEND_URL) throw new Error('Application input requires the native Ez executor, not a channel backend')
   const pagerDutyRoutingKey = env.PAGERDUTY_ROUTING_KEY?.trim()
   const pagerDutyStocksHealthUrl = env.EZ_PAGERDUTY_STOCKS_HEALTH_URL?.trim()
   if (pagerDutyStocksHealthUrl && !pagerDutyRoutingKey)
@@ -65,6 +68,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     executorTimeoutMs: 0,
     codexAutoCompactTokens: !env.EZ_CODEX_AUTO_COMPACT_TOKENS?.trim() ? undefined : positiveInteger(env.EZ_CODEX_AUTO_COMPACT_TOKENS, 'EZ_CODEX_AUTO_COMPACT_TOKENS'),
     executorCli: env.EZ_EXECUTOR_CLI?.trim() || 'agy',
+    applicationPort: env.EZ_APPLICATION_PORT ? positiveInteger(env.EZ_APPLICATION_PORT, 'EZ_APPLICATION_PORT') : undefined,
+    applicationHost: env.EZ_APPLICATION_HOST?.trim() || '127.0.0.1',
     channelBackendUrl: env.EZ_CHANNEL_BACKEND_URL?.trim(),
     channelBackendToken: env.EZ_CHANNEL_BACKEND_TOKEN?.trim(),
     geminiApiKey: env.GEMINI_API_KEY?.trim(),

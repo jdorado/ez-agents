@@ -27,6 +27,7 @@ export type SessionState = {
   title?: string
   archived?: boolean
   preset?: AiPreset
+  applicationScope?: string
 }
 
 type ControlState = {
@@ -62,6 +63,7 @@ const isState = (value: unknown): value is ControlState => {
   const session = (s: SessionState) => s && /^[0-9a-f-]{36}$/i.test(s.sessionId) && typeof s.hasStarted === 'boolean' &&
     (s.title === undefined || (typeof s.title === 'string' && s.title.length <= 80)) &&
     (s.archived === undefined || typeof s.archived === 'boolean') &&
+    (s.applicationScope === undefined || /^[a-f0-9]{64}$/.test(s.applicationScope)) &&
     (s.preset === undefined || (isPreset(s.preset) && s.preset.cli === s.cli))
   return (
     candidate.version === 1 &&
@@ -269,7 +271,7 @@ export class ControlStore {
 
   async listSessions(): Promise<SessionState[]> {
     const state = await this.status()
-    return [...(state.activeSession ? [state.activeSession] : []), ...(state.sessions ?? []).slice().reverse()]
+    return [...(state.activeSession ? [state.activeSession] : []), ...(state.sessions ?? []).filter(session => !session.applicationScope).slice().reverse()]
   }
 
   async switchSession(sessionId: string): Promise<SessionState> {
@@ -277,7 +279,7 @@ export class ControlStore {
       const state = await this.readState()
       if (state.activeSession?.sessionId === sessionId) return state.activeSession
       const session = state.sessions?.find(s => s.sessionId === sessionId)
-      if (!session || session.archived) throw new Error('Conversation unavailable. Open /chats again.')
+      if (!session || session.archived || session.applicationScope) throw new Error('Conversation unavailable. Open /chats again.')
       if (session.cli === 'agy')
         throw new Error('Antigravity only resumes its latest conversation; selecting an older session is not supported.')
       const ai = state.ai
@@ -385,6 +387,23 @@ export class ControlStore {
         state.activeSession.title = title.replace(/\s+/g, ' ').trim().slice(0, 80)
       await this.writeState(state)
       return { sessionId: state.activeSession.sessionId, preset }
+    })
+  }
+
+  async captureApplicationChoice(initial: AiPreset, scope: string): Promise<ExecutionChoice> {
+    if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('Invalid application scope')
+    return this.withLock(async () => {
+      const state = await this.readState()
+      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
+      state.sessions ??= []
+      const previous = state.sessions.find(session => session.applicationScope === scope)
+      if (previous?.preset) return { sessionId: previous.sessionId, preset: previous.preset }
+      const preset = state.ai.presets.find(item => item.id === state.ai!.selectedId)!
+      if (preset.cli === 'agy') throw new Error('Application scopes require an engine with explicit session selection')
+      const session: SessionState = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset, applicationScope: scope }
+      state.sessions.push(session)
+      await this.writeState(state)
+      return { sessionId: session.sessionId, preset }
     })
   }
 

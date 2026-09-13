@@ -1,3 +1,4 @@
+import { ApplicationBindings } from './application-channel.js'
 import { ControlStore } from './control-state.js'
 import { RunStore, type RunRecord } from './runs.js'
 import type { Owner } from './control-state.js'
@@ -21,5 +22,6 @@ export async function requireOwnerExecution(controlDir: string, runId: string): 
   const owner = (await new ControlStore(controlDir, 900_000).status()).owner
   const reason = executionBlockReason(run, owner)
   if (reason) throw new Error(`Execution blocked: ${reason}`)
+  if (run.application) await new ApplicationBindings(controlDir).authorize(run)
   return run
 }

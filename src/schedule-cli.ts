@@ -57,7 +57,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     if(!caller)throw new Error('Context requires an active owner run')
     const origin=caller.scheduled?.originRunId ? await runs.get(caller.scheduled.originRunId) : null
     if(origin && !ownsFailureRun(origin))throw new Error('Source context is outside this owner binding')
-    result={run:caller,busyReplies:await parallelReplyHistory(config.controlDir,caller),...(origin?{origin:await ownerConversationContext(config.controlDir,origin)}:{})}
+    result=caller.application ? {run:caller} : {run:caller,busyReplies:await parallelReplyHistory(config.controlDir,caller),...(origin?{origin:await ownerConversationContext(config.controlDir,origin)}:{})}
   }else if(action==='failures'){
     const limit=Number(v.limit || 20)
     if(!Number.isSafeInteger(limit) || limit<1 || limit>100)throw new Error('Limit must be 1..100')

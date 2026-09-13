@@ -172,6 +172,8 @@ test('host install exposes runnable public commands without source aliases',asyn
  for(const [name,entry] of Object.entries(manifest.bin)) assert.equal(await fs.realpath(path.join(f.home,'bin',name)),await fs.realpath(new URL('../'+entry,import.meta.url)));
  const result=await exec(path.join(f.home,'bin','ezenciel-agents-message'),['--help'],{env:{...process.env,PATH:path.dirname(process.execPath)+path.delimiter+process.env.PATH}});
  assert.match(result.stdout,/Usage: ezenciel-agents-message/);
+ const application=await exec(path.join(f.home,'bin','ezenciel-agents-application'),['--help'],{env:{...process.env,PATH:path.dirname(process.execPath)+path.delimiter+process.env.PATH}});
+ assert.match(application.stdout,/--token-file/);
 });
 test('copying another agent registry is rejected before any Docker operation',async t=>{
  const f=await fixture(t),other=path.join(f.root,'other');await init(f.home,f.workspace);await init(other,f.workspace);

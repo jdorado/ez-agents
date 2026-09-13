@@ -1,3 +1,4 @@
+import { validApplicationOrigin, type ApplicationOrigin } from './application-origin.js'
 import { type FailureEvidence, type FailureReview, validFailureReview, failureStamp, failureEvidence } from './failure.js'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -37,6 +38,7 @@ export type RunRecord = {
   nativeSessionId?: string
   scheduled?: ScheduledOrigin
   external?: ExternalOrigin
+  application?: ApplicationOrigin
 }
 
 export type OutboxItemType = 'message' | 'reaction' | 'document' | 'voice' | 'approval'
@@ -79,6 +81,8 @@ const isRun = (value: unknown): value is RunRecord => {
     (candidate.scheduled === undefined || validScheduledOrigin(candidate.scheduled)) &&
     (candidate.blockReason === undefined || ['owner-mismatch', 'external-execution-unavailable'].includes(candidate.blockReason)) &&
     (candidate.external === undefined || validOrigin(candidate.external)) &&
+    (candidate.id.startsWith('r_app_') === (candidate.application !== undefined)) &&
+    (candidate.application === undefined || (validApplicationOrigin(candidate.application) && candidate.external === undefined && candidate.scheduled === undefined && candidate.taskId === undefined && !candidate.replyOnly)) &&
     (candidate.execution === undefined || isExecutionChoice(candidate.execution))
   )
 }
@@ -122,6 +126,7 @@ export class RunStore {
     scheduled?: ScheduledOrigin
     external?: ExternalOrigin
     taskId?: string
+    application?: ApplicationOrigin
   }): Promise<RunRecord> {
     if (input.id) {
       const existing = await this.get(input.id)
@@ -142,6 +147,7 @@ export class RunStore {
       items: input.items,
       execution: input.execution,
       external: input.external,
+      application: input.application,
       scheduled: input.scheduled,
       status: 'queued',
       createdAt: new Date().toISOString(),
@@ -380,6 +386,20 @@ export class RunStore {
       }
     }
     return items.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  }
+
+  async applicationMessages(runId: string): Promise<{ id: string; text: string }[]> {
+    assertId(runId)
+    await this.ensure()
+    const messages = new Map<string, OutboxItem>()
+    for (const name of await readdir(this.outboxDir)) {
+      if (!name.startsWith(`${runId}_`) || !name.endsWith('.json') || name.includes('.tmp') || name.endsWith('.failed.json')) continue
+      try {
+        const item = JSON.parse(await readFile(path.join(this.outboxDir, name), 'utf8')) as OutboxItem
+        if (item.runId === runId && (!item.type || item.type === 'message') && typeof item.text === 'string') messages.set(item.id, item)
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    }
+    return [...messages.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(item => ({ id: item.id, text: item.text! }))
   }
 
   async claimOutbox(id: string): Promise<boolean> {
