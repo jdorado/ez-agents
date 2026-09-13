@@ -153,3 +153,71 @@ test('packaged admin command discovery and existing core child cancellation',asy
   assert.equal(response.status,200)
   await waitFor(async()=> (await new RunStore(root).get(run.id))?.status==='cancelled')
 })
+
+test('native history assertion blocks accidental fresh cutover without choosing a native session', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-app-import-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const owned = await owner(root), control = new ControlStore(root, 1000)
+  const channel = new ApplicationChannel({ controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {} })
+  const binding = (await channel.bindings.register('app', token(), owned))!
+  const input = { requestId: 'job', scope: 'main', text: 'Continue', expectedNativeSessionId: 'existing-native' }
+  await assert.rejects(channel.submit(binding.bindingId, input), /import the existing scope/)
+  assert.equal((await new RunStore(root).list()).length, 0)
+  const choice = await control.captureApplicationChoice(initialPreset('codex'), applicationScope(binding.bindingId, 'main'))
+  await control.saveNativeSession(choice.sessionId, 'existing-native')
+  const run = await channel.submit(binding.bindingId, input)
+  assert.equal((await channel.snapshot(binding.bindingId, run.id)).nativeSessionId, 'existing-native')
+  await assert.rejects(channel.submit(binding.bindingId, { ...input, requestId: 'other', expectedNativeSessionId: 'someone-else' }), /conflicts/)
+})
+
+test('explicit shared channel grant resumes one native session from app and Telegram', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-app-shared-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const owned = await owner(root), control = new ControlStore(root, 1000)
+  const channel = new ApplicationChannel({ controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {} })
+  const binding = (await channel.bindings.register('app', token(), owned, true))!
+  const input = { requestId: 'app-1', scope: 'biology', text: 'Continue', activateTelegram: true }
+  const app = await channel.submit(binding.bindingId, input)
+  await control.saveNativeSession(app.execution!.sessionId, 'biology-history')
+  const telegram = await control.captureChoice(initialPreset('codex'))
+  assert.equal(telegram.sessionId, app.execution!.sessionId)
+  assert.equal((await control.executionSession(telegram)).nativeSessionId, 'biology-history')
+  const selection = await channel.submit(binding.bindingId, { ...input, requestId: 'selection', scope: 'selection:1', activateTelegram: false })
+  assert.notEqual(selection.execution!.sessionId, telegram.sessionId)
+  assert.equal((await control.captureChoice(initialPreset('codex'))).sessionId, telegram.sessionId)
+  const appAgain = await channel.submit(binding.bindingId, { ...input, requestId: 'app-2' })
+  assert.equal(appAgain.execution!.sessionId, telegram.sessionId)
+  assert.equal((await control.listSessions()).filter(s => s.sessionId === telegram.sessionId).length, 1)
+  const other = (await channel.bindings.register('private', token(), owned))!
+  await channel.submit(other.bindingId, { ...input, requestId: 'private' })
+  assert.equal((await control.captureChoice(initialPreset('codex'))).sessionId, telegram.sessionId, 'an unshared app cannot switch Telegram')
+})
+
+test('application AI choice retains same-engine history and rejects cross-engine resume and changed retries', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-app-ai-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const channel = new ApplicationChannel({ controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {} })
+  const binding = (await channel.bindings.register('app', token(), await owner(root)))!
+  const input = { requestId: 'one', scope: 'main:codex', text: 'Hello', ai: { cli: 'codex', model: 'gpt-5.6-luna', effort: 'high' } }
+  const first = await channel.submit(binding.bindingId, input)
+  assert.equal(first.execution!.preset.model, input.ai.model)
+  const second = await channel.submit(binding.bindingId, { ...input, requestId: 'two', ai: { ...input.ai, model: 'gpt-5.6-terra' } })
+  assert.equal(first.execution!.sessionId, second.execution!.sessionId)
+  await assert.rejects(channel.submit(binding.bindingId, { ...input, ai: { ...input.ai, model: 'gpt-5.6-terra' } }), /conflicts/)
+  await assert.rejects(channel.submit(binding.bindingId, { ...input, requestId: 'three', ai: { cli: 'grok' } }), /engine/)
+})
+
+test('rejected history assertion cannot activate Telegram and incomplete native metadata does not hide cancellation', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-app-assertion-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const owned = await owner(root), control = new ControlStore(root, 1000)
+  const before = await control.captureChoice(initialPreset('codex'))
+  const channel = new ApplicationChannel({ controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {} })
+  const binding = (await channel.bindings.register('app', token(), owned, true))!
+  const input = { requestId: 'one', scope: 'main', text: 'Hello', activateTelegram: true, expectedNativeSessionId: 'old-native' }
+  await assert.rejects(channel.submit(binding.bindingId, input), /import/)
+  assert.equal((await control.captureChoice(initialPreset('codex'))).sessionId, before.sessionId)
+  const run = await channel.submit(binding.bindingId, { ...input, expectedNativeSessionId: undefined })
+  await control.markSessionStarted(run.execution!.sessionId)
+  assert.equal((await channel.snapshot(binding.bindingId, run.id)).id, run.id)
+})

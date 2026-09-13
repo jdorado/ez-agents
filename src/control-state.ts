@@ -28,6 +28,7 @@ export type SessionState = {
   archived?: boolean
   preset?: AiPreset
   applicationScope?: string
+  telegramShared?: boolean
 }
 
 type ControlState = {
@@ -64,6 +65,7 @@ const isState = (value: unknown): value is ControlState => {
     (s.title === undefined || (typeof s.title === 'string' && s.title.length <= 80)) &&
     (s.archived === undefined || typeof s.archived === 'boolean') &&
     (s.applicationScope === undefined || /^[a-f0-9]{64}$/.test(s.applicationScope)) &&
+    (s.telegramShared === undefined || typeof s.telegramShared === 'boolean') &&
     (s.preset === undefined || (isPreset(s.preset) && s.preset.cli === s.cli))
   return (
     candidate.version === 1 &&
@@ -271,7 +273,7 @@ export class ControlStore {
 
   async listSessions(): Promise<SessionState[]> {
     const state = await this.status()
-    return [...(state.activeSession ? [state.activeSession] : []), ...(state.sessions ?? []).filter(session => !session.applicationScope).slice().reverse()]
+    return [...(state.activeSession ? [state.activeSession] : []), ...(state.sessions ?? []).filter(session => !session.applicationScope || session.telegramShared).slice().reverse()]
   }
 
   async switchSession(sessionId: string): Promise<SessionState> {
@@ -279,7 +281,7 @@ export class ControlStore {
       const state = await this.readState()
       if (state.activeSession?.sessionId === sessionId) return state.activeSession
       const session = state.sessions?.find(s => s.sessionId === sessionId)
-      if (!session || session.archived || session.applicationScope) throw new Error('Conversation unavailable. Open /chats again.')
+      if (!session || session.archived || (session.applicationScope && !session.telegramShared)) throw new Error('Conversation unavailable. Open /chats again.')
       if (session.cli === 'agy')
         throw new Error('Antigravity only resumes its latest conversation; selecting an older session is not supported.')
       const ai = state.ai
@@ -390,18 +392,38 @@ export class ControlStore {
     })
   }
 
-  async captureApplicationChoice(initial: AiPreset, scope: string): Promise<ExecutionChoice> {
+  async captureApplicationChoice(initial: AiPreset, scope: string, shareTelegram = false, requested?: AiPreset, expectedNativeSessionId?: string): Promise<ExecutionChoice> {
     if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('Invalid application scope')
     return this.withLock(async () => {
       const state = await this.readState()
       state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
       state.sessions ??= []
-      const previous = state.sessions.find(session => session.applicationScope === scope)
-      if (previous?.preset) return { sessionId: previous.sessionId, preset: previous.preset }
-      const preset = state.ai.presets.find(item => item.id === state.ai!.selectedId)!
+      const previous = state.activeSession?.applicationScope === scope ? state.activeSession : state.sessions.find(session => session.applicationScope === scope)
+      if (expectedNativeSessionId !== undefined && previous?.nativeSessionId !== expectedNativeSessionId) throw new Error('Application request conflicts with native session; import the existing scope before cutover')
+      const activate = (session: SessionState) => {
+        if (!shareTelegram) return
+        session.telegramShared = true
+        session.archived = false
+        if (state.activeSession?.sessionId !== session.sessionId) {
+          state.sessions = state.sessions!.filter(item => item.sessionId !== session.sessionId)
+          if (state.activeSession) state.sessions.push(state.activeSession)
+          state.activeSession = session
+        }
+        state.ai!.presets = [...state.ai!.presets.filter(item => item.id !== session.preset!.id), session.preset!]
+        state.ai!.selectedId = session.preset!.id
+      }
+      if (previous?.preset) {
+        if (requested && requested.cli !== previous.cli) throw new Error('Application request conflicts with existing session engine')
+        if (requested) previous.preset = requested
+        activate(previous)
+        if (shareTelegram || requested) await this.writeState(state)
+        return { sessionId: previous.sessionId, preset: previous.preset }
+      }
+      const preset = requested ?? state.ai.presets.find(item => item.id === state.ai!.selectedId)!
       if (preset.cli === 'agy') throw new Error('Application scopes require an engine with explicit session selection')
       const session: SessionState = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset, applicationScope: scope }
       state.sessions.push(session)
+      activate(session)
       await this.writeState(state)
       return { sessionId: session.sessionId, preset }
     })

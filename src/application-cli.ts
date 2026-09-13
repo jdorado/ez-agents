@@ -9,9 +9,9 @@ import { applicationId } from './application-origin.js'
 async function main() {
   const { values } = parseArgs({ options: {
     id: {type:'string'}, 'token-file': {type:'string'}, revoke: {type:'boolean'}, list: {type:'boolean'}, help: {type:'boolean'},
-    'import-scope': {type:'string'}, 'native-session': {type:'string'}, cli: {type:'string'},
+    'import-scope': {type:'string'}, 'native-session': {type:'string'}, cli: {type:'string'}, 'share-telegram': {type:'boolean'},
   } })
-  if (values.help) { console.log('ezenciel-agents-application --id NAME --token-file PRIVATE_FILE | --id NAME --revoke | --list | --id NAME --import-scope SCOPE --native-session ID --cli CLI'); return }
+  if (values.help) { console.log('ezenciel-agents-application --id NAME --token-file PRIVATE_FILE [--share-telegram] | --id NAME --revoke | --list | --id NAME --import-scope SCOPE --native-session ID --cli CLI'); return }
   if (process.env.EZ_RUN_ID) throw new Error('Application authority is configured by the installing administrator outside agent turns')
   const config = loadControlConfig(), control = new ControlStore(config.controlDir, config.pairingTtlMs)
   const owner = (await control.status()).owner
@@ -28,7 +28,7 @@ async function main() {
     console.log(JSON.stringify({ok:true,scope:values['import-scope'],sessionId:choice.sessionId})); return
   }
   if (!!values['token-file'] === !!values.revoke) throw new Error('Provide --token-file or --revoke')
-  const binding = await bindings.register(values.id, values.revoke ? null : (await readFile(values['token-file']!, 'utf8')).trim(), owner)
+  const binding = await bindings.register(values.id, values.revoke ? null : (await readFile(values['token-file']!, 'utf8')).trim(), owner, values['share-telegram'])
   console.log(JSON.stringify({ok:true,id:values.id,bindingId:binding?.bindingId,revoked:Boolean(values.revoke)}))
 }
 main().catch(error => { console.error(error.message); process.exitCode = 1 })

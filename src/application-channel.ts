@@ -6,23 +6,24 @@ import { ControlStore, type Owner } from './control-state.js'
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
 import { ownsRun } from './identity.js'
 import { applicationId, validApplicationOrigin } from './application-origin.js'
-import type { AiPreset } from './ai.js'
+import { isPreset, type AiPreset } from './ai.js'
+import { assertEffort } from './model-policy.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const sameOwner = (left: Owner, right: Owner | null) => !!right && left.telegramUserId === right.telegramUserId && left.telegramChatId === right.telegramChatId && left.pairedAt === right.pairedAt
 export const applicationScope = (bindingId: string, scope: string) => hash(JSON.stringify([bindingId, scope]))
-type Binding = { id: string; bindingId: string; tokenHash: string; owner: Owner }
+type Binding = { id: string; bindingId: string; tokenHash: string; owner: Owner; shareTelegram?: boolean }
 
 export class ApplicationBindings {
   constructor(private controlDir: string) {}
   async list(): Promise<Binding[]> {
     try {
       const bindings = JSON.parse(await readFile(join(this.controlDir, 'application-bindings.json'), 'utf8'))
-      if (!Array.isArray(bindings) || bindings.some(binding => !applicationId(binding?.id) || !/^[a-f0-9-]{36}$/.test(binding.bindingId) || !/^[a-f0-9]{64}$/.test(binding.tokenHash) || !Number.isSafeInteger(binding.owner?.telegramUserId) || !Number.isSafeInteger(binding.owner?.telegramChatId) || typeof binding.owner?.pairedAt !== 'string')) throw new Error('Invalid application binding state')
+      if (!Array.isArray(bindings) || bindings.some(binding => !applicationId(binding?.id) || !/^[a-f0-9-]{36}$/.test(binding.bindingId) || !/^[a-f0-9]{64}$/.test(binding.tokenHash) || !Number.isSafeInteger(binding.owner?.telegramUserId) || !Number.isSafeInteger(binding.owner?.telegramChatId) || typeof binding.owner?.pairedAt !== 'string' || (binding.shareTelegram !== undefined && typeof binding.shareTelegram !== 'boolean'))) throw new Error('Invalid application binding state')
       return bindings
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
   }
-  async register(id: string, token: string | null, owner: Owner): Promise<Binding | undefined> {
+  async register(id: string, token: string | null, owner: Owner, shareTelegram = false): Promise<Binding | undefined> {
     if (!applicationId(id) || (token !== null && !/^[A-Za-z0-9_-]{43,200}$/.test(token))) throw new Error('Use a simple application ID and a random token of at least 256 bits encoded as base64url')
     await mkdir(this.controlDir, { recursive: true, mode: 0o700 })
     const file = join(this.controlDir, 'application-bindings.json')
@@ -31,7 +32,7 @@ export class ApplicationBindings {
       const bindings = await this.list()
       const existing = bindings.find(binding => binding.id === id)
       if (token !== null && existing) throw new Error('Application already registered; revoke before replacing its authority')
-      const binding = token === null ? undefined : { id, bindingId: randomUUID(), tokenHash: hash(token), owner }
+      const binding = token === null ? undefined : { id, bindingId: randomUUID(), tokenHash: hash(token), owner, ...(shareTelegram ? { shareTelegram: true } : {}) }
       const next = [...bindings.filter(item => item.id !== id), ...(binding ? [binding] : [])]
       const temporary = `${file}.${randomUUID()}.tmp`
       await writeFile(temporary, JSON.stringify(next), { mode: 0o600 })
@@ -67,8 +68,17 @@ export class ApplicationChannel {
   private get runs() { return new RunStore(this.options.controlDir) }
   async submit(bindingId: string, input: unknown): Promise<RunRecord> {
     const work = this.admissions.then(async () => {
-      const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; context?: Record<string, unknown> }
-      if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','context'].includes(key))) throw new Error('Invalid application request')
+      const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; ai?: { cli?: unknown; model?: unknown; effort?: unknown } }
+      if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','context','expectedNativeSessionId','activateTelegram','ai'].includes(key))) throw new Error('Invalid application request')
+      if (value.expectedNativeSessionId !== undefined && (typeof value.expectedNativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(value.expectedNativeSessionId))) throw new Error('Invalid application native session assertion')
+      if (value.activateTelegram !== undefined && typeof value.activateTelegram !== 'boolean') throw new Error('Invalid application Telegram activation')
+      let requestedPreset: AiPreset | undefined
+      if (value.ai !== undefined) {
+        const candidate = { ...value.ai, id: 'application', name: 'Application selection' }
+        if (!value.ai || Object.keys(value.ai).some(key => !['cli', 'model', 'effort'].includes(key)) || !isPreset(candidate)) throw new Error('Invalid application AI selection')
+        assertEffort(candidate.effort, candidate.model, candidate.cli)
+        requestedPreset = candidate
+      }
       const application = { bindingId, requestId: value.requestId, scope: value.scope, ...(value.context === undefined ? {} : { context: value.context }) }
       if (!validApplicationOrigin(application)) throw new Error('Invalid application context')
       const binding = (await this.bindings.list()).find(item => item.bindingId === bindingId)
@@ -77,12 +87,13 @@ export class ApplicationChannel {
       const existing = await this.runs.get(id)
       if (existing) {
         await this.bindings.authorize(existing)
+        if (requestedPreset && (existing.execution?.preset.cli !== requestedPreset.cli || existing.execution?.preset.model !== requestedPreset.model || existing.execution?.preset.effort !== requestedPreset.effort)) throw new Error('Application request ID conflicts with prior AI selection')
         if (existing.application?.scope !== value.scope || existing.texts[0] !== value.text) throw new Error('Application request ID conflicts with prior scope or text')
         return existing // Retried context never replaces already admitted capabilities.
       }
       const control = new ControlStore(this.options.controlDir, 900000)
       if (!sameOwner(binding.owner, (await control.status()).owner)) throw new Error('Application authority revoked')
-      const execution = await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope))
+      const execution = await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope), binding.shareTelegram === true && value.activateTelegram === true, requestedPreset, value.expectedNativeSessionId as string | undefined)
       const run = await this.runs.create({ id, chatId: binding.owner.telegramChatId, telegramUserId: binding.owner.telegramUserId, texts: [value.text], execution, application })
       this.options.wake()
       return run
@@ -94,7 +105,9 @@ export class ApplicationChannel {
     const run = await this.runs.get(id)
     if (!run || run.application?.bindingId !== bindingId) throw new Error('Unknown application run')
     await this.bindings.authorize(run)
-    return { id: run.id, scope: run.application.scope, status: run.status, messages: await this.runs.applicationMessages(run.id), ...(run.status === 'failed' ? { error: 'Agent execution failed; inspect the core run' } : {}) }
+    const state = await new ControlStore(this.options.controlDir, 900000).status()
+    const session = state.activeSession?.sessionId === run.execution?.sessionId ? state.activeSession : state.sessions?.find(item => item.sessionId === run.execution?.sessionId)
+    return { ...(session ? { sessionId: session.sessionId, nativeSessionId: session.nativeSessionId, cli: session.cli } : {}), id: run.id, scope: run.application.scope, status: run.status, messages: await this.runs.applicationMessages(run.id), ...(run.status === 'failed' ? { error: 'Agent execution failed; inspect the core run' } : {}) }
   }
   async deliver(run: RunRecord, item: OutboxItem): Promise<void> {
     await this.bindings.authorize(run)
