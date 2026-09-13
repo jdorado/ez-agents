@@ -59,7 +59,7 @@ const fixture = async (overrides: Partial<Config> = {}) => {
     } as typeof relay.bot.botInfo
     relay.bot.api.config.use(async (_previous, method, payload) => {
       if (method === 'getChatMember' && members.get((payload as {user_id: number}).user_id) === 'error') throw new Error('Fixture membership unavailable')
-      if (method === 'sendMessage') replies.push((payload as { text: string }).text)
+      if (method === 'sendMessage' || method === 'editMessageText') replies.push((payload as { text: string }).text)
       const keyboard = (payload as { reply_markup?: { inline_keyboard?: { text: string; callback_data: string }[][] } }).reply_markup?.inline_keyboard
       if (keyboard) keyboards.push(keyboard)
       return {
@@ -600,7 +600,7 @@ test('older conversation names come from owner messages and detail keeps archive
     await f.relay.bot.handleUpdate(message(1, '/chats'))
     const rows = f.keyboards.at(-1)!
     assert.ok(rows.flat().some(b => b.text.startsWith('Client launch checklist · ')))
-    assert.ok(rows.flat().some(b => b.text === '✓ New conversation'))
+    assert.ok(!rows.flat().some(b => b.text === '✓ New conversation'))
     assert.ok(!rows.flat().some(b => b.text.includes(old.sessionId.slice(0, 8))))
     assert.ok(!rows.flat().some(b => b.callback_data.startsWith('chat:archive:')))
     await f.relay.bot.handleUpdate({ update_id: 2, callback_query: {

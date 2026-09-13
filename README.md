@@ -221,7 +221,8 @@ leaves the next message to start a fresh one. Running and queued work stays boun
 to its original conversation; archive does not cancel work.
 
 Existing conversations without a title show their first saved message and date when
-available; empty sessions show New conversation. Use /rename for a custom name. Older
+available. Empty routing placeholders are omitted from history; + New conversation
+is the create action. Back updates the current menu without creating a conversation. Use /rename for a custom name. Older
 records without a saved model reuse a known choice for their original CLI.
 Antigravity's latest-only resume cannot switch back to an older conversation.
 The list covers sessions already tracked by this Ez agent; it does not import
