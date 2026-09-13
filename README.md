@@ -215,12 +215,13 @@ In Telegram, **Conversations** (or `/chats`) lists this agent's saved Ez
 conversations by name. Tap a name to continue its native engine session and
 restore its AI choice. Names start with the first message; `/rename Client launch`
 sets a custom name for the current conversation. **New conversation** keeps the
-old one available. **Archive** hides a conversation without deleting its engine
-history; **Archived → Restore** brings it back. Archiving the current conversation
+old one available. **Archive this conversation**, shown after selecting a name, hides a conversation without deleting its engine
+history; **Archived conversations → select a name → Restore conversation** brings it back. Archiving the current conversation
 leaves the next message to start a fresh one. Running and queued work stays bound
 to its original conversation; archive does not cancel work.
 
-Existing conversations without a title use a short ID until renamed. Older
+Existing conversations without a title show their first saved message and date when
+available; empty sessions show New conversation. Use /rename for a custom name. Older
 records without a saved model reuse a known choice for their original CLI.
 Antigravity's latest-only resume cannot switch back to an older conversation.
 The list covers sessions already tracked by this Ez agent; it does not import

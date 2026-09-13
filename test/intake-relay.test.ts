@@ -526,12 +526,15 @@ test('Telegram named conversation buttons switch and archive without rerouting a
     const second = (await store.getActiveSession())!.sessionId
     await send('/chats')
     assert.ok(f.keyboards.at(-1)!.flat().some(b => b.text === 'Client launch'))
+    assert.ok(!f.keyboards.at(-1)!.flat().some(b => b.callback_data.startsWith('chat:archive:')))
+    assert.ok(f.keyboards.at(-1)!.every(row => row.filter(b => b.callback_data.startsWith('chat:open:')).length === 0 || row.length === 1))
     const before = await store.status()
     await click(`chat:open:${first}`, 202)
     await click(`chat:archive:${second}`, 202)
     assert.deepEqual(await store.status(), before)
     await click(`chat:open:${first}`)
     assert.equal((await store.getActiveSession())!.sessionId, first)
+    assert.deepEqual(f.keyboards.at(-1)!.flat().filter(b => b.callback_data.startsWith('chat:archive:')), [{text: 'Archive this conversation', callback_data: `chat:archive:${first}`}])
     await send('/rename@fixture_bot <Client & launch>')
     assert.equal((await store.getActiveSession())!.title, '<Client & launch>')
     await click(`chat:archive:${first}`)
@@ -575,5 +578,36 @@ test('conversation menu paginates and stale pages remain usable after archiving'
     for (const session of await store.listSessions()) await store.archiveSession(session.sessionId, true)
     await click('chat:list:0:1')
     assert.equal(f.keyboards.at(-1)!.flat().filter(b => b.callback_data.startsWith('chat:open:')).length, 0)
+  } finally { await f.close() }
+})
+
+
+test('older conversation names come from owner messages and detail keeps archive available when resume fails', async () => {
+  const f = await fixture()
+  try {
+    const store = new ControlStore(f.dir, 1000)
+    const old = await store.ensureActiveSession()
+    await store.markSessionStarted(old.sessionId)
+    const execution = await store.captureChoice({ id: 'grok', name: 'Grok', cli: 'grok' })
+    const runs = new RunStore(f.dir)
+    await runs.create({ chatId: 101, telegramUserId: 101, texts: ['Internal update event'], execution })
+    await runs.create({ chatId: 101, telegramUserId: 101, messageId: 9, texts: [JSON.stringify({event: 'approval_decision', decision: 'approve'})], execution })
+    await runs.create({ chatId: 101, telegramUserId: 101, messageId: 10, texts: ['/start'], execution })
+    await runs.create({ chatId: 101, telegramUserId: 101, messageId: 11, texts: ['Client launch checklist'], execution })
+    await store.captureChoice({ id: 'grok', name: 'Grok', cli: 'grok' }, 'A later message must not relabel old history')
+    assert.equal((await store.getActiveSession())!.title, undefined)
+    await store.resetSession()
+    await f.relay.bot.handleUpdate(message(1, '/chats'))
+    const rows = f.keyboards.at(-1)!
+    assert.ok(rows.flat().some(b => b.text.startsWith('Client launch checklist · ')))
+    assert.ok(rows.flat().some(b => b.text === '✓ New conversation'))
+    assert.ok(!rows.flat().some(b => b.text.includes(old.sessionId.slice(0, 8))))
+    assert.ok(!rows.flat().some(b => b.callback_data.startsWith('chat:archive:')))
+    await f.relay.bot.handleUpdate({ update_id: 2, callback_query: {
+      id: '2', chat_instance: 'fixture', data: `chat:open:${old.sessionId}`,
+      from: { id: 101, first_name: 'Fixture', is_bot: false }, message: message(2).message!,
+    } })
+    assert.match(f.replies.at(-1)!, /Client launch checklist.*\n.*binding/)
+    assert.deepEqual(f.keyboards.at(-1)![0], [{text: 'Archive this conversation', callback_data: `chat:archive:${old.sessionId}`}])
   } finally { await f.close() }
 })

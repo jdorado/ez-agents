@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep the conversation list to names only; show Archive/Restore for the selected
+  conversation. Label older chats from saved owner messages instead of opaque IDs.
+
 - Add named Telegram conversations with switching, renaming, archiving and
   restoring. Preserve native engine bindings and queued work across switches.
 

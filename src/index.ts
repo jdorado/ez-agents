@@ -65,7 +65,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let taskTimer: ReturnType<typeof setInterval> | undefined
   let drainTimer: ReturnType<typeof setInterval> | undefined
   const codexHome = join(config.controlDir, 'cli', 'codex')
-  const conversationMenu = createConversationMenu(control)
+  const conversationMenu = createConversationMenu(control, runs)
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
   const durableWorkerChoice = () => control.captureChoice(aiMenu.initial)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
