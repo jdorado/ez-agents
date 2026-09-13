@@ -208,6 +208,14 @@ appear in the existing `/chats` selector. Omit activation for temporary selectio
 extraction, and delegated work; those must not switch the personal conversation.
 Without the administrator's flag, application requests cannot switch Telegram.
 
+For a main chat that should follow the owner's current Telegram conversation,
+submit `followTelegram:true` under the same administrator-approved sharing grant.
+This uses the normal selected conversation and AI at admission, including after
+`/new`, `/chats`, or `/ai`. Do not also send `activateTelegram`, `ai`, or a native
+session assertion. Retries remain pinned to their originally admitted run even
+if the owner has since switched conversations. Keep exercise/detail scopes on
+the ordinary scoped path by omitting this flag.
+
 This shares native context, not an application's transcript database. Apps using
 the older Telegram-to-backend channel should continue routing both channels into
 their canonical app job first, using the same principal and scope. Do not route a

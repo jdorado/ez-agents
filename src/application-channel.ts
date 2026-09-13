@@ -72,10 +72,12 @@ export class ApplicationChannel {
   private get runs() { return new RunStore(this.options.controlDir) }
   async submit(bindingId: string, input: unknown): Promise<RunRecord> {
     const work = this.admissions.then(async () => {
-      const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; ai?: { cli?: unknown; model?: unknown; effort?: unknown } }
-      if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','context','expectedNativeSessionId','activateTelegram','ai'].includes(key))) throw new Error('Invalid application request')
+      const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; followTelegram?: unknown; ai?: { cli?: unknown; model?: unknown; effort?: unknown } }
+      if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','context','expectedNativeSessionId','activateTelegram','followTelegram','ai'].includes(key))) throw new Error('Invalid application request')
       if (value.expectedNativeSessionId !== undefined && (typeof value.expectedNativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(value.expectedNativeSessionId))) throw new Error('Invalid application native session assertion')
       if (value.activateTelegram !== undefined && typeof value.activateTelegram !== 'boolean') throw new Error('Invalid application Telegram activation')
+      if (value.followTelegram !== undefined && typeof value.followTelegram !== 'boolean') throw new Error('Invalid application Telegram following')
+      if (value.followTelegram && (value.activateTelegram || value.ai !== undefined || value.expectedNativeSessionId !== undefined)) throw new Error('Invalid application request: following Telegram uses its current conversation and AI')
       let requestedPreset: AiPreset | undefined
       if (value.ai !== undefined) {
         const candidate = { ...value.ai, id: 'application', name: 'Application selection' }
@@ -83,21 +85,22 @@ export class ApplicationChannel {
         assertEffort(candidate.effort, candidate.model, candidate.cli)
         requestedPreset = candidate
       }
-      const application = { bindingId, requestId: value.requestId, scope: value.scope, ...(value.context === undefined ? {} : { context: value.context }) }
+      const application = { bindingId, requestId: value.requestId, scope: value.scope, ...(value.followTelegram ? { followTelegram: true } : {}), ...(value.context === undefined ? {} : { context: value.context }) }
       if (!validApplicationOrigin(application)) throw new Error('Invalid application context')
       const binding = (await this.bindings.list()).find(item => item.bindingId === bindingId)
       if (!binding) throw new Error('Application authority revoked')
+      if (value.followTelegram && !binding.shareTelegram) throw new Error('Application authority does not permit following Telegram')
       const id = `r_app_${hash(JSON.stringify([bindingId, value.requestId]))}`
       const existing = await this.runs.get(id)
       if (existing) {
         await this.bindings.authorize(existing)
         if (requestedPreset && (existing.execution?.preset.cli !== requestedPreset.cli || existing.execution?.preset.model !== requestedPreset.model || existing.execution?.preset.effort !== requestedPreset.effort)) throw new Error('Application request ID conflicts with prior AI selection')
-        if (existing.application?.scope !== value.scope || existing.texts[0] !== value.text) throw new Error('Application request ID conflicts with prior scope or text')
+        if (Boolean(existing.application?.followTelegram) !== Boolean(value.followTelegram) || existing.application?.scope !== value.scope || existing.texts[0] !== value.text) throw new Error('Application request ID conflicts with prior scope or text')
         return existing // Retried context never replaces already admitted capabilities.
       }
       const control = new ControlStore(this.options.controlDir, 900000)
       if (!sameOwner(binding.owner, (await control.status()).owner)) throw new Error('Application authority revoked')
-      const execution = await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope), binding.shareTelegram === true && value.activateTelegram === true, requestedPreset, value.expectedNativeSessionId as string | undefined)
+      const execution = value.followTelegram ? await control.captureChoice(this.options.initial) : await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope), binding.shareTelegram === true && value.activateTelegram === true, requestedPreset, value.expectedNativeSessionId as string | undefined)
       const run = await this.runs.create({ id, chatId: binding.owner.telegramChatId, telegramUserId: binding.owner.telegramUserId, texts: [value.text], execution, application })
       this.options.wake()
       return run
