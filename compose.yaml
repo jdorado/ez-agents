@@ -12,6 +12,9 @@ services:
     # still removes every capability from the relay and its executor children.
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SETPCAP, KILL]
     environment:
+      EZ_RUNTIME_UID: ${EZ_RUNTIME_UID:-1000}
+      EZ_RUNTIME_GID: ${EZ_RUNTIME_GID:-1000}
+      EZ_RELAY_UID: ${EZ_RELAY_UID:-1001}
       EZ_REPAIR_ENABLED: ${EZ_REPAIR_ENABLED:-true}
       EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md
       EZ_EXECUTOR_TRANSPORT: ${EZ_EXECUTOR_TRANSPORT:-host}
