@@ -6,6 +6,41 @@ outbox. The application supplies domain tools and keeps its UI/content API; it
 can remove its own model runner, continuation loop and engine authentication.
 This is separate from the older outbound channel-backend integration.
 
+## Shared runtime controls
+
+Register with `--share-active` (the existing `--share-telegram` spelling is an
+alias) to grant access to the runtime's active conversation and standard AI
+settings. This explicit grant works with or without a Telegram bot. It grants
+control of the same active state Telegram uses when enabled; it is not a
+scope-only permission. Ordinary application bindings cannot read or change it.
+
+`GET /v1/control` returns the existing Ez AI presets, installed native model
+catalog, active control-session ID and conversations visible through `/chats`.
+Native engine session IDs and private application scopes are omitted. The token
+stays in the authenticated application backend, never in browser code.
+
+`POST /v1/control` accepts one action and the `expectedSession` returned by the
+last read (null before a conversation exists):
+
+| Action | Additional fields | Existing Ez operation |
+| --- | --- | --- |
+| `new` | None | `/new`, using the default AI |
+| `switch` | `sessionId` from the visible conversation list | `/chats` selection |
+| `select` | `presetId` from `ai.presets` | Select a saved AI |
+| `model` | `cli`, optional `model` and `effort`, from `models` | Save/select the same native choice as `/ai` |
+
+Engine changes start a fresh conversation through the same selection operation
+as Telegram. A changed active conversation rejects a stale mutation; refresh
+controls before another attempt. Model changes within one conversation retain
+the ordinary last-selection-wins behavior. Already-admitted runs keep their
+captured conversation and AI. Uncertain control responses require a fresh read,
+not blind repetition of `/new`.
+
+Current HTTP gaps: rename/archive, scoped conversation reset, scheduling
+administration and shared-chat stop-all are not exposed here. Per-run application
+cancellation remains available. These endpoints do not make application-only
+background scheduling operational; see its deployment limitations below.
+
 ## Install and authorize
 
 An installation has one owner, independent of its channels. As the installing
@@ -245,10 +280,11 @@ session assertion. Retries remain pinned to their originally admitted run even
 if the owner has since switched conversations. Keep exercise/detail scopes on
 the ordinary scoped path by omitting this flag.
 
-This shares native context, not an application's transcript database. Apps using
-the older Telegram-to-backend channel should continue routing both channels into
-their canonical app job first, using the same principal and scope. Do not route a
-channel-backend job back into its own occupied execution queue.
+This shares native context, not an application's transcript database. Existing
+Telegram-to-backend integrations are a legacy limitation. Drain/reconcile their
+actual admitted runs before moving Telegram onto ordinary Ez transport and app
+admission onto this path. Do not introduce an application execution queue or
+route a channel-backend job into its own occupied execution queue.
 
 For backends holding a data lock across a native turn, `reconnect:true` keeps
 retrying transient transport failures with the same admitted request/GET until

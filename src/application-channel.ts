@@ -2,11 +2,11 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, open, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ControlStore, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
+import { ControlStore, sessionTitle, type ControlGuard, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
 import { ownsRun } from './identity.js'
 import { applicationId, validApplicationOrigin } from './application-origin.js'
-import { isPreset, type AiPreset } from './ai.js'
+import { isPreset, type AiPreset, type ModelChoice } from './ai.js'
 import { assertEffort } from './model-policy.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -71,8 +71,71 @@ export class ApplicationChannel {
     controlDir: string; initial: AiPreset
     wake: () => void
     cancel: (id: string) => Promise<void>
+    aiControls?: {
+      catalog: () => Promise<ModelChoice[]>
+      select: (preset: AiPreset, expectedSession: string | null, guard?: ControlGuard) => Promise<unknown>
+      saveSelection: (model: ModelChoice, effort?: string, guard?: ControlGuard) => Promise<AiPreset>
+    }
   }) { this.bindings = new ApplicationBindings(options.controlDir) }
   private get runs() { return new RunStore(this.options.controlDir) }
+  private async sharedBinding(bindingId: string) {
+    const binding = (await this.bindings.list()).find(item => item.bindingId === bindingId)
+    const state = await new ControlStore(this.options.controlDir, 900000).status()
+    if (!binding?.shareTelegram || !sameOwner(binding.owner, state.owner)) throw new Error('Application authority does not permit shared controls')
+    return binding.owner
+  }
+  async controls(bindingId: string) {
+    await this.sharedBinding(bindingId)
+    if (!this.options.aiControls) throw new Error('Application controls unavailable')
+    const models = await this.options.aiControls.catalog()
+    await this.sharedBinding(bindingId)
+    const control = new ControlStore(this.options.controlDir, 900000)
+    const state = await control.status()
+    const ai = state.ai ?? {presets:[this.options.initial],defaultId:this.options.initial.id,selectedId:this.options.initial.id,recentIds:[]}
+    const sessions = (await control.listSessions()).filter(item => !item.applicationScope || item.telegramShared)
+    await this.sharedBinding(bindingId)
+    return { ai, models, activeSessionId: state.activeSession?.sessionId ?? null,
+      sessions: sessions.map(item => ({id:item.sessionId, title:sessionTitle(item), cli:item.cli, archived:!!item.archived})) }
+  }
+  async changeControls(bindingId: string, input: unknown) {
+    const owner = await this.sharedBinding(bindingId)
+    const controls = this.options.aiControls
+    if (!controls) throw new Error('Application controls unavailable')
+    const value = input as {action?: unknown; expectedSession?: unknown; sessionId?: unknown; presetId?: unknown; cli?: unknown; model?: unknown; effort?: unknown}
+    if (!value || !['new','switch','select','model'].includes(String(value.action)) ||
+      !(value.expectedSession === null || (typeof value.expectedSession === 'string' && /^[a-f0-9-]{36}$/.test(value.expectedSession)))) throw new Error('Invalid application control request')
+    const fields = {new:[],switch:['sessionId'],select:['presetId'],model:['cli','model','effort']}[value.action as 'new'|'switch'|'select'|'model']!
+    if (Object.keys(value).some(key => !['action','expectedSession',...fields].includes(key))) throw new Error('Invalid application control fields')
+    const control = new ControlStore(this.options.controlDir, 900000)
+    const expected = value.expectedSession as string | null
+    const guard: ControlGuard = {owner, expectedSession:expected, authorize:async()=>{
+      // Runs inside the control lock. Binding storage has its own independent
+      // lock; do not call sharedBinding here because it also reads ControlStore.
+      const live = (await this.bindings.list()).find(item=>item.bindingId===bindingId)
+      if (!live?.shareTelegram || !sameOwner(owner, live.owner)) throw new Error('Application authority revoked')
+    }}
+    if (value.action === 'new') await control.resetSession(expected, guard)
+    if (value.action === 'switch') {
+      if (typeof value.sessionId !== 'string') throw new Error('Invalid application conversation')
+      // switchSession enforces the same visibility/engine restrictions as /chats.
+      await control.switchSession(value.sessionId, expected, guard)
+    }
+    if (value.action === 'select') {
+      const preset = (await control.status()).ai?.presets.find(item => item.id === value.presetId)
+      if (!preset) throw new Error('Invalid application preset')
+      await this.sharedBinding(bindingId)
+      await controls.select(preset, expected, guard)
+    }
+    if (value.action === 'model') {
+      const model = (await controls.catalog()).find(item => item.cli === value.cli && item.model === value.model)
+      if (!model || (value.effort !== undefined && (typeof value.effort !== 'string' || !model.efforts.includes(value.effort)))) throw new Error('Invalid application model selection')
+      await this.sharedBinding(bindingId)
+      const preset = await controls.saveSelection(model, value.effort as string | undefined, guard)
+      await this.sharedBinding(bindingId)
+      await controls.select(preset, expected, guard)
+    }
+    return this.controls(bindingId)
+  }
   async submit(bindingId: string, input: unknown): Promise<RunRecord> {
     const work = this.admissions.then(async () => {
       // Channel-neutral name for the existing shared owner conversation option.
@@ -148,6 +211,13 @@ export class ApplicationChannel {
         if (end < 0) throw new Error('Invalid application inbox cursor')
         const records = all.slice(Math.max(0,end-100),end)
         send(200, {runs: await Promise.all(records.map(run => this.snapshot(binding.bindingId, run.id))), nextCursor:end>100?records[0].id:null}); return
+      }
+      if (path === '/v1/control' && ['GET','POST'].includes(request.method ?? '')) {
+        if (!binding.shareTelegram) { send(403, {error:'Application authority does not permit shared controls'}); return }
+        if (request.method === 'GET') { send(200, await this.controls(binding.bindingId)); return }
+        const chunks: Buffer[] = []; let size = 0
+        for await (const chunk of request) { size += chunk.length; if (size > 65536) throw new Error('Invalid application control size'); chunks.push(chunk) }
+        send(200, await this.changeControls(binding.bindingId, JSON.parse(Buffer.concat(chunks).toString('utf8')))); return
       }
       if (request.method === 'POST' && path === '/v1/runs') {
         const chunks: Buffer[] = []; let size = 0

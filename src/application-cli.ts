@@ -9,7 +9,7 @@ import { applicationId } from './application-origin.js'
 async function main() {
   const { values } = parseArgs({ options: {
     owner: {type:'string'}, id: {type:'string'}, 'token-file': {type:'string'}, revoke: {type:'boolean'}, list: {type:'boolean'}, help: {type:'boolean'},
-    'owner-id': {type:'string'}, rotate: {type:'boolean'}, 'share-owner': {type:'boolean'},
+    'owner-id': {type:'string'}, rotate: {type:'boolean'}, 'share-owner': {type:'boolean'}, 'share-active': {type:'boolean'},
     'import-scope': {type:'string'}, 'native-session': {type:'string'}, cli: {type:'string'}, 'share-telegram': {type:'boolean'},
   } })
   if (values.help) { console.log('ezenciel-agents-application --id CHANNEL --token-file PRIVATE_FILE [--owner-id VERIFIED_OWNER_ID] [--share-owner] [--rotate] | --id CHANNEL --revoke | --list | --id CHANNEL --import-scope SCOPE --native-session ID --cli CLI'); return }
@@ -35,7 +35,7 @@ async function main() {
     console.log(JSON.stringify({ok:true,scope:values['import-scope'],sessionId:choice.sessionId})); return
   }
   if (!!values['token-file'] === !!values.revoke) throw new Error('Provide --token-file or --revoke')
-  const binding = await bindings.register(values.id, values.revoke ? null : registrationToken, owner, values['share-owner'] || values['share-telegram'], values.rotate)
+  const binding = await bindings.register(values.id, values.revoke ? null : registrationToken, owner, values['share-owner'] || values['share-active'] || values['share-telegram'], values.rotate)
   console.log(JSON.stringify({ok:true,ownerId:ownerId(owner),id:values.id,bindingId:binding?.bindingId,revoked:Boolean(values.revoke)}))
 }
 main().catch(error => { console.error(error.message); process.exitCode = 1 })

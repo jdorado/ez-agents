@@ -53,6 +53,8 @@ export type SessionState = {
   telegramShared?: boolean
 }
 
+export type ControlGuard = { owner: Owner; authorize: () => Promise<unknown>; expectedSession?: string | null }
+
 type ControlState = {
   version: 1
   owner: Owner | null
@@ -113,6 +115,16 @@ const rememberPreset = (state: ControlState) => {
   const preset = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
   if (state.activeSession && preset && state.activeSession.cli === preset.cli)
     state.activeSession.preset = preset
+}
+
+const requireControlGuard = async (state: ControlState, guard?: ControlGuard) => {
+  if (!guard) return
+  // The callback may inspect binding authority, but must not acquire this store's lock.
+  await guard.authorize()
+  const expected = guard.owner
+  if (!state.owner || state.owner.telegramUserId !== expected.telegramUserId ||
+    state.owner.telegramChatId !== expected.telegramChatId || state.owner.pairedAt !== expected.pairedAt) throw new Error('Control owner changed. Refresh the connection.')
+  if (guard.expectedSession !== undefined && (state.activeSession?.sessionId ?? null) !== guard.expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
 }
 
 const wait = (milliseconds: number): Promise<void> =>
@@ -341,9 +353,11 @@ export class ControlStore {
     return [...(state.activeSession ? [state.activeSession] : []), ...(state.sessions ?? []).filter(session => !session.applicationScope || session.telegramShared).slice().reverse()]
   }
 
-  async switchSession(sessionId: string): Promise<SessionState> {
+  async switchSession(sessionId: string, expectedSession?: string | null, guard?: ControlGuard): Promise<SessionState> {
     return this.withLock(async () => {
       const state = await this.readState()
+      await requireControlGuard(state, guard)
+      if (expectedSession !== undefined && (state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
       if (state.activeSession?.sessionId === sessionId) return state.activeSession
       const session = state.sessions?.find(s => s.sessionId === sessionId)
       if (!session || session.archived || (session.applicationScope && !session.telegramShared)) throw new Error('Conversation unavailable. Open /chats again.')
@@ -398,9 +412,11 @@ export class ControlStore {
     })
   }
 
-  async resetSession(): Promise<SessionState> {
+  async resetSession(expectedSession?: string | null, guard?: ControlGuard): Promise<SessionState> {
     return this.withLock(async () => {
       const state = await this.readState()
+      await requireControlGuard(state, guard)
+      if (expectedSession !== undefined && (state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
       const next: SessionState = {
         sessionId: crypto.randomUUID(),
         hasStarted: false,
@@ -521,11 +537,12 @@ export class ControlStore {
     })
   }
 
-  async savePreset(preset: AiPreset): Promise<void> {
+  async savePreset(preset: AiPreset, guard?: ControlGuard): Promise<void> {
     if (!isPreset(preset)) throw new Error('Invalid AI preset')
     assertEffort(preset.effort, preset.model, preset.cli)
     await this.withLock(async () => {
       const state = await this.readState()
+      await requireControlGuard(state, guard)
       if (!state.ai) throw new Error('AI settings not initialized')
       if (state.ai.presets.length >= 12 && !state.ai.presets.some((p) => p.id === preset.id))
         throw new Error('Keep it small: at most 12 saved AIs.')
@@ -534,9 +551,10 @@ export class ControlStore {
     })
   }
 
-  async selectPreset(id: string, expectedSession: string | null, fresh = false): Promise<boolean> {
+  async selectPreset(id: string, expectedSession: string | null, fresh = false, guard?: ControlGuard): Promise<boolean> {
     return this.withLock(async () => {
       const state = await this.readState()
+      await requireControlGuard(state, guard)
       const ai = state.ai
       const preset = ai?.presets.find((p) => p.id === id)
       if (!ai || !preset) throw new Error('Saved AI no longer exists')
