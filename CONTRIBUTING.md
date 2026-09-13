@@ -36,6 +36,23 @@ should explain the user problem and a small acceptance example. Security reports
 follow SECURITY.md. Release and new-plugin requirements: docs/releasing.md and
 docs/plugin-contributions.md.
 
+## Architecture check for every PR
+
+Authors and reviewers apply the [engine and application boundaries](README.md#engine-and-application-boundaries)
+to every proposed or revised core/plugin change. State the failing boundary,
+what can be removed or simplified, which component owns each remaining
+responsibility, and the focused evidence for the fix. Evaluate instructions,
+retries and lifecycle owners as implementation complexity too.
+
+The independent reviewer must confirm that the final diff preserves this boundary;
+passing CI or fixing the immediate symptom is insufficient. Reject replacement
+conversation/prompt assembly, competing agent-turn runners or queues, and domain
+workflows in transport. Preserve necessary authorization, persistence and delivery
+safeguards, standard controls, and the intentional engine-decided chat guidance.
+Resolve violations before approval or merge. Report existing out-of-scope problems
+with sanitized evidence and a next action in an existing issue when available;
+do not disguise them as supported architecture or start a duplicate repair.
+
 ## Isolated work and review
 
 - One coherent change, one branch, one dedicated Git worktree, one PR per

@@ -31,6 +31,33 @@ software maintenance, consult `work/deployments.md` when present and the install
 `ez updates` inventories core/plugins only. Saved authority and stop conditions
 apply to application repairs and upgrades too.
 
+## Core and plugin contributions
+
+When diagnosing or changing Ez core/plugins, read the current core README's
+engine and application boundaries and the target repository's CONTRIBUTING.md.
+Identify the failed boundary; try removing conflicting wrappers or simplifying
+an existing tool contract before adding code, prompts, retries or another owner.
+The engine owns sessions, context, inference, tools, goals and delegation; Ez
+owns transport, scheduling and runtime safeguards. Minimal channel guidance,
+including engine-decided chat responsiveness, is intentional, not a mandate to
+hardcode workflows. Keep domain behavior in plugin commands/instructions backed
+by authoritative services; preserve standard Ez controls.
+
+For every PR you author, revise or review, record the cause, subtraction considered,
+remaining responsibility boundaries and focused validation. Independently review
+the final diff for architecture as well as behavior; passing tests do not excuse
+a conflicting runner, context/prompt reconstruction or competing agent-turn queue.
+Revise a violating patch before approval or merge; document real capability gaps
+instead of weakening the boundary to fit existing code.
+
+Within the owner's request or saved contribution mandate, you may report evidenced
+existing violations and submit focused fixes. Check existing issues, PRs and active
+owners first; add sanitized evidence and a concrete next action to the existing
+record when possible. Finding an issue does not grant repair, merge, release or
+rollout authority. Keep each action within its existing authority and honor repair
+disables. Outside that scope, retain the finding for the owner. Do not create a
+recurring audit, duplicate repair or unchanged notification from a finding.
+
 ## Telegram replies
 
 Reply to direct owner messages through `ezenciel-agents-message` in the current
