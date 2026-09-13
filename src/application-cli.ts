@@ -9,12 +9,11 @@ import { applicationId } from './application-origin.js'
 async function main() {
   const { values } = parseArgs({ options: {
     owner: {type:'string'}, id: {type:'string'}, 'token-file': {type:'string'}, revoke: {type:'boolean'}, list: {type:'boolean'}, help: {type:'boolean'},
-    'import-scope': {type:'string'}, 'native-session': {type:'string'}, cli: {type:'string'}, 'share-telegram': {type:'boolean'},
+    'import-scope': {type:'string'}, 'native-session': {type:'string'}, cli: {type:'string'}, 'share-telegram': {type:'boolean'}, 'share-active': {type:'boolean'},
   } })
-  if (values.help) { console.log('ezenciel-agents-application --id NAME --token-file PRIVATE_FILE [--share-telegram] [--owner REAL_ADMIN_TELEGRAM_ID] | --id NAME --revoke | --list | --id NAME --import-scope SCOPE --native-session ID --cli CLI'); return }
+  if (values.help) { console.log('ezenciel-agents-application --id NAME --token-file PRIVATE_FILE [--share-active (alias: --share-telegram)] [--owner REAL_ADMIN_TELEGRAM_ID] | --id NAME --revoke | --list | --id NAME --import-scope SCOPE --native-session ID --cli CLI'); return }
   if (process.env.EZ_RUN_ID) throw new Error('Application authority is configured by the installing administrator outside agent turns')
   const config = loadControlConfig(), control = new ControlStore(config.controlDir, config.pairingTtlMs)
-  if (process.env.EZ_TELEGRAM_ENABLED === 'false' && values['share-telegram']) throw new Error('Telegram sharing is unavailable when Telegram is disabled')
   if (values.owner && (process.env.EZ_TELEGRAM_ENABLED !== 'false' || !values.id || !values['token-file'] || values.revoke || values.list || values['import-scope'])) throw new Error('--owner bootstrap requires explicit application-only registration')
   const registrationToken = values['token-file'] ? (await readFile(values['token-file'], 'utf8')).trim() : null
   if (values.owner) validateApplicationRegistration(values.id!, registrationToken)
@@ -32,7 +31,7 @@ async function main() {
     console.log(JSON.stringify({ok:true,scope:values['import-scope'],sessionId:choice.sessionId})); return
   }
   if (!!values['token-file'] === !!values.revoke) throw new Error('Provide --token-file or --revoke')
-  const binding = await bindings.register(values.id, values.revoke ? null : registrationToken, owner, values['share-telegram'])
+  const binding = await bindings.register(values.id, values.revoke ? null : registrationToken, owner, values['share-active'] || values['share-telegram'])
   console.log(JSON.stringify({ok:true,id:values.id,bindingId:binding?.bindingId,revoked:Boolean(values.revoke)}))
 }
 main().catch(error => { console.error(error.message); process.exitCode = 1 })

@@ -12,6 +12,7 @@ import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { EXECUTOR_REGISTRY } from '../src/executor.js'
+import { ApplicationBindings } from '../src/application-channel.js'
 
 const waitFor = async (condition: () => Promise<boolean>) => {
   for (let i=0;i<300;i++) { if (await condition()) return; await new Promise(r=>setTimeout(r,10)) }
@@ -51,6 +52,10 @@ test('administrator bootstrap is explicit, local-only and cannot replace identit
   assert.equal((await new ControlStore(root,1000).status()).owner?.telegramUserId,42)
   assert.notEqual(spawnSync(process.execPath,args,{env}).status,0)
   assert.notEqual(spawnSync(process.execPath,[cli,'--id','app','--token-file',token,'--share-telegram'],{env}).status,0)
+  const sharedToken=join(root,'shared-token');await writeFile(sharedToken,'s'.repeat(43),{mode:0o600})
+  const shared=spawnSync(process.execPath,[cli,'--id','shared','--token-file',sharedToken,'--share-active'],{env,encoding:'utf8'})
+  assert.equal(shared.status,0,shared.stderr)
+  assert.equal((await new ApplicationBindings(root).list()).find(binding=>binding.id==='shared')?.shareTelegram,true)
 })
 
 test('botless daemon executes application turn and rejects Telegram-origin work/outbound', async t => {

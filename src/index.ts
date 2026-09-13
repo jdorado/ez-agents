@@ -108,6 +108,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
   const applicationChannel = new ApplicationChannel({
     controlDir: config.controlDir, initial: aiMenu.initial,
+    aiControls: aiMenu,
     wake: () => { void drainSources().catch(error => console.error('Application queue unavailable', safeError(error))) },
     cancel: id => withStartLock(async () => {
       const run = await runs.get(id)

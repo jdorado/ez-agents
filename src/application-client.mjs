@@ -33,7 +33,7 @@ function applicationEndpoint(value) {
 
 export async function applicationCall(path, body, { url, token, fetchImpl = fetch, signal } = {}) {
   if (!token) throw new Error('Ez application credential is missing')
-  if (!/^\/v1\/runs(?:\/r_app_[a-f0-9]{64}(?:\/cancel)?)?$/.test(path)) throw new Error('Invalid Ez application operation')
+  if (!/^\/v1\/(?:control|runs(?:\/r_app_[a-f0-9]{64}(?:\/cancel)?)?)$/.test(path)) throw new Error('Invalid Ez application operation')
   let response
   try {
     response = await fetchImpl(new URL(path, applicationEndpoint(url)), {
