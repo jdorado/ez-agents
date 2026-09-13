@@ -130,6 +130,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
   return {
     initial,
     refresh,
+    validate,
     catalog: () => catalog(),
     select,
     saveSelection,
