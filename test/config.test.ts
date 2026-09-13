@@ -59,3 +59,11 @@ test('PagerDuty Stocks monitoring requires a routing key and validates its targe
   assert.equal(config.pagerDutyPollMs, 45_000)
   assert.equal(config.pagerDutyFailureThreshold, 4)
 })
+
+test('external Codex isolation requires explicit application-only local deployment', () => {
+  const env = {EZ_TELEGRAM_ENABLED:'false', EZ_APPLICATION_PORT:'8110', EZ_EXECUTOR_TRANSPORT:'local', EZ_CODEX_SANDBOX:'external'}
+  assert.equal(loadConfig(env).codexSandbox, 'external')
+  assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test'}).codexSandbox, undefined)
+  for (const override of [{EZ_TELEGRAM_ENABLED:'true',TELEGRAM_BOT_TOKEN:'test'}, {EZ_EXECUTOR_TRANSPORT:'host'}, {EZ_EXECUTOR_TRANSPORT:''}, {EZ_CODEX_SANDBOX:'danger-full-access'}])
+    assert.throws(() => loadConfig({...env,...override}), /sandbox|SANDBOX/)
+})
