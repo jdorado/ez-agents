@@ -263,10 +263,10 @@ Shared workers have a hard Docker CPU quota of half a core by default, across al
 
 ## Existing local folders
 
-Use operator-owned read-only folder bindings when a plugin needs files that
+Use operator-owned folder bindings when a plugin needs files that
 already exist on the host. Keep indexes and writable metadata in the plugin's
 normal volume. This uses Docker bind mounts; it copies no source bytes and
-starts no provider sync. File edits remain with the host's existing tools.
+starts no provider sync. Read-only is the default.
 
 Stop the plugin before changing a binding:
 
@@ -288,8 +288,8 @@ volume contents; inspect those before restarting to avoid using stale files.
 Never enable another sync writer for an already synchronized host folder.
 
 For Library, create/select the library name first and retain its QMD state while
-binding the host tree at that library's `files` directory. Keep provider bindings
-disabled for that source. Enable the normal shared embedding worker through
+binding the host tree at that library's `files` directory. Enable provider bindings
+only when that plugin supports the selected host folder and owns its sync. Enable the normal shared embedding worker through
 `plugins shared-enable library embeddings`. Verify `library sources`, real search,
 and original readback from the actual executor. Document any differences between
 indexed snapshots and current originals; do not replace Library with private
@@ -307,3 +307,10 @@ on the next read, without hooks, LLM calls or a cached inventory file.
 contains only the agent-bound discovery shortcut. New workspaces do not seed
 TOOLS.md; upgrades preserve legacy notes without rewriting them. Keep owner/account
 policies in agent instructions or linked policy files, separate from plugin metadata.
+
+Folder bindings default to read-only. For an explicitly authorized plugin that
+updates the existing source, add `--writable` to `folder-bind` while the plugin
+is stopped. The grant applies only to that folder and survives compatible
+upgrades. Rebind without `--writable` to return it to read-only. Package
+descriptors cannot request this grant. Keep one synchronization owner for each
+source; a writable mount alone does not configure synchronization.

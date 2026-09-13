@@ -141,7 +141,8 @@ export function folderMounts(config, record) {
   const mounts = config.folders?.[record.manifest.id] || [];
   if (!Array.isArray(mounts)) throw Error('Invalid folder bindings');
   for (const mount of mounts) {
-    keys(mount, ['service', 'source', 'target']);
+    keys(mount, ['service', 'source', 'target', 'writable']);
+    if (mount.writable !== undefined && typeof mount.writable !== 'boolean') throw Error('Folder writable must be boolean');
     const service = record.deployment.services[mount.service];
     containerPath(mount.target);
     if (!service || typeof mount.source !== 'string' || !path.isAbsolute(mount.source) || /[\0\r\n$]/.test(mount.source) ||
@@ -227,7 +228,7 @@ export async function compose(config, record, secrets={}, home) {
   for(const [name,s] of Object.entries(record.deployment.services)) {
     const mounts=[];
     for(const [volume,target] of Object.entries(s.volumes||{})) { volumes[volume]={};mounts.push({type:'volume',source:volume,target}); }
-    for (const folder of folders.filter(f => f.service === name)) mounts.push({type:'bind',source:folder.source,target:folder.target,read_only:true,bind:{create_host_path:false}});
+    for (const folder of folders.filter(f => f.service === name)) mounts.push({type:'bind',source:folder.source,target:folder.target,read_only:folder.writable !== true,bind:{create_host_path:false}});
     if(s.workspace) mounts.push({type:'bind',source:config.workspace,target:config.workspace,read_only:true});
     services[name]={...(s.image?{image:s.image}:{image:`${record.project}-${name}:${record.revision.slice(7,23)}`,build:{context:record.source,target:s.buildTarget}}),
       init:true,user:s.user||'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
@@ -363,7 +364,7 @@ export async function main(args) {
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
   if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure','<registered CLI> ...'],scope:home});
-  if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
+  if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
     if(action==='available'&&group==='plugins') return emit(config.catalog);
@@ -397,6 +398,8 @@ export async function main(args) {
     if (action === 'folders') { if(args.length) throw Error('Unexpected arguments'); return emit(folderMounts(config, record)); }
     if (['folder-bind','folder-unbind'].includes(action)) {
       const service=take('--service'), target=take('--target'), source=take('--source');
+      const writable=action === 'folder-bind' && args.includes('--writable');
+      if(writable) args.splice(args.indexOf('--writable'),1);
       if(args.length || !service || !target || (action === 'folder-bind' ? !source : source !== undefined))
         throw Error('Supply --service, --target and, for folder-bind, --source');
       if(source && (!path.isAbsolute(source) || await fs.realpath(source) !== source || !(await fs.stat(source)).isDirectory()))
@@ -409,14 +412,14 @@ export async function main(args) {
         if((await checked(['ps','--filter',`label=com.docker.compose.project=${latest.project}`,'--quiet'])).trim())
           throw Error('Stop the plugin before changing folder bindings');
         const folders=(settings.folders?.[name] || []).filter(f => f.service !== service || f.target !== target);
-        if(action === 'folder-bind') folders.push({service,source,target});
+        if(action === 'folder-bind') folders.push({service,source,target,...(writable ? {writable:true} : {})});
         settings.folders={...settings.folders,[name]:folders};
         await checkFolders(settings,latest);
         const secrets=await json(path.join(home,'packages',name,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
         const generated=await compose(settings,latest,secrets,home);
         await atomic(path.join(home,'config.json'),settings);
         await atomic(latest.compose,generated);
-        return emit({ok:true,plugin:name,folders,readOnly:true,started:false});
+        return emit({ok:true,plugin:name,folders,readOnly:folders.every(folder=>folder.writable !== true),started:false});
       });
     }
     if (['shared-enable','shared-disable','shared-status'].includes(action)) {
