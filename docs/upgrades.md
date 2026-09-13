@@ -1,5 +1,10 @@
 # Agent-owned software upgrades
 
+For an application's independently deployed frontend, backend or embedded gateway,
+see [managed applications](managed-applications.md). They use their existing
+deployment tools and a saved maintenance mandate; this package updater inventories
+only core and registered plugins.
+
 Available in this beta. Earlier main upgrade/rollback VM QA passed; final-release
 fresh-host/reboot and live plugin upgrade acceptance remain pending. npm
 publication is not required to test this feature. The beta channel is the default

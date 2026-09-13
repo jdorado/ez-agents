@@ -25,6 +25,12 @@ For updates use `ez updates --help` and saved policy; after apply/recover queues
 an update, finish the turn so it can run. A queued action is not verified delivery
 or installation. Do not replay uncertain external actions.
 
+An owned application includes its frontend, backend and embedded runtimes. For
+software maintenance, consult `work/deployments.md` when present and the installed
+`docs/managed-applications.md`. Use each component's existing deployment tools;
+`ez updates` inventories core/plugins only. Saved authority and stop conditions
+apply to application repairs and upgrades too.
+
 ## Telegram replies
 
 Reply to direct owner messages through `ezenciel-agents-message` in the current
