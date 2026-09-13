@@ -55,6 +55,18 @@ try {
   const result = run(['run', '--rm', '--mount', `type=bind,src=${join(dir,'relay.env')},dst=/run/secrets/relay_env,readonly`, image, 'exec', 'node', '-e', probe, literal]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).argv, [literal]);
+  const customProbe = probe.replace('process.getuid(), 1000', 'process.getuid(), 20001') + `
+    assert.equal(process.geteuid(),20001);
+    assert.equal(process.getgid(),20002);
+    assert.equal(process.getegid(),20002);
+    for (const directory of ['/state/control','/state/home','/workspace']) {
+      const info=fs.statSync(directory); assert.equal(info.uid,20001); assert.equal(info.gid,20002);
+    }
+  `;
+  const custom = run(['run','--rm','-e','EZ_RUNTIME_UID=20001','-e','EZ_RUNTIME_GID=20002','-e','EZ_RELAY_UID=20003',
+    '--mount',`type=bind,src=${join(dir,'relay.env')},dst=/run/secrets/relay_env,readonly`,image,'exec','node','-e',customProbe]);
+  assert.equal(custom.status,0,custom.stderr);
+  assert.equal(JSON.parse(custom.stdout).uid,20001);
   const failed = run(['run','--rm',image,'exec','node','-e','process.exit(23)']);
   assert.equal(failed.status, 23, failed.stderr);
   const held = run(['run','-d','--name',holder,'-v',`${volume}:/state/control`,image,'exec','node','-e',"require('fs').writeFileSync('/state/control/ready','yes');setInterval(()=>{},1000)"]);
