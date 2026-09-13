@@ -100,7 +100,11 @@ Own the complete engineering/release handoff in CONTRIBUTING.md. Once ready,
 proactively request only missing merge/release authority, then ship and verify;
 do not leave the maintainer to discover ready drafts or operate the release.
 
-- In channel-backend mode, the application owns native sessions and actions. Forward normalized inputs with stable run IDs, recover only by idempotent backend submission, and deliver replies through the existing outbox. Never launch a fallback CLI or pass relay credentials into an executor.
+For every core or plugin PR you author, revise or review, apply CONTRIBUTING.md's
+architecture check and the README's engine/application boundary. A symptom fix
+and green tests do not justify a conflicting execution or context owner. Existing
+legacy channel-backend code is a documented limitation, not a pattern for new
+integrations; applications submit agent turns through the native Ez execution path.
 
 A coding-task handoff must include the pushed commit and draft PR URL, checks,
 independent-review status and remaining QA. If PR creation is blocked, state the
