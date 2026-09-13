@@ -13,6 +13,10 @@ writeFileSync(join(dir, 'relay.env'), `TELEGRAM_BOT_TOKEN=${marker}\n`, { mode: 
 writeFileSync(join(dir, 'node'), `#!/bin/sh\nIFS= read -r value <&3\n[ "$value" = "TELEGRAM_BOT_TOKEN=${marker}" ] || exit 91\nexec /usr/local/bin/node "$@"\n`, { mode: 0o555 });
 const run = (args) => spawnSync('docker', args, { encoding: 'utf8', timeout: 60000 });
 try {
+  const loginHelpers = run(['run','--rm','--network','none','--user','20001:20001','--entrypoint','/bin/sh',image,'-lc',
+    'for name in $(node -p "Object.keys(require(\"/app/package.json\").bin).join(\" \")"); do command -v "$name" || exit 1; done; ezenciel-agents-application --help']);
+  assert.equal(loginHelpers.status,0,loginHelpers.stderr || loginHelpers.stdout);
+  assert.match(loginHelpers.stdout,/ezenciel-agents-application --id NAME/);
   const inherited = run(['run','--rm','--mount',`type=bind,src=${join(dir,'relay.env')},dst=/run/secrets/relay_env,readonly`,
     '--mount',`type=bind,src=${join(dir,'node')},dst=/qa/node,readonly`,'-e','PATH=/qa:/usr/local/bin:/usr/bin:/bin',image,'application','--help']);
   assert.equal(inherited.status,0,inherited.stderr);
