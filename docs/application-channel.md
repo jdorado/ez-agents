@@ -151,3 +151,77 @@ deployment, and include it in that deployment's saved Compose invocation. This i
 an explicit network configuration, not a second runtime or automatic discovery
 service. Read back the loaded package/image and verify a real authenticated app
 request after switching; preparation and image build alone are not rollout.
+
+## Shared backend client and private principals
+
+Node backends can import `applicationBinding`, `applicationCall`, and
+`runApplication` from `@jc_stack/ez-agents/application-client`. This is a small
+HTTP client; core remains the sole owner of agent execution. Pin the package
+revision in the application's lockfile. Do not copy this client into each app.
+
+`applicationBinding(file, principalId)` reads a backend-private registry:
+
+```json
+{"version":1,"bindings":[
+  {"principalId":"verified-person-one","url":"http://person-one-agent:8787","tokenFile":"/run/secrets/person-one"},
+  {"principalId":"verified-person-two","url":"http://person-two-agent:8787","tokenFile":"/run/secrets/person-two"}
+]}
+```
+
+Resolve identity in the app before lookup. Unknown and revoked principals fail
+closed. Set `revoked:true` to remove a mapping from new lookup and revoke its
+core application grant to stop admitted work. Do not use a default owner's
+connection. Each endpoint must be a separate ordinary Ez deployment with private
+workspace, native CLI state, OS/container access and tools. The client rejects
+reused endpoint origins, but cannot prove that two DNS aliases name different
+containers. Provision isolation explicitly; this registry does not create it.
+The backend's registry and service credentials must not be mounted in an agent.
+
+The app keeps its existing user and coach/tutor grants. A delegated principal
+must be distinct from the learner's personal principal, and every domain tool
+must recheck the current grant. A coach can edit permitted learner records
+without inheriting the learner's private agent conversation. No new role system
+is required in Ez.
+
+Use `runApplication({requestId,scope,text,context}, connection)`. It returns the
+completed snapshot plus `reply`, the last nonempty message. An interrupted or
+invalid HTTP response reports a retryable transport error; the caller reconnects
+using the same persisted job ID and authority. The client does not resubmit by
+itself. `applicationCall('/v1/runs/<id>/cancel', {}, connection)` uses normal
+core cancellation. Aborting a local poll does not cancel admitted work.
+
+Snapshots also expose `sessionId`, `nativeSessionId` when known, and `cli`.
+An optional `expectedNativeSessionId` on submission is an assertion, never a
+session selector. It rejects a missing or different imported history before
+execution. Import old histories administratively before cutover. An optional
+`ai:{cli,model,effort}` uses the existing preset/effort contract; a scope keeps its
+CLI, while model/effort can change for later turns. Use distinct scopes for
+separate CLI histories. A retry cannot change an admitted turn's AI choice.
+
+## Optional direct Telegram continuity
+
+For an application using the ordinary agent's Telegram channel, the administrator
+may register its grant with `--share-telegram`. An ordinary application turn can
+then send `activateTelegram:true`: its scoped session becomes the owner's current
+Telegram conversation. Both inputs resume the same native history. Shared scopes
+appear in the existing `/chats` selector. Omit activation for temporary selection,
+extraction, and delegated work; those must not switch the personal conversation.
+Without the administrator's flag, application requests cannot switch Telegram.
+
+This shares native context, not an application's transcript database. Apps using
+the older Telegram-to-backend channel should continue routing both channels into
+their canonical app job first, using the same principal and scope. Do not route a
+channel-backend job back into its own occupied execution queue.
+
+For backends holding a data lock across a native turn, `reconnect:true` keeps
+retrying transient transport failures with the same admitted request/GET until
+core reports the outcome. It never changes a job or capability. Do not apply a
+wall-clock abort that releases the data lock while remote execution continues.
+Persist a restart barrier before admission if backend restart could otherwise
+allow conflicting domain writes. Core remains the execution owner.
+
+A rejected submission includes `admitted:false` only when core can verify that
+no run exists for that binding/request ID. An existing conflicting run produces
+`admitted:true` and `runId`. Authentication or unreadable state may leave admission
+unknown. Backends may release a pending data barrier on explicit non-admission;
+a generic HTTP error or revoked credential alone is not proof of termination.

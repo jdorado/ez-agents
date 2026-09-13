@@ -112,5 +112,9 @@
     "kind": "main",
     "stateSchema": 1,
     "mainProtocol": 1
+  },
+  "exports": {
+    "./application-client": "./src/application-client.mjs",
+    "./*": "./*"
   }
 }
