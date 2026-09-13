@@ -211,6 +211,23 @@ optional. Installed plugin snippets and skill paths come from `ez tools list --d
 Credentials and control state stay outside the mind. File separation is not
 OS isolation against a process running as the same user.
 
+In Telegram, **Conversations** (or `/chats`) lists this agent's saved Ez
+conversations by name. Tap a name to continue its native engine session and
+restore its AI choice. Names start with the first message; `/rename Client launch`
+sets a custom name for the current conversation. **New conversation** keeps the
+old one available. **Archive** hides a conversation without deleting its engine
+history; **Archived → Restore** brings it back. Archiving the current conversation
+leaves the next message to start a fresh one. Running and queued work stays bound
+to its original conversation; archive does not cancel work.
+
+Existing conversations without a title use a short ID until renamed. Older
+records without a saved model reuse a known choice for their original CLI.
+Antigravity's latest-only resume cannot switch back to an older conversation.
+The list covers sessions already tracked by this Ez agent; it does not import
+unrelated GUI/CLI history. Application-backed channels keep session controls in
+the connected application. Shared workspace files still persist across topics.
+
+
 Telegram intake is owner-gated. The executor sends replies with the messaging
 CLI; stdout is not a reply. A process exit code is not delivery proof.
 Voice/media needs its additional providers and tools; defer optional setup

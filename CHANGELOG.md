@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add named Telegram conversations with switching, renaming, archiving and
+  restoring. Preserve native engine bindings and queued work across switches.
+
 ## 0.1.0-beta.27
 
 - Pass literal task input and `/goal` requests to the selected engine; remove

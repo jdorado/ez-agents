@@ -9,12 +9,15 @@ import { discoverDefaults } from './client-defaults.js'
 
 export const mainCommands = [
   { command: 'new', description: 'New conversation' },
+  { command: 'chats', description: 'Conversations' },
+  { command: 'rename', description: 'Rename current conversation' },
   { command: 'ai', description: 'Choose AI' },
   { command: 'status', description: 'Work status' },
 ]
 
 export const mainKeyboard = () => new InlineKeyboard()
-  .text('New conversation', 'menu:new').text('Choose AI', 'menu:ai').row()
+  .text('New conversation', 'menu:new').text('Conversations', 'menu:chats').row()
+  .text('Choose AI', 'menu:ai')
   .text('Work status', 'menu:status')
 
 const clientLabel = (cli: string) => cli === 'codex-gui' ? 'codex-gui (desktop)' : cli
