@@ -219,3 +219,9 @@ core reports the outcome. It never changes a job or capability. Do not apply a
 wall-clock abort that releases the data lock while remote execution continues.
 Persist a restart barrier before admission if backend restart could otherwise
 allow conflicting domain writes. Core remains the execution owner.
+
+A rejected submission includes `admitted:false` only when core can verify that
+no run exists for that binding/request ID. An existing conflicting run produces
+`admitted:true` and `runId`. Authentication or unreadable state may leave admission
+unknown. Backends may release a pending data barrier on explicit non-admission;
+a generic HTTP error or revoked credential alone is not proof of termination.

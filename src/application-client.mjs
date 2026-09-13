@@ -45,9 +45,14 @@ export async function applicationCall(path, body, { url, token, fetchImpl = fetc
   } catch (cause) {
     throw Object.assign(new Error('Ez application transport unavailable', { cause }), { retryable: !signal?.aborted })
   }
-  if (!response.ok) throw Object.assign(new Error(`Ez application returned HTTP ${response.status}`), {
-    retryable: response.status >= 500 || [408, 429].includes(response.status), status: response.status,
-  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw Object.assign(new Error(`Ez application returned HTTP ${response.status}`), {
+      retryable: response.status >= 500 || [408, 429].includes(response.status), status: response.status,
+      ...(typeof body?.admitted === 'boolean' ? { admitted: body.admitted } : {}),
+      ...(typeof body?.runId === 'string' ? { runId: body.runId } : {}),
+    })
+  }
   try { return await response.json() }
   catch (cause) { throw Object.assign(new Error('Ez application response unavailable or invalid', { cause }), { retryable: true }) }
 }

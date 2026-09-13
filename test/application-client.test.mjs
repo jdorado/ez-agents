@@ -60,3 +60,9 @@ test('opt-in reconnect retains admission identity and polls through temporary ne
   assert.equal(calls[0].body, calls[1].body)
   assert.equal(calls[2].method, 'GET'); assert.equal(calls[3].method, 'GET')
 })
+
+test('client preserves definitive non-admission evidence without inventing it for authentication errors', async () => {
+  const connection = { url: 'http://agent:8787', token: 'secret' }
+  await assert.rejects(applicationCall('/v1/runs', {}, { ...connection, fetchImpl: async () => Response.json({ admitted: false }, { status: 409 }) }), error => error.admitted === false)
+  await assert.rejects(applicationCall('/v1/runs', {}, { ...connection, fetchImpl: async () => Response.json({ error: 'Unauthorized' }, { status: 401 }) }), error => error.admitted === undefined)
+})

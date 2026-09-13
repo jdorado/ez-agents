@@ -119,12 +119,15 @@ export class ApplicationChannel {
     let binding: Binding
     try { binding = await this.bindings.authenticate(request.headers.authorization?.match(/^Bearer (.+)$/)?.[1] ?? '') }
     catch { send(401, { error: 'Unauthorized application' }); return }
+    let admissionId: string | undefined
     try {
       const path = new URL(request.url ?? '/', 'http://localhost').pathname
       if (request.method === 'POST' && path === '/v1/runs') {
         const chunks: Buffer[] = []; let size = 0
         for await (const chunk of request) { size += chunk.length; if (size > 65536) throw new Error('Application request too large'); chunks.push(chunk) }
-        const run = await this.submit(binding.bindingId, JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        const input = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        if (applicationId(input?.requestId)) admissionId = `r_app_${hash(JSON.stringify([binding.bindingId, input.requestId]))}`
+        const run = await this.submit(binding.bindingId, input)
         send(202, await this.snapshot(binding.bindingId, run.id)); return
       }
       const match = path.match(/^\/v1\/runs\/(r_app_[a-f0-9]{64})(\/cancel)?$/)
@@ -136,7 +139,11 @@ export class ApplicationChannel {
       send(404, { error: 'Unknown application endpoint' })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid application request'
-      send(message.includes('conflicts') ? 409 : message === 'Unknown application run' ? 404 : 400, { error: /^(Invalid application|Application request|Application authority|Unknown application)/.test(message) ? message : 'Invalid application request' })
+      let admission: { admitted: boolean; runId?: string } | undefined
+      if (admissionId) {
+        try { const existing = await this.runs.get(admissionId); admission = { admitted: !!existing, ...(existing ? { runId: existing.id } : {}) } } catch { /* Unreadable state is not proof of non-admission. */ }
+      }
+      send(message.includes('conflicts') ? 409 : message === 'Unknown application run' ? 404 : 400, { ...admission, error: /^(Invalid application|Application request|Application authority|Unknown application)/.test(message) ? message : 'Invalid application request' })
     }
   }
   async listen(port: number, host = '127.0.0.1') {

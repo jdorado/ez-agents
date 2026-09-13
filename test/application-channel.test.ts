@@ -221,3 +221,22 @@ test('rejected history assertion cannot activate Telegram and incomplete native 
   await control.markSessionStarted(run.execution!.sessionId)
   assert.equal((await channel.snapshot(binding.bindingId, run.id)).id, run.id)
 })
+
+test('HTTP admission errors distinguish absent work from an existing conflicting run', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-app-admission-'))
+  const channel = new ApplicationChannel({ controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {} })
+  t.after(async () => { await channel.stop(); await rm(root, { recursive: true, force: true }) })
+  const credential = token()
+  await channel.bindings.register('app', credential, await owner(root))
+  const address = await channel.listen(0) as { port: number }
+  const post = (body: unknown) => fetch(`http://127.0.0.1:${address.port}/v1/runs`, { method: 'POST', headers: { authorization: `Bearer ${credential}` }, body: JSON.stringify(body) })
+  const input = { requestId: 'same', scope: 'main', text: 'Hello' }
+  const rejected = await post({ ...input, expectedNativeSessionId: 'unimported' })
+  assert.equal(rejected.status, 409)
+  assert.equal((await rejected.json() as { admitted: boolean }).admitted, false)
+  const accepted = await post(input)
+  const run = await accepted.json() as { id: string }
+  const conflict = await post({ ...input, text: 'Changed' })
+  const error = await conflict.json() as { admitted: boolean; runId: string }
+  assert.equal(error.admitted, true); assert.equal(error.runId, run.id)
+})
