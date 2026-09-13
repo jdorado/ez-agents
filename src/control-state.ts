@@ -202,6 +202,19 @@ export class ControlStore {
     })
   }
 
+  async bootstrapApplicationOwner(operatorId: number): Promise<Owner> {
+    if (!isPositiveId(operatorId)) throw new Error('Supply the real administrator Telegram user ID')
+    return this.withLock(async () => {
+      const state = await this.readState()
+      if (state.owner) throw new Error('An owner already exists; application bootstrap cannot replace it')
+      const owner: Owner = { telegramUserId: operatorId, telegramChatId: operatorId, pairedAt: new Date(this.clock()).toISOString() }
+      state.owner = owner
+      state.pending = []
+      await this.writeState(state)
+      return owner
+    })
+  }
+
   async approveOwner(telegramUserId: number, group = false): Promise<Owner> {
     if (!(group ? Number.isSafeInteger(telegramUserId) && telegramUserId < 0 : isPositiveId(telegramUserId))) throw new Error('Supply a positive user ID or negative group ID')
     return this.withLock(async () => {

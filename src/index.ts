@@ -47,7 +47,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     return message
   }
-  const bot = new Bot(config.telegramBotToken)
+  const telegramEnabled = config.telegramEnabled !== false
+  if (!telegramEnabled && (!config.applicationPort || config.channelBackendUrl)) throw new Error('Application-only execution requires the native application listener')
+  const bot = telegramEnabled ? new Bot(config.telegramBotToken) : null
   const control = new ControlStore(config.controlDir, config.pairingTtlMs)
   const approvals = new ApprovalStore(config.controlDir)
   const runs = new RunStore(config.controlDir)
@@ -60,7 +62,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const processTaskRequests = taskRequests(tasks)
   let taskWork: Promise<void> | undefined
   const drainTaskRequests = (): Promise<void> => {
-    if (shuttingDown) return taskWork ?? Promise.resolve()
+    if (!telegramEnabled || shuttingDown) return taskWork ?? Promise.resolve()
     return taskWork ?? (taskWork = processTaskRequests().finally(() => { taskWork = undefined }))
   }
   let taskTimer: ReturnType<typeof setInterval> | undefined
@@ -84,6 +86,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let activeBackend = false
   const ownerStopped = new WeakSet<ChildProcess>()
   let activeChild: ChildProcess | null = null
+  let runtimeStarted = false
   let shuttingDown = false
   let wakePollRetry: (() => void) | undefined
   const pollingAbort = new AbortController()
@@ -118,6 +121,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   })
 
   const sendChat = async (chatId: number, text: string, replyToMessageId?: number): Promise<number[]> => {
+    if (!bot) throw new Error('Telegram delivery is disabled')
     const ids: number[] = []
     const parts = splitTelegramText(text)
     for (let i = 0; i < parts.length; i++) {
@@ -127,7 +131,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         i === 0 && replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}
       try {
         const html = markdownToTelegramHtml(part)
-        const sent = await bot.api.sendMessage(chatId, html, { parse_mode: 'HTML', ...replyParams })
+        const sent = await bot!.api.sendMessage(chatId, html, { parse_mode: 'HTML', ...replyParams })
         ids.push(sent.message_id)
       } catch (error) {
         if (
@@ -137,14 +141,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         )
           throw error
         // Fallback to plain text if HTML parsing fails
-        const sent = await bot.api.sendMessage(chatId, part, { ...replyParams })
+        const sent = await bot!.api.sendMessage(chatId, part, { ...replyParams })
         ids.push(sent.message_id)
       }
     }
     return ids
   }
 
-  const telegramSource = new TelegramSource(config.controlDir, config.telegramBotToken.split(':')[0], sendChat)
+  const telegramSource = telegramEnabled ? new TelegramSource(config.controlDir, config.telegramBotToken.split(':')[0], sendChat) : null
 
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
@@ -152,6 +156,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // stat uses the effective UID; access uses the relay's isolated real UID.
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
+      if (!telegramEnabled && !run.application) return
       if (!run.scheduled && await runs.running(false)) return
       const owner = (await control.status()).owner
       if (!owner || !ownsRun(owner, run)) {
@@ -264,7 +269,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
         if (!run.scheduled && activeTypingTimer) clearInterval(activeTypingTimer)
         if (!run.application && !run.external && !run.taskId && !run.scheduled) activeTypingTimer = setInterval(() => {
-          if (performance.now() - executionStarted < 30000) void bot.api.sendChatAction(run.chatId, 'typing').catch(() => {})
+          if (performance.now() - executionStarted < 30000) void bot!.api.sendChatAction(run.chatId, 'typing').catch(() => {})
         }, 4000)
 
         const completion = finished.then((code) => {
@@ -327,14 +332,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       const owner = (await control.status()).owner
       if (!owner) return
-      if (!config.channelBackendUrl) {
+      if (telegramEnabled && !config.channelBackendUrl) {
       await drainTaskRequests()
       for (const task of await tasks.list()) if (task.state === 'pending' || task.state === 'active' || task.unwatchPending) {
         try { await tasks.decide(task.id) } catch { /* Failed or stale grants cannot launch. */ }
       }
       await queueUpdateAttention(config.controlDir,owner,runs,await durableWorkerChoice())
       }
-      for (const source of config.channelBackendUrl ? [] : await sources.available(owner)) {
+      for (const source of !telegramEnabled || config.channelBackendUrl ? [] : await sources.available(owner)) {
         try {
           const batch = await sources.batch(source)
           unavailableSources.delete(source.id)
@@ -359,7 +364,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         } catch { unavailableSources.add(source.id) }
       }
       await runs.running(true)
-      if (!config.channelBackendUrl) await scheduler.tick(owner,runs)
+      if (telegramEnabled && !config.channelBackendUrl) await scheduler.tick(owner,runs)
       for (const [id,child] of background) {
         if (await scheduler.cancelled(id)) terminateJob(child)
       }
@@ -399,6 +404,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }, 250)
   }
   const drainInbox = (force = false): Promise<void> => {
+    if (!telegramEnabled) return Promise.resolve()
     if (intakeWork) return intakeWork
     intakeWork = (async () => {
       if (shuttingDown) return
@@ -413,7 +419,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             normalizing = entry.update
             replay.add(entry.update)
             try {
-              await bot.handleUpdate(entry.update)
+              await bot!.handleUpdate(entry.update)
             } finally {
               replay.delete(entry.update)
               normalizing = undefined
@@ -481,13 +487,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             await applicationChannel.deliver(origin, item)
             continue
           }
+          if (!telegramEnabled) throw new Error('Telegram delivery is disabled')
           const receiptIds: number[] = []
 
           if (item.type === 'reaction' && item.emoji && item.messageId) {
             const emoji = normalizeReactionEmoji(item.emoji)
             if (!emoji) throw new Error('Unsupported reaction')
             attemptedDelivery = true
-            await bot.api.setMessageReaction(item.chatId, item.messageId, [
+            await bot!.api.setMessageReaction(item.chatId, item.messageId, [
               { type: 'emoji', emoji: emoji as any },
             ])
             console.info('run reaction sent', { run_id: item.runId, emoji })
@@ -495,21 +502,21 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             const docPath = await workspaceFile(origin.scheduled ? await taskWorkspace(config.workspace,origin.id) : config.workspace, item.documentPath)
             await paceSend()
             attemptedDelivery = true
-            const sent = await bot.api.sendDocument(item.chatId, new InputFile(docPath), {
+            const sent = await bot!.api.sendDocument(item.chatId, new InputFile(docPath), {
               caption: item.text,
               ...replyParams,
             })
             console.info('run document sent', { run_id: item.runId, path: docPath })
             receiptIds.push(sent.message_id)
           } else if (item.type === 'voice' && item.voiceText) {
-            await bot.api.sendChatAction(item.chatId, 'record_voice')
+            await bot!.api.sendChatAction(item.chatId, 'record_voice')
             const { buffer } = await synthesizeSpeech(item.voiceText, {
               geminiApiKey: config.geminiApiKey,
               openaiApiKey: config.openaiApiKey,
             })
             await paceSend()
             attemptedDelivery = true
-            const sent = await bot.api.sendVoice(item.chatId, new InputFile(buffer, 'voice.ogg'), replyParams)
+            const sent = await bot!.api.sendVoice(item.chatId, new InputFile(buffer, 'voice.ogg'), replyParams)
             receiptIds.push(sent.message_id)
             console.info('run voice sent', { run_id: item.runId })
           } else if (item.type === 'approval' && item.approvalPrompt && item.approvalActionId) {
@@ -519,7 +526,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             const html = `⚠️ <b>Approval Required</b>\n\n${markdownToTelegramHtml(item.approvalPrompt)}`
             await paceSend()
             attemptedDelivery = true
-            const sent = await bot.api.sendMessage(item.chatId, html, {
+            const sent = await bot!.api.sendMessage(item.chatId, html, {
               parse_mode: 'HTML',
               reply_markup: keyboard,
               ...replyParams,
@@ -650,11 +657,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
   // Returning from the polling handler acknowledges intake, not execution. Only
   // return after the authorized update has reached the atomic local journal.
+  if (bot) {
   bot.use(async (ctx, next) => {
     if (ctx.callbackQuery && (await control.status()).owner?.kind === 'group') {
       if (!isOwner(ctx, (await control.status()).owner)) return
       try {
-        const member = await bot.api.getChatMember(ctx.chat!.id, ctx.from!.id)
+        const member = await bot!.api.getChatMember(ctx.chat!.id, ctx.from!.id)
         if (!['creator', 'administrator', 'member'].includes(member.status) &&
           !(member.status === 'restricted' && member.is_member)) return
       } catch { throw new Error('Group membership verification unavailable; retry the update') }
@@ -669,8 +677,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         return
       }
       if (!owner || !message?.text || message.sender_chat || !ctx.from || ctx.from.is_bot) return
-      await telegramSource.start(owner)
-      if (await telegramSource.capture(ctx.update.update_id, message as import('grammy/types').Message.TextMessage, ctx.from)) return
+      await telegramSource!.start(owner)
+      if (await telegramSource!.capture(ctx.update.update_id, message as import('grammy/types').Message.TextMessage, ctx.from)) return
       if (owner.kind === 'group') return
       if (ctx.from.id !== owner.telegramUserId) return
       if (replay.has(ctx.update)) {
@@ -695,7 +703,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if (await inbox.accept(ctx.update, await control.captureChoice(aiMenu.initial, message?.text || message?.caption))) scheduleIntake()
   })
 
-  bot.on('message:text', async (ctx) => {
+  bot!.on('message:text', async (ctx) => {
     if (!(await checkOwner(ctx))) return
 
     const text = controlCommand(ctx.message.text)
@@ -810,7 +818,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     })
   })
 
-  bot.on('message:photo', async (ctx) => {
+  bot!.on('message:photo', async (ctx) => {
     if (!(await checkOwner(ctx))) return
     try {
       const photos = ctx.message.photo
@@ -840,7 +848,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
   })
 
-  bot.on('message:document', async (ctx) => {
+  bot!.on('message:document', async (ctx) => {
     if (!(await checkOwner(ctx))) return
     try {
       const doc = ctx.message.document
@@ -871,10 +879,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
   })
 
-  bot.on('message:voice', async (ctx) => {
+  bot!.on('message:voice', async (ctx) => {
     if (!(await checkOwner(ctx))) return
     try {
-      await bot.api.sendChatAction(ctx.chat.id, 'typing').catch(() => {})
+      await bot!.api.sendChatAction(ctx.chat.id, 'typing').catch(() => {})
       const voice = ctx.message.voice
       const fileInfo = await ctx.api.getFile(voice.file_id)
       if (!fileInfo.file_path) throw new Error('Telegram attachment path unavailable')
@@ -903,7 +911,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
   })
 
-  bot.on('callback_query:data', async (ctx) => {
+  bot!.on('callback_query:data', async (ctx) => {
     if (!isOwner(ctx, (await control.status()).owner)) {
       await ctx.answerCallbackQuery()
       return
@@ -1005,15 +1013,17 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
   })
 
-  bot.catch((error) => {
+  bot!.catch((error) => {
     console.error('Telegram update failure', safeError(error.error))
     // Do not let polling acknowledge an update whose journal write failed.
     throw error
   })
+  }
 
   let stopWork: Promise<void> | undefined
   const stop = (): Promise<void> => stopWork ?? (stopWork = (async () => {
     shuttingDown = true
+    runtimeStarted = false
     pollingAbort.abort()
     await applicationChannel.stop()
     wakePollRetry?.()
@@ -1032,9 +1042,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     await Promise.all([taskWork, outboxWork].map(work => work?.catch(() => {})))
     pagerDuty?.stop()
     try {
-      if (bot.isRunning()) await bot.stop()
+      if (bot?.isRunning()) await bot.stop()
     } finally {
-      await telegramSource.stop()
+      await telegramSource?.stop()
     }
   })())
 
@@ -1043,14 +1053,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     try {
       await initializeWorkspace(config.workspace)
       if (config.applicationPort) await applicationChannel.listen(config.applicationPort, config.applicationHost)
+      runtimeStarted = true
       pagerDuty?.start()
       const owner = (await control.status()).owner
-      if (owner && !config.channelBackendUrl) await telegramSource.start(owner)
-      await scheduler.recover(runs)
+      if (telegramEnabled && owner && !config.channelBackendUrl) await telegramSource!.start(owner)
+      if (telegramEnabled) await scheduler.recover(runs)
       sourceTimer = setInterval(() => {
         void drainSources().catch(error => console.error('Event-source drain failed', safeError(error)))
       }, 1000)
-      taskTimer = setInterval(() => { void drainTaskRequests().catch(console.error) }, 250)
+      if (telegramEnabled) taskTimer = setInterval(() => { void drainTaskRequests().catch(console.error) }, 250)
       drainTimer = setInterval(() => {
         void drainOutbox().catch((error) => console.error('Outbox drain failed', error.message))
       }, 250)
@@ -1073,18 +1084,22 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         }
       }
 
+      if (!telegramEnabled) {
+        await new Promise<void>(resolve => { wakePollRetry = resolve; if (shuttingDown) resolve() })
+        return
+      }
       scheduleIntake()
       // Telegram polling is a delivery surface, not the scheduler or executor.
       // grammY owns in-poll reconnects. Escaped permanent faults wait for
       // intervention without restarting setup or terminating authorized work.
       while (!shuttingDown) {
         try {
-          await bot.api.setMyCommands(commands)
-          await bot.api.setMyCommands(commands, { scope: { type: 'all_private_chats' } })
+          await bot!.api.setMyCommands(commands)
+          await bot!.api.setMyCommands(commands, { scope: { type: 'all_private_chats' } })
           // grammY types its Node signal with the older abort-controller shim.
-          await bot.init(pollingAbort.signal as unknown as Parameters<typeof bot.init>[0])
+          await bot!.init(pollingAbort.signal as unknown as Parameters<typeof Bot.prototype.init>[0])
           if (shuttingDown) break
-          await bot.start({
+          await bot!.start({
             drop_pending_updates: false,
             onStart: (botInfo) => console.log(`✓ Bot @${botInfo.username} polling for messages...`),
           })
@@ -1116,7 +1131,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
     }
   }
-  return { bot, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests, applicationChannel }
+  return { bot: bot!, isRunning: () => telegramEnabled ? Boolean(bot?.isRunning()) : runtimeStarted, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests, applicationChannel }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

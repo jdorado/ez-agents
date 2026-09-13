@@ -225,3 +225,41 @@ no run exists for that binding/request ID. An existing conflicting run produces
 `admitted:true` and `runId`. Authentication or unreadable state may leave admission
 unknown. Backends may release a pending data barrier on explicit non-admission;
 a generic HTTP error or revoked credential alone is not proof of termination.
+
+## Application-only deployment (no Telegram bot)
+
+For a private per-user native runtime, set `EZ_TELEGRAM_ENABLED=false` and
+`EZ_APPLICATION_PORT` (plus `EZ_APPLICATION_HOST` when other containers connect).
+No bot token is required or used. This mode runs the existing native executor,
+application queue and application outbox without creating a Telegram client,
+starting Telegram sources/polling, or registering bot commands. Default deployments
+still enable Telegram and require its token.
+
+The installing administrator can initialize empty control authority and register
+an application in one local command:
+
+```sh
+EZ_TELEGRAM_ENABLED=false ezenciel-agents-application --id aifit --token-file /run/private/application-token --owner REAL_ADMIN_TELEGRAM_ID
+```
+
+Use the administrator's actual numeric Telegram user ID: the existing control
+owner is deployment administration bookkeeping, not the learner/account identity.
+Never fabricate learner Telegram IDs. Account identity remains server-resolved by
+the app and bound to its isolated runtime. This bootstrap is unavailable inside
+agent turns, requires explicit botless mode, and cannot replace an existing owner.
+Existing owners require no new bootstrap. Application tokens remain private;
+normal source binding and run authorization checks still apply.
+
+Each learner/coach principal requires its own workspace, CLI state and isolated
+runtime. Several such runtimes can use the same actual administrator identity;
+no separate bot is required. Connect Telegram through the application's existing
+linked-account entrypoint to the same application scope, rather than starting a
+second bot inside each user's runtime. `--share-telegram` is unavailable in
+application-only mode.
+
+This initial mode accepts application turns only. Existing Telegram jobs/outbox
+items, event-source work, tasks and scheduled delivery do not execute or send.
+Application agents must finish and reply in their admitted turn; ordinary native
+subagents remain available. Background scheduling with application delivery is
+not implemented here. Do not switch an active Telegram deployment to this mode
+as a substitute for migrating its pending work.
