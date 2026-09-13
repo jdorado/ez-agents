@@ -12,6 +12,7 @@ type Message = {id?:number;method?:string;params?:any;result?:any;error?:{messag
 // this transport never generates a continuation prompt or an Ez goal record.
 export async function runCodexSession(options:Options, io:{launch?:()=>ChildProcess;emit?:(line:string)=>void}={}):Promise<number> {
   options = executionDefaults('codex', options)
+  if (options.codexSandbox !== undefined && options.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
   const child=io.launch?.() ?? spawn('codex',['app-server','--stdio','--disable','memories','--enable','skip_host_skill_discovery'],{cwd:options.workspace,env:process.env,stdio:['pipe','pipe','pipe']})
   const emit=io.emit ?? (line=>process.stdout.write(line+'\n'))
   let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=false
@@ -77,7 +78,8 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     threadId=result.thread?.id
     if(!threadId)throw new Error('Codex did not return a native thread ID')
     emit(JSON.stringify({type:'thread.started',thread_id:threadId}))
-    await request('turn/start',{threadId,input:[{type:'text',text:options.prompt}],model:options.model,effort:options.effort})
+    await request('turn/start',{threadId,input:[{type:'text',text:options.prompt}],model:options.model,effort:options.effort,
+      ...(options.codexSandbox === 'external' ? {sandboxPolicy:{type:'externalSandbox',networkAccess:'enabled'}} : {})})
     return await done
   }catch(error){fail(error);return 1}
   finally{

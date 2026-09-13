@@ -350,12 +350,17 @@ its UI; it does not schedule or execute work. Revoked channels cannot launch or
 receive scheduled work. Token rotation retains delivery. Telegram-specific intake
 and delivery require Telegram; pending Telegram work is never rerouted to web.
 
-When a private application-only container supplies the isolation boundary and
+When a private container supplies the isolation boundary and
 Codex cannot create its nested sandbox, its installing administrator may set
-`EZ_CODEX_SANDBOX=external` together with `EZ_EXECUTOR_TRANSPORT=local`. Authorized
-local owner Codex runs, including scheduled native sessions, use that container
-isolation setting. The default remains `workspace-write`.
+`EZ_CODEX_SANDBOX=external` together with `EZ_EXECUTOR_TRANSPORT=local`.
+Local owner-authorized Codex app and Telegram turns use
+`--sandbox danger-full-access`. Native scheduled owner sessions use Codex's
+`externalSandbox` turn policy, with network access supplied by the container.
+The default remains `workspace-write`.
 Keep the container's private mounts, non-root UID, dropped capabilities and
 no-new-privileges policy; the agent can access everything mounted into it.
-This setting is rejected for restricted tasks or host execution and cannot be selected
-by an application request. It is not forwarded to the host executor.
+Use standard root-start relay privilege separation when Telegram/provider
+secrets are present; do not put those secrets in a same-UID process environment
+or readable mount. This setting is rejected for host/backend execution and
+restricted delegated tasks, and cannot be selected by an application request.
+It is not forwarded to the host executor.
