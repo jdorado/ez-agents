@@ -4,6 +4,13 @@ import type { RunStore } from './runs.js'
 
 // IDs identify existing relay bindings only; the engine still owns all context.
 export const createConversationMenu = (control: ControlStore, runs: Pick<RunStore, 'list'>) => {
+  const render = async (ctx: Context, text: string, keyboard: InlineKeyboard) => {
+    if (!ctx.callbackQuery?.message) { await ctx.reply(text, { reply_markup: keyboard }); return }
+    try { await ctx.editMessageText(text, { reply_markup: keyboard }) }
+    catch (error) {
+      if (!String((error as {description?: string})?.description).includes('message is not modified')) throw error
+    }
+  }
   const sessionsWithNames = async () => {
     const sessions = await control.listSessions()
     if (sessions.every(s => s.title)) return sessions
@@ -11,15 +18,18 @@ export const createConversationMenu = (control: ControlStore, runs: Pick<RunStor
     // ask an engine to generate titles just to render a menu. Commands and JSON
     // event records (including approval callbacks) are not readable chat names.
     const history = await runs.list()
-    return sessions.map((session, index) => {
-      if (session.title) return session
+    return sessions.flatMap((session, index) => {
+      if (session.title) return [session]
       const first = history.find(run => run.execution?.sessionId === session.sessionId &&
         run.messageId && !run.taskId && !run.scheduled && !run.external && !run.replyOnly &&
         run.texts[0]?.trim() && !/^[/{]/.test(run.texts[0].trim()))
+      // New only reserves a routing ID. Do not present empty routing placeholders
+      // as engine conversations. Retain the records for already accepted work.
+      if (!session.hasStarted && !session.nativeSessionId && !first) return []
       const title = first
         ? `${first.texts[0].replace(/\s+/g, ' ').trim().slice(0, 40)} · ${first.createdAt.slice(0, 16).replace('T', ' ')} UTC`
-        : session.hasStarted ? `Untitled conversation ${index + 1}` : 'New conversation'
-      return { ...session, title }
+        : `Untitled conversation ${index + 1}`
+      return [{ ...session, title }]
     })
   }
   const list = async (ctx: Context, archived = false, page = 0) => {
@@ -32,9 +42,12 @@ export const createConversationMenu = (control: ControlStore, runs: Pick<RunStor
       keyboard.text(`${session.sessionId === active?.sessionId ? '✓ ' : ''}${sessionTitle(session)}`.slice(0, 64), `chat:open:${session.sessionId}`).row()
     if (page > 0) keyboard.text('Previous', `chat:list:${Number(archived)}:${page - 1}`)
     if ((page + 1) * 8 < sessions.length) keyboard.text('Next', `chat:list:${Number(archived)}:${page + 1}`)
-    keyboard.row().text(archived ? 'Conversations' : 'Archived conversations', `chat:list:${Number(!archived)}:0`)
-      .text('New conversation', 'menu:new')
-    await ctx.reply(archived ? 'Archived conversations' : 'Conversations\nSelect a name to continue.', { reply_markup: keyboard })
+    if (page > 0 || (page + 1) * 8 < sessions.length) keyboard.row()
+    keyboard.text(archived ? 'Conversations' : 'Archived conversations', `chat:list:${Number(!archived)}:0`)
+      .text('+ New conversation', 'menu:new')
+    await render(ctx, archived
+      ? sessions.length ? 'Archived conversations' : 'No archived conversations.'
+      : sessions.length ? 'Conversations\nSelect a name to continue.' : 'No active conversations.\nSend a message to start a chat, or open Archived conversations.', keyboard)
   }
   return {
     list,
@@ -55,17 +68,17 @@ export const createConversationMenu = (control: ControlStore, runs: Pick<RunStor
           await ctx.reply(`${verb === 'archive' ? 'Archived' : 'Restored'}: ${sessionTitle(session)}${verb === 'archive' ? '\nExisting work keeps its conversation. Archiving does not stop it.' : ''}`)
           await list(ctx, verb === 'restore' ? false : true)
         } else if (session.archived) {
-          await ctx.reply(sessionTitle(session), { reply_markup: new InlineKeyboard().text('Restore conversation', `chat:restore:${id}`).row().text('Back', 'chat:list:1:0') })
+          await render(ctx, sessionTitle(session), new InlineKeyboard().text('Restore conversation', `chat:restore:${id}`).row().text('Back', 'chat:list:1:0'))
         } else {
           const keyboard = new InlineKeyboard().text('Archive this conversation', `chat:archive:${id}`).row()
             .text('Back to conversations', 'chat:list:0:0')
           try { await control.switchSession(id) }
           catch (error) {
             // Even an older session that cannot resume can still be archived.
-            await ctx.reply(`${sessionTitle(session)}\n${error instanceof Error ? error.message : 'Unable to continue.'}`, { reply_markup: keyboard })
+            await render(ctx, `${sessionTitle(session)}\n${error instanceof Error ? error.message : 'Unable to continue.'}`, keyboard)
             return true
           }
-          await ctx.reply(`Current conversation: ${sessionTitle(session)}\nSend a message to continue. To rename it, use /rename followed by a name.`, { reply_markup: keyboard })
+          await render(ctx, `Current conversation: ${sessionTitle(session)}\nSend a message to continue. To rename it, use /rename followed by a name.`, keyboard)
         }
       } catch (error) {
         await ctx.reply(error instanceof Error ? error.message : 'Conversation selection failed.')

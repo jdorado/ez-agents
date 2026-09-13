@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Hide empty conversation placeholders from history and update the same menu
+  when navigating Back, rather than adding another menu message.
+
 - Keep the conversation list to names only; show Archive/Restore for the selected
   conversation. Label older chats from saved owner messages instead of opaque IDs.
 
