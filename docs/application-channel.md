@@ -36,7 +36,21 @@ the ordinary last-selection-wins behavior. Already-admitted runs keep their
 captured conversation and AI. Uncertain control responses require a fresh read,
 not blind repetition of `/new`.
 
-Current HTTP gaps: rename/archive, scoped conversation reset, scheduling
+For private application conversations, `GET /v1/scope-control?scope=<encoded-scope>` returns
+the same catalog and the current scope's public control ID and preset. The scope
+is the application's original admission scope, resolved under its authenticated
+binding. `POST` accepts `new`, `select` and `model` with that scope's
+`expectedSession`. It does not require shared-control permission. Shared scopes
+must use `/v1/control` instead.
+
+A scope reset uses the configured default AI. A client change starts a fresh
+private conversation; a model change within the same client retains it. Retired
+private conversations stay hidden from `/chats`; admitted work can finish in its
+original native session. Neither operation changes the shared active selection.
+Control mutations are never marked retryable by the public client: read back
+after uncertainty before deciding on another change.
+
+Current HTTP gaps: rename/archive, scheduling
 administration and shared-chat stop-all are not exposed here. Per-run application
 cancellation remains available. These endpoints do not make application-only
 background scheduling operational; see its deployment limitations below.

@@ -13,8 +13,14 @@ test('control transport uses the same credential boundary without expanding arbi
   }}
   await applicationCall('/v1/control',undefined,connection)
   await applicationCall('/v1/control',{action:'new',expectedSession:null},connection)
+  await applicationCall('/v1/scope-control?scope=exercise',undefined,connection)
   await assert.rejects(applicationCall('/v1/control/../secrets',undefined,connection),/Invalid/)
-  assert.deepEqual(calls,[['http://agent:8787/v1/control','GET'],['http://agent:8787/v1/control','POST']])
+  assert.deepEqual(calls,[['http://agent:8787/v1/control','GET'],['http://agent:8787/v1/control','POST'],['http://agent:8787/v1/scope-control?scope=exercise','GET']])
+  await assert.rejects(applicationCall('/v1/scopes/../control',undefined,connection),/Invalid/)
+  for (const path of ['/v1/control','/v1/scope-control?scope=exercise']) {
+    await assert.rejects(applicationCall(path,{action:'new',expectedSession:null},{...connection,
+      fetchImpl:async()=>{throw new Error('lost response')}}),error=>error.retryable===false)
+  }
 })
 test('principal bindings fail closed on unknown, revoked, duplicate and shared endpoints', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-client-'))

@@ -33,8 +33,11 @@ function applicationEndpoint(value) {
 
 export async function applicationCall(path, body, { url, token, fetchImpl = fetch, signal } = {}) {
   if (!token) throw new Error('Ez application credential is missing')
-  if (!/^\/v1\/(?:control|runs(?:\/r_app_[a-f0-9]{64}(?:\/cancel)?)?)$/.test(path)) throw new Error('Invalid Ez application operation')
+  const scopeParams = path.startsWith('/v1/scope-control?') ? new URLSearchParams(path.slice('/v1/scope-control?'.length)) : null
+  const scoped = scopeParams && [...scopeParams.keys()].length===1 && /^[a-zA-Z0-9_:.\-]{1,200}$/.test(scopeParams.get('scope') ?? '')
+  if (!scoped && !/^\/v1\/(?:control|runs(?:\/r_app_[a-f0-9]{64}(?:\/cancel)?)?)$/.test(path)) throw new Error('Invalid Ez application operation')
   let response
+  const retrySafe = body === undefined || (!scoped && path !== '/v1/control')
   try {
     response = await fetchImpl(new URL(path, applicationEndpoint(url)), {
       method: body === undefined ? 'GET' : 'POST',
@@ -43,18 +46,18 @@ export async function applicationCall(path, body, { url, token, fetchImpl = fetc
       redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     })
   } catch (cause) {
-    throw Object.assign(new Error('Ez application transport unavailable', { cause }), { retryable: !signal?.aborted })
+    throw Object.assign(new Error('Ez application transport unavailable', { cause }), { retryable: retrySafe && !signal?.aborted })
   }
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     throw Object.assign(new Error(`Ez application returned HTTP ${response.status}`), {
-      retryable: response.status >= 500 || [408, 429].includes(response.status), status: response.status,
+      retryable: retrySafe && (response.status >= 500 || [408, 429].includes(response.status)), status: response.status,
       ...(typeof body?.admitted === 'boolean' ? { admitted: body.admitted } : {}),
       ...(typeof body?.runId === 'string' ? { runId: body.runId } : {}),
     })
   }
   try { return await response.json() }
-  catch (cause) { throw Object.assign(new Error('Ez application response unavailable or invalid', { cause }), { retryable: true }) }
+  catch (cause) { throw Object.assign(new Error('Ez application response unavailable or invalid', { cause }), { retryable: retrySafe }) }
 }
 
 // Reconnect with the same requestId after transport failure. This client never
