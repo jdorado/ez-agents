@@ -234,7 +234,7 @@ export const startExecutorJob = async (
   options = executionDefaults(executorKey(options.cli), options)
   if(options.runId.startsWith('r_schedule_') && !/^[a-zA-Z0-9_-]+$/.test(options.runId))throw new Error('Invalid native task run ID')
   const run = await new RunStore(options.controlDir).get(options.runId)
-  if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_TELEGRAM_ENABLED !== 'false' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || !run?.application || run.taskId || run.scheduled || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an application-only local foreground run')
+  if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || !run || run.taskId || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an owner-authorized native local run')
   if (run?.taskId) {
     if (run.status !== 'running') throw new Error('No active task run')
     await new Tasks(options.controlDir).authorize(run, process.env.EZ_EXECUTOR_TRANSPORT === 'host')

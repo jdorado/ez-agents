@@ -56,7 +56,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   if (env.EZ_APPLICATION_PORT && env.EZ_CHANNEL_BACKEND_URL) throw new Error('Application input requires the native Ez executor, not a channel backend')
   const codexSandbox = env.EZ_CODEX_SANDBOX?.trim()
   if (codexSandbox && codexSandbox !== 'external') throw new Error('EZ_CODEX_SANDBOX must be external or unset')
-  if (codexSandbox && (telegramEnabled || env.EZ_EXECUTOR_TRANSPORT !== 'local')) throw new Error('External Codex sandbox requires application-only local execution')
+  if (codexSandbox && (env.EZ_CHANNEL_BACKEND_URL || env.EZ_EXECUTOR_TRANSPORT !== 'local')) throw new Error('External Codex sandbox requires native local execution')
   const pagerDutyRoutingKey = env.PAGERDUTY_ROUTING_KEY?.trim()
   const pagerDutyStocksHealthUrl = env.EZ_PAGERDUTY_STOCKS_HEALTH_URL?.trim()
   if (pagerDutyStocksHealthUrl && !pagerDutyRoutingKey)
