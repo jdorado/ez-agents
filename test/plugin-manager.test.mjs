@@ -334,3 +334,25 @@ test('registered calls honor registry lock and regenerate stale Compose from cur
  await fs.writeFile(path.join(f.home,'registry.lock'),'test');
  await assert.rejects(f.call('sample','read'),/busy|EEXIST|locked/i);
 });
+
+
+test('writable folders require an explicit per-folder grant and can be revoked', async t => {
+ const f=await fixture(t);await init(f.home,f.workspace);
+ const p=await snapshot(f.source);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ const source=await fs.realpath(f.workspace),binding=['sample','--service','sample','--source',source,'--target','/data/files'];
+ const result=JSON.parse((await f.call('plugins','folder-bind',...binding,'--writable')).stdout);
+ assert.equal(result.readOnly,false);
+ const readConfig=async()=>JSON.parse(await fs.readFile(path.join(f.home,'config.json'),'utf8'));
+ let config=await readConfig();
+ assert.deepEqual(config.folders.sample,[{service:'sample',source,target:'/data/files',writable:true}]);
+ const record={...p,project:'ezp-test-sample'};
+ assert.equal((await compose(config,record)).services.sample.volumes.find(v=>v.target==='/data/files').read_only,false);
+ config.folders.sample[0].writable='true';
+ await assert.rejects(compose(config,record),/writable must be boolean/);
+ await assert.rejects(f.call('plugins','folder-bind',...binding,'--writable','--writable'),/Supply/);
+ await f.call('plugins','folder-bind',...binding);
+ config=await readConfig();
+ assert.equal((await compose(config,record)).services.sample.volumes.find(v=>v.target==='/data/files').read_only,true);
+ await assert.rejects(f.call('plugins','folder-unbind','sample','--service','sample','--target','/data/files','--writable'),/Supply/);
+});
