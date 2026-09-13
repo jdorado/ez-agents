@@ -591,6 +591,7 @@ test('older conversation names come from owner messages and detail keeps archive
     const execution = await store.captureChoice({ id: 'grok', name: 'Grok', cli: 'grok' })
     const runs = new RunStore(f.dir)
     await runs.create({ chatId: 101, telegramUserId: 101, texts: ['Internal update event'], execution })
+    await runs.create({ chatId: 101, telegramUserId: 101, messageId: 9, texts: [JSON.stringify({event: 'approval_decision', decision: 'approve'})], execution })
     await runs.create({ chatId: 101, telegramUserId: 101, messageId: 10, texts: ['/start'], execution })
     await runs.create({ chatId: 101, telegramUserId: 101, messageId: 11, texts: ['Client launch checklist'], execution })
     await store.captureChoice({ id: 'grok', name: 'Grok', cli: 'grok' }, 'A later message must not relabel old history')

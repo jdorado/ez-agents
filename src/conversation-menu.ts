@@ -8,13 +8,14 @@ export const createConversationMenu = (control: ControlStore, runs: Pick<RunStor
     const sessions = await control.listSessions()
     if (sessions.every(s => s.title)) return sessions
     // Display existing owner input only. Do not create another history store or
-    // ask an engine to generate titles just to render a menu.
+    // ask an engine to generate titles just to render a menu. Commands and JSON
+    // event records (including approval callbacks) are not readable chat names.
     const history = await runs.list()
     return sessions.map((session, index) => {
       if (session.title) return session
       const first = history.find(run => run.execution?.sessionId === session.sessionId &&
         run.messageId && !run.taskId && !run.scheduled && !run.external && !run.replyOnly &&
-        run.texts[0]?.trim() && !run.texts[0].trim().startsWith('/'))
+        run.texts[0]?.trim() && !/^[/{]/.test(run.texts[0].trim()))
       const title = first
         ? `${first.texts[0].replace(/\s+/g, ' ').trim().slice(0, 40)} · ${first.createdAt.slice(0, 16).replace('T', ' ')} UTC`
         : session.hasStarted ? `Untitled conversation ${index + 1}` : 'New conversation'
