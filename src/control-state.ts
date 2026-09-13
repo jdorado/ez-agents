@@ -381,7 +381,7 @@ export class ControlStore {
       state.activeSession ??= { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
       if (!state.activeSession.cli && !state.activeSession.hasStarted) state.activeSession.cli = preset.cli
       if (state.activeSession.cli === preset.cli) state.activeSession.preset = preset
-      if (!state.activeSession.title && title?.trim())
+      if (!state.activeSession.title && !state.activeSession.hasStarted && title?.trim())
         state.activeSession.title = title.replace(/\s+/g, ' ').trim().slice(0, 80)
       await this.writeState(state)
       return { sessionId: state.activeSession.sessionId, preset }
