@@ -10,27 +10,48 @@ following up on an agreed task. Each assistant has its own working context and
 responsibilities. The tools and permissions you configure determine what it can
 do.
 
-An AI harness is the client that lets a model reason, use tools and carry out
-work. Ez uses your chosen host CLI and its existing login. The harness does the
-reasoning; Ez connects it to a persistent workspace, messaging, plugins and
-explicit authority boundaries. Telegram is the current owner interface.
+Ez is a thin wrapper and transport layer around the native agent CLI engine,
+using your chosen host CLI and its existing login. The engine owns inference,
+native sessions, context management and tool execution. Ez supplies channel
+delivery, scheduling and standard runtime controls. Telegram is the current
+owner interface.
+
+## Engine and application boundaries
+
+User prompts pass through to the engine unchanged, with only the minimum
+additional metadata or instructions needed for channel-specific elements such
+as attachments. Ez must not reconstruct conversation history, assemble a
+conventional LLM/API prompt or wrap each message in a replacement system prompt:
+the native engine already maintains its session and full context.
+
+Applications such as AIFit or EzStudy integrate through public or purpose-built
+private plugins exposing documented CLI commands to the agent. All application
+actions run through those commands, which enforce authentication, authorization,
+validation and canonical persistence.
+
+Application interfaces must submit turns through the same Ez execution path,
+without separate agent runners, model-routing layers, conversation engines or
+competing execution queues. Preserve standard Ez commands and behavior unchanged;
+application-specific behavior belongs in plugin instructions and CLI commands,
+not transport branches or replacement runtime controls. These are integration
+requirements, not a claim that every application integration is already shipped.
 
 ## What makes an Ez assistant
 
 | Part | What it contributes |
 |---|---|
 | **Workspace** | Markdown instructions, business context and working files that persist across conversations and changes of AI. |
-| **Harness** | The existing AI client that plans, chooses tools and executes work. See [AI selection](docs/architecture/ai-selection.md). |
+| **Native engine** | Inference, native sessions, context management and tool execution. See [AI selection](docs/architecture/ai-selection.md). |
 | **Authority** | A verified owner and explicit limits on delegated work. Receiving a message or installing a tool does not grant permission to act. |
-| **Plugins** | Separately maintained tools and connections, with instructions the agent can discover and use. Provider authentication and receipts belong to the plugin. |
-| **Messaging and continuity** | A way to reach the assistant, return results and continue work in its own environment. |
+| **Plugins** | Documented CLI commands and agent instructions for application capabilities. Commands enforce authentication, authorization, validation and canonical persistence. |
+| **Ez transport and runtime** | Channel delivery, scheduling and standard runtime controls around the native engine. |
 
 The design starts with one assistant, one mind and clear responsibilities.
 Business instructions live in the workspace; reusable capabilities live in tools
 and plugins. The agent decides how to do the work using those instructions and
 the capabilities available to it.
 
-Use the harness's native capabilities when they meet the need. Add a standalone
+Use the engine's native capabilities when they meet the need. Add a standalone
 plugin when a missing integration earns the maintenance. Ez keeps the surrounding
 runtime small, so your files, tools and business knowledge remain useful as AI
 clients improve.
