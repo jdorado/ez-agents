@@ -74,14 +74,15 @@ export class ApplicationChannel {
     aiControls?: {
       catalog: () => Promise<ModelChoice[]>
       select: (preset: AiPreset, expectedSession: string | null, guard?: ControlGuard) => Promise<unknown>
+      validate: (preset: AiPreset) => Promise<void>
       saveSelection: (model: ModelChoice, effort?: string, guard?: ControlGuard) => Promise<AiPreset>
     }
   }) { this.bindings = new ApplicationBindings(options.controlDir) }
   private get runs() { return new RunStore(this.options.controlDir) }
-  private async sharedBinding(bindingId: string) {
+  private async sharedBinding(bindingId: string, shared = true) {
     const binding = (await this.bindings.list()).find(item => item.bindingId === bindingId)
     const state = await new ControlStore(this.options.controlDir, 900000).status()
-    if (!binding?.shareTelegram || !sameOwner(binding.owner, state.owner)) throw new Error('Application authority does not permit shared controls')
+    if (!binding || (shared && !binding.shareTelegram) || !sameOwner(binding.owner, state.owner)) throw new Error('Application authority does not permit controls')
     return binding.owner
   }
   async controls(bindingId: string) {
@@ -135,6 +136,53 @@ export class ApplicationChannel {
       await controls.select(preset, expected, guard)
     }
     return this.controls(bindingId)
+  }
+  async scopeControls(bindingId: string, scope: string) {
+    if (!applicationId(scope)) throw new Error('Invalid application scope')
+    await this.sharedBinding(bindingId, false)
+    if (!this.options.aiControls) throw new Error('Application controls unavailable')
+    const models = await this.options.aiControls.catalog()
+    const control = new ControlStore(this.options.controlDir, 900000)
+    const session = await control.applicationSession(applicationScope(bindingId, scope))
+    if (session?.telegramShared) throw new Error('Application scope is shared; use shared controls')
+    const state = await control.status()
+    const ai = state.ai ?? {presets:[this.options.initial],defaultId:this.options.initial.id,selectedId:this.options.initial.id}
+    await this.sharedBinding(bindingId, false)
+    return {ai:{...ai, selectedId:session?.preset?.id ?? ai.selectedId,
+      presets:session?.preset ? [...ai.presets.filter(item=>item.id!==session.preset!.id),session.preset] : ai.presets},
+      models, activeSessionId:session?.sessionId ?? null, sessions:session ? [{id:session.sessionId,title:sessionTitle(session),cli:session.cli,archived:false}] : []}
+  }
+  async changeScopeControls(bindingId: string, scope: string, input: unknown) {
+    if (!applicationId(scope)) throw new Error('Invalid application scope')
+    const owner = await this.sharedBinding(bindingId, false)
+    const controls = this.options.aiControls
+    if (!controls) throw new Error('Application controls unavailable')
+    const value = input as {action?:unknown; expectedSession?:unknown; presetId?:unknown; cli?:unknown; model?:unknown; effort?:unknown}
+    if (!value || !['new','select','model'].includes(String(value.action)) ||
+      !(value.expectedSession===null || (typeof value.expectedSession==='string' && /^[a-f0-9-]{36}$/.test(value.expectedSession)))) throw new Error('Invalid application control request')
+    const fields = {new:[],select:['presetId'],model:['cli','model','effort']}[value.action as 'new'|'select'|'model']!
+    if (Object.keys(value).some(key=>!['action','expectedSession',...fields].includes(key))) throw new Error('Invalid application control fields')
+    const hashedScope = applicationScope(bindingId,scope)
+    const guard:ControlGuard = {owner,applicationScope:hashedScope,expectedSession:value.expectedSession as string|null,
+      authorize:async()=>{
+        const binding = (await this.bindings.list()).find(item=>item.bindingId===bindingId)
+        if (!binding || !sameOwner(binding.owner,owner)) throw new Error('Application authority revoked')
+      }}
+    const control = new ControlStore(this.options.controlDir,900000)
+    let preset:AiPreset|undefined
+    if (value.action==='select') {
+      const session = await control.applicationSession(hashedScope)
+      preset = session?.preset && session.preset.id===value.presetId ? session.preset : (await control.status()).ai?.presets.find(item=>item.id===value.presetId)
+      if (!preset) throw new Error('Invalid application preset')
+      await controls.validate(preset)
+    }
+    if (value.action==='model') {
+      const model = (await controls.catalog()).find(item=>item.cli===value.cli && item.model===value.model)
+      if (!model || model.cli==='agy' || (value.effort!==undefined && (typeof value.effort!=='string' || !model.efforts.includes(value.effort)))) throw new Error('Invalid application model selection')
+      preset = await controls.saveSelection(model,value.effort as string|undefined,guard)
+    }
+    await control.changeApplicationSession(hashedScope,guard,preset)
+    return this.scopeControls(bindingId,scope)
   }
   async submit(bindingId: string, input: unknown): Promise<RunRecord> {
     const work = this.admissions.then(async () => {
@@ -211,6 +259,14 @@ export class ApplicationChannel {
         if (end < 0) throw new Error('Invalid application inbox cursor')
         const records = all.slice(Math.max(0,end-100),end)
         send(200, {runs: await Promise.all(records.map(run => this.snapshot(binding.bindingId, run.id))), nextCursor:end>100?records[0].id:null}); return
+      }
+      if (path==='/v1/scope-control' && ['GET','POST'].includes(request.method ?? '')) {
+        const scope = url.searchParams.get('scope')
+        if (!applicationId(scope) || [...url.searchParams.keys()].length!==1) throw new Error('Invalid application scope')
+        if (request.method==='GET') {send(200,await this.scopeControls(binding.bindingId,scope!));return}
+        const chunks:Buffer[]=[];let size=0
+        for await (const chunk of request) {size+=chunk.length;if(size>65536)throw new Error('Invalid application control size');chunks.push(chunk)}
+        send(200,await this.changeScopeControls(binding.bindingId,scope!,JSON.parse(Buffer.concat(chunks).toString('utf8'))));return
       }
       if (path === '/v1/control' && ['GET','POST'].includes(request.method ?? '')) {
         if (!binding.shareTelegram) { send(403, {error:'Application authority does not permit shared controls'}); return }

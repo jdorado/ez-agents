@@ -53,7 +53,7 @@ export type SessionState = {
   telegramShared?: boolean
 }
 
-export type ControlGuard = { owner: Owner; authorize: () => Promise<unknown>; expectedSession?: string | null }
+export type ControlGuard = { owner: Owner; authorize: () => Promise<unknown>; expectedSession?: string | null; applicationScope?: string }
 
 type ControlState = {
   version: 1
@@ -117,6 +117,9 @@ const rememberPreset = (state: ControlState) => {
     state.activeSession.preset = preset
 }
 
+const currentApplicationSession = (state: ControlState, scope: string) =>
+  [state.activeSession, ...(state.sessions ?? [])].find(session => session?.applicationScope === scope && !session.archived)
+
 const requireControlGuard = async (state: ControlState, guard?: ControlGuard) => {
   if (!guard) return
   // The callback may inspect binding authority, but must not acquire this store's lock.
@@ -124,7 +127,10 @@ const requireControlGuard = async (state: ControlState, guard?: ControlGuard) =>
   const expected = guard.owner
   if (!state.owner || state.owner.telegramUserId !== expected.telegramUserId ||
     state.owner.telegramChatId !== expected.telegramChatId || state.owner.pairedAt !== expected.pairedAt) throw new Error('Control owner changed. Refresh the connection.')
-  if (guard.expectedSession !== undefined && (state.activeSession?.sessionId ?? null) !== guard.expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
+  const current = guard.applicationScope ? currentApplicationSession(state, guard.applicationScope) : state.activeSession
+  if (guard.applicationScope && current && (current.telegramShared || current === state.activeSession))
+    throw new Error('Application scope is shared; use shared controls')
+  if (guard.expectedSession !== undefined && (current?.sessionId ?? null) !== guard.expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
 }
 
 const wait = (milliseconds: number): Promise<void> =>
@@ -479,7 +485,7 @@ export class ControlStore {
       const state = await this.readState()
       state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
       state.sessions ??= []
-      const previous = state.activeSession?.applicationScope === scope ? state.activeSession : state.sessions.find(session => session.applicationScope === scope)
+      const previous = currentApplicationSession(state, scope)
       if (expectedNativeSessionId !== undefined && previous?.nativeSessionId !== expectedNativeSessionId) throw new Error('Application request conflicts with native session; import the existing scope before cutover')
       const activate = (session: SessionState) => {
         if (!shareTelegram) return
@@ -507,6 +513,37 @@ export class ControlStore {
       activate(session)
       await this.writeState(state)
       return { sessionId: session.sessionId, preset }
+    })
+  }
+
+  async applicationSession(scope: string): Promise<SessionState | undefined> {
+    return currentApplicationSession(await this.status(), scope) ?? undefined
+  }
+
+  async changeApplicationSession(scope: string, guard: ControlGuard, preset?: AiPreset): Promise<SessionState> {
+    if (!/^[a-f0-9]{64}$/.test(scope) || guard.applicationScope !== scope || guard.expectedSession === undefined)
+      throw new Error('Invalid application scope control')
+    return this.withLock(async () => {
+      const state = await this.readState()
+      await requireControlGuard(state, guard)
+      const previous = currentApplicationSession(state, scope)
+      if (previous && (previous.telegramShared || previous === state.activeSession))
+        throw new Error('Application scope is shared; use shared controls')
+      const nextPreset = preset ?? state.ai?.presets.find(item => item.id === state.ai!.defaultId)
+      if (!nextPreset || !isPreset(nextPreset) || nextPreset.cli === 'agy') throw new Error('Invalid application AI selection')
+      if (preset && previous?.cli === preset.cli) {
+        previous.preset = persistedPreset(preset)
+        await this.writeState(state)
+        return previous
+      }
+      // Retire the binding, not its native session. Admitted work still resolves
+      // the old immutable session ID; private history stays absent from /chats.
+      if (previous) previous.archived = true
+      const next: SessionState = {sessionId:crypto.randomUUID(), hasStarted:false,
+        cli:nextPreset.cli, preset:persistedPreset(nextPreset), applicationScope:scope}
+      ;(state.sessions ??= []).push(next)
+      await this.writeState(state)
+      return next
     })
   }
 
