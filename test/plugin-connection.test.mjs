@@ -87,3 +87,38 @@ test('startup recovers dead native leases but preserves live owners and surfaces
     await fs.writeFile(file,'{}');await assert.rejects(recoverNativeLease(dir),/Invalid/);await fs.access(file);
   }finally{await fs.rm(dir,{recursive:true,force:true});}
 });
+test('owner discovery is read-only, live and rejects caller-selected identity',async()=>{
+  let owner={telegramUserId:42,pairedAt:'epoch'};
+  const f=fixture({readOwner:async()=>owner});
+  await f.request('tools.owner');assert.deepEqual(f.plugin.at(-1).coreResponse.result,owner);
+  owner=null;await f.request('tools.owner',{},'second');assert.equal(f.plugin.at(-1).coreResponse.result,null);
+  await f.request('tools.owner',{telegramUserId:43},'forged');assert.match(f.plugin.at(-1).coreResponse.error,/unavailable/);
+  assert.equal(f.calls.length,0);
+});
+test('web publication accepts only explicit bounded loopback port mapping',async()=>{
+  const {loopbackPublish}=await import('../src/plugins/connection.mjs');
+  assert.equal(loopbackPublish('8791:8080'),'127.0.0.1:8791:8080');
+  for(const value of ['80:8080','8791:0','8791:65536','0.0.0.0:8791:8080','8791:8080/udp','$(x)',''])assert.throws(()=>loopbackPublish(value));
+});
+
+test('channel-neutral owner does not require a Telegram delivery context',async()=>{
+  const {captureDeliveryContext}=await import('../src/delivery-context.mjs');
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'ez-owner-web-'));
+  try {
+    await fs.writeFile(path.join(root,'control-state.json'),JSON.stringify({version:1,owner:{id:'owner',generation:'epoch',pairedAt:new Date().toISOString()}}));
+    assert.equal(await captureDeliveryContext(root,'voice','revision'),undefined);
+    await fs.writeFile(path.join(root,'control-state.json'),JSON.stringify({version:1,owner:{telegramUserId:42,pairedAt:new Date().toISOString()}}));
+    await assert.rejects(captureDeliveryContext(root,'voice','revision'),/invalid/);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('cancellation verifies a container already being removed by Compose',async()=>{
+  const {removeCommandContainer}=await import('../src/plugins/manager.mjs');
+  const calls=[];await removeCommandContainer('fixture',async args=>{
+    calls.push(args);
+    return args[1]==='rm'?{code:1,stderr:'removal of container fixture is already in progress'}:{code:1,stderr:'No such object: fixture'};
+  });
+  assert.deepEqual(calls.map(args=>args[1]),['rm','inspect']);
+  await assert.rejects(removeCommandContainer('fixture',async()=>({code:1,stderr:'permission denied'})),/cleanup failed/);
+  await assert.rejects(removeCommandContainer('fixture',async args=>({code:1,stderr:args[1]==='rm'?'removal of container fixture is already in progress':'daemon unavailable'})),/cleanup failed/);
+});

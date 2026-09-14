@@ -269,16 +269,29 @@ export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,
       clearTimeout(timeout);signal?.removeEventListener('abort',term);
       if(cancelled&&container) {
         try {
-          const cleanup=await run(['container','rm','--force',container],{capture:true});
-          // Compose --rm may already have removed this exact command container.
-          if(cleanup.code!==0&&!cleanup.stderr.includes(`No such container: ${container}`))
-            return reject(Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`));
+          await removeCommandContainer(container);
         } catch(error) {return reject(error);}
       }
       if(failure)return reject(failure);
       resolve({code:cancelled?130:code??(childSignal?130:1),stdout,stderr});});
   });
 }
+// Compose --rm can race cancellation. Confirm disappearance instead of treating
+// Docker's in-progress removal as either failure or completed cleanup.
+export async function removeCommandContainer(container,execute=run) {
+  const cleanup=await execute(['container','rm','--force',container],{capture:true});
+  if(cleanup.code===0||cleanup.stderr.includes(`No such container: ${container}`))return;
+  if(cleanup.stderr.includes(`removal of container ${container} is already in progress`)) {
+    for(let attempt=0;attempt<20;attempt++) {
+      const state=await execute(['container','inspect','--format','{{.Id}}',container],{capture:true});
+      if(state.code!==0&&(state.stderr.includes(`No such object: ${container}`)||state.stderr.includes(`No such container: ${container}`)))return;
+      if(state.code!==0)break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+  }
+  throw Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`);
+}
+
 async function checked(args) {
   const r=await run(args,{capture:true});if(r.code) throw Error(r.stderr||r.stdout||`Docker failed (${r.code})`);return r.stdout;
 }
@@ -293,7 +306,7 @@ export async function registry(home) {
   return r;
 }
 // The lock protects admission and compose refresh, never a persistent connection.
-export async function prepareCommand(home,alias,args,{revision,exclude}={}) {
+export async function prepareCommand(home,alias,args,{revision,exclude,publish}={}) {
   strings(args);
   return locked(home,async()=>{
     const config=await json(path.join(home,'config.json')),r=await registry(home);
@@ -304,7 +317,7 @@ export async function prepareCommand(home,alias,args,{revision,exclude}={}) {
     const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
     await atomic(record.compose,await compose(config,record,secrets,home));
     const container=`${record.project}-call-${randomUUID()}`;
-    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])]};
+    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])]};
   });
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
@@ -387,8 +400,12 @@ export async function main(args) {
   const [group,action,...rest]=args;
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
+  if(group==='tools'&&action==='serve') {
+    const port=rest.shift();
+    return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1),{publish:port,serve:true});
+  }
   if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>','<registered CLI> ...'],scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');

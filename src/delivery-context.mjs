@@ -19,5 +19,7 @@ export async function currentDeliveryOwner(controlDir) {
 export async function captureDeliveryContext(controlDir,plugin,revision) {
   const owner=await currentDeliveryOwner(controlDir).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
   if(!owner)return undefined;
+  // A channel-neutral installation has no Telegram delivery destination.
+  if(owner.telegramUserId===undefined&&owner.telegramChatId===undefined)return undefined;
   return authorizeDeliveryContext({version:1,connectionId:randomUUID(),plugin,revision,owner},owner);
 }

@@ -68,3 +68,9 @@ test('external Codex isolation requires explicit native local deployment', () =>
   for (const override of [{EZ_EXECUTOR_TRANSPORT:'host'}, {EZ_EXECUTOR_TRANSPORT:''}, {EZ_CODEX_SANDBOX:'danger-full-access'}])
     assert.throws(() => loadConfig({...env,...override}), /sandbox|SANDBOX/)
 })
+
+test('optional web launcher preserves reserved commands and accepts only HTTPS without secrets', () => {
+  const config = (value: unknown) => loadConfig({ TELEGRAM_BOT_TOKEN: 'test', EZ_TELEGRAM_WEB_APP: JSON.stringify(value) })
+  assert.deepEqual(config({command:'voice',label:'Voice',url:'https://voice.example/'}).webLauncher,{command:'voice',label:'Voice',url:'https://voice.example/'})
+  for (const value of [{command:'stop',label:'Voice',url:'https://voice.example/'},{command:'voice',label:'Voice',url:'http://voice.example/'},{command:'voice',label:'Voice',url:'https://voice.example/#secret'},{command:'voice',label:'Voice',url:'https://user:pass@voice.example/'},{command:'voice',label:'Voice',url:'https://voice.example/?token=secret'}]) assert.throws(()=>config(value))
+})

@@ -40,7 +40,6 @@ test('authenticated connection sends text and files through ordinary outbox rece
     await assert.rejects(store.ownerDeliveryReceipt(context,queued.id),/revoked/)
   } finally {await relay.stop();await fs.rm(root,{recursive:true,force:true})}
 })
-
 test('delivery authority cannot revive after Telegram relink or same-time owner replacement',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'ez-channel-delivery-epoch-'))
   t.after(()=>fs.rm(root,{recursive:true,force:true}))
