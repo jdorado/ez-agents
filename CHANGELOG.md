@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0-beta.29
+
+- Republish the beta.28 Voice connection and web-serving contract at a monotonic
+  version so installations already running private beta.28 QA builds can upgrade
+  through the standard verified public-package path. Runtime behavior is unchanged.
+
 ## 0.1.0-beta.28
 
 - Hide empty conversation placeholders from history and update the same menu
