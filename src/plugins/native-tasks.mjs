@@ -2,6 +2,12 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import {authorizeDeliveryContext,currentDeliveryOwner} from '../delivery-context.mjs';
+
+export const nativeCommands=()=>[
+  {command:'schedule',description:'Standard native agent task scheduling and status. Read --help.'},
+  {command:'message',description:'Send text, voice or a workspace document to the paired owner and wait for its delivery receipt. Read --help.',limitations:['History requires a native run; inline text only.']},
+];
 
 export async function nativeTaskBinding(home,environment=process.env) {
   home=await fs.realpath(home);
@@ -18,12 +24,32 @@ export async function nativeTaskBinding(home,environment=process.env) {
   return {cwd:workspace,env:{...env,EZ_CONTROL_DIR:controlDir,EZ_AGENT_WORKSPACE:workspace,EZ_EXECUTOR_CLI:host.cli}};
 }
 
-export async function nativeTasks(home,args,{signal}={}) {
+export async function nativeTasks(home,args,{signal,command='schedule',deliveryContext}={}) {
+  if(!['schedule','message'].includes(command))throw Error('Unknown native command');
   if(!Array.isArray(args)||args.length>100||args.some(a=>typeof a!=='string'||a.includes('\0')||a.length>8192))throw Error('Invalid literal scheduler arguments');
   if(args.some(a=>a==='--text-file'||a.startsWith('--text-file=')))throw Error('Native task connections require inline --text, not host file input');
   const binding=await nativeTaskBinding(home);
+  if(command==='message') {
+    if(!args.includes('--help')&&!args.includes('-h')) {
+      authorizeDeliveryContext(deliveryContext,await currentDeliveryOwner(binding.env.EZ_CONTROL_DIR));
+      if(args[0]==='history')throw Error('Message history requires a native run; use receipt OUTBOX_ID for a channel send');
+      const valueFlags=new Set(['--text','--document','--file','--voice','--reply-to']);
+      args=[...args];
+      if(args[0]==='receipt') {if(args.length!==2||!/^[a-zA-Z0-9_-]+$/.test(args[1]))throw Error('Invalid delivery receipt ID');}
+      else for(let i=0;i<args.length;i++) {
+        const flag=args[i];if(!valueFlags.has(flag)||args[i+1]===undefined)throw Error('Unsupported native message argument');
+        const value=args[++i];
+        if(flag==='--document'||flag==='--file') {
+          const file=await fs.realpath(path.resolve(binding.cwd,value));
+          if(!file.startsWith(binding.cwd+path.sep)||!(await fs.stat(file)).isFile())throw Error('Message document is outside owning workspace');
+          args[i]=file;
+        }
+      }
+      binding.env.EZ_DELIVERY_CONTEXT=JSON.stringify(deliveryContext);
+    }
+  }
   if(signal?.aborted)throw Error('Request cancelled');
-  const entry=fileURLToPath(new URL('../../bin/ezenciel-agents-schedule.mjs',import.meta.url));
+  const entry=fileURLToPath(new URL(`../../bin/ezenciel-agents-${command}.mjs`,import.meta.url));
   return new Promise((resolve,reject)=>{
     const child=spawn(process.execPath,[entry,...args],{...binding,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
     let stdout='',stderr='',size=0,failure,killTimer;
@@ -35,6 +61,6 @@ export async function nativeTasks(home,args,{signal}={}) {
     signal?.addEventListener('abort',stop,{once:true});if(signal?.aborted)stop();
     const cleanup=()=>{clearTimeout(timer);clearTimeout(killTimer);signal?.removeEventListener('abort',stop);};
     child.once('error',error=>{cleanup();reject(error);});
-    child.once('close',code=>{cleanup();if(failure)reject(failure);else resolve({code:code??1,stdout,stderr});});
+    child.once('close',code=>{cleanup();if(failure&&command==='message')resolve({code:130,stdout,stderr:stderr+'\nDelivery outcome may be unknown; inspect any queued outbox ID before retrying. '+failure.message});else if(failure)reject(failure);else resolve({code:code??1,stdout,stderr});});
   });
 }

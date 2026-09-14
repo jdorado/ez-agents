@@ -17,10 +17,11 @@ Core answers `{"coreResponse":{"id":"r1","result":...}}` or `error` (a string).
 | `tools.list` | none | Array of alias, plugin, description, skillCount, revision |
 | `tools.help` | alias | CLI `--help` result: code, stdout, stderr |
 | `tools.skill` | alias, index, optional line | Declared skill text and nextLine; index starts at zero, line at one |
-| `tools.invoke` | alias, args (literal string array), optional stdin | CLI result: code, stdout, stderr |
-| `tools.native` | args (literal scheduler argument array) | Standard scheduler CLI result: code, stdout, stderr |
+| `tools.invoke` | alias, args (literal string array), optional stdin and output filename | CLI result: code, stdout, stderr; optional artifact path, bytes, sha256 |
+| `tools.native.list` | none | Core command descriptions and availability |
+| `tools.native` | command, args (literal argument array) | Native CLI result: code, stdout, stderr |
 
-`tools.native` invokes only the shipped `ezenciel-agents-schedule` CLI, using the
+`tools.native` invokes only the shipped `schedule` or `message` CLI, using the
 owning host's verified workspace/control binding and a whitelisted environment.
 Read `--help` for its command contract; this connection requires inline `--text`
 and rejects `--text-file` so it cannot read arbitrary host files. `create --now` submits standard
@@ -32,6 +33,24 @@ No synthetic run context is injected. Standalone bindings cannot use this method
 task creation without a Telegram owner or authenticated originating channel still
 fails under the scheduler's existing delivery rule. Results can be inspected with
 `runs` and `run RUN_ID`; a completed run alone is not proof of indexed content.
+
+Message delivery captures the paired owner and pairing epoch when the connection
+opens. Core injects that context; tool arguments cannot select a recipient or
+replace it. The message CLI enqueues the existing outbox without creating an agent
+run, and the relay rechecks the owner before sending. Revocation or re-pairing
+invalidates the connection. Inline text and workspace documents use the same
+Telegram delivery and receipt path as native runs. Text-file input is unavailable.
+History still requires a native run; `message receipt OUTBOX_ID` reconciles a
+channel send against the current owner's outbox. Sends return a queued ID then
+wait up to 20 seconds for delivery; queued or unknown never means sent, and must
+not be retried without receipt readback. An accepted send may finish after the
+voice connection closes. Omitting command retains schedule compatibility.
+
+For binary plugin output, supply a simple `output` filename. Core saves at most
+20 MiB of stdout in a unique private workspace artifact and returns its relative
+path, byte count and SHA-256 instead of binary model text. Only successful command
+output is saved. The message CLI can send that path with `--document`; both host
+admission and relay delivery enforce workspace containment.
 
 The registry is read on each request. The connected plugin is excluded, including
 its other aliases. Skill reads stay within its declared source directory and

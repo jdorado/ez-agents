@@ -3,7 +3,9 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { registry, prepareCommand, run } from './manager.mjs';
 import { invokeLease } from './workspace-lease.mjs';
-import { nativeTasks } from './native-tasks.mjs';
+import { nativeTasks,nativeTaskBinding,nativeCommands } from './native-tasks.mjs';
+import {captureDeliveryContext} from '../delivery-context.mjs';
+import {commandArtifact} from './connection-artifacts.mjs';
 
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const reserved = ['coreRequest','coreResponse','coreApprove','coreApproval','coreApprovalResolved','coreCancel'];
@@ -11,7 +13,7 @@ const maxFrame = 1048576;
 function requestId(value) {if(typeof value!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(value))throw Error('Invalid request id');return value;}
 
 // The local owning connection uses the same installed authority as its bound CLI.
-export function connectionProtocol({readRegistry,execute,executeNative,sendClient,sendPlugin,excludedPlugin}) {
+export function connectionProtocol({readRegistry,execute,executeNative,listNative=nativeCommands,sendClient,sendPlugin,excludedPlugin}) {
   const active=new Map(),consumed=new Set();let closed=false;
   async function record(alias) {
     const r=await readRegistry(),plugin=r.commands[alias],value=r.plugins[plugin];
@@ -21,11 +23,13 @@ export function connectionProtocol({readRegistry,execute,executeNative,sendClien
   async function perform(req,state) {
     const p=req.params??{};
     if(!object(p))throw Error('Invalid request params');
+    if(req.method==='tools.native.list') {await readRegistry();return listNative();}
     if(req.method==='tools.native') {
+      if(Object.keys(p).some(k=>!['command','args'].includes(k)))throw Error('Unknown native request parameter');
       await readRegistry();
       if(closed||state.abort.signal.aborted)throw Error('Request cancelled');
       if(!executeNative)throw Error('Native task access is unavailable');
-      return executeNative(p.args,{signal:state.abort.signal});
+      return executeNative(p.args,{signal:state.abort.signal,command:p.command??'schedule'});
     }
     if(req.method==='tools.list') {
       const r=await readRegistry();return Object.entries(r.commands).filter(([,owner])=>owner!==excludedPlugin).map(([alias,owner])=>{
@@ -53,7 +57,7 @@ export function connectionProtocol({readRegistry,execute,executeNative,sendClien
     if(closed||state.abort.signal.aborted)throw Error('Request cancelled');
     const current=await record(p.alias);
     if(current.revision!==v.revision)throw Error('Plugin changed; discover again');
-    return execute(p.alias,args,{revision:v.revision,stdin:req.method==='tools.invoke'?p.stdin:undefined,signal:state.abort.signal,invocation:req.method==='tools.invoke'});
+    return execute(p.alias,args,{revision:v.revision,stdin:req.method==='tools.invoke'?p.stdin:undefined,output:req.method==='tools.invoke'?p.output:undefined,signal:state.abort.signal,invocation:req.method==='tools.invoke'});
   }
   return {
     plugin(frame) {
@@ -85,11 +89,15 @@ export function jsonLines(onFrame,onError) {
 
 export async function connect(home,alias,args,{input=process.stdin,output=process.stdout}={}) {
   const command=await prepareCommand(home,alias,args),abort=new AbortController();let child,protocol,failure;
+  const config=JSON.parse(await fs.readFile(path.join(home,'config.json'),'utf8'));
+  const nativeBinding=config.hostConfig?await nativeTaskBinding(home):undefined;
+  const deliveryContext=nativeBinding?await captureDeliveryContext(nativeBinding.env.EZ_CONTROL_DIR,command.plugin,command.revision):undefined;
   const send=(stream,frame)=>{try {const text=JSON.stringify(frame)+'\n';if(stream?.writableLength>maxFrame||Buffer.byteLength(text)>maxFrame)throw Error('Connection backpressure limit exceeded');stream?.write(text);}catch(error){fail(error);}};
   const fail=error=>{failure??=error;abort.abort();protocol?.close();};
   protocol=connectionProtocol({excludedPlugin:command.plugin,readRegistry:async()=>{const r=await registry(home);if(r.commands[alias]!==command.plugin||r.plugins[command.plugin]?.revision!==command.revision)throw Error('Connected plugin changed; reconnect');return r;},
-    executeNative:(args,options)=>nativeTasks(home,args,options),
-    execute:async(a,argv,options)=>{const release=options.invocation?await invokeLease(home):undefined;try {const c=await prepareCommand(home,a,argv,{revision:options.revision,exclude:command.plugin});if(options.signal.aborted)throw Error('Request cancelled');return await run(c.argv,{...options,container:c.container,capture:true,timeoutMs:30000,maxBytes:262144});}finally{await release?.();}},
+    listNative:()=>nativeCommands().map(item=>({...item,available:!!nativeBinding&&(item.command!=='message'||!!deliveryContext)})),
+    executeNative:(args,options)=>nativeTasks(home,args,{...options,deliveryContext}),
+    execute:async(a,argv,options)=>{const release=options.invocation?await invokeLease(home):undefined;try {const c=await prepareCommand(home,a,argv,{revision:options.revision,exclude:command.plugin});if(options.signal.aborted)throw Error('Request cancelled');const execute=overrides=>run(c.argv,{...options,...overrides,container:c.container,capture:true,timeoutMs:30000,maxBytes:262144});return options.output===undefined?await execute({}):await commandArtifact(config.workspace,options.output,execute,{signal:options.signal});}finally{await release?.();}},
     sendClient:frame=>send(output,frame),sendPlugin:frame=>send(child?.stdin,frame)});
   const onInput=jsonLines(frame=>protocol.client(frame),fail),onEnd=()=>{protocol.close();abort.abort();};
   try {

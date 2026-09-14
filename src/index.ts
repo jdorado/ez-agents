@@ -4,6 +4,7 @@ import { TelegramSource } from './telegram-source.js'
 import { Tasks } from './tasks.js'
 import { taskRequests } from './task-rpc.js'
 import { executionBlockReason } from './execution-authority.js'
+import {authorizeDeliveryContext} from './delivery-context.mjs'
 import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
@@ -120,12 +121,13 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }),
   })
 
-  const sendChat = async (chatId: number, text: string, replyToMessageId?: number): Promise<number[]> => {
+  const sendChat = async (chatId: number, text: string, replyToMessageId?: number, authorize?:()=>Promise<void>): Promise<number[]> => {
     if (!bot) throw new Error('Telegram delivery is disabled')
     const ids: number[] = []
     const parts = splitTelegramText(text)
     for (let i = 0; i < parts.length; i++) {
       await paceSend()
+      await authorize?.()
       const part = parts[i]
       const replyParams =
         i === 0 && replyToMessageId ? { reply_parameters: { message_id: replyToMessageId } } : {}
@@ -475,8 +477,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             ? { reply_parameters: { message_id: item.replyToMessageId } }
             : {}
           const owner = (await control.status()).owner
-          const origin = await runs.get(item.runId)
-          if (
+          const authorizeChannelDelivery=async()=>{if(item.deliveryContext)authorizeDeliveryContext(item.deliveryContext,(await control.status()).owner)}
+          const origin = item.runId ? await runs.get(item.runId) : null
+          if (item.deliveryContext) {
+            const context=authorizeDeliveryContext(item.deliveryContext,owner)
+            if(item.runId||item.chatId!==context.owner.telegramChatId||!['message','document','voice'].includes(item.type??''))throw new Error('Outbox delivery context mismatch')
+          } else if (
             !origin ||
             !owner ||
             !ownsRun(owner, origin) ||
@@ -484,7 +490,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             item.chatId !== origin.chatId
           )
             throw new Error('Outbox ownership mismatch')
-          if (origin.application) {
+          if (origin?.application) {
             await applicationChannel.deliver(origin, item)
             continue
           }
@@ -500,8 +506,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             ])
             console.info('run reaction sent', { run_id: item.runId, emoji })
           } else if (item.type === 'document' && item.documentPath) {
-            const docPath = await workspaceFile(origin.scheduled ? await taskWorkspace(config.workspace,origin.id) : config.workspace, item.documentPath)
+            const docPath = await workspaceFile(origin?.scheduled ? await taskWorkspace(config.workspace,origin.id) : config.workspace, item.documentPath)
             await paceSend()
+            await authorizeChannelDelivery()
             attemptedDelivery = true
             const sent = await bot!.api.sendDocument(item.chatId, new InputFile(docPath), {
               caption: item.text,
@@ -516,6 +523,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               openaiApiKey: config.openaiApiKey,
             })
             await paceSend()
+            await authorizeChannelDelivery()
             attemptedDelivery = true
             const sent = await bot!.api.sendVoice(item.chatId, new InputFile(buffer, 'voice.ogg'), replyParams)
             receiptIds.push(sent.message_id)
@@ -536,14 +544,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             receiptIds.push(sent.message_id)
           } else if (item.text) {
             attemptedDelivery = true
-            const ids = await sendChat(item.chatId, item.text, item.replyToMessageId)
+            const ids = await sendChat(item.chatId, item.text, item.replyToMessageId,authorizeChannelDelivery)
             receiptIds.push(...ids)
             console.info('run message sent', { run_id: item.runId, outbox_id: item.id, message_ids: ids })
           } else throw new Error('Outbox item has no supported payload')
           await runs.markOutboxSent(item.id, receiptIds)
           console.info('run timing', { run_id: item.runId, outbox_id: item.id, phase: 'delivery',
             delivery_processing_ms: Math.round(performance.now() - deliveryStarted),
-            run_to_delivery_ms: Math.max(0, Date.now() - Date.parse(origin.createdAt)) })
+            run_to_delivery_ms: Math.max(0, Date.now() - Date.parse(origin?.createdAt??item.createdAt)) })
         } catch (error) {
           console.error('outbox item processing failed', item.id, safeError(error))
           await runs.failOutbox(
