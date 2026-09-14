@@ -87,7 +87,6 @@ test('startup recovers dead native leases but preserves live owners and surfaces
     await fs.writeFile(file,'{}');await assert.rejects(recoverNativeLease(dir),/Invalid/);await fs.access(file);
   }finally{await fs.rm(dir,{recursive:true,force:true});}
 });
-
 test('owner discovery is read-only, live and rejects caller-selected identity',async()=>{
   let owner={telegramUserId:42,pairedAt:'epoch'};
   const f=fixture({readOwner:async()=>owner});
