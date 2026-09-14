@@ -248,17 +248,25 @@ export async function compose(config, record, secrets={}, home) {
 function dockerEnv() {
   return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
 }
-export function run(argv,{capture=false,container}={}) {
+export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,timeoutMs=0,maxBytes=Infinity}={}) {
   return new Promise((resolve,reject)=>{
-    const child=spawn('docker',argv,{env:dockerEnv(),stdio:capture?['ignore','pipe','pipe']:['inherit','inherit','inherit']});
-    let stdout='',stderr='',cancelled=false,killTimer;
-    if(capture) {child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);}
+    const child=spawn('docker',argv,{env:dockerEnv(),stdio:capture?['pipe','pipe','pipe']:['inherit','inherit','inherit']});
+    let stdout='',stderr='',cancelled=false,killTimer,bytes=0,failure;
+    if(capture) {
+      const collect=(b,err)=>{bytes+=b.length;if(bytes>maxBytes){failure=Error('Command output limit exceeded');cancel('SIGTERM');return;}if(err)stderr+=b;else stdout+=b;};
+      child.stdout.on('data',b=>onStdout?onStdout(b):collect(b,false));child.stderr.on('data',b=>collect(b,true));
+      child.stdin.on('error',()=>{});
+    }
     const cancel=signal=>{cancelled=true;child.kill(signal);killTimer??=setTimeout(()=>child.kill('SIGKILL'),2000);};
     const term=()=>cancel('SIGTERM'),int=()=>cancel('SIGINT');
+    const timeout=timeoutMs?setTimeout(()=>{failure=Error('Command timed out');term();},timeoutMs):undefined;
+    signal?.addEventListener('abort',term,{once:true});if(signal?.aborted)term();
+    if(onStart)onStart(child);else if(capture)child.stdin.end(stdin);
     process.on('SIGTERM',term);process.on('SIGINT',int);
-    child.once('error',error=>{clearTimeout(killTimer);process.off('SIGTERM',term);process.off('SIGINT',int);reject(error);});
-    child.once('close',async(code,signal)=>{process.off('SIGTERM',term);process.off('SIGINT',int);
+    child.once('error',error=>{clearTimeout(timeout);signal?.removeEventListener('abort',term);clearTimeout(killTimer);process.off('SIGTERM',term);process.off('SIGINT',int);reject(error);});
+    child.once('close',async(code,childSignal)=>{process.off('SIGTERM',term);process.off('SIGINT',int);
       clearTimeout(killTimer);
+      clearTimeout(timeout);signal?.removeEventListener('abort',term);
       if(cancelled&&container) {
         try {
           const cleanup=await run(['container','rm','--force',container],{capture:true});
@@ -267,14 +275,15 @@ export function run(argv,{capture=false,container}={}) {
             return reject(Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`));
         } catch(error) {return reject(error);}
       }
-      resolve({code:cancelled?130:code??(signal?130:1),stdout,stderr});});
+      if(failure)return reject(failure);
+      resolve({code:cancelled?130:code??(childSignal?130:1),stdout,stderr});});
   });
 }
 async function checked(args) {
   const r=await run(args,{capture:true});if(r.code) throw Error(r.stderr||r.stdout||`Docker failed (${r.code})`);return r.stdout;
 }
 const composeArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
-async function registry(home) {
+export async function registry(home) {
   const r=await json(path.join(home,'registry.json'));
   if(r.schemaVersion!==1 || r.owner!==home || !r.plugins || !r.commands) throw Error('Corrupt registry');
   for(const [name,record] of Object.entries(r.plugins)) {
@@ -282,6 +291,21 @@ async function registry(home) {
   }
   for(const [alias,plugin] of Object.entries(r.commands)) if(!r.plugins[plugin]?.deployment?.commands?.[alias]) throw Error('Corrupt command registry');
   return r;
+}
+// The lock protects admission and compose refresh, never a persistent connection.
+export async function prepareCommand(home,alias,args,{revision,exclude}={}) {
+  strings(args);
+  return locked(home,async()=>{
+    const config=await json(path.join(home,'config.json')),r=await registry(home);
+    const record=r.plugins[r.commands[alias]],binding=record?.deployment.commands[alias];
+    if(!binding||r.commands[alias]===exclude)throw Error('Unknown or unavailable registered CLI');
+    if(revision!==undefined&&revision!==record.revision)throw Error('Plugin changed; discover again');
+    await checkFolders(config,record);
+    const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
+    await atomic(record.compose,await compose(config,record,secrets,home));
+    const container=`${record.project}-call-${randomUUID()}`;
+    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])]};
+  });
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
   if(standalone && hostConfig) throw Error('Standalone setup cannot bind a relay host config');
@@ -363,7 +387,8 @@ export async function main(args) {
   const [group,action,...rest]=args;
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure','<registered CLI> ...'],scope:home});
+  if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');

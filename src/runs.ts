@@ -9,6 +9,7 @@ import { validScheduledOrigin, type ScheduledOrigin } from './scheduler.js'
 import type { IncomingItem } from './inbox.js'
 import { assertId } from './identity.js'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
+import {authorizeDeliveryContext,currentDeliveryOwner,type DeliveryContext} from './delivery-context.mjs'
 
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
@@ -49,7 +50,8 @@ export type OutboxItemType = 'message' | 'reaction' | 'document' | 'voice' | 'ap
 
 export type OutboxItem = {
   id: string
-  runId: string
+  runId?: string
+  deliveryContext?: DeliveryContext
   chatId?: number
   type?: OutboxItemType
   text?: string
@@ -255,6 +257,27 @@ export class RunStore {
     await writeFile(temporary, `${JSON.stringify(item, null, 2)}\n`, { mode: 0o600 })
     await rename(temporary, file)
     return item
+  }
+
+  async enqueueOwnerDelivery(context: DeliveryContext, payload: {type:'message'|'document'|'voice';text?:string;documentPath?:string;voiceText?:string;replyToMessageId?:number}): Promise<OutboxItem> {
+    await this.ensure()
+    const authorized=authorizeDeliveryContext(context,await currentDeliveryOwner(this.controlDir))
+    const item:OutboxItem={...payload,id:`delivery_${Date.now().toString(36)}_${randomBytes(8).toString('hex')}`,deliveryContext:authorized,chatId:authorized.owner.telegramChatId,createdAt:new Date().toISOString()}
+    return this.writeOutboxItem(item)
+  }
+
+  async ownerDeliveryReceipt(context:DeliveryContext,id:string) {
+    assertId(id)
+    const owner=await currentDeliveryOwner(this.controlDir)
+    authorizeDeliveryContext(context,owner)
+    for(const [suffix,status] of [['sent.json','delivered'],['failed.json','failed'],['sending.json','sending'],['json','queued']] as const) {
+      let item
+      try {item=JSON.parse(await readFile(path.join(this.outboxDir,`${id}.${suffix}`),'utf8'))}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')continue;throw error}
+      authorizeDeliveryContext(item.deliveryContext,owner)
+      if(item.runId||item.chatId!==owner!.telegramChatId)throw new Error('Outbox ownership mismatch')
+      return {outbox_id:id,status:item.deliveryUnknown?'unknown':status,...(item.receipt?{receipt:item.receipt}:{}),...(item.deliveryError?{error:item.deliveryError}:{})}
+    }
+    throw new Error('Unknown owner delivery receipt')
   }
 
   async enqueueMessage(

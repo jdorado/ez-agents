@@ -12,6 +12,29 @@ import { EXECUTOR_REGISTRY } from '../src/executor.js'
 import { RunStore } from '../src/runs.js'
 import { packageVersion } from '../src/version.js'
 import { executionDefaults } from '../src/model-policy.js'
+import { workspaceLease } from '../src/plugins/workspace-lease.mjs'
+
+test('host restart clears dead native lease only after proving previous CLI stopped',async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'ez-native-recovery-'));
+  const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),toolsHome=path.join(root,'tools'),directory=path.join(controlDir,'host-executor');
+  const abort=new AbortController();let server:Promise<void>|undefined;
+  try {
+    await mkdir(workspace);await mkdir(toolsHome);await mkdir(directory,{recursive:true});
+    await writeFile(path.join(toolsHome,'config.json'),JSON.stringify({schemaVersion:1,workspace:await realpath(workspace)}));
+    const child=spawn(process.execPath,['-e','process.exit(0)']);const deadPid=child.pid;await new Promise(r=>child.once('close',r));
+    await writeFile(path.join(toolsHome,'workspace-writer.lock'),JSON.stringify({pid:deadPid,kind:'native',runId:'r_old'}));
+    await writeFile(path.join(directory,'r_old.running.json'),'{}');
+    await writeFile(path.join(directory,'r_old.process.json'),JSON.stringify({pid:process.pid}));
+    const installation={cli:'grok',agents:[{name:'test',workspace,controlDir,toolsHome,binDir:path.join(root,'bin')}]};
+    await assert.rejects(serveHostExecutor(installation,abort.signal),/Previous host CLI is still running/);
+    await readFile(path.join(toolsHome,'workspace-writer.lock'));
+    await writeFile(path.join(directory,'r_old.process.json'),JSON.stringify({pid:deadPid}));
+    server=serveHostExecutor(installation,abort.signal);
+    for(let n=0;n<100;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+    await readFile(path.join(directory,'heartbeat.json'));
+    await assert.rejects(readFile(path.join(toolsHome,'workspace-writer.lock')),{code:'ENOENT'});
+  }finally{abort.abort();await server;await rm(root,{recursive:true,force:true});}
+});
 
 test('one installed CLI executes two agent bindings with separate minds and sanitized environment', async () => {
   const root=await mkdtemp(path.join(tmpdir(),'ez-host-'))
@@ -44,8 +67,13 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       const dir=path.join(agent.controlDir,'host-executor')
       for(let n=0;n<100;n++){try{await readFile(path.join(dir,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
       assert.equal(JSON.parse(await readFile(path.join(dir,'heartbeat.json'),'utf8')).version,packageVersion)
+      const release = await workspaceLease(agent.toolsHome)
       await ownerRun(agent.controlDir, `r_${agent.name}`)
       await writeFile(path.join(dir,`r_${agent.name}.request.json`),JSON.stringify({texts:['test'],options:{workspace:'/wrong',controlDir:'/wrong',toolsHome:'/wrong',cli:'grok',timeoutMs:5000}}))
+      await new Promise(r=>setTimeout(r,300))
+      await readFile(path.join(dir,`r_${agent.name}.request.json`))
+      await assert.rejects(readFile(path.join(dir,`r_${agent.name}.process.json`)),{code:'ENOENT'})
+      await release?.()
     }
     for(const agent of agents){
       const file=path.join(agent.controlDir,'host-executor',`r_${agent.name}.events`)
