@@ -8,7 +8,7 @@ This is separate from the older outbound channel-backend integration.
 
 ## Shared runtime controls
 
-Register with `--share-active` (the existing `--share-telegram` spelling is an
+Register with `--share-owner` (the existing `--share-telegram` spelling is an
 alias) to grant access to the runtime's active conversation and standard AI
 settings. This explicit grant works with or without a Telegram bot. It grants
 control of the same active state Telegram uses when enabled; it is not a
@@ -52,8 +52,8 @@ after uncertainty before deciding on another change.
 
 Current HTTP gaps: rename/archive, scheduling
 administration and shared-chat stop-all are not exposed here. Per-run application
-cancellation remains available. These endpoints do not make application-only
-background scheduling operational; see its deployment limitations below.
+cancellation remains available. The native agent can use the standard scheduler
+from an application turn; its replies retain that channel binding.
 
 ## Install and authorize
 
@@ -274,7 +274,7 @@ owner, application bindings or native sessions. Relinking does not authorize old
 Telegram deliveries. Linking other providers requires an authenticated adapter;
 registering the label `phone` does not install a phone service.
 
-The legacy `--share-telegram` and `followTelegram:true` spellings remain supported.
+The legacy `--share-telegram`, `--share-active` and `followTelegram:true` spellings remain supported.
 
 ### Existing scoped Telegram sharing
 

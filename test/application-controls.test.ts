@@ -205,3 +205,20 @@ test('revocation during a control-lock wait prevents every guarded mutation', as
     assert.deepEqual(await control.status(),before)
   }
 })
+
+
+test('web control guards survive Telegram linking but reject another owner generation', async t => {
+  const root = await mkdtemp(join(tmpdir(),'ez-owner-channel-controls-'))
+  t.after(()=>rm(root,{recursive:true,force:true}))
+  const control = new ControlStore(root,1000)
+  const owner = await control.registerOwner('web-owner')
+  const guard = {owner,authorize:async()=>{}}
+  await control.requestPairing(42,42); await control.approveOwner(42)
+  const session = await control.resetSession(null,guard)
+  await control.unlinkTelegram()
+  const next = await control.resetSession(session.sessionId,guard)
+  await assert.rejects(control.resetSession(next.sessionId,{
+    ...guard,owner:{...owner,generation:'00000000-0000-0000-0000-000000000000'},
+  }),/owner changed/)
+  assert.equal((await control.getActiveSession())!.sessionId,next.sessionId)
+})

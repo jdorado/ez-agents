@@ -125,8 +125,7 @@ const requireControlGuard = async (state: ControlState, guard?: ControlGuard) =>
   // The callback may inspect binding authority, but must not acquire this store's lock.
   await guard.authorize()
   const expected = guard.owner
-  if (!state.owner || state.owner.telegramUserId !== expected.telegramUserId ||
-    state.owner.telegramChatId !== expected.telegramChatId || state.owner.pairedAt !== expected.pairedAt) throw new Error('Control owner changed. Refresh the connection.')
+  if (!sameOwner(expected, state.owner)) throw new Error('Control owner changed. Refresh the connection.')
   const current = guard.applicationScope ? currentApplicationSession(state, guard.applicationScope) : state.activeSession
   if (guard.applicationScope && current && (current.telegramShared || current === state.activeSession))
     throw new Error('Application scope is shared; use shared controls')
