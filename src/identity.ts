@@ -1,5 +1,6 @@
 import type { Context } from 'grammy'
 import type { Owner } from './control-state.js'
+import { ownerId, ownerEpoch } from './control-state.js'
 
 export const isOwner = (ctx: Pick<Context, 'from' | 'chat'>, owner: Owner | null): boolean =>
   Boolean(
@@ -12,9 +13,16 @@ export const isOwner = (ctx: Pick<Context, 'from' | 'chat'>, owner: Owner | null
       ctx.chat?.id === owner.telegramChatId,
   )
 
-export const ownsRun = (owner: Owner | null, run: {telegramUserId: number; chatId: number}): boolean =>
-  Boolean(owner && Number.isSafeInteger(run.telegramUserId) && run.telegramUserId > 0 &&
-    run.chatId === owner.telegramChatId && (owner.kind === 'group' || run.telegramUserId === owner.telegramUserId))
+export const ownsRun = (owner: Owner | null, run: {application?: unknown; ownerId?: string; ownerEpoch?: string; telegramEpoch?: string; telegramUserId?: number; chatId?: number}): boolean =>
+  // Legacy app runs used the original Telegram owner IDs as bookkeeping. Their
+  // validated application binding remains the authority, not the current TG link.
+  Boolean(owner && (run.application && run.ownerId === undefined
+    ? ownerId(owner) === `telegram:${run.telegramUserId}:${run.chatId}`
+    : (run.chatId === undefined ||
+    (run.chatId === owner.telegramChatId && (run.telegramEpoch ?? owner.pairedAt) === (owner.telegramLinkedAt ?? owner.pairedAt))) && (run.ownerId !== undefined
+    ? run.ownerId === ownerId(owner) && run.ownerEpoch === ownerEpoch(owner)
+    : Number.isSafeInteger(run.telegramUserId) && run.telegramUserId! > 0 &&
+      run.chatId === owner.telegramChatId && (owner.kind === 'group' || run.telegramUserId === owner.telegramUserId))))
 
 export const assertId = (id: string): string => {
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error('Invalid record identifier')

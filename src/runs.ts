@@ -16,8 +16,11 @@ export type RunRecord = {
   version: 1 | 2
   taskId?: string
   id: string
-  chatId: number
-  telegramUserId: number
+  ownerId?: string
+  ownerEpoch?: string
+  telegramEpoch?: string
+  chatId?: number
+  telegramUserId?: number
   messageId?: number
   items?: IncomingItem[]
   texts: string[]
@@ -39,6 +42,7 @@ export type RunRecord = {
   scheduled?: ScheduledOrigin
   external?: ExternalOrigin
   application?: ApplicationOrigin
+  delivery?: { bindingId: string; scope: string }
 }
 
 export type OutboxItemType = 'message' | 'reaction' | 'document' | 'voice' | 'approval'
@@ -46,7 +50,7 @@ export type OutboxItemType = 'message' | 'reaction' | 'document' | 'voice' | 'ap
 export type OutboxItem = {
   id: string
   runId: string
-  chatId: number
+  chatId?: number
   type?: OutboxItemType
   text?: string
   emoji?: string
@@ -66,8 +70,10 @@ const isRun = (value: unknown): value is RunRecord => {
     ((candidate.version === 1 && candidate.taskId === undefined) || (candidate.version === 2 && typeof candidate.taskId === 'string' && /^task_[a-f0-9]{32}$/.test(candidate.taskId))) &&
     typeof candidate.id === 'string' &&
     /^[a-zA-Z0-9_-]+$/.test(candidate.id) &&
-    Number.isSafeInteger(candidate.chatId) &&
-    Number.isSafeInteger(candidate.telegramUserId) &&
+    ((Number.isSafeInteger(candidate.chatId) && Number.isSafeInteger(candidate.telegramUserId)) ||
+      (typeof candidate.ownerId === 'string' && /^[a-zA-Z0-9_:.-]{1,200}$/.test(candidate.ownerId) &&
+       typeof candidate.ownerEpoch === 'string' && (/^[a-f0-9-]{36}$/.test(candidate.ownerEpoch) || Number.isFinite(Date.parse(candidate.ownerEpoch))) &&
+       candidate.chatId === undefined && candidate.telegramUserId === undefined)) &&
     Array.isArray(candidate.texts) &&
     candidate.texts.every((text) => typeof text === 'string') &&
     ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') &&
@@ -83,6 +89,7 @@ const isRun = (value: unknown): value is RunRecord => {
     (candidate.external === undefined || validOrigin(candidate.external)) &&
     (candidate.id.startsWith('r_app_') === (candidate.application !== undefined)) &&
     (candidate.application === undefined || (validApplicationOrigin(candidate.application) && candidate.external === undefined && candidate.scheduled === undefined && candidate.taskId === undefined && !candidate.replyOnly)) &&
+    (candidate.delivery === undefined || (!!candidate.scheduled && validApplicationOrigin({...candidate.delivery, requestId: candidate.id}) && candidate.application === undefined)) &&
     (candidate.execution === undefined || isExecutionChoice(candidate.execution))
   )
 }
@@ -117,8 +124,11 @@ export class RunStore {
 
   async create(input: {
     id?: string
-    chatId: number
-    telegramUserId: number
+    ownerId?: string
+    ownerEpoch?: string
+    telegramEpoch?: string
+    chatId?: number
+    telegramUserId?: number
     items?: IncomingItem[]
     texts: string[]
     messageId?: number
@@ -127,11 +137,12 @@ export class RunStore {
     external?: ExternalOrigin
     taskId?: string
     application?: ApplicationOrigin
+    delivery?: { bindingId: string; scope: string }
   }): Promise<RunRecord> {
     if (input.id) {
       const existing = await this.get(input.id)
       if (existing) {
-        if (existing.chatId !== input.chatId || existing.telegramUserId !== input.telegramUserId)
+        if (existing.ownerId !== input.ownerId || existing.ownerEpoch !== input.ownerEpoch || existing.chatId !== input.chatId || existing.telegramUserId !== input.telegramUserId)
           throw new Error('Run ownership mismatch')
         return existing
       }
@@ -140,6 +151,9 @@ export class RunStore {
       version: input.taskId ? 2 : 1,
       taskId: input.taskId,
       id: input.id ?? newRunId(),
+      ownerId: input.ownerId,
+      ownerEpoch: input.ownerEpoch,
+      telegramEpoch: input.telegramEpoch,
       chatId: input.chatId,
       telegramUserId: input.telegramUserId,
       messageId: input.messageId,
@@ -148,6 +162,7 @@ export class RunStore {
       execution: input.execution,
       external: input.external,
       application: input.application,
+      delivery: input.delivery,
       scheduled: input.scheduled,
       status: 'queued',
       createdAt: new Date().toISOString(),

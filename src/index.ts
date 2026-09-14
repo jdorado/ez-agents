@@ -21,7 +21,7 @@ import { isOwner, ownsRun } from './identity.js'
 import type { Update } from 'grammy/types'
 import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
-import { ControlStore } from './control-state.js'
+import { ControlStore, telegramOwner, ownerId, ownerEpoch } from './control-state.js'
 import { ApprovalStore } from './approval.js'
 import { startExecutorJob, terminateJob } from './executor.js'
 import { RunStore, type RunRecord } from './runs.js'
@@ -62,7 +62,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const processTaskRequests = taskRequests(tasks)
   let taskWork: Promise<void> | undefined
   const drainTaskRequests = (): Promise<void> => {
-    if (!telegramEnabled || shuttingDown) return taskWork ?? Promise.resolve()
+    if (shuttingDown) return taskWork ?? Promise.resolve()
     return taskWork ?? (taskWork = processTaskRequests().finally(() => { taskWork = undefined }))
   }
   let taskTimer: ReturnType<typeof setInterval> | undefined
@@ -113,6 +113,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const run = await runs.get(id)
       if (run?.status === 'queued') await runs.patch(id, {status:'cancelled',endedAt:new Date().toISOString()})
       else if (run?.status === 'running') {
+        const child = background.get(id)
+        if (child) { await scheduler.cancel(id); terminateJob(child); return }
         if (!activeChild || (await runs.running(false))?.id !== id) throw new Error('Application cancellation unavailable')
         ownerStopped.add(activeChild)
         terminateJob(activeChild)
@@ -156,14 +158,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // stat uses the effective UID; access uses the relay's isolated real UID.
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
-      if (!telegramEnabled && !run.application) return
+      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled) return
       if (!run.scheduled && await runs.running(false)) return
       const owner = (await control.status()).owner
       if (!owner || !ownsRun(owner, run)) {
         await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
         return
       }
-      if (run.application) {
+      if (run.application || run.delivery) {
         try { await applicationChannel.bindings.authorize(run) }
         catch { await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); return }
       }
@@ -231,7 +233,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           model: selected.model,
           effort: selected.effort,
           codexAutoCompactTokens: config.codexAutoCompactTokens,
-          codexSandbox: !telegramEnabled && run.application && !startsOwnSession && selected.cli === 'codex' ? config.codexSandbox : undefined,
+          codexSandbox: !run.taskId && selected.cli === 'codex' ? config.codexSandbox : undefined,
           sessionId: session.nativeSessionId || session.sessionId,
           isResume: session.hasStarted,
           eventSource: run.external?.sourceId,
@@ -269,8 +271,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         })
 
         if (!run.scheduled && activeTypingTimer) clearInterval(activeTypingTimer)
-        if (!run.application && !run.external && !run.taskId && !run.scheduled) activeTypingTimer = setInterval(() => {
-          if (performance.now() - executionStarted < 30000) void bot!.api.sendChatAction(run.chatId, 'typing').catch(() => {})
+        if (bot && run.chatId !== undefined && !run.application && !run.external && !run.taskId && !run.scheduled) activeTypingTimer = setInterval(() => {
+          if (performance.now() - executionStarted < 30000) void bot.api.sendChatAction(run.chatId!, 'typing').catch(() => {})
         }, 4000)
 
         const completion = finished.then((code) => {
@@ -309,7 +311,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         }
         await runs.patch(run.id, { status: 'failed', failureReason: 'executor-start', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
         console.error('run start failed', run.id, safeError(error))
-        if (!run.application) await sendChat(run.chatId, `Run ${run.id} failed to start. Check the local relay log.`)
+        if (bot && !run.application && !run.delivery && run.chatId !== undefined) await sendChat(run.chatId, `Run ${run.id} failed to start. Check the local relay log.`)
         setImmediate(() => {
           void runs
             .nextQueued(false)
@@ -327,20 +329,31 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     sourceWork = (async () => {
       if (shuttingDown) return
       const foreground = await runs.running(false)
-      if (foreground?.application && activeChild) {
-        try { await applicationChannel.bindings.authorize(foreground) }
+      const owner = (await control.status()).owner
+      if (foreground && activeChild) {
+        try {
+          if (!ownsRun(owner, foreground)) throw new Error('Owner channel revoked')
+          if (foreground.application) await applicationChannel.bindings.authorize(foreground)
+        }
         catch { ownerStopped.add(activeChild); terminateJob(activeChild) }
       }
-      const owner = (await control.status()).owner
+      for (const [id, child] of background) {
+        const run = await runs.get(id)
+        try {
+          if (!run || !ownsRun(owner, run)) throw new Error('Owner revoked')
+          if (run.delivery) await applicationChannel.bindings.authorize(run)
+        } catch { ownerStopped.add(child); terminateJob(child); continue }
+        if (await scheduler.cancelled(id)) terminateJob(child)
+      }
       if (!owner) return
-      if (telegramEnabled && !config.channelBackendUrl) {
+      if (!config.channelBackendUrl) {
       await drainTaskRequests()
       for (const task of await tasks.list()) if (task.state === 'pending' || task.state === 'active' || task.unwatchPending) {
         try { await tasks.decide(task.id) } catch { /* Failed or stale grants cannot launch. */ }
       }
-      await queueUpdateAttention(config.controlDir,owner,runs,await durableWorkerChoice())
+      if (telegramOwner(owner)) await queueUpdateAttention(config.controlDir,owner,runs,await durableWorkerChoice())
       }
-      for (const source of !telegramEnabled || config.channelBackendUrl ? [] : await sources.available(owner)) {
+      for (const source of !telegramOwner(owner) || config.channelBackendUrl ? [] : await sources.available(owner)) {
         try {
           const batch = await sources.batch(source)
           unavailableSources.delete(source.id)
@@ -365,10 +378,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         } catch { unavailableSources.add(source.id) }
       }
       await runs.running(true)
-      if (telegramEnabled && !config.channelBackendUrl) await scheduler.tick(owner,runs)
-      for (const [id,child] of background) {
-        if (await scheduler.cancelled(id)) terminateJob(child)
-      }
+      if (!config.channelBackendUrl) await scheduler.tick(owner,runs)
       for (const run of (await runs.list()).filter(r => r.status === 'queued')) {
         if (shuttingDown) break
         await startJob(run)
@@ -429,9 +439,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           await withStartLock(async () => {
             if (shuttingDown || !(await inbox.pending(batch.id))) return
             const first = collected[0]
-            if (first)
+            const owner = telegramOwner((await control.status()).owner)
+            if (first && owner)
               run = await runs.create({
                 id: batch.id,
+                ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner),
+                telegramEpoch: owner.telegramLinkedAt ?? owner.pairedAt,
                 chatId: first.chatId,
                 telegramUserId: first.fromId,
                 messageId: first.messageId,
@@ -484,11 +497,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             item.chatId !== origin.chatId
           )
             throw new Error('Outbox ownership mismatch')
-          if (origin.application) {
+          if (origin.application || origin.delivery) {
             await applicationChannel.deliver(origin, item)
             continue
           }
-          if (!telegramEnabled) throw new Error('Telegram delivery is disabled')
+          if (!telegramEnabled || item.chatId === undefined) throw new Error('Telegram delivery is disabled')
           const receiptIds: number[] = []
 
           if (item.type === 'reaction' && item.emoji && item.messageId) {
@@ -559,7 +572,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const checkOwner = async (ctx: Context): Promise<boolean> => {
     if (!ctx.from || ctx.from.is_bot || ctx.message?.sender_chat) return false
     const state = await control.status()
-    if (!state.owner) {
+    if (!telegramOwner(state.owner)) {
       if (ctx.chat?.type !== 'private') return false
       const result = await control.requestPairing(ctx.from.id, ctx.chat.id)
       if (result === 'requested')
@@ -671,7 +684,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if ((ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') &&
       !isOwner(ctx, (await control.status()).owner)) {
       if (config.channelBackendUrl) return
-      const owner = (await control.status()).owner
+      const owner = telegramOwner((await control.status()).owner)
       const message = ctx.message
       if (!owner && message && !message.sender_chat && ctx.from && !ctx.from.is_bot) {
         await control.requestPairing(ctx.from.id, ctx.chat.id, ctx.chat.title)
@@ -949,7 +962,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           text: JSON.stringify({ event: 'approval_decision', actionId, decision, prompt: request?.prompt }),
           messageId: ctx.callbackQuery.message?.message_id,
           updateId: ctx.update.update_id,
-          chatId: run.chatId,
+          chatId: run.chatId!,
           fromId: ctx.from.id,
         })
         console.info('Approval decision recorded', { actionId, decision: isApproved ? 'approved' : 'denied' })
@@ -1057,12 +1070,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       runtimeStarted = true
       pagerDuty?.start()
       const owner = (await control.status()).owner
-      if (telegramEnabled && owner && !config.channelBackendUrl) await telegramSource!.start(owner)
-      if (telegramEnabled) await scheduler.recover(runs)
+      if (telegramEnabled && telegramOwner(owner) && !config.channelBackendUrl) await telegramSource!.start(owner!)
+      await scheduler.recover(runs)
       sourceTimer = setInterval(() => {
         void drainSources().catch(error => console.error('Event-source drain failed', safeError(error)))
       }, 1000)
-      if (telegramEnabled) taskTimer = setInterval(() => { void drainTaskRequests().catch(console.error) }, 250)
+      taskTimer = setInterval(() => { void drainTaskRequests().catch(console.error) }, 250)
       drainTimer = setInterval(() => {
         void drainOutbox().catch((error) => console.error('Outbox drain failed', error.message))
       }, 250)

@@ -36,14 +36,15 @@ if(q.method==='thread/goal/get'){
  }
 }
 });setInterval(()=>{},1000);`
-  let threadConfig:any,turnPrompt:string|undefined
+  let threadConfig:any,turnPrompt:string|undefined,sandbox:string|undefined
   const launch=()=>{
     const child=spawn(process.execPath,['-e',program],{stdio:['pipe','pipe','pipe'],detached:process.platform!=='win32'})
     const write=child.stdin.write.bind(child.stdin)
-    child.stdin.write=((chunk:any,...args:any[])=>{try{const q=JSON.parse(String(chunk));if(q.method==='turn/start')turnPrompt=q.params.input[0].text;requests.push(q.method);if(JSON.parse(String(chunk)).method==='thread/start')threadConfig=JSON.parse(String(chunk)).params.config}catch{};return (write as any)(chunk,...args)}) as typeof child.stdin.write
+    child.stdin.write=((chunk:any,...args:any[])=>{try{const q=JSON.parse(String(chunk));if(q.method==='turn/start')turnPrompt=q.params.input[0].text;requests.push(q.method);if(q.method==='thread/start'){threadConfig=q.params.config;sandbox=q.params.sandbox}}catch{};return (write as any)(chunk,...args)}) as typeof child.stdin.write
     return child
   }
-  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',prompt},{launch,emit:line=>output.push(line)})
+  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',prompt,codexSandbox:mode==='plain'?'external':undefined},{launch,emit:line=>output.push(line)})
+  assert.equal(sandbox,mode==='plain'?'danger-full-access':'workspace-write')
   assert.deepEqual(threadConfig.project_root_markers,['AGENTS.md','.git'])
   assert.equal(turnPrompt,prompt,'full input reaches the engine without goal admission or truncation')
   if(mode==='long-goal')assert.ok(prompt.length>4000)

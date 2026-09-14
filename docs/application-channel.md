@@ -8,17 +8,24 @@ This is separate from the older outbound channel-backend integration.
 
 ## Install and authorize
 
-Pair the ordinary agent's owner first. As the installing administrator, outside
-an agent turn, generate a random 32-byte base64url token into a private file and
-register it:
+An installation has one owner, independent of its channels. As the installing
+administrator, outside an agent turn, generate a random 32-byte base64url token
+into a private file and register the first channel with a verified opaque owner ID:
 
 ```sh
-ezenciel-agents-application --id myapp --token-file /private/myapp-token
+ezenciel-agents-application --owner-id verified-account --id web --token-file /private/web-token --share-owner
+ezenciel-agents-application --id phone --token-file /private/phone-token --share-owner
 ```
 
 The application backend receives that token through its secret store. Core stores
-only its SHA-256 digest, bound to this owner pairing. Revoke with `--id myapp
---revoke`; re-register to replace authority. Re-pairing also invalidates the grant.
+only its SHA-256 digest, bound to the installation owner. Channel IDs are arbitrary
+labels, not a predefined provider list. The trusted adapter verifies its provider's
+identity (for example Privy); a browser-supplied owner ID is never authentication.
+For an existing Telegram owner, omit `--owner-id`: the new channel attaches to that
+same owner. `GET /v1/registration` returns the owner ID and binding ID.
+Revoke a channel with `--id web --revoke`. Rotate with `--id web --token-file
+/private/new-token --rotate`: the binding ID, retries and native sessions remain
+unchanged. Revoking the installation owner invalidates every channel.
 Revocation blocks admission, results and delivery and stops an active app run on
 the existing queue tick. `--list` exposes IDs, never tokens or hashes.
 
@@ -52,6 +59,8 @@ POST /v1/runs
 {"requestId":"job-123","scope":"principal:program","text":"Prepare our next lesson","context":{"reference":"lesson-1"}}
 
 GET /v1/runs/<id>
+GET /v1/runs
+GET /v1/registration
 POST /v1/runs/<id>/cancel
 ```
 
@@ -105,6 +114,9 @@ Do this before submitting work for that scope. Import does not copy transcripts,
 change the model preset, or merge histories. Verify the next real native turn
 recalls the intended history and the app renders its reply before removing the
 old deployment. Keep exactly one executor owner throughout the cutover.
+For an owner-chat channel registered with `--share-owner`, add `--share-owner`
+to the import command to select that imported conversation as the owner's current
+chat. Without it, the import remains scoped and does not switch owner chat.
 
 ## Reviewed deployment migration
 
@@ -198,7 +210,24 @@ execution. Import old histories administratively before cutover. An optional
 CLI, while model/effort can change for later turns. Use distinct scopes for
 separate CLI histories. A retry cannot change an admitted turn's AI choice.
 
-## Optional direct Telegram continuity
+## One owner across channels
+
+Register owner-chat channels with `--share-owner` and submit `followOwner:true`.
+Web, phone and Telegram then use the same selected native conversation and AI.
+This works without Telegram and requires no transcript replay or new runner.
+Scoped application conversations remain separate when the flag is omitted.
+Owner identity does not automatically merge histories or grant learner access.
+
+To link Telegram, enable its ordinary bot configuration, send a real DM, then
+approve the observed pending identity using `ezenciel-agents-owner approve ID`.
+`ezenciel-agents-owner unlink-telegram` removes that channel without removing the
+owner, application bindings or native sessions. Relinking does not authorize old
+Telegram deliveries. Linking other providers requires an authenticated adapter;
+registering the label `phone` does not install a phone service.
+
+The legacy `--share-telegram` and `followTelegram:true` spellings remain supported.
+
+### Existing scoped Telegram sharing
 
 For an application using the ordinary agent's Telegram channel, the administrator
 may register its grant with `--share-telegram`. An ordinary application turn can
@@ -247,37 +276,36 @@ The installing administrator can initialize empty control authority and register
 an application in one local command:
 
 ```sh
-EZ_TELEGRAM_ENABLED=false ezenciel-agents-application --id aifit --token-file /run/private/application-token --owner REAL_ADMIN_TELEGRAM_ID
+ezenciel-agents-application --id web --token-file /run/private/application-token --owner-id VERIFIED_ACCOUNT_ID --share-owner
 ```
 
-Use the administrator's actual numeric Telegram user ID: the existing control
-owner is deployment administration bookkeeping, not the learner/account identity.
-Never fabricate learner Telegram IDs. Account identity remains server-resolved by
-the app and bound to its isolated runtime. This bootstrap is unavailable inside
-agent turns, requires explicit botless mode, and cannot replace an existing owner.
-Existing owners require no new bootstrap. Application tokens remain private;
-normal source binding and run authorization checks still apply.
+No Telegram ID is required or fabricated. Account identity remains server-resolved
+by the app and bound to its isolated runtime. Registration is unavailable inside
+agent turns and cannot replace an existing owner or adopt orphaned session state.
+Existing owners require no bootstrap. Tokens remain private; normal binding and
+run authorization checks still apply. The old numeric `--owner` option is retained
+only for compatibility, not recommended for new installations.
 
 Each learner/coach principal requires its own workspace, CLI state and isolated
-runtime. Several such runtimes can use the same actual administrator identity;
-no separate bot is required. Connect Telegram through the application's existing
-linked-account entrypoint to the same application scope, rather than starting a
-second bot inside each user's runtime. `--share-telegram` is unavailable in
-application-only mode.
+runtime. No separate bot is required. A channel is an authenticated route to its
+existing owner, not a new owner, scheduler or native execution engine.
 
-This initial mode accepts application turns only. Existing Telegram jobs/outbox
-items, event-source work, tasks and scheduled delivery do not execute or send.
-Application agents must finish and reply in their admitted turn; ordinary native
-subagents remain available. Background scheduling with application delivery is
-not implemented here. Do not switch an active Telegram deployment to this mode
-as a substitute for migrating its pending work.
+The standard scheduler, task controls and native delegation remain available.
+Schedules created during an application turn retain its binding and reply scope;
+scheduled replies use the normal outbox and appear in `GET /v1/runs` (100 channel
+runs per page), with their `originRunId`. Follow `nextCursor` through
+`GET /v1/runs?before=RUN_ID` until null to catch up after a disconnect; receipts
+from older origins must not be limited to the UI's current page. The backend projects these receipts into
+its UI; it does not schedule or execute work. Revoked channels cannot launch or
+receive scheduled work. Token rotation retains delivery. Telegram-specific intake
+and delivery require Telegram; pending Telegram work is never rerouted to web.
 
 When a private application-only container supplies the isolation boundary and
 Codex cannot create its nested sandbox, its installing administrator may set
-`EZ_CODEX_SANDBOX=external` together with `EZ_TELEGRAM_ENABLED=false` and
-`EZ_EXECUTOR_TRANSPORT=local`. Only local foreground Codex application turns use
-`--sandbox danger-full-access`. The default remains `workspace-write`.
+`EZ_CODEX_SANDBOX=external` together with `EZ_EXECUTOR_TRANSPORT=local`. Authorized
+local owner Codex runs, including scheduled native sessions, use that container
+isolation setting. The default remains `workspace-write`.
 Keep the container's private mounts, non-root UID, dropped capabilities and
 no-new-privileges policy; the agent can access everything mounted into it.
-This setting is rejected for Telegram or host execution and cannot be selected
+This setting is rejected for restricted tasks or host execution and cannot be selected
 by an application request. It is not forwarded to the host executor.

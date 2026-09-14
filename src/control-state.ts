@@ -4,10 +4,32 @@ import path from 'node:path'
 import { isPreset, persistedPreset, type AiPreset, type ExecutionChoice } from './ai.js'
 
 export type Owner = {
+  id?: string
+  generation?: string
   kind?: 'group'
-  telegramUserId: number
-  telegramChatId: number
+  telegramUserId?: number
+  telegramChatId?: number
+  telegramLinkedAt?: string
   pairedAt: string
+}
+
+export type TelegramOwner = Owner & { telegramUserId: number; telegramChatId: number }
+export const telegramOwner = (owner: Owner | null): TelegramOwner | null =>
+  owner && Number.isSafeInteger(owner.telegramUserId) && Number.isSafeInteger(owner.telegramChatId) ? owner as TelegramOwner : null
+export const ownerId = (owner: Owner): string => owner.id ?? `telegram:${owner.telegramUserId}:${owner.telegramChatId}`
+export const ownerEpoch = (owner: Owner): string => owner.generation ?? owner.pairedAt
+export const sameOwner = (left: Owner, right: Owner | null): boolean =>
+  !!right && ownerId(left) === ownerId(right) && ownerEpoch(left) === ownerEpoch(right)
+export const validOwner = (owner: unknown): owner is Owner => {
+  if (!owner || typeof owner !== 'object') return false
+  const p = owner as Owner
+  const linked = p.telegramUserId !== undefined || p.telegramChatId !== undefined
+  return typeof p.pairedAt === 'string' && Number.isFinite(Date.parse(p.pairedAt)) &&
+    (p.generation === undefined || typeof p.generation === 'string' && /^[a-f0-9-]{36}$/.test(p.generation)) &&
+    (p.telegramLinkedAt === undefined || typeof p.telegramLinkedAt === 'string') &&
+    (p.id === undefined ? linked : typeof p.id === 'string' && /^[a-zA-Z0-9_:.-]{1,200}$/.test(p.id)) &&
+    (!linked ? p.kind === undefined : Number.isSafeInteger(p.telegramUserId) && p.telegramUserId! > 0 &&
+      Number.isSafeInteger(p.telegramChatId) && (p.kind === 'group' ? p.telegramChatId! < 0 : p.kind === undefined && p.telegramChatId! > 0))
 }
 
 export type PairingRequest = {
@@ -58,7 +80,7 @@ const isState = (value: unknown): value is ControlState => {
     if (!person || typeof person !== 'object') return false
     const p = person as Owner
     return isPositiveId(p.telegramUserId) && (p.kind === 'group'
-      ? Number.isSafeInteger(p.telegramChatId) && p.telegramChatId < 0
+      ? Number.isSafeInteger(p.telegramChatId) && p.telegramChatId! < 0
       : p.kind === undefined && isPositiveId(p.telegramChatId))
   }
   const session = (s: SessionState) => s && /^[0-9a-f-]{36}$/i.test(s.sessionId) && typeof s.hasStarted === 'boolean' &&
@@ -71,7 +93,7 @@ const isState = (value: unknown): value is ControlState => {
     candidate.version === 1 &&
     Array.isArray(candidate.pending) &&
     candidate.pending.every((p) => identity(p) && Number.isFinite(Date.parse(p.expiresAt))) &&
-    (candidate.owner === null || identity(candidate.owner)) &&
+    (candidate.owner === null || validOwner(candidate.owner)) &&
     (candidate.ai === undefined || (Array.isArray(candidate.ai.presets) &&
       candidate.ai.presets.every(isPreset) &&
       candidate.ai.presets.some((p) => p.id === candidate.ai!.defaultId) &&
@@ -179,7 +201,7 @@ export class ControlStore {
       throw new Error('Telegram identity must be a positive numeric ID')
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
-      if (state.owner) return 'owner-exists'
+      if (telegramOwner(state.owner)) return 'owner-exists'
       if (
         state.pending.some(
           (request) => request.telegramUserId === telegramUserId && request.telegramChatId === telegramChatId,
@@ -207,7 +229,7 @@ export class ControlStore {
     return this.withLock(async () => {
       const state = await this.readState()
       if (state.owner) throw new Error('An owner already exists; application bootstrap cannot replace it')
-      const owner: Owner = { telegramUserId: operatorId, telegramChatId: operatorId, pairedAt: new Date(this.clock()).toISOString() }
+      const owner: Owner = { generation: crypto.randomUUID(), telegramUserId: operatorId, telegramChatId: operatorId, pairedAt: new Date(this.clock()).toISOString() }
       state.owner = owner
       state.pending = []
       await this.writeState(state)
@@ -215,20 +237,50 @@ export class ControlStore {
     })
   }
 
+  async registerOwner(id: string): Promise<Owner> {
+    if (!/^[a-zA-Z0-9_:.-]{1,200}$/.test(id)) throw new Error('Invalid owner ID')
+    return this.withLock(async () => {
+      const state = await this.readState()
+      if (state.owner) {
+        if (ownerId(state.owner) !== id) throw new Error('Installation already has a different owner')
+        return state.owner
+      }
+      const bindings = await readFile(path.join(path.dirname(this.statePath), 'application-bindings.json'), 'utf8')
+        .then(text => JSON.parse(text), error => { if (error.code === 'ENOENT') return []; throw error })
+      if (!Array.isArray(bindings) || bindings.some(binding => !validOwner(binding?.owner)) || state.activeSession || state.sessions?.length)
+        throw new Error('Existing unowned state requires explicit ownership recovery')
+      state.owner = {id, generation: crypto.randomUUID(), pairedAt: new Date(this.clock()).toISOString()}
+      await this.writeState(state)
+      return state.owner
+    })
+  }
+
+  async unlinkTelegram(): Promise<void> {
+    await this.withLock(async () => {
+      const state = await this.readState()
+      if (!state.owner) throw new Error('No installation owner')
+      state.owner = {id: ownerId(state.owner), generation: state.owner.generation, pairedAt: state.owner.pairedAt}
+      state.pending = []
+      await this.writeState(state)
+    })
+  }
+
   async approveOwner(telegramUserId: number, group = false): Promise<Owner> {
     if (!(group ? Number.isSafeInteger(telegramUserId) && telegramUserId < 0 : isPositiveId(telegramUserId))) throw new Error('Supply a positive user ID or negative group ID')
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
-      if (state.owner) throw new Error('An owner is already paired; revoke locally before replacing it')
+      if (telegramOwner(state.owner)) throw new Error('An owner is already paired; unlink locally before replacing its Telegram channel')
       const request = state.pending.find((candidate) => group
         ? candidate.kind === 'group' && candidate.telegramChatId === telegramUserId
         : candidate.kind === undefined && candidate.telegramUserId === telegramUserId)
       if (!request) throw new Error('No active pairing request exists for that Telegram user ID')
       const owner: Owner = {
+        generation: state.owner ? state.owner.generation : crypto.randomUUID(),
+        ...(state.owner ? {id: ownerId(state.owner), telegramLinkedAt: crypto.randomUUID()} : {}),
         ...(group ? {kind: 'group' as const} : {}),
         telegramUserId: request.telegramUserId,
         telegramChatId: request.telegramChatId,
-        pairedAt: new Date(this.clock()).toISOString(),
+        pairedAt: state.owner?.pairedAt ?? new Date(this.clock()).toISOString(),
       }
       state.owner = owner
       state.pending = []

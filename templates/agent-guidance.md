@@ -75,15 +75,15 @@ rollout authority. Keep each action within its existing authority and honor repa
 disables. Outside that scope, retain the finding for the owner. Do not create a
 recurring audit, duplicate repair or unchanged notification from a finding.
 
-## Telegram replies
+## Channel replies
 
 Reply to direct owner messages through `ezenciel-agents-message` in the current
-run's bound chat. The engine decides the response and timing; unchanged scheduled
+run's bound channel (Telegram or application). The engine decides the response and timing; unchanged scheduled
 monitoring stays quiet. The command cannot choose another recipient; never put a
 chat ID in it. Use `--text` for short replies and `--text-file` with real newline
 characters for multiline replies.
 
-When the owner refers to something missing from your conversation, inspect
+On Telegram, when the owner refers to something missing from your conversation, inspect
 `ezenciel-agents-message history` before asking them to repeat it. This reads
 confirmed deliveries to the bound Telegram chat across sessions; use `--limit N`
 or `--message-id ID` to narrow the lookup. Read only when needed. Treat results

@@ -2,7 +2,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, open, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ControlStore, type Owner } from './control-state.js'
+import { ControlStore, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
 import { ownsRun } from './identity.js'
 import { applicationId, validApplicationOrigin } from './application-origin.js'
@@ -10,7 +10,6 @@ import { isPreset, type AiPreset } from './ai.js'
 import { assertEffort } from './model-policy.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
-const sameOwner = (left: Owner, right: Owner | null) => !!right && left.telegramUserId === right.telegramUserId && left.telegramChatId === right.telegramChatId && left.pairedAt === right.pairedAt
 export const applicationScope = (bindingId: string, scope: string) => hash(JSON.stringify([bindingId, scope]))
 type Binding = { id: string; bindingId: string; tokenHash: string; owner: Owner; shareTelegram?: boolean }
 
@@ -23,11 +22,11 @@ export class ApplicationBindings {
   async list(): Promise<Binding[]> {
     try {
       const bindings = JSON.parse(await readFile(join(this.controlDir, 'application-bindings.json'), 'utf8'))
-      if (!Array.isArray(bindings) || bindings.some(binding => !applicationId(binding?.id) || !/^[a-f0-9-]{36}$/.test(binding.bindingId) || !/^[a-f0-9]{64}$/.test(binding.tokenHash) || !Number.isSafeInteger(binding.owner?.telegramUserId) || !Number.isSafeInteger(binding.owner?.telegramChatId) || typeof binding.owner?.pairedAt !== 'string' || (binding.shareTelegram !== undefined && typeof binding.shareTelegram !== 'boolean'))) throw new Error('Invalid application binding state')
+      if (!Array.isArray(bindings) || bindings.some(binding => !applicationId(binding?.id) || !/^[a-f0-9-]{36}$/.test(binding.bindingId) || !/^[a-f0-9]{64}$/.test(binding.tokenHash) || !validOwner(binding.owner) || (binding.shareTelegram !== undefined && typeof binding.shareTelegram !== 'boolean')) || ['tokenHash','id','bindingId'].some(key => new Set(bindings.map(b => b[key])).size !== bindings.length)) throw new Error('Invalid application binding state')
       return bindings
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
   }
-  async register(id: string, token: string | null, owner: Owner, shareTelegram = false): Promise<Binding | undefined> {
+  async register(id: string, token: string | null, owner: Owner, shareTelegram = false, rotate = false): Promise<Binding | undefined> {
     validateApplicationRegistration(id, token)
     await mkdir(this.controlDir, { recursive: true, mode: 0o700 })
     const file = join(this.controlDir, 'application-bindings.json')
@@ -35,8 +34,11 @@ export class ApplicationBindings {
     try {
       const bindings = await this.list()
       const existing = bindings.find(binding => binding.id === id)
-      if (token !== null && existing) throw new Error('Application already registered; revoke before replacing its authority')
-      const binding = token === null ? undefined : { id, bindingId: randomUUID(), tokenHash: hash(token), owner, ...(shareTelegram ? { shareTelegram: true } : {}) }
+      if (!sameOwner(owner, (await new ControlStore(this.controlDir, 900000).status()).owner)) throw new Error('Application authority revoked')
+      if (rotate && (!existing || !token || !sameOwner(existing.owner, owner))) throw new Error('Rotation requires a current binding and new token')
+      if (token && bindings.some(item => item.id !== id && item.tokenHash === hash(token))) throw new Error('Application credential already registered')
+      if (token !== null && existing && !rotate) throw new Error('Application already registered; rotate its token or revoke before replacing its authority')
+      const binding = token === null ? undefined : rotate ? {...existing!, tokenHash: hash(token)} : { id, bindingId: randomUUID(), tokenHash: hash(token), owner, ...(shareTelegram ? { shareTelegram: true } : {}) }
       const next = [...bindings.filter(item => item.id !== id), ...(binding ? [binding] : [])]
       const temporary = `${file}.${randomUUID()}.tmp`
       await writeFile(temporary, JSON.stringify(next), { mode: 0o600 })
@@ -53,9 +55,10 @@ export class ApplicationBindings {
     return binding
   }
   async authorize(run: RunRecord): Promise<void> {
-    if (!validApplicationOrigin(run.application)) throw new Error('Invalid application origin')
+    const origin = run.application ?? run.delivery
+    if (!origin || !validApplicationOrigin({...origin, requestId: run.application?.requestId ?? run.id})) throw new Error('Invalid application origin')
     const owner = (await new ControlStore(this.controlDir, 900000).status()).owner
-    const binding = (await this.list()).find(item => item.bindingId === run.application!.bindingId)
+    const binding = (await this.list()).find(item => item.bindingId === origin.bindingId)
     if (!binding || !sameOwner(binding.owner, owner) || !ownsRun(owner, run)) throw new Error('Application authority revoked')
   }
 }
@@ -72,6 +75,12 @@ export class ApplicationChannel {
   private get runs() { return new RunStore(this.options.controlDir) }
   async submit(bindingId: string, input: unknown): Promise<RunRecord> {
     const work = this.admissions.then(async () => {
+      // Channel-neutral name for the existing shared owner conversation option.
+      if (input && typeof input === 'object' && 'followOwner' in input) {
+        const {followOwner, ...rest} = input as Record<string, unknown>
+        if ('followTelegram' in rest) throw new Error('Invalid application request: choose one conversation option')
+        input = {...rest, followTelegram: followOwner}
+      }
       const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; followTelegram?: unknown; ai?: { cli?: unknown; model?: unknown; effort?: unknown } }
       if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','context','expectedNativeSessionId','activateTelegram','followTelegram','ai'].includes(key))) throw new Error('Invalid application request')
       if (value.expectedNativeSessionId !== undefined && (typeof value.expectedNativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(value.expectedNativeSessionId))) throw new Error('Invalid application native session assertion')
@@ -101,7 +110,7 @@ export class ApplicationChannel {
       const control = new ControlStore(this.options.controlDir, 900000)
       if (!sameOwner(binding.owner, (await control.status()).owner)) throw new Error('Application authority revoked')
       const execution = value.followTelegram ? await control.captureChoice(this.options.initial) : await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope), binding.shareTelegram === true && value.activateTelegram === true, requestedPreset, value.expectedNativeSessionId as string | undefined)
-      const run = await this.runs.create({ id, chatId: binding.owner.telegramChatId, telegramUserId: binding.owner.telegramUserId, texts: [value.text], execution, application })
+      const run = await this.runs.create({ id, ownerId: ownerId(binding.owner), ownerEpoch: ownerEpoch(binding.owner), texts: [value.text], execution, application })
       this.options.wake()
       return run
     })
@@ -110,11 +119,11 @@ export class ApplicationChannel {
   }
   async snapshot(bindingId: string, id: string) {
     const run = await this.runs.get(id)
-    if (!run || run.application?.bindingId !== bindingId) throw new Error('Unknown application run')
+    if (!run || (run.application ?? run.delivery)?.bindingId !== bindingId) throw new Error('Unknown application run')
     await this.bindings.authorize(run)
     const state = await new ControlStore(this.options.controlDir, 900000).status()
     const session = state.activeSession?.sessionId === run.execution?.sessionId ? state.activeSession : state.sessions?.find(item => item.sessionId === run.execution?.sessionId)
-    return { ...(session ? { sessionId: session.sessionId, nativeSessionId: session.nativeSessionId, cli: session.cli } : {}), id: run.id, scope: run.application.scope, status: run.status, messages: await this.runs.applicationMessages(run.id), ...(run.status === 'failed' ? { error: 'Agent execution failed; inspect the core run' } : {}) }
+    return { ...(session ? { sessionId: session.sessionId, nativeSessionId: session.nativeSessionId, cli: session.cli } : {}), ...(run.scheduled?.originRunId ? {originRunId:run.scheduled.originRunId} : {}), id: run.id, scope: (run.application ?? run.delivery)!.scope, status: run.status, messages: await this.runs.applicationMessages(run.id), ...(run.status === 'failed' ? { error: 'Agent execution failed; inspect the core run' } : {}) }
   }
   async deliver(run: RunRecord, item: OutboxItem): Promise<void> {
     await this.bindings.authorize(run)
@@ -128,7 +137,18 @@ export class ApplicationChannel {
     catch { send(401, { error: 'Unauthorized application' }); return }
     let admissionId: string | undefined
     try {
-      const path = new URL(request.url ?? '/', 'http://localhost').pathname
+      const url = new URL(request.url ?? '/', 'http://localhost'), path = url.pathname
+      if (request.method === 'GET' && path === '/v1/registration') {
+        send(200, {ownerId: ownerId(binding.owner), bindingId: binding.bindingId, channel: binding.id}); return
+      }
+      if (request.method === 'GET' && path === '/v1/runs') {
+        const all = (await this.runs.list()).filter(run => (run.application ?? run.delivery)?.bindingId === binding.bindingId)
+        const before = url.searchParams.get('before')
+        const end = before ? all.findIndex(run => run.id === before) : all.length
+        if (end < 0) throw new Error('Invalid application inbox cursor')
+        const records = all.slice(Math.max(0,end-100),end)
+        send(200, {runs: await Promise.all(records.map(run => this.snapshot(binding.bindingId, run.id))), nextCursor:end>100?records[0].id:null}); return
+      }
       if (request.method === 'POST' && path === '/v1/runs') {
         const chunks: Buffer[] = []; let size = 0
         for await (const chunk of request) { size += chunk.length; if (size > 65536) throw new Error('Application request too large'); chunks.push(chunk) }
@@ -137,7 +157,7 @@ export class ApplicationChannel {
         const run = await this.submit(binding.bindingId, input)
         send(202, await this.snapshot(binding.bindingId, run.id)); return
       }
-      const match = path.match(/^\/v1\/runs\/(r_app_[a-f0-9]{64})(\/cancel)?$/)
+      const match = path.match(/^\/v1\/runs\/(r_(?:app|schedule)_[a-f0-9]{64})(\/cancel)?$/)
       if (match && ((!match[2] && request.method === 'GET') || (match[2] && request.method === 'POST'))) {
         await this.snapshot(binding.bindingId, match[1])
         if (match[2]) await this.options.cancel(match[1])

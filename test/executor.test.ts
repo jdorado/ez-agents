@@ -188,16 +188,16 @@ test('Codex external isolation changes only explicit sandbox argv and never ente
   assert.equal(executorEnvironment({EZ_CODEX_SANDBOX:'external'}).EZ_CODEX_SANDBOX, undefined)
 })
 
-test('external Codex isolation cannot launch ordinary or host runs', async t => {
+test('external Codex isolation cannot launch host runs', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'ez-external-sandbox-'))
   t.after(() => rm(root,{recursive:true,force:true}))
   await ownerRun(root,'r_sandbox')
   const previous = {transport:process.env.EZ_EXECUTOR_TRANSPORT,telegram:process.env.EZ_TELEGRAM_ENABLED}
   try {
     process.env.EZ_TELEGRAM_ENABLED='false'
-    for (const transport of ['local','host']) {
+    for (const transport of ['host','']) {
       process.env.EZ_EXECUTOR_TRANSPORT=transport
-      await assert.rejects(startExecutorJob(['Hello'],{workspace:root,controlDir:root,binDir:root,runId:'r_sandbox',timeoutMs:0,cli:'codex',codexSandbox:'external'}), /application-only local foreground/)
+      await assert.rejects(startExecutorJob(['Hello'],{workspace:root,controlDir:root,binDir:root,runId:'r_sandbox',timeoutMs:0,cli:'codex',codexSandbox:'external'}), /owner-authorized native local/)
     }
   } finally {
     for (const [key,value] of [['EZ_EXECUTOR_TRANSPORT',previous.transport],['EZ_TELEGRAM_ENABLED',previous.telegram]]) {
