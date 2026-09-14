@@ -1,4 +1,5 @@
 import { ownerRun } from './helpers/owner-run.js'
+import { RunStore } from '../src/runs.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
@@ -188,20 +189,50 @@ test('Codex external isolation changes only explicit sandbox argv and never ente
   assert.equal(executorEnvironment({EZ_CODEX_SANDBOX:'external'}).EZ_CODEX_SANDBOX, undefined)
 })
 
-test('external Codex isolation cannot launch ordinary or host runs', async t => {
+test('external Codex isolation cannot launch host runs', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'ez-external-sandbox-'))
   t.after(() => rm(root,{recursive:true,force:true}))
   await ownerRun(root,'r_sandbox')
   const previous = {transport:process.env.EZ_EXECUTOR_TRANSPORT,telegram:process.env.EZ_TELEGRAM_ENABLED}
   try {
     process.env.EZ_TELEGRAM_ENABLED='false'
-    for (const transport of ['local','host']) {
+    for (const transport of ['host','']) {
       process.env.EZ_EXECUTOR_TRANSPORT=transport
-      await assert.rejects(startExecutorJob(['Hello'],{workspace:root,controlDir:root,binDir:root,runId:'r_sandbox',timeoutMs:0,cli:'codex',codexSandbox:'external'}), /application-only local foreground/)
+      await assert.rejects(startExecutorJob(['Hello'],{workspace:root,controlDir:root,binDir:root,runId:'r_sandbox',timeoutMs:0,cli:'codex',codexSandbox:'external'}), /owner-authorized native local/)
     }
   } finally {
     for (const [key,value] of [['EZ_EXECUTOR_TRANSPORT',previous.transport],['EZ_TELEGRAM_ENABLED',previous.telegram]]) {
       if (value === undefined) delete process.env[key!]; else process.env[key!]=value
     }
+  }
+})
+
+test('external local owner chat preserves authorization and literal input', async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'ez-external-owner-'))
+  t.after(()=>rm(root,{recursive:true,force:true}))
+  const prior={path:process.env.PATH,transport:process.env.EZ_EXECUTOR_TRANSPORT}
+  const bin=path.join(root,'bin');await mkdir(bin)
+  await writeFile(path.join(bin,'codex'),`#!/usr/bin/env node\nconst fs=require('fs');let text='';process.stdin.on('data',b=>text+=b);process.stdin.on('end',()=>fs.writeFileSync(${JSON.stringify(path.join(root,'observed.json'))},JSON.stringify({args:process.argv.slice(2),text,secret:process.env.TELEGRAM_BOT_TOKEN})));`,{mode:0o755})
+  await ownerRun(root,'r_owner_external')
+  const opts={workspace:root,controlDir:root,binDir:bin,runId:'r_owner_external',timeoutMs:0,cli:'codex',codexSandbox:'external' as const}
+  try {
+    process.env.PATH=bin+path.delimiter+prior.path;process.env.EZ_EXECUTOR_TRANSPORT='local'
+    const job=await startExecutorJob(['  literal /goal request\n'],opts)
+    const code=await new Promise(resolve=>job.child.once('close',resolve));await job.cleanup()
+    assert.equal(code,0)
+    const observed=JSON.parse(await readFile(path.join(root,'observed.json'),'utf8'))
+    assert.equal(observed.text,'  literal /goal request\n')
+    assert.equal(observed.args[observed.args.indexOf('--sandbox')+1],'danger-full-access')
+    assert.equal(observed.secret,undefined)
+    const runs=new RunStore(root)
+    await runs.create({id:'r_foreign',chatId:999,telegramUserId:999,texts:['no']})
+    await runs.patch('r_foreign',{status:'running'})
+    await assert.rejects(startExecutorJob(['no'],{...opts,runId:'r_foreign'}),/blocked|owner/i)
+    await runs.create({id:'r_restricted',chatId:101,telegramUserId:101,texts:['no'],taskId:'task_'+'a'.repeat(32)})
+    await runs.patch('r_restricted',{status:'running'})
+    await assert.rejects(startExecutorJob(['no'],{...opts,runId:'r_restricted'}),/owner-authorized native local/)
+  } finally {
+    if(prior.path===undefined)delete process.env.PATH;else process.env.PATH=prior.path
+    if(prior.transport===undefined)delete process.env.EZ_EXECUTOR_TRANSPORT;else process.env.EZ_EXECUTOR_TRANSPORT=prior.transport
   }
 })

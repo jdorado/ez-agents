@@ -234,7 +234,7 @@ export const startExecutorJob = async (
   options = executionDefaults(executorKey(options.cli), options)
   if(options.runId.startsWith('r_schedule_') && !/^[a-zA-Z0-9_-]+$/.test(options.runId))throw new Error('Invalid native task run ID')
   const run = await new RunStore(options.controlDir).get(options.runId)
-  if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_TELEGRAM_ENABLED !== 'false' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || !run?.application || run.taskId || run.scheduled || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an application-only local foreground run')
+  if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || !run || run.taskId || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an owner-authorized native local run')
   if (run?.taskId) {
     if (run.status !== 'running') throw new Error('No active task run')
     await new Tasks(options.controlDir).authorize(run, process.env.EZ_EXECUTOR_TRANSPORT === 'host')
@@ -247,8 +247,8 @@ export const startExecutorJob = async (
   const gui = !host && key === 'codex-gui'
   const nativeSession = !host && key === 'codex' && options.runId.startsWith('r_schedule_')
   // Chat-mode experiment: only direct chat input at the engine boundary.
-  const applicationReminder = !host && run?.application
-    ? '\n\n[Application channel] This is an owner-authorized application conversation. Send text replies using ezenciel-agents-message; stdout alone is not delivered. Attachments/reactions/approval controls are unsupported here. Domain tools can retrieve private context from ezenciel-agents-schedule context under run.application.context; do not expose credentials from that data. The application scope is ' + JSON.stringify(run.application.scope) + '.'
+  const applicationReminder = !host && (run?.application || run?.delivery)
+    ? '\n\n[Application channel] This is an owner-authorized application conversation. Send text replies using ezenciel-agents-message; stdout alone is not delivered. Attachments/reactions/approval controls are unsupported here. Domain tools can retrieve private context from ezenciel-agents-schedule context under run.application.context; do not expose credentials from that data. The application scope is ' + JSON.stringify((run.application ?? run.delivery)!.scope) + '.'
     : ''
   const chatReminder = !host && !run?.taskId && run?.messageId !== undefined
     ? '\n\n[Chat context] You are replying in chat. Send replies with ezenciel-agents-message --text "..."; your final answer alone is not delivered. Before lengthy tool or repository work, briefly acknowledge through that CLI. Keep chat responsive: use ezenciel-agents-schedule for long-running work and native subagents for useful independent parts. Decide when to delegate and what to send.'

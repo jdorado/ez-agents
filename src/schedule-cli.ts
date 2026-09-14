@@ -4,7 +4,8 @@ import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { loadControlConfig } from './config.js'
-import { ControlStore } from './control-state.js'
+import { ControlStore, sameOwner } from './control-state.js'
+import { ApplicationBindings } from './application-channel.js'
 import { RunStore } from './runs.js'
 import { initialPreset, isPreset } from './ai.js'
 import { executionOverrides } from './model-policy.js'
@@ -39,10 +40,11 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
   if(!owner)throw new Error('Pair an owner before scheduling')
   const runs=new RunStore(config.controlDir), scheduler=new Scheduler(config.controlDir)
   const caller=process.env.EZ_RUN_ID ? await runs.get(process.env.EZ_RUN_ID) : null
+  if (caller?.application || caller?.delivery) await new ApplicationBindings(config.controlDir).authorize(caller)
   if(process.env.EZ_RUN_ID && (!caller || caller.status!=='running' || caller.external || caller.taskId || caller.replyOnly ||
     !ownsRun(owner, caller) ||
     (caller.scheduled && caller.scheduled.pairedAt!==owner.pairedAt)))throw new Error('Scheduling requires an active owner-authorized run')
-  const owned=(s:{owner:typeof owner})=>s.owner.telegramUserId===owner.telegramUserId && s.owner.telegramChatId===owner.telegramChatId && s.owner.pairedAt===owner.pairedAt
+  const owned=(s:{owner:typeof owner})=>sameOwner(s.owner,owner)
   const ownsFailureRun=(r:Awaited<ReturnType<RunStore['get']>>)=>r && ownsRun(owner,r) && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt)
   const show=async(s:Awaited<ReturnType<Scheduler['get']>>)=>{
     const held=(await runs.list()).filter(r=>holdsSchedule(s,r))
@@ -57,7 +59,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     if(!caller)throw new Error('Context requires an active owner run')
     const origin=caller.scheduled?.originRunId ? await runs.get(caller.scheduled.originRunId) : null
     if(origin && !ownsFailureRun(origin))throw new Error('Source context is outside this owner binding')
-    result=caller.application ? {run:caller} : {run:caller,busyReplies:await parallelReplyHistory(config.controlDir,caller),...(origin?{origin:await ownerConversationContext(config.controlDir,origin)}:{})}
+    result=caller.application || caller.delivery ? {run:caller,...(origin ? {origin} : {})} : {run:caller,busyReplies:await parallelReplyHistory(config.controlDir,caller),...(origin?{origin:await ownerConversationContext(config.controlDir,origin)}:{})}
   }else if(action==='failures'){
     const limit=Number(v.limit || 20)
     if(!Number.isSafeInteger(limit) || limit<1 || limit>100)throw new Error('Limit must be 1..100')
@@ -73,7 +75,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       result=await runs.patch(id,{failureReview:{failedAt:v['failed-at'],reviewedAt:new Date().toISOString(),reviewerRunId:caller?.id,status:v.status as 'resolved'|'attention',diagnosis:redactFailure(v.diagnosis).slice(0,2000),recovery:redactFailure(v.recovery).slice(0,2000),outcome:redactFailure(v.outcome).slice(0,2000)}})
     }
   }else if(action==='list')result=await Promise.all((await scheduler.list()).filter(owned).map(show))
-  else if(action==='runs')result=(await runs.list()).filter(r=>r.scheduled && r.scheduled.pairedAt===owner.pairedAt && r.telegramUserId===owner.telegramUserId && r.chatId===owner.telegramChatId)
+  else if(action==='runs')result=(await runs.list()).filter(r=>r.scheduled && r.scheduled.pairedAt===owner.pairedAt && ownsRun(owner,r))
   else if(action==='create' || action==='edit'){
     if(action==='edit' && (!id || !owned(await scheduler.get(id))))throw new Error('Unknown schedule')
     if(action==='create' && id && (await scheduler.list()).some(s=>s.id===id))throw new Error('Schedule exists; use edit')
@@ -83,6 +85,9 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const trigger:Trigger=v.now ? {at:new Date(Date.now()+1000).toISOString()} : v.at ? {at:v.at} :
       v.cron ? {cron:v.cron,timezone:v.timezone!,start,until:v.until} : {everySeconds:Number(v['every-seconds']),start,until:v.until}
     const previousSchedule = action === 'edit' ? await scheduler.get(id!) : undefined
+    const origin = caller?.application ?? caller?.delivery
+    const delivery = previousSchedule ? previousSchedule.delivery : (origin ? {bindingId:origin.bindingId,scope:origin.scope} : undefined)
+    if (!delivery && !owner.telegramChatId) throw new Error('Create the schedule from an authenticated channel turn to bind its reply destination')
     const previous = previousSchedule?.execution
     const state = await control.status()
     const selected = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
@@ -90,13 +95,13 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const preset = executionOverrides(base.cli, base, v.model, v.effort)
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
-      originRunId:previousSchedule?.originRunId,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
+      originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
       execution:{sessionId:previous?.sessionId || randomUUID(),preset}},action==='create'))
   }else{
     if(!id)throw new Error('ID required')
     if(action==='cancel'){
       const run=await runs.get(id)
-      if(!run?.scheduled || run.scheduled.pairedAt!==owner.pairedAt || run.telegramUserId!==owner.telegramUserId || run.chatId!==owner.telegramChatId)throw new Error('Unknown background run')
+      if(!run?.scheduled || run.scheduled.pairedAt!==owner.pairedAt || !ownsRun(owner,run))throw new Error('Unknown background run')
       await scheduler.cancel(id);result={cancelRequested:id}
     }else{
       const s=await scheduler.get(id)

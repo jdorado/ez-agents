@@ -5,13 +5,14 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { terminateJob } from './executor.js'
 
-type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;model?:string;effort?:string;prompt:string}
+type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;model?:string;effort?:string;prompt:string;codexSandbox?:'external'}
 type Message = {id?:number;method?:string;params?:any;result?:any;error?:{message:string;code?:number}}
 
 // Keep Codex's native session alive. Codex itself starts goal continuation turns;
 // this transport never generates a continuation prompt or an Ez goal record.
 export async function runCodexSession(options:Options, io:{launch?:()=>ChildProcess;emit?:(line:string)=>void}={}):Promise<number> {
   options = executionDefaults('codex', options)
+  if (options.codexSandbox !== undefined && options.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
   const child=io.launch?.() ?? spawn('codex',['app-server','--stdio','--disable','memories','--enable','skip_host_skill_discovery'],{cwd:options.workspace,env:process.env,stdio:['pipe','pipe','pipe']})
   const emit=io.emit ?? (line=>process.stdout.write(line+'\n'))
   let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=false
@@ -70,14 +71,15 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     await request('initialize',{clientInfo:{name:'ezenciel-agents',version:'1'},capabilities:{experimentalApi:true}})
     send({method:'initialized',params:{}})
     const result=await request('thread/start',{
-      cwd:options.workspace,approvalPolicy:'never',sandbox:'workspace-write',model:options.model,
+      cwd:options.workspace,approvalPolicy:'never',sandbox:options.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write',model:options.model,
       config:{project_root_markers:['AGENTS.md','.git'],'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[]),...(options.sharedWorkspace?[options.sharedWorkspace]:[])],
         'sandbox_workspace_write.network_access':Boolean(options.toolsHome),...(options.effort?{model_reasoning_effort:options.effort}:{})},
     })
     threadId=result.thread?.id
     if(!threadId)throw new Error('Codex did not return a native thread ID')
     emit(JSON.stringify({type:'thread.started',thread_id:threadId}))
-    await request('turn/start',{threadId,input:[{type:'text',text:options.prompt}],model:options.model,effort:options.effort})
+    await request('turn/start',{threadId,input:[{type:'text',text:options.prompt}],model:options.model,effort:options.effort,
+      ...(options.codexSandbox === 'external' ? {sandboxPolicy:{type:'externalSandbox',networkAccess:'enabled'}} : {})})
     return await done
   }catch(error){fail(error);return 1}
   finally{

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { InlineKeyboard, type Context } from 'grammy'
-import { ControlStore } from './control-state.js'
+import { ControlStore, type ControlGuard } from './control-state.js'
 import { chatPreset, installed, persistedPreset, presetLabel, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 
@@ -50,13 +50,19 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     buttons.set(id, { expires: Date.now() + 15 * 60_000, action })
     keyboard.text(label.slice(0, 64), `ai:${id}`).row()
   }
-  const choose = async (ctx: Context, preset: AiPreset) => {
+  const select = async (preset: AiPreset, expectedSession: string | null, guard?: ControlGuard) => {
     await validate(preset)
     const session = await control.getActiveSession()
-    const state = await control.aiState(initial)
+    const state = (await control.status()).ai
+    if (!state) throw new Error('AI settings not initialized')
     const current = state.presets.find((p) => p.id === state.selectedId)!
     const fresh = current.cli !== preset.cli || Boolean(session && !session.cli)
-    await control.selectPreset(preset.id, session?.sessionId ?? null, fresh)
+    if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Refresh available AIs before trying again.')
+    return { preset, fresh }
+  }
+  const choose = async (ctx: Context, preset: AiPreset) => {
+    const session = await control.getActiveSession()
+    const { fresh } = await select(preset, session?.sessionId ?? null)
     await ctx.reply(`${preset.name}\n${presetLabel(preset)}\n${fresh
       ? 'CLI changed: fresh conversation. Files kept; queued work unchanged.'
       : 'Selected for this conversation. Queued work unchanged.'}`)
@@ -106,20 +112,28 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     button(keyboard, 'Back to clients', (next) => list(next))
     await ctx.reply(`${clientLabel(cli)}\nChoose a model`, { reply_markup: keyboard })
   }
-  const save = async (ctx: Context, model: ModelChoice, effort?: string) => {
-    const state = await control.aiState(initial)
+  const saveSelection = async (model: ModelChoice, effort?: string, guard?: ControlGuard) => {
+    const state = (await control.status()).ai
+    if (!state) throw new Error('AI settings not initialized')
     const candidate: AiPreset = { id: randomBytes(8).toString('hex'),
       name: `${model.name}${effort ? ` · ${effort}` : ''}`.slice(0, 80), cli: model.cli, model: model.model, effort }
     const stored = persistedPreset(candidate)
     const existing = state.presets.find((preset) => preset.cli === stored.cli && preset.model === stored.model && preset.effort === stored.effort)
     const preset = existing ?? candidate
     await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
-    await control.savePreset(preset)
-    await choose(ctx, preset)
+    await control.savePreset(preset, guard)
+    return preset
+  }
+  const save = async (ctx: Context, model: ModelChoice, effort?: string) => {
+    await choose(ctx, await saveSelection(model, effort))
   }
   return {
     initial,
     refresh,
+    validate,
+    catalog: () => catalog(),
+    select,
+    saveSelection,
     list,
     async handle(ctx: Context): Promise<boolean> {
       const data = ctx.callbackQuery?.data
