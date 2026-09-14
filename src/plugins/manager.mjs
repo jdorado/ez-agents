@@ -293,7 +293,7 @@ export async function registry(home) {
   return r;
 }
 // The lock protects admission and compose refresh, never a persistent connection.
-export async function prepareCommand(home,alias,args,{revision,exclude}={}) {
+export async function prepareCommand(home,alias,args,{revision,exclude,publish}={}) {
   strings(args);
   return locked(home,async()=>{
     const config=await json(path.join(home,'config.json')),r=await registry(home);
@@ -304,7 +304,7 @@ export async function prepareCommand(home,alias,args,{revision,exclude}={}) {
     const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
     await atomic(record.compose,await compose(config,record,secrets,home));
     const container=`${record.project}-call-${randomUUID()}`;
-    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])]};
+    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])]};
   });
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
@@ -387,8 +387,12 @@ export async function main(args) {
   const [group,action,...rest]=args;
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
+  if(group==='tools'&&action==='serve') {
+    const port=rest.shift();
+    return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1),{publish:port,serve:true});
+  }
   if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>','<registered CLI> ...'],scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');

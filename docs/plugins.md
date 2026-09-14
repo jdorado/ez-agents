@@ -314,3 +314,32 @@ is stopped. The grant applies only to that folder and survives compatible
 upgrades. Rebind without `--writable` to return it to read-only. Package
 descriptors cannot request this grant. Keep one synchronization owner for each
 source; a writable mount alone does not configure synchronization.
+
+## Browser endpoints for connected plugins
+
+`ez tools serve HOST_PORT:CONTAINER_PORT ALIAS ARGS...` runs a plugin's web command
+inside its command container while core handles the existing persistent tool
+protocol. Both ports must be 1024–65535. Publication is always on host 127.0.0.1;
+no plugin manifest can request public ingress. Run the foreground command under
+the host's normal service supervisor if it must survive terminal closure. SIGINT
+or SIGTERM cancels the connection and removes its command container.
+
+The plugin owns HTTP, browser authentication, sessions and static assets. HTTPS
+termination, DNS and forwarding are explicit operator configuration. Plugins may
+use the read-only `tools.owner` core request to check the current paired private
+Telegram user and opaque pairing epoch. This is identity data, not an access grant;
+the plugin must authenticate the requester and recheck identity on protected requests.
+No owner returns null, and no bot token is exposed. Standard plugin CLI operations
+still enforce their normal permissions. See the Voice plugin's README for a client.
+
+To add an optional launcher without replacing Telegram's command menu, set the
+relay environment (then restart the relay):
+
+```dotenv
+EZ_TELEGRAM_WEB_APP={"command":"voice","label":"Voice","url":"https://voice.example.com/"}
+```
+
+The command returns a Mini App button to the authenticated owner in private chat;
+`/menu` includes the same button. Reserved commands cannot be replaced. The HTTPS
+URL must not contain credentials, query parameters or a fragment. This setting
+only registers a launcher; it does not expose a port or authenticate web requests.

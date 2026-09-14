@@ -200,3 +200,9 @@ voice providers need separate verification; CLI success is not GUI evidence.
 
 Beta acceptance: automated tests, packed installs and Docker fixtures only. Live
 provider onboarding and reboot verification are deferred, not marked passed.
+
+### Unreleased plugin web access
+
+- Add explicit loopback-only `tools serve` for connected plugin web commands.
+- Expose live private Telegram owner identity through the read-only connection protocol.
+- Add an optional authenticated private-chat Mini App launcher while retaining standard commands.

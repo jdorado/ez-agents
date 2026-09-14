@@ -4,7 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { registry, prepareCommand, run } from './manager.mjs';
 import { invokeLease } from './workspace-lease.mjs';
 import { nativeTasks,nativeTaskBinding,nativeCommands } from './native-tasks.mjs';
-import {captureDeliveryContext} from '../delivery-context.mjs';
+import {currentDeliveryOwner,captureDeliveryContext} from '../delivery-context.mjs';
 import {commandArtifact} from './connection-artifacts.mjs';
 
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -13,7 +13,7 @@ const maxFrame = 1048576;
 function requestId(value) {if(typeof value!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(value))throw Error('Invalid request id');return value;}
 
 // The local owning connection uses the same installed authority as its bound CLI.
-export function connectionProtocol({readRegistry,execute,executeNative,listNative=nativeCommands,sendClient,sendPlugin,excludedPlugin}) {
+export function connectionProtocol({readRegistry,execute,executeNative,listNative=nativeCommands,readOwner,sendClient,sendPlugin,excludedPlugin}) {
   const active=new Map(),consumed=new Set();let closed=false;
   async function record(alias) {
     const r=await readRegistry(),plugin=r.commands[alias],value=r.plugins[plugin];
@@ -23,6 +23,10 @@ export function connectionProtocol({readRegistry,execute,executeNative,listNativ
   async function perform(req,state) {
     const p=req.params??{};
     if(!object(p))throw Error('Invalid request params');
+    if(req.method==='tools.owner') {
+      if(Object.keys(p).length||!readOwner)throw Error('Owner identity unavailable');
+      await readRegistry();return readOwner();
+    }
     if(req.method==='tools.native.list') {await readRegistry();return listNative();}
     if(req.method==='tools.native') {
       if(Object.keys(p).some(k=>!['command','args'].includes(k)))throw Error('Unknown native request parameter');
@@ -67,8 +71,8 @@ export function connectionProtocol({readRegistry,execute,executeNative,listNativ
       if(reserved.some(k=>k!=='coreRequest'&&k in frame))throw Error('Plugin forged core control frame');
       if(!('coreRequest' in frame)){sendClient(frame);return;}
       const req=frame.coreRequest;if(!object(req))throw Error('Invalid core request');requestId(req.id);
-      if(consumed.has(req.id)||active.size>=8||consumed.size>=10000)throw Error('Duplicate or excessive core request');
-      consumed.add(req.id);
+      if(active.has(req.id)||consumed.has(req.id)||active.size>=8||(req.method!=='tools.owner'&&consumed.size>=10000))throw Error('Duplicate or excessive core request');
+      if(req.method!=='tools.owner')consumed.add(req.id);
       const state={abort:new AbortController()};active.set(req.id,state);
       return perform(req,state).then(result=>{if(!closed)sendPlugin({coreResponse:{id:req.id,result}});},error=>{if(!closed)sendPlugin({coreResponse:{id:req.id,error:error.message}});}).finally(()=>{active.delete(req.id);});
     },
@@ -87,21 +91,34 @@ export function jsonLines(onFrame,onError) {
   return chunk=>{try {buffer+=decoder.write(chunk);if(Buffer.byteLength(buffer)>maxFrame)throw Error('Connection frame limit exceeded');let index;while((index=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(line)onFrame(JSON.parse(line));}}catch(error){onError(error);}};
 }
 
-export async function connect(home,alias,args,{input=process.stdin,output=process.stdout}={}) {
-  const command=await prepareCommand(home,alias,args),abort=new AbortController();let child,protocol,failure;
+export function loopbackPublish(value) {
+  if(typeof value!=='string'||!/^\d{1,5}:\d{1,5}$/.test(value)||value.split(':').some(p=>Number(p)<1024||Number(p)>65535))throw Error('Expected host-port:container-port (1024-65535)');
+  return `127.0.0.1:${value}`;
+}
+
+export async function connect(home,alias,args,{input=process.stdin,output=process.stdout,publish,serve=false}={}) {
+  const command=await prepareCommand(home,alias,args,{...(serve?{publish:loopbackPublish(publish)}:{})}),abort=new AbortController();let child,protocol,failure;
   const config=JSON.parse(await fs.readFile(path.join(home,'config.json'),'utf8'));
   const nativeBinding=config.hostConfig?await nativeTaskBinding(home):undefined;
   const deliveryContext=nativeBinding?await captureDeliveryContext(nativeBinding.env.EZ_CONTROL_DIR,command.plugin,command.revision):undefined;
   const send=(stream,frame)=>{try {const text=JSON.stringify(frame)+'\n';if(stream?.writableLength>maxFrame||Buffer.byteLength(text)>maxFrame)throw Error('Connection backpressure limit exceeded');stream?.write(text);}catch(error){fail(error);}};
   const fail=error=>{failure??=error;abort.abort();protocol?.close();};
   protocol=connectionProtocol({excludedPlugin:command.plugin,readRegistry:async()=>{const r=await registry(home);if(r.commands[alias]!==command.plugin||r.plugins[command.plugin]?.revision!==command.revision)throw Error('Connected plugin changed; reconnect');return r;},
+    readOwner:async()=>{
+      if(!nativeBinding)return null;
+      const owner=await currentDeliveryOwner(nativeBinding.env.EZ_CONTROL_DIR);
+      if(!owner||owner.kind!==undefined||!Number.isSafeInteger(owner.telegramUserId)||owner.telegramUserId<=0||!Number.isSafeInteger(owner.telegramChatId)||owner.telegramChatId<=0||typeof owner.pairedAt!=='string'||!Number.isFinite(Date.parse(owner.pairedAt)))return null;
+      return {telegramUserId:owner.telegramUserId,pairedAt:JSON.stringify([owner.id,owner.generation,owner.pairedAt,owner.telegramLinkedAt,owner.telegramChatId])};
+    },
     listNative:()=>nativeCommands().map(item=>({...item,available:!!nativeBinding&&(item.command!=='message'||!!deliveryContext)})),
     executeNative:(args,options)=>nativeTasks(home,args,{...options,deliveryContext}),
     execute:async(a,argv,options)=>{const release=options.invocation?await invokeLease(home):undefined;try {const c=await prepareCommand(home,a,argv,{revision:options.revision,exclude:command.plugin});if(options.signal.aborted)throw Error('Request cancelled');const execute=overrides=>run(c.argv,{...options,...overrides,container:c.container,capture:true,timeoutMs:30000,maxBytes:262144});return options.output===undefined?await execute({}):await commandArtifact(config.workspace,options.output,execute,{signal:options.signal});}finally{await release?.();}},
     sendClient:frame=>send(output,frame),sendPlugin:frame=>send(child?.stdin,frame)});
   const onInput=jsonLines(frame=>protocol.client(frame),fail),onEnd=()=>{protocol.close();abort.abort();};
+  const onSignal=()=>{protocol.close();abort.abort();};
+  if(serve)for(const signal of ['SIGINT','SIGTERM'])process.on(signal,onSignal);
   try {
-    const result=await run(command.argv,{container:command.container,capture:true,maxBytes:262144,signal:abort.signal,onStdout:jsonLines(frame=>protocol.plugin(frame),fail),onStart:c=>{child=c;input.on('data',onInput);input.once('end',onEnd);input.resume();}});
+    const result=await run(command.argv,{container:command.container,capture:true,maxBytes:262144,signal:abort.signal,onStdout:jsonLines(frame=>protocol.plugin(frame),fail),onStart:c=>{child=c;if(!serve){input.on('data',onInput);input.once('end',onEnd);input.resume();}}});
     if(failure)throw failure;process.exitCode=result.code;
-  } finally {input.off('data',onInput);input.off('end',onEnd);input.pause();protocol.close();}
+  } finally {if(serve)for(const signal of ['SIGINT','SIGTERM'])process.off(signal,onSignal);input.off('data',onInput);input.off('end',onEnd);input.pause();protocol.close();}
 }

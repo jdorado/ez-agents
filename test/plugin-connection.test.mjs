@@ -87,3 +87,17 @@ test('startup recovers dead native leases but preserves live owners and surfaces
     await fs.writeFile(file,'{}');await assert.rejects(recoverNativeLease(dir),/Invalid/);await fs.access(file);
   }finally{await fs.rm(dir,{recursive:true,force:true});}
 });
+
+test('owner discovery is read-only, live and rejects caller-selected identity',async()=>{
+  let owner={telegramUserId:42,pairedAt:'epoch'};
+  const f=fixture({readOwner:async()=>owner});
+  await f.request('tools.owner');assert.deepEqual(f.plugin.at(-1).coreResponse.result,owner);
+  owner=null;await f.request('tools.owner',{},'second');assert.equal(f.plugin.at(-1).coreResponse.result,null);
+  await f.request('tools.owner',{telegramUserId:43},'forged');assert.match(f.plugin.at(-1).coreResponse.error,/unavailable/);
+  assert.equal(f.calls.length,0);
+});
+test('web publication accepts only explicit bounded loopback port mapping',async()=>{
+  const {loopbackPublish}=await import('../src/plugins/connection.mjs');
+  assert.equal(loopbackPublish('8791:8080'),'127.0.0.1:8791:8080');
+  for(const value of ['80:8080','8791:0','8791:65536','0.0.0.0:8791:8080','8791:8080/udp','$(x)',''])assert.throws(()=>loopbackPublish(value));
+});

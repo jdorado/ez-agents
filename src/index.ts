@@ -605,7 +605,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   ]
   // Keep the retired command from becoming an agent prompt while old clients catch up.
   const retiredCommands = ['/settings']
-  const commands = mainCommands
+  const launcher = config.webLauncher
+  const commands = [...mainCommands, ...(launcher ? [{ command: launcher.command, description: launcher.label }] : [])]
   const controlCommand = (text?: string) => /^\/rename(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text?.trim() ?? '')
     ? '/rename' : text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
   const statusKeyboard = () => new InlineKeyboard()
@@ -736,6 +737,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
 
+    if (launcher && text === `/${launcher.command}`) {
+      if (ctx.chat.type !== 'private' || (await control.status()).owner?.kind === 'group') return
+      await ctx.reply(launcher.label, { reply_markup: new InlineKeyboard().webApp(launcher.label, launcher.url) })
+      return
+    }
+
     if (text === '/chats') {
       await conversationMenu.list(ctx)
       return
@@ -814,6 +821,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
     if (text === '/menu') {
       const menuKeyboard = mainKeyboard()
+      if (launcher && ctx.chat.type === 'private' && (await control.status()).owner?.kind !== 'group') menuKeyboard.row().webApp(launcher.label, launcher.url)
       await ctx.reply('⚡ <b>Ezenciel Agent Menu</b>\nSelect an action below:', {
         parse_mode: 'HTML',
         reply_markup: menuKeyboard,
