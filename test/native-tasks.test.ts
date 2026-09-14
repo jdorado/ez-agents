@@ -26,6 +26,8 @@ test('native tasks use verified control binding, sanitized environment and uncha
     assert.equal((await nativeTasks(home,['remove','native-fixture'])).code,0)
     await assert.rejects(nativeTasks(home,['--help'],{signal:AbortSignal.abort()}),/cancelled/)
     await assert.rejects(nativeTasks(home,['bad\0argument']),/literal/)
+    for(const input of [['--text-file','/private/secret'],['--text-file=/private/secret']])
+      await assert.rejects(nativeTasks(home,['create','--now',...input]),/inline --text/)
     await fs.writeFile(hostConfig,JSON.stringify({...host,agents:[{...host.agents[0],workspace:root}]}))
     await assert.rejects(nativeTaskBinding(home),/does not match/)
     await fs.writeFile(path.join(home,'config.json'),JSON.stringify({schemaVersion:1,workspace}))

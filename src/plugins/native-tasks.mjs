@@ -20,6 +20,7 @@ export async function nativeTaskBinding(home,environment=process.env) {
 
 export async function nativeTasks(home,args,{signal}={}) {
   if(!Array.isArray(args)||args.length>100||args.some(a=>typeof a!=='string'||a.includes('\0')||a.length>8192))throw Error('Invalid literal scheduler arguments');
+  if(args.some(a=>a==='--text-file'||a.startsWith('--text-file=')))throw Error('Native task connections require inline --text, not host file input');
   const binding=await nativeTaskBinding(home);
   if(signal?.aborted)throw Error('Request cancelled');
   const entry=fileURLToPath(new URL('../../bin/ezenciel-agents-schedule.mjs',import.meta.url));
