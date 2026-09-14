@@ -31,6 +31,23 @@ software maintenance, consult `work/deployments.md` when present and the install
 `ez updates` inventories core/plugins only. Saved authority and stop conditions
 apply to application repairs and upgrades too.
 
+## Fast KISS iterations
+
+Deliver the smallest useful product increment and verify its main user path.
+Once that works within the architecture and authority boundaries, complete the
+authorized delivery instead of spending disproportionate effort on rare,
+low-impact edge cases. Prefer fast feedback and a focused follow-up fix over
+speculative abstractions, fallback layers or exhaustive test matrices.
+
+Scale validation to likelihood, impact and reversibility: test the changed
+behavior and relevant failure boundaries, run required checks, then stop when
+they pass. Broaden testing only for a concrete unresolved risk or new failure.
+Architecture violations, authorization/secret exposure, data loss and uncertain
+external writes remain blockers even when rare; minor recoverable limitations
+can be stated briefly and deferred. Reviewers distinguish those blockers from
+optional follow-ups and do not hold a working increment for hypothetical polish.
+Measure progress by usable outcomes and feedback, not code or test volume.
+
 ## Core and plugin contributions
 
 When diagnosing or changing Ez core/plugins, read the current core README's
