@@ -3,7 +3,9 @@ import { needsFailureReview } from './failure.js'
 import { mkdir, readFile, readdir, writeFile, rename, link, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
-import type { Owner } from './control-state.js'
+import { type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
+import { validApplicationOrigin } from './application-origin.js'
+import { ApplicationBindings } from './application-channel.js'
 import { assertId, ownsRun } from './identity.js'
 import { type ExecutionChoice, isExecutionChoice, persistedPreset } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
@@ -14,6 +16,7 @@ export type Schedule = {
   when?: 'unreviewed-failures'
   version: 1; id: string; revision: string; name: string; text: string; trigger: Trigger; enabled: boolean
   owner: Owner; execution: ExecutionChoice
+  delivery?: { bindingId: string; scope: string }
 }
 export type ActiveSchedule = Schedule & { nextAt: number | null; runState?: 'queued' | 'running' }
 export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string; originRunId?: string }
@@ -43,7 +46,8 @@ export class Scheduler {
     const s = JSON.parse(await readFile(join(this.dir,assertId(id)+'.json'),'utf8')) as Schedule
     if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt,originRunId:s.originRunId}) ||
       (s.when !== undefined && s.when !== 'unreviewed-failures') || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' || !s.text.trim() ||
-      !Number.isSafeInteger(s.owner?.telegramUserId) || !Number.isSafeInteger(s.owner?.telegramChatId) || !isExecutionChoice(s.execution))
+      !validOwner(s.owner) || !isExecutionChoice(s.execution) ||
+      (s.delivery !== undefined && !validApplicationOrigin({...s.delivery, requestId: s.id})))
       throw new Error('Invalid schedule record')
     validateTrigger(s.trigger)
     return s
@@ -113,8 +117,8 @@ export class Scheduler {
     if (!run.scheduled) return false
     try {
       const s = await this.get(run.scheduled.id)
-      return s.revision === run.scheduled.revision && s.owner.pairedAt === owner.pairedAt &&
-        s.owner.telegramUserId === owner.telegramUserId && s.owner.telegramChatId === owner.telegramChatId
+      return s.revision === run.scheduled.revision && sameOwner(s.owner, owner) &&
+        (!!s.delivery || ((s.owner.telegramLinkedAt ?? s.owner.pairedAt) === (owner.telegramLinkedAt ?? owner.pairedAt) && s.owner.telegramChatId === owner.telegramChatId))
     } catch { return false }
   }
   async cancel(runId: string) {
@@ -139,7 +143,11 @@ export class Scheduler {
   }
   async tick(owner: Schedule['owner'], runs: RunStore, now = Date.now()) {
     for (const s of await this.list()) {
-      if (!s.enabled || s.owner.telegramUserId !== owner.telegramUserId || s.owner.telegramChatId !== owner.telegramChatId || s.owner.pairedAt !== owner.pairedAt) continue
+      if (!s.enabled || !sameOwner(s.owner, owner)) continue
+      if (s.delivery) {
+        const binding = (await new ApplicationBindings(this.controlDir).list()).find(b => b.bindingId === s.delivery!.bindingId)
+        if (!binding || !sameOwner(binding.owner, owner)) continue
+      } else if (!owner.telegramChatId || owner.telegramChatId !== s.owner.telegramChatId || owner.telegramUserId !== s.owner.telegramUserId || (owner.telegramLinkedAt ?? owner.pairedAt) !== (s.owner.telegramLinkedAt ?? s.owner.pairedAt)) continue
       const cursor = join(this.dir,`${s.id}.${s.revision}.cursor`)
       try {
         const next = await this.pendingOccurrence(s)
@@ -152,8 +160,10 @@ export class Scheduler {
         if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && ownsRun(owner, r) && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
           await atomic(cursor,{next:future}); continue
         }
-        await runs.create({id:scheduledRunId(s,next),chatId:s.owner.telegramChatId,
-          telegramUserId:s.owner.telegramUserId,texts:[s.text],execution:s.execution,
+        await runs.create({id:scheduledRunId(s,next),
+          ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
+          ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
+          texts:[s.text],execution:s.execution,
           scheduled:{id:s.id,revision:s.revision,dueAt:new Date(next).toISOString(),pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}})
         // A restart between run creation and this cursor write sees the same occurrence ID.
         await atomic(cursor,{next:future})

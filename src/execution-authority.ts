@@ -22,6 +22,6 @@ export async function requireOwnerExecution(controlDir: string, runId: string): 
   const owner = (await new ControlStore(controlDir, 900_000).status()).owner
   const reason = executionBlockReason(run, owner)
   if (reason) throw new Error(`Execution blocked: ${reason}`)
-  if (run.application) await new ApplicationBindings(controlDir).authorize(run)
+  if (run.application || run.delivery) await new ApplicationBindings(controlDir).authorize(run)
   return run
 }

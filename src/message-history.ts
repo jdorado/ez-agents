@@ -12,7 +12,7 @@ export async function deliveredMessages(controlDir: string, runId: string, optio
   if (options.messageId !== undefined && (!Number.isSafeInteger(options.messageId) || options.messageId < 1))
     throw new Error('Message ID must be a positive integer')
   const caller = await requireOwnerExecution(controlDir, runId)
-  if (caller.application) throw new Error('History requires a Telegram owner run')
+  if (caller.application || caller.delivery) throw new Error('History requires a Telegram owner run')
   const owner = (await new ControlStore(controlDir, 900_000).status()).owner
   if (!ownsRun(owner, caller)) throw new Error('Owner binding changed')
   const pairedAt = Date.parse(owner!.pairedAt)

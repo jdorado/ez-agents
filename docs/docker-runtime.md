@@ -51,6 +51,21 @@ between jobs after adding a registry binding.
 
 ## Operate and verify
 
+Root-started containers default to executor UID/GID `1000:1000` and relay real
+UID `1001`. To preserve an existing private workspace's ownership, set
+`EZ_RUNTIME_UID`, `EZ_RUNTIME_GID` and, if necessary, `EZ_RELAY_UID` in the
+deployment environment. IDs must be positive decimal integers; the relay real
+UID must differ from the executor UID. The entrypoint retains its secret file
+descriptor and privilege separation, then runs the executor with the configured
+UID. It changes ownership only on the top-level control, home and workspace
+directories; it does not recursively change existing data. Provision nested
+files/mounts for that UID before starting. These settings apply to root startup;
+an explicit Docker `user` still controls an already non-root process.
+
+Changing IDs is an operator installation step, not a new tenant-isolation
+mechanism. Keep private mounts and secrets isolated as described above. This
+option does not change native sandbox or channel support.
+
 ```sh
 export EZ_DEPLOYMENT_DIR=/absolute/private/agents/family
 bin/ezenciel-agents-docker up -d --wait

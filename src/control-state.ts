@@ -4,10 +4,32 @@ import path from 'node:path'
 import { isPreset, persistedPreset, type AiPreset, type ExecutionChoice } from './ai.js'
 
 export type Owner = {
+  id?: string
+  generation?: string
   kind?: 'group'
-  telegramUserId: number
-  telegramChatId: number
+  telegramUserId?: number
+  telegramChatId?: number
+  telegramLinkedAt?: string
   pairedAt: string
+}
+
+export type TelegramOwner = Owner & { telegramUserId: number; telegramChatId: number }
+export const telegramOwner = (owner: Owner | null): TelegramOwner | null =>
+  owner && Number.isSafeInteger(owner.telegramUserId) && Number.isSafeInteger(owner.telegramChatId) ? owner as TelegramOwner : null
+export const ownerId = (owner: Owner): string => owner.id ?? `telegram:${owner.telegramUserId}:${owner.telegramChatId}`
+export const ownerEpoch = (owner: Owner): string => owner.generation ?? owner.pairedAt
+export const sameOwner = (left: Owner, right: Owner | null): boolean =>
+  !!right && ownerId(left) === ownerId(right) && ownerEpoch(left) === ownerEpoch(right)
+export const validOwner = (owner: unknown): owner is Owner => {
+  if (!owner || typeof owner !== 'object') return false
+  const p = owner as Owner
+  const linked = p.telegramUserId !== undefined || p.telegramChatId !== undefined
+  return typeof p.pairedAt === 'string' && Number.isFinite(Date.parse(p.pairedAt)) &&
+    (p.generation === undefined || typeof p.generation === 'string' && /^[a-f0-9-]{36}$/.test(p.generation)) &&
+    (p.telegramLinkedAt === undefined || typeof p.telegramLinkedAt === 'string') &&
+    (p.id === undefined ? linked : typeof p.id === 'string' && /^[a-zA-Z0-9_:.-]{1,200}$/.test(p.id)) &&
+    (!linked ? p.kind === undefined : Number.isSafeInteger(p.telegramUserId) && p.telegramUserId! > 0 &&
+      Number.isSafeInteger(p.telegramChatId) && (p.kind === 'group' ? p.telegramChatId! < 0 : p.kind === undefined && p.telegramChatId! > 0))
 }
 
 export type PairingRequest = {
@@ -30,6 +52,8 @@ export type SessionState = {
   applicationScope?: string
   telegramShared?: boolean
 }
+
+export type ControlGuard = { owner: Owner; authorize: () => Promise<unknown>; expectedSession?: string | null; applicationScope?: string }
 
 type ControlState = {
   version: 1
@@ -58,7 +82,7 @@ const isState = (value: unknown): value is ControlState => {
     if (!person || typeof person !== 'object') return false
     const p = person as Owner
     return isPositiveId(p.telegramUserId) && (p.kind === 'group'
-      ? Number.isSafeInteger(p.telegramChatId) && p.telegramChatId < 0
+      ? Number.isSafeInteger(p.telegramChatId) && p.telegramChatId! < 0
       : p.kind === undefined && isPositiveId(p.telegramChatId))
   }
   const session = (s: SessionState) => s && /^[0-9a-f-]{36}$/i.test(s.sessionId) && typeof s.hasStarted === 'boolean' &&
@@ -71,7 +95,7 @@ const isState = (value: unknown): value is ControlState => {
     candidate.version === 1 &&
     Array.isArray(candidate.pending) &&
     candidate.pending.every((p) => identity(p) && Number.isFinite(Date.parse(p.expiresAt))) &&
-    (candidate.owner === null || identity(candidate.owner)) &&
+    (candidate.owner === null || validOwner(candidate.owner)) &&
     (candidate.ai === undefined || (Array.isArray(candidate.ai.presets) &&
       candidate.ai.presets.every(isPreset) &&
       candidate.ai.presets.some((p) => p.id === candidate.ai!.defaultId) &&
@@ -91,6 +115,21 @@ const rememberPreset = (state: ControlState) => {
   const preset = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
   if (state.activeSession && preset && state.activeSession.cli === preset.cli)
     state.activeSession.preset = preset
+}
+
+const currentApplicationSession = (state: ControlState, scope: string) =>
+  [state.activeSession, ...(state.sessions ?? [])].find(session => session?.applicationScope === scope && !session.archived)
+
+const requireControlGuard = async (state: ControlState, guard?: ControlGuard) => {
+  if (!guard) return
+  // The callback may inspect binding authority, but must not acquire this store's lock.
+  await guard.authorize()
+  const expected = guard.owner
+  if (!sameOwner(expected, state.owner)) throw new Error('Control owner changed. Refresh the connection.')
+  const current = guard.applicationScope ? currentApplicationSession(state, guard.applicationScope) : state.activeSession
+  if (guard.applicationScope && current && (current.telegramShared || current === state.activeSession))
+    throw new Error('Application scope is shared; use shared controls')
+  if (guard.expectedSession !== undefined && (current?.sessionId ?? null) !== guard.expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
 }
 
 const wait = (milliseconds: number): Promise<void> =>
@@ -179,7 +218,7 @@ export class ControlStore {
       throw new Error('Telegram identity must be a positive numeric ID')
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
-      if (state.owner) return 'owner-exists'
+      if (telegramOwner(state.owner)) return 'owner-exists'
       if (
         state.pending.some(
           (request) => request.telegramUserId === telegramUserId && request.telegramChatId === telegramChatId,
@@ -207,7 +246,7 @@ export class ControlStore {
     return this.withLock(async () => {
       const state = await this.readState()
       if (state.owner) throw new Error('An owner already exists; application bootstrap cannot replace it')
-      const owner: Owner = { telegramUserId: operatorId, telegramChatId: operatorId, pairedAt: new Date(this.clock()).toISOString() }
+      const owner: Owner = { generation: crypto.randomUUID(), telegramUserId: operatorId, telegramChatId: operatorId, pairedAt: new Date(this.clock()).toISOString() }
       state.owner = owner
       state.pending = []
       await this.writeState(state)
@@ -215,20 +254,50 @@ export class ControlStore {
     })
   }
 
+  async registerOwner(id: string): Promise<Owner> {
+    if (!/^[a-zA-Z0-9_:.-]{1,200}$/.test(id)) throw new Error('Invalid owner ID')
+    return this.withLock(async () => {
+      const state = await this.readState()
+      if (state.owner) {
+        if (ownerId(state.owner) !== id) throw new Error('Installation already has a different owner')
+        return state.owner
+      }
+      const bindings = await readFile(path.join(path.dirname(this.statePath), 'application-bindings.json'), 'utf8')
+        .then(text => JSON.parse(text), error => { if (error.code === 'ENOENT') return []; throw error })
+      if (!Array.isArray(bindings) || bindings.some(binding => !validOwner(binding?.owner)) || state.activeSession || state.sessions?.length)
+        throw new Error('Existing unowned state requires explicit ownership recovery')
+      state.owner = {id, generation: crypto.randomUUID(), pairedAt: new Date(this.clock()).toISOString()}
+      await this.writeState(state)
+      return state.owner
+    })
+  }
+
+  async unlinkTelegram(): Promise<void> {
+    await this.withLock(async () => {
+      const state = await this.readState()
+      if (!state.owner) throw new Error('No installation owner')
+      state.owner = {id: ownerId(state.owner), generation: state.owner.generation, pairedAt: state.owner.pairedAt}
+      state.pending = []
+      await this.writeState(state)
+    })
+  }
+
   async approveOwner(telegramUserId: number, group = false): Promise<Owner> {
     if (!(group ? Number.isSafeInteger(telegramUserId) && telegramUserId < 0 : isPositiveId(telegramUserId))) throw new Error('Supply a positive user ID or negative group ID')
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
-      if (state.owner) throw new Error('An owner is already paired; revoke locally before replacing it')
+      if (telegramOwner(state.owner)) throw new Error('An owner is already paired; unlink locally before replacing its Telegram channel')
       const request = state.pending.find((candidate) => group
         ? candidate.kind === 'group' && candidate.telegramChatId === telegramUserId
         : candidate.kind === undefined && candidate.telegramUserId === telegramUserId)
       if (!request) throw new Error('No active pairing request exists for that Telegram user ID')
       const owner: Owner = {
+        generation: state.owner ? state.owner.generation : crypto.randomUUID(),
+        ...(state.owner ? {id: ownerId(state.owner), telegramLinkedAt: crypto.randomUUID()} : {}),
         ...(group ? {kind: 'group' as const} : {}),
         telegramUserId: request.telegramUserId,
         telegramChatId: request.telegramChatId,
-        pairedAt: new Date(this.clock()).toISOString(),
+        pairedAt: state.owner?.pairedAt ?? new Date(this.clock()).toISOString(),
       }
       state.owner = owner
       state.pending = []
@@ -289,9 +358,11 @@ export class ControlStore {
     return [...(state.activeSession ? [state.activeSession] : []), ...(state.sessions ?? []).filter(session => !session.applicationScope || session.telegramShared).slice().reverse()]
   }
 
-  async switchSession(sessionId: string): Promise<SessionState> {
+  async switchSession(sessionId: string, expectedSession?: string | null, guard?: ControlGuard): Promise<SessionState> {
     return this.withLock(async () => {
       const state = await this.readState()
+      await requireControlGuard(state, guard)
+      if (expectedSession !== undefined && (state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
       if (state.activeSession?.sessionId === sessionId) return state.activeSession
       const session = state.sessions?.find(s => s.sessionId === sessionId)
       if (!session || session.archived || (session.applicationScope && !session.telegramShared)) throw new Error('Conversation unavailable. Open /chats again.')
@@ -346,9 +417,11 @@ export class ControlStore {
     })
   }
 
-  async resetSession(): Promise<SessionState> {
+  async resetSession(expectedSession?: string | null, guard?: ControlGuard): Promise<SessionState> {
     return this.withLock(async () => {
       const state = await this.readState()
+      await requireControlGuard(state, guard)
+      if (expectedSession !== undefined && (state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
       const next: SessionState = {
         sessionId: crypto.randomUUID(),
         hasStarted: false,
@@ -411,7 +484,7 @@ export class ControlStore {
       const state = await this.readState()
       state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
       state.sessions ??= []
-      const previous = state.activeSession?.applicationScope === scope ? state.activeSession : state.sessions.find(session => session.applicationScope === scope)
+      const previous = currentApplicationSession(state, scope)
       if (expectedNativeSessionId !== undefined && previous?.nativeSessionId !== expectedNativeSessionId) throw new Error('Application request conflicts with native session; import the existing scope before cutover')
       const activate = (session: SessionState) => {
         if (!shareTelegram) return
@@ -442,6 +515,37 @@ export class ControlStore {
     })
   }
 
+  async applicationSession(scope: string): Promise<SessionState | undefined> {
+    return currentApplicationSession(await this.status(), scope) ?? undefined
+  }
+
+  async changeApplicationSession(scope: string, guard: ControlGuard, preset?: AiPreset): Promise<SessionState> {
+    if (!/^[a-f0-9]{64}$/.test(scope) || guard.applicationScope !== scope || guard.expectedSession === undefined)
+      throw new Error('Invalid application scope control')
+    return this.withLock(async () => {
+      const state = await this.readState()
+      await requireControlGuard(state, guard)
+      const previous = currentApplicationSession(state, scope)
+      if (previous && (previous.telegramShared || previous === state.activeSession))
+        throw new Error('Application scope is shared; use shared controls')
+      const nextPreset = preset ?? state.ai?.presets.find(item => item.id === state.ai!.defaultId)
+      if (!nextPreset || !isPreset(nextPreset) || nextPreset.cli === 'agy') throw new Error('Invalid application AI selection')
+      if (preset && previous?.cli === preset.cli) {
+        previous.preset = persistedPreset(preset)
+        await this.writeState(state)
+        return previous
+      }
+      // Retire the binding, not its native session. Admitted work still resolves
+      // the old immutable session ID; private history stays absent from /chats.
+      if (previous) previous.archived = true
+      const next: SessionState = {sessionId:crypto.randomUUID(), hasStarted:false,
+        cli:nextPreset.cli, preset:persistedPreset(nextPreset), applicationScope:scope}
+      ;(state.sessions ??= []).push(next)
+      await this.writeState(state)
+      return next
+    })
+  }
+
   async executionSession(choice: ExecutionChoice): Promise<SessionState> {
     const state = await this.status()
     const session = state.activeSession?.sessionId === choice.sessionId ? state.activeSession
@@ -469,11 +573,12 @@ export class ControlStore {
     })
   }
 
-  async savePreset(preset: AiPreset): Promise<void> {
+  async savePreset(preset: AiPreset, guard?: ControlGuard): Promise<void> {
     if (!isPreset(preset)) throw new Error('Invalid AI preset')
     assertEffort(preset.effort, preset.model, preset.cli)
     await this.withLock(async () => {
       const state = await this.readState()
+      await requireControlGuard(state, guard)
       if (!state.ai) throw new Error('AI settings not initialized')
       if (state.ai.presets.length >= 12 && !state.ai.presets.some((p) => p.id === preset.id))
         throw new Error('Keep it small: at most 12 saved AIs.')
@@ -482,9 +587,10 @@ export class ControlStore {
     })
   }
 
-  async selectPreset(id: string, expectedSession: string | null, fresh = false): Promise<boolean> {
+  async selectPreset(id: string, expectedSession: string | null, fresh = false, guard?: ControlGuard): Promise<boolean> {
     return this.withLock(async () => {
       const state = await this.readState()
+      await requireControlGuard(state, guard)
       const ai = state.ai
       const preset = ai?.presets.find((p) => p.id === id)
       if (!ai || !preset) throw new Error('Saved AI no longer exists')
