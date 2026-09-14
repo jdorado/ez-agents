@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0-beta.30
+
+- Bind installed native command launchers to the deployment's canonical control
+  directory. This makes application registration use the owning agent's state
+  and prevents caller environment variables from redirecting that authority.
+
 ## 0.1.0-beta.29
 
 - Republish the beta.28 Voice connection and web-serving contract at a monotonic
