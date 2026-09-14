@@ -6,7 +6,7 @@ import os from 'node:os'
 import {createRelay} from '../src/index.js'
 import {ControlStore} from '../src/control-state.js'
 import {RunStore} from '../src/runs.js'
-import {captureDeliveryContext} from '../src/delivery-context.mjs'
+import {authorizeDeliveryContext,captureDeliveryContext} from '../src/delivery-context.mjs'
 import {nativeTasks,nativeTaskBinding} from '../src/plugins/native-tasks.mjs'
 
 test('authenticated connection sends text and files through ordinary outbox receipts without a native run',async()=>{
@@ -39,4 +39,26 @@ test('authenticated connection sends text and files through ordinary outbox rece
     await assert.rejects(nativeTasks(home,['--text','denied'],{command:'message',deliveryContext:context}),/revoked/)
     await assert.rejects(store.ownerDeliveryReceipt(context,queued.id),/revoked/)
   } finally {await relay.stop();await fs.rm(root,{recursive:true,force:true})}
+})
+
+test('delivery authority cannot revive after Telegram relink or same-time owner replacement',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'ez-channel-delivery-epoch-'))
+  t.after(()=>fs.rm(root,{recursive:true,force:true}))
+  const control=new ControlStore(root,60000,()=>Date.parse('2026-09-14T00:00:00Z'))
+  await control.requestPairing(101,101)
+  await control.approveOwner(101)
+  const original=(await captureDeliveryContext(root,'voice','revision'))!
+
+  await control.unlinkTelegram()
+  await control.requestPairing(101,101)
+  await control.approveOwner(101)
+  const relinked=(await control.status()).owner!
+  assert.throws(()=>authorizeDeliveryContext(original,relinked),/revoked/)
+
+  const relinkedContext=(await captureDeliveryContext(root,'voice','revision'))!
+  await control.revokeOwner()
+  await control.requestPairing(101,101)
+  await control.approveOwner(101)
+  const replacement=(await control.status()).owner
+  assert.throws(()=>authorizeDeliveryContext(relinkedContext,replacement),/revoked/)
 })
