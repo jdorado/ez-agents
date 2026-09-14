@@ -22,7 +22,8 @@ Core answers `{"coreResponse":{"id":"r1","result":...}}` or `error` (a string).
 
 `tools.native` invokes only the shipped `ezenciel-agents-schedule` CLI, using the
 owning host's verified workspace/control binding and a whitelisted environment.
-Read `--help` for its unchanged command contract. `create --now` submits standard
+Read `--help` for its command contract; this connection requires inline `--text`
+and rejects `--text-file` so it cannot read arbitrary host files. `create --now` submits standard
 asynchronous native work; it does not launch a second runner or hold the workspace
 lease while waiting. The native agent may retrieve a Library original, inspect it
 with its existing image/PDF tools, and save source-linked searchable text.
