@@ -611,3 +611,20 @@ test('older conversation names come from owner messages and detail keeps archive
     assert.deepEqual(f.keyboards.at(-1)![0], [{text: 'Archive this conversation', callback_data: `chat:archive:${old.sessionId}`}])
   } finally { await f.close() }
 })
+
+
+test('web launcher is private-owner-only and bypasses native intake without replacing controls', async () => {
+  const f=await fixture({webLauncher:{command:'voice',label:'Voice',url:'https://voice.example/'}})
+  try {
+    const stranger=message(1,'/voice');stranger.message!.from!.id=202
+    await f.relay.bot.handleUpdate(stranger)
+    assert.equal(f.keyboards.length,0)
+    await f.relay.bot.handleUpdate(message(2,'/voice'))
+    assert.deepEqual(f.keyboards.at(-1),[[{text:'Voice',web_app:{url:'https://voice.example/'}}]])
+    await f.relay.bot.handleUpdate(message(3,'/menu'))
+    assert.deepEqual(f.keyboards.at(-1)!.flat().map(b=>b.text),['New conversation','Conversations','Choose AI','Work status','Voice'])
+    await f.relay.drainInbox(true);assert.equal(f.launched.length,0)
+    await new ControlStore(f.dir,1000).revokeOwner()
+    const before=f.keyboards.length;await f.relay.bot.handleUpdate(message(4,'/voice'));assert.equal(f.keyboards.length,before)
+  } finally {await f.close()}
+})

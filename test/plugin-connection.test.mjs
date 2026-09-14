@@ -101,3 +101,14 @@ test('web publication accepts only explicit bounded loopback port mapping',async
   assert.equal(loopbackPublish('8791:8080'),'127.0.0.1:8791:8080');
   for(const value of ['80:8080','8791:0','8791:65536','0.0.0.0:8791:8080','8791:8080/udp','$(x)',''])assert.throws(()=>loopbackPublish(value));
 });
+
+test('channel-neutral owner does not require a Telegram delivery context',async()=>{
+  const {captureDeliveryContext}=await import('../src/delivery-context.mjs');
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'ez-owner-web-'));
+  try {
+    await fs.writeFile(path.join(root,'control-state.json'),JSON.stringify({version:1,owner:{id:'owner',generation:'epoch',pairedAt:new Date().toISOString()}}));
+    assert.equal(await captureDeliveryContext(root,'voice','revision'),undefined);
+    await fs.writeFile(path.join(root,'control-state.json'),JSON.stringify({version:1,owner:{telegramUserId:42,pairedAt:new Date().toISOString()}}));
+    await assert.rejects(captureDeliveryContext(root,'voice','revision'),/invalid/);
+  }finally{await fs.rm(root,{recursive:true,force:true});}
+});

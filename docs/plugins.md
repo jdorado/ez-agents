@@ -333,7 +333,7 @@ No owner returns null, and no bot token is exposed. Standard plugin CLI operatio
 still enforce their normal permissions. See the Voice plugin's README for a client.
 
 To add an optional launcher without replacing Telegram's command menu, set the
-relay environment (then restart the relay):
+relay Compose environment or `.env` (then recreate the relay container):
 
 ```dotenv
 EZ_TELEGRAM_WEB_APP={"command":"voice","label":"Voice","url":"https://voice.example.com/"}
