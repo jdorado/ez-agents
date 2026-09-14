@@ -41,6 +41,16 @@ async function fixture(t) {
  const call=(...args)=>exec(process.execPath,[bin,'--home',home,...args],{env});
  return {root,source,home,deploymentDir,workspace,control,hostConfig,fake,log,manifest,deployment,env,call};
 }
+test('persistent connection reuses one container and releases registry lock between frames',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nif(process.argv[2]==='container')process.exit(0);require('readline').createInterface({input:process.stdin}).on('line',line=>{const f=JSON.parse(line);console.log(JSON.stringify(f.coreResponse?{reply:f.coreResponse}:{coreRequest:{id:f.id,method:'tools.list',params:{}}}));});`,{mode:0o700});
+ const child=spawn(process.execPath,[bin,'--home',f.home,'tools','connect','sample','connect'],{env:f.env,stdio:['pipe','pipe','pipe']});t.after(()=>child.kill('SIGKILL'));
+ const frame=async id=>{const output=once(child.stdout,'data');child.stdin.write(JSON.stringify({id})+'\n');return JSON.parse((await output)[0].toString());};
+ assert.deepEqual((await frame('first')).reply.result,[]);
+ await locked(f.home,async()=>{});
+ assert.deepEqual((await frame('second')).reply.result,[]);
+ child.stdin.end();await once(child,'close');
+});
 test('catalog paths resolve relative to the catalog and pin each new agent independently',async t=>{
  const f=await fixture(t),catalog=path.join(f.root,'defaults.json');
  await fs.writeFile(catalog,JSON.stringify({sample:'./source'}));
