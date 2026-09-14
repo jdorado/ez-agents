@@ -6,7 +6,7 @@ import {authorizeDeliveryContext,currentDeliveryOwner} from '../delivery-context
 
 export const nativeCommands=()=>[
   {command:'schedule',description:'Standard native agent task scheduling and status. Read --help.'},
-  {command:'message',description:'Send text, voice or a workspace document to the paired owner and wait for its delivery receipt. Read --help.',limitations:['History requires a native run; inline text only.']},
+  {command:'message',description:"Send text, voice or a workspace document to the paired owner's Telegram chat and wait for its Telegram delivery receipt. Read --help.",limitations:['History requires a native run; inline text only.']},
 ];
 
 export async function nativeTaskBinding(home,environment=process.env) {
