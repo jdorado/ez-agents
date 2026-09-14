@@ -22,9 +22,9 @@ test('discovery follows installed registry; self and missing aliases are unavail
   assert.equal(f.calls.length,0);
 });
 test('literal invocation requires exact client approval; denial, expiry, stale revision never execute',async()=>{
-  const f=fixture({approvalMs:15});f.request('tools.invoke',{alias:'notes',args:['read','a; $(x)']});await tick();assert.equal(f.calls.length,0);
+  const f=fixture();f.request('tools.invoke',{alias:'notes',args:['read','a; $(x)']});await tick();assert.equal(f.calls.length,0);
   assert.deepEqual(f.client[0].coreApproval.args,['read','a; $(x)']);f.protocol.client({coreApprove:{id:'r1',approved:false}});await tick();assert.match(f.plugin[0].coreResponse.error,/denied/);
-  f.request('tools.invoke',{alias:'notes',args:[]},'r2');await new Promise(r=>setTimeout(r,25));assert.match(f.plugin.at(-1).coreResponse.error,/expired/);
+  const expired=fixture({approvalMs:1});await expired.request('tools.invoke',{alias:'notes',args:[]},'r2');assert.match(expired.plugin.at(-1).coreResponse.error,/expired/);assert.equal(expired.calls.length,0);
   f.request('tools.invoke',{alias:'notes',args:[]},'r3');await tick();f.r.plugins.notes={...f.r.plugins.notes,revision:'two'};f.protocol.client({coreApprove:{id:'r3',approved:true}});await tick();assert.match(f.plugin.at(-1).coreResponse.error,/changed/);assert.equal(f.calls.length,0);
   f.request('tools.invoke',{alias:'notes',args:['read','literal']},'r4');await tick();f.protocol.client({coreApprove:{id:'r4',approved:true}});await tick();assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].slice(0,2),['notes',['read','literal']]);
 });
