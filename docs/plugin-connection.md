@@ -18,6 +18,19 @@ Core answers `{"coreResponse":{"id":"r1","result":...}}` or `error` (a string).
 | `tools.help` | alias | CLI `--help` result: code, stdout, stderr |
 | `tools.skill` | alias, index, optional line | Declared skill text and nextLine; index starts at zero, line at one |
 | `tools.invoke` | alias, args (literal string array), optional stdin | CLI result: code, stdout, stderr |
+| `tools.native` | args (literal scheduler argument array) | Standard scheduler CLI result: code, stdout, stderr |
+
+`tools.native` invokes only the shipped `ezenciel-agents-schedule` CLI, using the
+owning host's verified workspace/control binding and a whitelisted environment.
+Read `--help` for its unchanged command contract. `create --now` submits standard
+asynchronous native work; it does not launch a second runner or hold the workspace
+lease while waiting. The native agent may retrieve a Library original, inspect it
+with its existing image/PDF tools, and save source-linked searchable text.
+Scheduler owner checks, selected engine, cancellation and receipts remain native.
+No synthetic run context is injected. Standalone bindings cannot use this method;
+task creation without a Telegram owner or authenticated originating channel still
+fails under the scheduler's existing delivery rule. Results can be inspected with
+`runs` and `run RUN_ID`; a completed run alone is not proof of indexed content.
 
 The registry is read on each request. The connected plugin is excluded, including
 its other aliases. Skill reads stay within its declared source directory and

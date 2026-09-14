@@ -3,6 +3,7 @@ import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { registry, prepareCommand, run } from './manager.mjs';
 import { invokeLease } from './workspace-lease.mjs';
+import { nativeTasks } from './native-tasks.mjs';
 
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const reserved = ['coreRequest','coreResponse','coreApprove','coreApproval','coreApprovalResolved','coreCancel'];
@@ -10,7 +11,7 @@ const maxFrame = 1048576;
 function requestId(value) {if(typeof value!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(value))throw Error('Invalid request id');return value;}
 
 // The local owning connection uses the same installed authority as its bound CLI.
-export function connectionProtocol({readRegistry,execute,sendClient,sendPlugin,excludedPlugin}) {
+export function connectionProtocol({readRegistry,execute,executeNative,sendClient,sendPlugin,excludedPlugin}) {
   const active=new Map(),consumed=new Set();let closed=false;
   async function record(alias) {
     const r=await readRegistry(),plugin=r.commands[alias],value=r.plugins[plugin];
@@ -20,6 +21,12 @@ export function connectionProtocol({readRegistry,execute,sendClient,sendPlugin,e
   async function perform(req,state) {
     const p=req.params??{};
     if(!object(p))throw Error('Invalid request params');
+    if(req.method==='tools.native') {
+      await readRegistry();
+      if(closed||state.abort.signal.aborted)throw Error('Request cancelled');
+      if(!executeNative)throw Error('Native task access is unavailable');
+      return executeNative(p.args,{signal:state.abort.signal});
+    }
     if(req.method==='tools.list') {
       const r=await readRegistry();return Object.entries(r.commands).filter(([,owner])=>owner!==excludedPlugin).map(([alias,owner])=>{
         const v=r.plugins[owner];return {alias,plugin:owner,description:String(v.manifest.description??'').slice(0,200),skillCount:v.manifest.skills.length,revision:v.revision};
@@ -81,6 +88,7 @@ export async function connect(home,alias,args,{input=process.stdin,output=proces
   const send=(stream,frame)=>{try {const text=JSON.stringify(frame)+'\n';if(stream?.writableLength>maxFrame||Buffer.byteLength(text)>maxFrame)throw Error('Connection backpressure limit exceeded');stream?.write(text);}catch(error){fail(error);}};
   const fail=error=>{failure??=error;abort.abort();protocol?.close();};
   protocol=connectionProtocol({excludedPlugin:command.plugin,readRegistry:async()=>{const r=await registry(home);if(r.commands[alias]!==command.plugin||r.plugins[command.plugin]?.revision!==command.revision)throw Error('Connected plugin changed; reconnect');return r;},
+    executeNative:(args,options)=>nativeTasks(home,args,options),
     execute:async(a,argv,options)=>{const release=options.invocation?await invokeLease(home):undefined;try {const c=await prepareCommand(home,a,argv,{revision:options.revision,exclude:command.plugin});if(options.signal.aborted)throw Error('Request cancelled');return await run(c.argv,{...options,container:c.container,capture:true,timeoutMs:30000,maxBytes:262144});}finally{await release?.();}},
     sendClient:frame=>send(output,frame),sendPlugin:frame=>send(child?.stdin,frame)});
   const onInput=jsonLines(frame=>protocol.client(frame),fail),onEnd=()=>{protocol.close();abort.abort();};

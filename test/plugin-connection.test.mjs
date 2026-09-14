@@ -27,6 +27,11 @@ test('trusted connection invokes literal command once without a permission excha
   assert.throws(()=>f.request('tools.invoke',{alias:'notes',args:[]}),/Duplicate/);assert.equal(f.calls.length,1);
   await f.request('tools.invoke',{alias:'notes',args:[{}]},'invalid');assert.match(f.plugin.at(-1).coreResponse.error,/literal/);assert.equal(f.calls.length,1);
 });
+test('native task access uses the separate fixed scheduler adapter',async()=>{
+  const native=[];const f=fixture({executeNative:async(args)=>{native.push(args);return {code:0,stdout:'help',stderr:''};}});
+  await f.request('tools.native',{args:['--help']});assert.deepEqual(native,[['--help']]);assert.equal(f.calls.length,0);assert.equal(f.plugin[0].coreResponse.result.stdout,'help');
+  const unavailable=fixture();await unavailable.request('tools.native',{args:['--help']});assert.match(unavailable.plugin[0].coreResponse.error,/unavailable/);
+});
 test('registry revision change during admission prevents invocation',async()=>{
   let reads=0;const f=fixture({readRegistry:async()=>({commands:{notes:'notes'},plugins:{notes:{revision:++reads===1?'one':'two'}}})});
   await f.request('tools.invoke',{alias:'notes',args:[]});assert.match(f.plugin[0].coreResponse.error,/changed/);assert.equal(f.calls.length,0);
