@@ -9,10 +9,9 @@ const reserved = ['coreRequest','coreResponse','coreApprove','coreApproval','cor
 const maxFrame = 1048576;
 function requestId(value) {if(typeof value!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(value))throw Error('Invalid request id');return value;}
 
-// Both directions have separate entry points. Only the owning client grants authority.
-export function connectionProtocol({readRegistry,execute,sendClient,sendPlugin,excludedPlugin,approvalMs=60000}) {
+// The local owning connection uses the same installed authority as its bound CLI.
+export function connectionProtocol({readRegistry,execute,sendClient,sendPlugin,excludedPlugin}) {
   const active=new Map(),consumed=new Set();let closed=false;
-  const resolveApproval=id=>sendClient({coreApprovalResolved:{id}});
   async function record(alias) {
     const r=await readRegistry(),plugin=r.commands[alias],value=r.plugins[plugin];
     if(!value||plugin===excludedPlugin)throw Error('Unknown or unavailable registered CLI');
@@ -43,43 +42,32 @@ export function connectionProtocol({readRegistry,execute,sendClient,sendPlugin,e
     else if(req.method==='tools.invoke') {
       args=p.args;
       if(!Array.isArray(args)||args.length>100||args.some(a=>typeof a!=='string'||a.includes('\0')||a.length>8192)||p.stdin!==undefined&&(typeof p.stdin!=='string'||Buffer.byteLength(p.stdin)>65536))throw Error('Invalid literal command arguments');
-      if(closed||state.abort.signal.aborted)throw Error('Request cancelled');
-      await new Promise((resolve,reject)=>{
-        state.approval={resolve,reject};
-        state.timer=setTimeout(()=>reject(Error('Approval expired')),approvalMs);
-        sendClient({coreApproval:{id:req.id,alias:p.alias,args,...(p.stdin===undefined?{}:{stdin:p.stdin})}});
-      });
     } else throw Error('Unknown core method');
     if(closed||state.abort.signal.aborted)throw Error('Request cancelled');
     const current=await record(p.alias);
-    if(current.revision!==v.revision)throw Error('Plugin changed; discover and approve again');
+    if(current.revision!==v.revision)throw Error('Plugin changed; discover again');
     return execute(p.alias,args,{revision:v.revision,stdin:req.method==='tools.invoke'?p.stdin:undefined,signal:state.abort.signal,invocation:req.method==='tools.invoke'});
   }
   return {
     plugin(frame) {
       if(closed)return;
       if(!object(frame))throw Error('Expected JSON object');
-      if(frame.coreCancel){if(reserved.some(k=>k!=='coreCancel'&&k in frame))throw Error('Plugin forged core control frame');const id=requestId(frame.coreCancel.id),state=active.get(id);state?.abort.abort();state?.approval?.reject?.(Error('Request cancelled'));return;}
+      if(frame.coreCancel){if(reserved.some(k=>k!=='coreCancel'&&k in frame))throw Error('Plugin forged core control frame');const id=requestId(frame.coreCancel.id),state=active.get(id);state?.abort.abort();return;}
       if(reserved.some(k=>k!=='coreRequest'&&k in frame))throw Error('Plugin forged core control frame');
       if(!('coreRequest' in frame)){sendClient(frame);return;}
       const req=frame.coreRequest;if(!object(req))throw Error('Invalid core request');requestId(req.id);
       if(consumed.has(req.id)||active.size>=8||consumed.size>=10000)throw Error('Duplicate or excessive core request');
       consumed.add(req.id);
       const state={abort:new AbortController()};active.set(req.id,state);
-      return perform(req,state).then(result=>{if(!closed)sendPlugin({coreResponse:{id:req.id,result}});},error=>{if(!closed)sendPlugin({coreResponse:{id:req.id,error:error.message}});}).finally(()=>{clearTimeout(state.timer);active.delete(req.id);if(state.approval&&!closed)resolveApproval(req.id);});
+      return perform(req,state).then(result=>{if(!closed)sendPlugin({coreResponse:{id:req.id,result}});},error=>{if(!closed)sendPlugin({coreResponse:{id:req.id,error:error.message}});}).finally(()=>{active.delete(req.id);});
     },
     client(frame) {
       if(closed)return;
       if(!object(frame))throw Error('Expected JSON object');
-      if(reserved.some(k=>k!=='coreApprove'&&k in frame))throw Error('Client forged core control frame');
-      if('coreApprove' in frame) {
-        const p=frame.coreApprove;if(!object(p)||typeof p.approved!=='boolean')throw Error('Invalid approval');
-        const state=active.get(requestId(p.id));if(!state?.approval?.resolve)throw Error('Unknown or expired approval');
-        clearTimeout(state.timer);const decision=state.approval;state.approval={};
-        if(p.approved)decision.resolve();else decision.reject(Error('Approval denied'));
-      } else sendPlugin(frame);
+      if(reserved.some(k=>k in frame))throw Error('Client forged core control frame');
+      sendPlugin(frame);
     },
-    close() {closed=true;for(const state of active.values()){clearTimeout(state.timer);state.abort.abort();state.approval?.reject?.(Error('Connection closed'));}active.clear();},
+    close() {closed=true;for(const state of active.values())state.abort.abort();active.clear();},
   };
 }
 

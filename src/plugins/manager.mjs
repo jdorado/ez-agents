@@ -299,7 +299,7 @@ export async function prepareCommand(home,alias,args,{revision,exclude}={}) {
     const config=await json(path.join(home,'config.json')),r=await registry(home);
     const record=r.plugins[r.commands[alias]],binding=record?.deployment.commands[alias];
     if(!binding||r.commands[alias]===exclude)throw Error('Unknown or unavailable registered CLI');
-    if(revision!==undefined&&revision!==record.revision)throw Error('Plugin changed; discover and approve again');
+    if(revision!==undefined&&revision!==record.revision)throw Error('Plugin changed; discover again');
     await checkFolders(config,record);
     const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
     await atomic(record.compose,await compose(config,record,secrets,home));
