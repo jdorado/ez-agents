@@ -21,18 +21,22 @@ test('discovery follows installed registry; self and missing aliases are unavail
   for(const alias of ['voice','missing','notes']){f.request('tools.help',{alias},alias);await tick();assert.match(f.plugin.at(-1).coreResponse.error,/unavailable/);}
   assert.equal(f.calls.length,0);
 });
-test('literal invocation requires exact client approval; denial, expiry, stale revision never execute',async()=>{
-  const f=fixture();f.request('tools.invoke',{alias:'notes',args:['read','a; $(x)']});await tick();assert.equal(f.calls.length,0);
-  assert.deepEqual(f.client[0].coreApproval.args,['read','a; $(x)']);f.protocol.client({coreApprove:{id:'r1',approved:false}});await tick();assert.match(f.plugin[0].coreResponse.error,/denied/);
-  const expired=fixture({approvalMs:1});await expired.request('tools.invoke',{alias:'notes',args:[]},'r2');assert.match(expired.plugin.at(-1).coreResponse.error,/expired/);assert.equal(expired.calls.length,0);
-  f.request('tools.invoke',{alias:'notes',args:[]},'r3');await tick();f.r.plugins.notes={...f.r.plugins.notes,revision:'two'};f.protocol.client({coreApprove:{id:'r3',approved:true}});await tick();assert.match(f.plugin.at(-1).coreResponse.error,/changed/);assert.equal(f.calls.length,0);
-  f.request('tools.invoke',{alias:'notes',args:['read','literal']},'r4');await tick();f.protocol.client({coreApprove:{id:'r4',approved:true}});await tick();assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].slice(0,2),['notes',['read','literal']]);
+test('trusted connection invokes literal command once without a permission exchange',async()=>{
+  const f=fixture();await f.request('tools.invoke',{alias:'notes',args:['read','a; $(x)'],stdin:'literal input'});
+  assert.equal(f.calls.length,1);assert.deepEqual(f.calls[0].slice(0,2),['notes',['read','a; $(x)']]);assert.equal(f.calls[0][2].stdin,'literal input');assert.deepEqual(f.client,[]);assert.equal(f.plugin[0].coreResponse.result.code,0);
+  assert.throws(()=>f.request('tools.invoke',{alias:'notes',args:[]}),/Duplicate/);assert.equal(f.calls.length,1);
+  await f.request('tools.invoke',{alias:'notes',args:[{}]},'invalid');assert.match(f.plugin.at(-1).coreResponse.error,/literal/);assert.equal(f.calls.length,1);
 });
-test('reserved frames cannot cross authority directions; cancellation aborts approved call',async()=>{
+test('registry revision change during admission prevents invocation',async()=>{
+  let reads=0;const f=fixture({readRegistry:async()=>({commands:{notes:'notes'},plugins:{notes:{revision:++reads===1?'one':'two'}}})});
+  await f.request('tools.invoke',{alias:'notes',args:[]});assert.match(f.plugin[0].coreResponse.error,/changed/);assert.equal(f.calls.length,0);
+});
+test('reserved frames cannot cross authority directions; cancellation aborts running call',async()=>{
   let signal;const f=fixture({execute:async(a,args,opts)=>{signal=opts.signal;return new Promise(resolve=>signal.addEventListener('abort',()=>resolve({code:130})));}});
-  assert.throws(()=>f.protocol.client({coreRequest:{}}),/forged/);assert.throws(()=>f.protocol.client({coreResponse:{}}),/forged/);assert.throws(()=>f.protocol.plugin({coreApprove:{}}),/forged/);
-  f.request('tools.invoke',{alias:'notes',args:[]});await tick();f.protocol.client({coreApprove:{id:'r1',approved:true}});await tick();assert.equal(signal.aborted,false);f.protocol.plugin({coreCancel:{id:'r1'}});assert.equal(signal.aborted,true);await tick();assert.equal(f.client.at(-1).coreApprovalResolved.id,'r1');
-  f.request('tools.invoke',{alias:'notes',args:[]},'r2');await tick();f.protocol.close();await tick();assert.equal(f.calls.length,0);
+  for(const key of ['coreRequest','coreResponse','coreApprove','coreApproval','coreApprovalResolved'])assert.throws(()=>f.protocol.client({[key]:{}}),/forged/);
+  for(const key of ['coreResponse','coreApprove','coreApproval','coreApprovalResolved'])assert.throws(()=>f.protocol.plugin({[key]:{}}),/forged/);
+  const first=f.request('tools.invoke',{alias:'notes',args:[]});await tick();assert.equal(signal.aborted,false);f.protocol.plugin({coreCancel:{id:'r1'}});assert.equal(signal.aborted,true);await first;assert.equal(f.plugin[0].coreResponse.result.code,130);assert.deepEqual(f.client,[]);
+  const second=f.request('tools.invoke',{alias:'notes',args:[]},'r2');await tick();f.protocol.close();assert.equal(signal.aborted,true);await second;
 });
 test('declared skill reads are bounded and reject traversal and escaping symlinks',async()=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'ez-skill-'));
@@ -45,7 +49,7 @@ test('declared skill reads are bounded and reject traversal and escaping symlink
 test('JSONL rejects malformed and oversized input',()=>{
   const frames=[],errors=[];const parse=jsonLines(f=>frames.push(f),e=>errors.push(e));parse(Buffer.from('{"ok":true}\n'));assert.equal(frames.length,1);parse(Buffer.from('bad\n'));assert.equal(errors.length,1);parse(Buffer.alloc(1048577,97));assert.equal(errors.length,2);
 });
-test('completed request IDs cannot replay and early cancellation cannot create an approval',async()=>{
+test('completed request IDs cannot replay and early cancellation prevents execution',async()=>{
   const f=fixture();f.request('tools.list');await tick();assert.throws(()=>f.request('tools.list'),/Duplicate/);
   f.request('tools.invoke',{alias:'notes',args:[]},'early');f.protocol.plugin({coreCancel:{id:'early'}});await tick();assert.match(f.plugin.at(-1).coreResponse.error,/cancelled/);assert.equal(f.client.length,0);assert.equal(f.calls.length,0);
 });

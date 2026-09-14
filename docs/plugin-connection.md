@@ -4,8 +4,10 @@
 command container for a local, agent-bound client. It releases the registry lock
 after admission. Ordinary JSON objects travel as JSONL between client and plugin;
 this transport owns no inference, conversation history or plugin-specific tools.
-The client must be trusted to convey the owner's decisions. A remote or web
-adapter must authenticate its owner before connecting and protect its stdin.
+The local owning connection uses the agent's installed plugin permissions, just
+like its bound CLI. A remote or web adapter must authenticate its owner before
+connecting and protect its stdin. Plugin commands retain their own authorization;
+the connection adds no per-command permission prompt.
 
 Plugin requests use `{"coreRequest":{"id":"r1","method":"tools.list","params":{}}}`.
 Core answers `{"coreResponse":{"id":"r1","result":...}}` or `error` (a string).
@@ -19,14 +21,10 @@ Core answers `{"coreResponse":{"id":"r1","result":...}}` or `error` (a string).
 
 The registry is read on each request. The connected plugin is excluded, including
 its other aliases. Skill reads stay within its declared source directory and
-return at most 100 lines. Discovery and help need no approval. Every arbitrary
-invocation emits `{"coreApproval":{"id":"r1","alias":"notes","args":["list"]}}`
-(including stdin when supplied). Only client stdin can answer with
-`{"coreApprove":{"id":"r1","approved":true}}`. Approval expires after 60 seconds;
-a changed plugin revision requires rediscovery and a new approval. Core emits
-`coreApprovalResolved: {id}` when that request finishes, expires or is cancelled.
-Plugin stdout cannot grant approval; client stdin cannot forge core requests or
-responses. The plugin may send `coreCancel: {id}` to cancel its own pending request.
+return at most 100 lines. Invocations execute once through the registered binding;
+a changed plugin revision requires rediscovery. Client stdin cannot forge core
+requests or responses. The plugin may send `coreCancel: {id}` to cancel its own
+pending request. Request IDs cannot be reused within a connection.
 
 Commands use the existing bound Compose dispatcher, literal argv and whitelisted
 environment. Calls have a 30-second timeout and 256 KiB combined output limit;
