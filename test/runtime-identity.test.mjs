@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import test from 'node:test';
 
@@ -15,4 +16,10 @@ test('container identity rejects root, malformed IDs and shared relay/executor U
     });
     assert.equal(result.status,64,JSON.stringify(overrides)+': '+result.stderr);
   }
+});
+
+test('distinct relay identity retains access only through the tenant runtime group', () => {
+  const entrypoint=readFileSync('docker/entrypoint.sh','utf8');
+  assert.match(entrypoint,/chmod 770 \/state\/control \/state\/home \/workspace/);
+  assert.match(entrypoint,/find \/state\/control -xdev -type f -exec chgrp "\$runtime_gid"/);
 });

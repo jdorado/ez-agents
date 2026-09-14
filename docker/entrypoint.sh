@@ -20,6 +20,12 @@ if [ "$(id -u)" = 0 ]; then
   mkdir -p /state/control /state/home /workspace /run/secrets
   chmod 700 /run/secrets
   chown "$runtime_uid:$runtime_gid" /state/control /state/home /workspace
+  # The relay keeps a distinct real UID. Grant only this tenant's runtime group
+  # access to its control files so that process can retain the non-dumpable
+  # identity while its native executor still uses the private runtime UID.
+  chmod 770 /state/control /state/home /workspace
+  find /state/control -xdev -type d -exec chmod 770 {} +
+  find /state/control -xdev -type f -exec chgrp "$runtime_gid" {} + -exec chmod g+rw {} +
   if [ -f /run/secrets/relay_env ]; then exec 3</run/secrets/relay_env; else exec 3</dev/null; fi
   exec setpriv --ruid="$relay_uid" --euid="$runtime_uid" --regid="$runtime_gid" --clear-groups --bounding-set=-all --no-new-privs /app/docker/entrypoint.sh "$@"
 fi
