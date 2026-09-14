@@ -53,7 +53,7 @@ export function connectionProtocol({readRegistry,execute,sendClient,sendPlugin,e
     if(closed||state.abort.signal.aborted)throw Error('Request cancelled');
     const current=await record(p.alias);
     if(current.revision!==v.revision)throw Error('Plugin changed; discover and approve again');
-    return execute(p.alias,args,{revision:v.revision,stdin:p.stdin,signal:state.abort.signal,invocation:req.method==='tools.invoke'});
+    return execute(p.alias,args,{revision:v.revision,stdin:req.method==='tools.invoke'?p.stdin:undefined,signal:state.abort.signal,invocation:req.method==='tools.invoke'});
   }
   return {
     plugin(frame) {
