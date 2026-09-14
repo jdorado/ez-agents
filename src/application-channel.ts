@@ -231,11 +231,12 @@ export class ApplicationChannel {
       }
       const control = new ControlStore(this.options.controlDir, 900000)
       if (!sameOwner(binding.owner, (await control.status()).owner)) throw new Error('Application authority revoked')
-      const execution = value.followTelegram ? await control.captureChoice(this.options.initial) : await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope), binding.shareTelegram === true && value.activateTelegram === true, requestedPreset, value.expectedNativeSessionId as string | undefined)
       if (bytes && !this.options.workspace) throw new Error('Invalid application attachment: workspace unavailable')
       const staged = bytes ? await stageChatAttachment(this.options.workspace!, value.attachment!.name as string, bytes, value.text) : undefined
       let run: RunRecord
-      try { run = await this.runs.create({ id, ownerId: ownerId(binding.owner), ownerEpoch: ownerEpoch(binding.owner), texts: [staged?.text ?? value.text], execution, application }) }
+      try {
+      const execution = value.followTelegram ? await control.captureChoice(this.options.initial) : await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope), binding.shareTelegram === true && value.activateTelegram === true, requestedPreset, value.expectedNativeSessionId as string | undefined)
+        run = await this.runs.create({ id, ownerId: ownerId(binding.owner), ownerEpoch: ownerEpoch(binding.owner), texts: [staged?.text ?? value.text], execution, application }) }
       catch (error) { if (staged) await unlink(staged.fullPath).catch(() => {}); throw error }
       this.options.wake()
       return run

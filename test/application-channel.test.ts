@@ -314,6 +314,11 @@ test('generic attachments stage after auth, preserve literal comments and reject
     assert.equal((await post({...body,attachment:{name,data:Buffer.from('changed').toString('base64')}})).status,409)
     assert.equal((await fetch(`http://127.0.0.1:${address.port}/v1/runs/${snapshot.id}`,{headers:{Authorization:`Bearer ${other}`}})).status,404)
   }
+  const control=new ControlStore(root,1000)
+  const priorSession=(await control.status()).activeSession
+  const invalidActivation=await post({...input,requestId:'invalid-activation',followOwner:false,activateTelegram:true,scope:'new-scope',attachment:{name:'x.exe',data:Buffer.from('text').toString('base64')}})
+  assert.equal(invalidActivation.status,400)
+  assert.deepEqual((await control.status()).activeSession,priorSession)
   const before=(await readdir(join(root,'inbox'))).length
   for (const attachment of [{name:'x.exe',data:Buffer.from('text').toString('base64')},{name:'x.txt',data:'%%%invalid'},{name:'x.txt',data:Buffer.alloc(10*1024*1024+1,65).toString('base64')}]) {
     assert.equal((await post({...input,requestId:'bad',attachment})).status,400)
