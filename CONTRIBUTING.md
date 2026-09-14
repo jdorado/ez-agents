@@ -36,6 +36,17 @@ should explain the user problem and a small acceptance example. Security reports
 follow SECURITY.md. Release and new-plugin requirements: docs/releasing.md and
 docs/plugin-contributions.md.
 
+## Proportional scope and validation
+
+Follow AGENTS.md's fast KISS iteration principle. Define the smallest useful
+increment, verify the main user path and relevant failure boundaries, and run
+required checks. Once these pass and the architecture is preserved, finish the
+authorized delivery. Do not expand scope or repeat tests to cover hypothetical,
+low-impact edge cases. No new tests are needed merely to mirror wording or an
+obvious reversible edit. Broaden verification only when evidence warrants it.
+Reviewers must distinguish material blockers from optional follow-ups; briefly
+record real deferred limitations without making them conditions of this PR.
+
 ## Architecture check for every PR
 
 Authors and reviewers apply the [engine and application boundaries](README.md#engine-and-application-boundaries)
