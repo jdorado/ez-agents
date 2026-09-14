@@ -269,16 +269,29 @@ export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,
       clearTimeout(timeout);signal?.removeEventListener('abort',term);
       if(cancelled&&container) {
         try {
-          const cleanup=await run(['container','rm','--force',container],{capture:true});
-          // Compose --rm may already have removed this exact command container.
-          if(cleanup.code!==0&&!cleanup.stderr.includes(`No such container: ${container}`))
-            return reject(Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`));
+          await removeCommandContainer(container);
         } catch(error) {return reject(error);}
       }
       if(failure)return reject(failure);
       resolve({code:cancelled?130:code??(childSignal?130:1),stdout,stderr});});
   });
 }
+// Compose --rm can race cancellation. Confirm disappearance instead of treating
+// Docker's in-progress removal as either failure or completed cleanup.
+export async function removeCommandContainer(container,execute=run) {
+  const cleanup=await execute(['container','rm','--force',container],{capture:true});
+  if(cleanup.code===0||cleanup.stderr.includes(`No such container: ${container}`))return;
+  if(cleanup.stderr.includes(`removal of container ${container} is already in progress`)) {
+    for(let attempt=0;attempt<20;attempt++) {
+      const state=await execute(['container','inspect','--format','{{.Id}}',container],{capture:true});
+      if(state.code!==0&&(state.stderr.includes(`No such object: ${container}`)||state.stderr.includes(`No such container: ${container}`)))return;
+      if(state.code!==0)break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+  }
+  throw Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`);
+}
+
 async function checked(args) {
   const r=await run(args,{capture:true});if(r.code) throw Error(r.stderr||r.stdout||`Docker failed (${r.code})`);return r.stdout;
 }

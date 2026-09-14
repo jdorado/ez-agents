@@ -112,3 +112,14 @@ test('channel-neutral owner does not require a Telegram delivery context',async(
     await assert.rejects(captureDeliveryContext(root,'voice','revision'),/invalid/);
   }finally{await fs.rm(root,{recursive:true,force:true});}
 });
+
+test('cancellation verifies a container already being removed by Compose',async()=>{
+  const {removeCommandContainer}=await import('../src/plugins/manager.mjs');
+  const calls=[];await removeCommandContainer('fixture',async args=>{
+    calls.push(args);
+    return args[1]==='rm'?{code:1,stderr:'removal of container fixture is already in progress'}:{code:1,stderr:'No such object: fixture'};
+  });
+  assert.deepEqual(calls.map(args=>args[1]),['rm','inspect']);
+  await assert.rejects(removeCommandContainer('fixture',async()=>({code:1,stderr:'permission denied'})),/cleanup failed/);
+  await assert.rejects(removeCommandContainer('fixture',async args=>({code:1,stderr:args[1]==='rm'?'removal of container fixture is already in progress':'daemon unavailable'})),/cleanup failed/);
+});
