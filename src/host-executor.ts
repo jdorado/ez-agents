@@ -59,6 +59,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
         await appendFile(base+'.events',JSON.stringify({stream:'exit',code:1})+'\n',{mode:0o600})
         await rm(path.join(directory,file))
       }
+      if (agent.toolsHome) await (await import('./plugins/workspace-lease.mjs')).recoverNativeLease(agent.toolsHome)
     }
     let catalogAt=Date.now()
     while (!signal.aborted) {
@@ -90,7 +91,11 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           }
           const sharedWorkspace=sharedWorkspaces.get(agent)
           const base=path.join(directory,id)
-          await rename(base+'.request.json',base+'.running.json')
+          const releaseWorkspace = !run?.scheduled && agent.toolsHome
+            ? await (await import('./plugins/workspace-lease.mjs')).workspaceLease(agent.toolsHome,{kind:'native',runId:id}) : undefined
+          if (!run?.scheduled && agent.toolsHome && !releaseWorkspace) continue
+          try { await rename(base+'.request.json',base+'.running.json') }
+          catch (error) { await releaseWorkspace?.(); throw error }
           const task=(async()=>{
             let job: Awaited<ReturnType<typeof startExecutorJob>> | undefined
             let cancellation: ReturnType<typeof setInterval> | undefined
@@ -133,6 +138,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await rm(base+'.process.json',{force:true})
               await rm(base+'.cancel',{force:true})
               active.delete(base)
+              await releaseWorkspace?.()
             }
           })()
           tasks.add(task); void task.finally(()=>tasks.delete(task))
