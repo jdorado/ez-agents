@@ -2,14 +2,26 @@
 
 ## Unreleased
 
+## 0.1.0-beta.28
+
 - Hide empty conversation placeholders from history and update the same menu
   when navigating Back, rather than adding another menu message.
-
 - Keep the conversation list to names only; show Archive/Restore for the selected
   conversation. Label older chats from saved owner messages instead of opaque IDs.
-
 - Add named Telegram conversations with switching, renaming, archiving and
   restoring. Preserve native engine bindings and queued work across switches.
+- Add the authenticated application channel to the standard runtime, including
+  botless deployments, explicit owner sharing, native conversation continuity,
+  isolated non-root containers and writable-folder grants.
+- Add owner-bound persistent plugin connections with installed-tool discovery,
+  native task access and revocation-safe Telegram delivery receipts.
+- Add explicit loopback-only `tools serve`, live read-only owner discovery and an
+  optional authenticated private-chat Mini App launcher for plugin-owned web UIs.
+- Fix packaged application command availability and private-plugin update checks.
+- Document agent-owned maintenance for separately deployed applications and add
+  owner-bound, on-demand Telegram delivery-history lookup across native sessions.
+- Clarify the native-engine, transport and plugin ownership boundaries and the
+  proportionate KISS contribution/review standard.
 
 ## 0.1.0-beta.27
 
@@ -200,9 +212,3 @@ voice providers need separate verification; CLI success is not GUI evidence.
 
 Beta acceptance: automated tests, packed installs and Docker fixtures only. Live
 provider onboarding and reboot verification are deferred, not marked passed.
-
-### Unreleased plugin web access
-
-- Add explicit loopback-only `tools serve` for connected plugin web commands.
-- Expose live private Telegram owner identity through the read-only connection protocol.
-- Add an optional authenticated private-chat Mini App launcher while retaining standard commands.
