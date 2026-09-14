@@ -23,6 +23,11 @@ try {
   const help = run(['run','--rm',...nonroot,image,'application','--help']);
   assert.equal(help.status,0,help.stderr);
   assert.match(help.stdout,/ezenciel-agents-application/);
+  const login = run(['run','--rm',...nonroot,'--entrypoint','/bin/bash',image,'-lc',
+    'command -v ezenciel-agents-application && command -v ezenciel-agents-message && ezenciel-agents-message --help']);
+  assert.equal(login.status,0,login.stderr);
+  assert.match(login.stdout,/\/usr\/local\/bin\/ezenciel-agents-application/);
+  assert.match(login.stdout,/\/usr\/local\/bin\/ezenciel-agents-message/);
   const started = run(['run','-d','--name',application,...nonroot,image,'start']);
   assert.equal(started.status,0,started.stderr);
   let ready = false;

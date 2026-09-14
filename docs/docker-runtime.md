@@ -4,6 +4,11 @@ Docker Compose owns each relay and executable plugin. The CLI the user installs
 Ez from stays on the host, with its existing authentication. All agents in that
 installation use that CLI; there is no second CLI installation or agent-specific
 CLI login. The relay image contains Node, relay dependencies and ffmpeg.
+The runtime image exposes Ez commands through the wrappers in `/app/bin`, including
+`ezenciel-agents-application`; application images do not need to link Ez themselves.
+The image also installs package-manifest commands in `/usr/local/bin`, so native
+engine login shells can resolve them after resetting PATH. Command installation
+belongs to Ez packaging, not an application image or an engine-specific prompt.
 
 ## Agent binding
 
