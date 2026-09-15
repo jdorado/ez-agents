@@ -5,6 +5,7 @@ import { createServer } from 'node:http'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
 import { taskArguments, taskModelCatalog, TASK_CODEX_VERSION } from '../src/task-executor.js'
 import { Tasks } from '../src/tasks.js'
 import { ownerRun } from './helpers/owner-run.js'
@@ -60,7 +61,9 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r))
   let child: ReturnType<typeof spawn> | undefined
   try {
-    const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('../src/task-mcp.ts', import.meta.url)), root, run.id]
+    const entry = new URL('../src/task-mcp.ts', import.meta.url).href
+    await writeFile(`${root}/broker.mjs`, `if(process.env.HOME !== ${JSON.stringify(homedir())}) throw Error('Broker lost host CLI configuration'); await import(${JSON.stringify(entry)});`)
+    const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), `${root}/broker.mjs`, root, run.id]
     const catalog = await promisify(execFile)('codex', ['debug', 'models', '--bundled'], { maxBuffer: 4 * 1024 * 1024 });
     await writeFile(`${root}/models.json`, JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))));
     const args = taskArguments(directory, broker, JSON.stringify({event:'task_activated',taskId:proposal.id}), undefined, {model:'gpt-6-astra'})
