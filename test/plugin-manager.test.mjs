@@ -144,7 +144,7 @@ test('host-owned private networks survive registered-call Compose regeneration',
  config.hostConfig=await fs.realpath(f.hostConfig);
  await fs.writeFile(path.join(f.home,'config.json'),JSON.stringify(config));
  const file=path.join(f.home,'packages/sample/compose.json');await fs.writeFile(file,'{}');
- await f.call('sample','read');
+ await exec(path.join(f.home,'bin','ez'),['sample','read'],{cwd:f.workspace,env:f.env});
  const c=JSON.parse(await fs.readFile(file,'utf8'));
  assert.deepEqual(c.networks.default,{});
  const [key,network]=Object.entries(c.networks).find(([name])=>name!=='default');
@@ -292,8 +292,8 @@ test('standalone rejects relay binding and preserves literal plugin arguments ac
  }
  const log=(await fs.readFile(f.log,'utf8')).trim().split('\n').map(JSON.parse);
  assert(log.every(call=>call.secret===undefined));
- await fs.writeFile(path.join(f.home,'config.json'),JSON.stringify({schemaVersion:1,workspace:f.workspace,catalog:{},deploymentDir:'/missing'}));
- await assert.rejects(exec(launcher,['status']),/deployment-bound/); // never hide a broken relay binding
+ await fs.writeFile(path.join(f.home,'config.json'),JSON.stringify({schemaVersion:1,workspace:await fs.realpath(f.workspace),catalog:{},deploymentDir:'/missing'}));
+ await assert.rejects(exec(launcher,['status'],{cwd:f.workspace,env:f.env}),/deployment-bound/); // never hide a broken relay binding
 });
 
 test('existing folders are read-only, persistent and fail closed when missing', async t => {
@@ -316,6 +316,27 @@ test('existing folders are read-only, persistent and fail closed when missing', 
  await assert.rejects(f.call('sample','read'),/ENOENT/);
  await f.call('plugins','folder-unbind','sample','--service','sample','--target','/data/files');
  assert.deepEqual(JSON.parse((await f.call('plugins','folders','sample')).stdout),[]);
+});
+
+test('relay registry rejects foreign callers and ungranted host folders', async t => {
+ const f=await fixture(t);await init(f.home,f.workspace);const p=await snapshot(f.source);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ await fs.mkdir(path.join(f.root,'allowed'));await fs.mkdir(path.join(f.root,'denied'));
+ const allowed=await fs.realpath(path.join(f.root,'allowed')),denied=await fs.realpath(path.join(f.root,'denied'));
+ const host={cli:'synthetic',agents:[{name:'sample',workspace:f.workspace,controlDir:f.control,binDir:path.join(f.home,'bin'),toolsHome:f.home,pluginFolderRoots:{sample:[allowed]}}]};
+ await fs.writeFile(f.hostConfig,JSON.stringify(host));
+ const config=JSON.parse(await fs.readFile(path.join(f.home,'config.json'),'utf8'));
+ config.hostConfig=await fs.realpath(f.hostConfig);await fs.writeFile(path.join(f.home,'config.json'),JSON.stringify(config));
+ const launcher=path.join(f.home,'bin','ez'),foreign={cwd:f.source,env:f.env};
+ const before=await fs.readFile(f.log,'utf8');
+ await assert.rejects(exec(launcher,['sample','read'],foreign),/Registry belongs/);
+ await assert.rejects(exec(launcher,['--for-workspace',f.workspace,'sample','read'],foreign),/Registry belongs/);
+ assert.equal(await fs.readFile(f.log,'utf8'),before);
+ assert.deepEqual(JSON.parse((await exec(launcher,['sample','read'],{cwd:f.workspace,env:f.env})).stdout),['read']);
+ await exec(launcher,['plugins','folder-bind','sample','--service','sample','--source',allowed,'--target','/data/files'],{cwd:f.workspace,env:f.env});
+ const saved=await fs.readFile(path.join(f.home,'config.json'),'utf8');
+ await assert.rejects(exec(launcher,['plugins','folder-bind','sample','--service','sample','--source',denied,'--target','/data/files'],{cwd:f.workspace,env:f.env}),/not granted/);
+ assert.equal(await fs.readFile(path.join(f.home,'config.json'),'utf8'),saved);
 });
 
 test('folder bindings survive compatible descriptors and reject incompatible updates',async t=>{
