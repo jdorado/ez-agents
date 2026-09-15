@@ -32,7 +32,8 @@ export function taskArguments(directory: string, broker: string[], prompt: strin
     '-c', 'default_permissions="ez-task"',
     '-c', `permissions.ez-task.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(directory)}="write"}`,
     '-c', 'permissions.ez-task.network.enabled=false',
-    '-c', `mcp_servers.ez={command=${JSON.stringify(broker[0])},args=${JSON.stringify(broker.slice(1))},required=true,enabled_tools=${JSON.stringify(toolNames)}}`,
+    // The trusted broker needs the host's CLI configuration; the model keeps its isolated HOME.
+    '-c', `mcp_servers.ez={command=${JSON.stringify(broker[0])},args=${JSON.stringify(broker.slice(1))},env={HOME=${JSON.stringify(homedir())}},required=true,enabled_tools=${JSON.stringify(toolNames)}}`,
     ...toolNames.flatMap(name => ['-c', `mcp_servers.ez.tools.${name}.approval_mode="approve"`]),
     '-'] // Literal input travels on stdin, including slash commands and leading options.
 }
