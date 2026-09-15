@@ -161,19 +161,20 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // stat uses the effective UID; access uses the relay's isolated real UID.
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
-      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled) return
+      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled && !(run.taskId && run.external)) return
       if (!run.scheduled && await runs.running(false)) return
       const owner = (await control.status()).owner
       if (!owner || !ownsRun(owner, run)) {
         await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
+        await releaseExternal(run)
         return
       }
       if (run.application || run.delivery) {
         try { await applicationChannel.bindings.authorize(run) }
-        catch { await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); return }
+        catch { await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); await releaseExternal(run); return }
       }
       if (config.channelBackendUrl) {
-        if (run.external || run.taskId || run.scheduled || run.id.startsWith('r_update_')) { await runs.patch(run.id, { status: 'failed' }); return }
+        if (run.external || run.taskId || run.scheduled || run.id.startsWith('r_update_')) { await runs.patch(run.id, { status: 'failed' }); await releaseExternal(run); return }
         activeBackend = true
         await runs.patch(run.id, { status: 'running', backendSubmitted: true })
         void dispatchChannel(config, run).then(async reply => {
@@ -201,18 +202,20 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         try { events = await sources.check(run.external, owner); unavailableSources.delete(run.external.sourceId) } catch { unavailableSources.add(run.external.sourceId); return }
         if (!events.length) {
           await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() })
+          await releaseExternal(run)
           return
         }
         texts = events.map(event => JSON.stringify(event))
       }
       if (run.taskId) {
         try { await tasks.authorize(run) } catch {
-          await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); return
+          await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); await releaseExternal(run); return
         }
       }
       const blockReason = run.taskId ? undefined : executionBlockReason(run, owner)
       if (blockReason) {
         await runs.patch(run.id, { status: 'cancelled', blockReason, endedAt: new Date().toISOString() })
+        await releaseExternal(run)
         return
       }
       try {
@@ -329,9 +332,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
   const unavailableSources = new Set<string>()
   const releaseExternal = async (run: RunRecord) => {
-    if (!run.external || !run.taskId) return
-    const task = await tasks.get(run.taskId).catch(() => null)
-    if (task) await sources.release(run.external,task.owner).catch(() => {})
+    if (!run.external) return
+    const task = run.taskId ? await tasks.get(run.taskId).catch(() => null) : null
+    const owner = task?.owner ?? (await control.status()).owner
+    if (owner) await sources.release(run.external,owner).catch(() => {})
+    if (run.taskId) await runs.pruneTaskHistory(run.taskId)
   }
   let sourceWork: Promise<void> | undefined
   const drainSources = (): Promise<void> => {
@@ -383,11 +388,17 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             let publicOutstanding = known.filter(run => run.taskId && publicTaskIds.has(run.taskId) && ['queued','running'].includes(run.status)).length
             let admitted = true
             for (const events of groups.values()) {
-              const task = await tasks.match(source.id, source.bindingId, events)
+              let task = await tasks.match(source.id, source.bindingId, events)
               const id = eventRunId(source,events)
               if (known.some(run => run.id === id)) continue
-              if (task?.anyConversation && (publicOutstanding >= 8 || known.some(run => run.taskId === task.id &&
-                run.external?.conversationId === events[0].conversationId && ['queued','running'].includes(run.status)))) { admitted=false; continue }
+              if (task?.anyConversation) {
+                const publicTaskId=task.id
+                if (publicOutstanding >= 8 || known.some(run => run.taskId === publicTaskId &&
+                  run.external?.conversationId === events[0].conversationId && ['queued','running'].includes(run.status))) { admitted=false; continue }
+                const admission = await tasks.admitPublic(task.id)
+                if (admission === 'defer') { admitted=false; continue }
+                if (admission === 'revoked') task=undefined
+              }
               const identity = owner.telegramUserId !== undefined && owner.telegramChatId !== undefined
                 ? {chatId:owner.telegramChatId,telegramUserId:owner.telegramUserId}
                 : {ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner)}
@@ -693,6 +704,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       for (const run of await runs.list()) {
         if (run.status !== 'queued' || run.backendSubmitted) continue
         await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() })
+        await releaseExternal(run)
         count++
       }
     })

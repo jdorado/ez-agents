@@ -219,6 +219,11 @@ export class RunStore {
     return runs.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   }
 
+  async pruneTaskHistory(taskId:string,keep=100):Promise<void>{
+    const terminal=(await this.list()).filter(run=>run.taskId===taskId&&['completed','failed','cancelled'].includes(run.status)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt))
+    for(const run of terminal.slice(0,Math.max(0,terminal.length-keep)))await rm(this.runPath(run.id),{force:true})
+  }
+
   async running(background?: boolean): Promise<RunRecord | undefined> {
     const runs = await this.list()
     let first: RunRecord | undefined

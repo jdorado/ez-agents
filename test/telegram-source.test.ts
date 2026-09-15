@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { TelegramSource } from '../src/telegram-source.js'
 import { ControlStore } from '../src/control-state.js'
 import { EventSources } from '../src/event-sources.js'
@@ -90,6 +91,9 @@ test('Telegram wildcard watches capture private chats and groups but still send 
   assert.deepEqual(batch.events.map(event=>event.conversationId).sort(),['-303','202'])
   await source.call('task-send',{accountId:'999',conversationId:'202',key:'answer',text:'Answer'})
   assert.deepEqual(sent,[{chat:202,text:'Answer'}])
+  for(let index=0;index<100;index++)await source.call('task-send',{accountId:'999',conversationId:'202',key:`bounded-${index}`,text:'Answer'})
+  const [accountDirectory]=await readdir(join(dir,'telegram-source'))
+  assert.equal((await readdir(join(dir,'telegram-source',accountDirectory))).filter(name=>name.startsWith('send_')).length,100)
   await source.call('events-release',{ids:[batch.events[0].id]})
   assert.equal((await source.call('events-check',{ids:[batch.events[0].id]})).events.length,0)
   await assert.rejects(source.call('task-send',{accountId:'999',conversationId:'*',key:'bad',text:'No'}),/Invalid send/)

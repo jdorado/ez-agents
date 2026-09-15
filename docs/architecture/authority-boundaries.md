@@ -1,6 +1,7 @@
 # Authority boundaries
 
-The core pairs one Telegram owner and owns authority across providers. Plugins
+The core binds one owner identity, optionally linked to Telegram or an
+application channel, and owns authority across providers. Plugins
 provide transport, authentication, capture, and receipts. Their exposure metadata
 is discovery information, never a grant. A CRM can contain external text too;
 marking it internal does not confer owner authority.
@@ -41,6 +42,12 @@ the owner session, owner files or conversation history. Each run contains events
 from exactly one provider conversation, replies only to that captured
 conversation and exposes no cross-conversation notes. Exact-contact grants remain
 the default.
+
+Public admission is capped at eight outstanding conversations, 60 conversations
+and 60 replies per hour, and 1,000 conversations or replies across the life of a
+grant. The cumulative limit revokes the grant and requires fresh owner review.
+Terminal public-run evidence retains the most recent 100 runs per grant; released
+provider events and accepted Telegram send receipts are also bounded.
 
 A channel grant may include up to eight owner-approved query capabilities. Each is an
 exact registered `ez` command plus fixed arguments ending in literal

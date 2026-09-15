@@ -143,7 +143,9 @@ Command output may be shown to anyone in that audience. External writes need
 their own bounded tool contract and receipts. Revocation stops new capture,
 cancels queued replies and rechecks every tool/send. Public Telegram groups must
 mention or reply to the bot; one conversation can have only one outstanding run
-and the source-wide public backlog is bounded.
+and the source-wide public backlog is bounded. Core admits at most 60 public
+conversations and 60 replies per hour. A grant revokes after 1,000 conversations
+or replies so the owner must review continued broad access.
 
 The core presents the exact proposal for owner confirmation. Ordinary messages
 inside that grant need no repeated confirmations. Incoming-only grants create

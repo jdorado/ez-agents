@@ -9,6 +9,13 @@ import { requireOwnerExecution } from './execution-authority.js'
 import { ownsRun } from './identity.js'
 
 export type TaskCapability = { id: string; description: string; command: string; args: string[] }
+type PublicBudget = {windowStartedAt:number;runs:number;responses:number;totalRuns:number;totalResponses:number}
+const validPublicBudget = (value: unknown): value is PublicBudget => {
+  if (!value || typeof value !== 'object') return false
+  const budget = value as Record<string, unknown>
+  return Object.keys(budget).length === 5 && ['windowStartedAt','runs','responses','totalRuns','totalResponses']
+    .every(key => Number.isSafeInteger(budget[key]) && Number(budget[key]) >= 0)
+}
 export type Task = {
   version: 1 | 2 | 3 | 4; waitForIncoming?: true; untilRevoked?: true; anyConversation?: true; capabilities?: TaskCapability[]; unwatchPending?: true; id: string; runId: string; owner: Owner
   sourceId: string; bindingId: string; accountId: string; conversationId: string
@@ -16,6 +23,7 @@ export type Task = {
   state: 'pending' | 'active' | 'revoked' | 'completed'
   notes: string[]; operations: Record<string, { text: string; state: 'uncertain' | 'accepted'; receipt?: unknown }>
   capabilityOperations?: Record<string, { capabilityId: string; inputHash: string; lease: string; state: 'authorized' | 'completed' }>
+  publicBudget?: PublicBudget
 }
 const idOK = (v: unknown): v is string => typeof v === 'string' && /^task_[a-f0-9]{32}$/.test(v)
 const bounded = (v: unknown, max: number): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max
@@ -49,7 +57,8 @@ export class Tasks {
         !bounded(task.accountId, 200) || !bounded(task.conversationId, 200) || !bounded(task.purpose, 1000) ||
         !bounded(task.context, 6000) || !Number.isFinite(task.createdAt) || !Number.isFinite(task.expiresAt) ||
         !['pending', 'active', 'revoked', 'completed'].includes(task.state) || !Array.isArray(task.notes) ||
-        !task.operations || typeof task.operations !== 'object' || (task.capabilityOperations !== undefined && (!task.capabilityOperations || typeof task.capabilityOperations !== 'object')) || !task.owner) throw new Error('Invalid task record')
+        !task.operations || typeof task.operations !== 'object' || (task.capabilityOperations !== undefined && (!task.capabilityOperations || typeof task.capabilityOperations !== 'object')) ||
+        (task.anyConversation && !validPublicBudget(task.publicBudget)) || !task.owner) throw new Error('Invalid task record')
       return task
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
   }
@@ -103,6 +112,17 @@ export class Tasks {
         (t.anyConversation || e.conversationId === t.conversationId) && e.receivedAt >= t.createdAt))
     return matches.length === 1 ? matches[0] : undefined
   }
+  async admitPublic(id:string):Promise<'admitted'|'defer'|'revoked'> {
+    return this.serial(async()=>{
+      const task=await this.get(id)
+      if(!task?.anyConversation||task.state!=='active')return 'revoked'
+      const now=Date.now(),budget=task.publicBudget!
+      if(now-budget.windowStartedAt>=3600000){budget.windowStartedAt=now;budget.runs=0;budget.responses=0}
+      if(budget.totalRuns>=1000||budget.totalResponses>=1000){task.state='revoked';task.unwatchPending=true;await this.save(task);await this.unwatch(task);return 'revoked'}
+      if(budget.runs>=60)return 'defer'
+      budget.runs++;budget.totalRuns++;await this.save(task);return 'admitted'
+    })
+  }
   private async unwatch(task: Task) {
     const source=await this.source(task)
     await sourceCall(source.socketPath,'task-unwatch',{accountId:task.accountId,conversationId:task.conversationId})
@@ -134,7 +154,7 @@ export class Tasks {
   private prompt(task: Task) {
     const audience = task.anyConversation ? `Any human conversation received by source ${task.sourceId}` : `Contact: ${task.conversationId}`
     const capabilities = task.capabilities ? `\nApproved capabilities (their output may be disclosed):\n${task.capabilities.map(item => `- ${item.id}: ${item.description}; ez ${item.command} ${item.args.join(' ')}`).join('\n')}` : ''
-    return `Allow this messaging task?${task.waitForIncoming ? '\nWait for incoming messages; do not initiate contact.' : ''}\nSource: ${task.sourceId}\nAccount: ${task.accountId}\nAudience: ${audience}\nPurpose: ${task.purpose}\nShared context (all may be disclosed to this audience):\n${task.context}${capabilities}\n${task.untilRevoked ? 'Enabled until owner revocation.' : `Expires: ${new Date(task.expiresAt).toISOString()}`}\nText messages only. No payments, files, owner memory, unlisted capabilities, or settings changes.`
+    return `Allow this messaging task?${task.waitForIncoming ? '\nWait for incoming messages; do not initiate contact.' : ''}\nSource: ${task.sourceId}\nAccount: ${task.accountId}\nAudience: ${audience}\nPurpose: ${task.purpose}\nShared context (all may be disclosed to this audience):\n${task.context}${capabilities}\n${task.anyConversation ? 'Budget: 60 conversations and 60 responses per hour; 1000 total, then owner review.' : ''}\n${task.untilRevoked ? 'Enabled until owner revocation.' : `Expires: ${new Date(task.expiresAt).toISOString()}`}\nText messages only. No payments, files, owner memory, unlisted capabilities, or settings changes.`
   }
   async ownerCall(runId: string, command: string, args: Record<string, unknown>) {
     return this.serial(async () => {
@@ -149,8 +169,11 @@ export class Tasks {
         if(task.untilRevoked) task.unwatchPending=true
         await this.save(task)
         const runStore = new RunStore(this.controlDir)
-        for (const candidate of await runStore.list()) if(candidate.taskId===task.id && candidate.status==='queued')
+        for (const candidate of await runStore.list()) if(candidate.taskId===task.id && candidate.status==='queued') {
           await runStore.patch(candidate.id,{status:'cancelled',endedAt:new Date().toISOString()})
+          if(candidate.external)await new EventSources(this.controlDir).release(candidate.external,task.owner).catch(()=>{})
+        }
+        await runStore.pruneTaskHistory(task.id)
         if(task.unwatchPending) await this.unwatch(task)
         return { id: task.id, state: task.state }
       }
@@ -176,7 +199,7 @@ export class Tasks {
       if ((await this.list()).some(t => ((['active', 'pending'].includes(t.state) && t.expiresAt > Date.now()) || t.unwatchPending) && t.sourceId === source.id &&
         (t.conversationId === args.conversationId || t.anyConversation || args.anyConversation)))
         throw new Error('This contact already has a task; complete or revoke it first')
-      const task: Task = { version: args.anyConversation ? 4 : args.untilRevoked ? 3 : args.waitForIncoming ? 2 : 1, ...(args.untilRevoked ? {untilRevoked:true as const} : {}), ...(args.waitForIncoming ? { waitForIncoming: true as const } : {}), ...(args.anyConversation ? {anyConversation:true as const} : {}), ...(capabilities ? {capabilities} : {}), id: `task_${randomUUID().replaceAll('-', '')}`, runId, owner, sourceId: source.id,
+      const task: Task = { version: args.anyConversation ? 4 : args.untilRevoked ? 3 : args.waitForIncoming ? 2 : 1, ...(args.untilRevoked ? {untilRevoked:true as const} : {}), ...(args.waitForIncoming ? { waitForIncoming: true as const } : {}), ...(args.anyConversation ? {anyConversation:true as const,publicBudget:{windowStartedAt:Date.now(),runs:0,responses:0,totalRuns:0,totalResponses:0}} : {}), ...(capabilities ? {capabilities} : {}), id: `task_${randomUUID().replaceAll('-', '')}`, runId, owner, sourceId: source.id,
         bindingId: source.bindingId, accountId: head.accountId, conversationId: args.conversationId, purpose: args.purpose,
         context: args.context, createdAt: Date.now(), expiresAt: args.untilRevoked ? 8640000000000000 : Date.now() + args.hours * 3600000, state: 'pending', notes: [], operations: {} }
       if (this.prompt(task).length > 3500) throw new Error('Proposal is too long for owner review; shorten the shared context')
@@ -212,8 +235,7 @@ export class Tasks {
           prior.state = 'completed'; await this.save(task); return {accepted:true}
         }
         if (prior) return {capability:selected,lease:prior.lease}
-        task.capabilityOperations = Object.fromEntries(Object.entries(task.capabilityOperations ?? {}).filter(([item,value]) =>
-          item.startsWith(`${run.id}_`) || value.state === 'authorized'))
+        task.capabilityOperations = Object.fromEntries(Object.entries(task.capabilityOperations ?? {}).filter(([item]) => item.startsWith(`${run.id}_`)))
         if (Object.keys(task.capabilityOperations ?? {}).filter(item => item.startsWith(`${run.id}_`)).length >= 8) throw new Error('Channel capability limit reached')
         const operation = {capabilityId:selected.id,inputHash,lease:randomUUID(),state:'authorized' as const}
         task.capabilityOperations = {...task.capabilityOperations,[key]:operation}
@@ -241,6 +263,9 @@ export class Tasks {
         if (prior.text !== args.text) throw new Error('Message key already used for different text')
         return prior // Uncertain sends are never blindly retried.
       }
+      if(task.anyConversation){const budget=task.publicBudget!,now=Date.now();if(now-budget.windowStartedAt>=3600000){budget.windowStartedAt=now;budget.runs=0;budget.responses=0}
+        if(budget.responses>=60||budget.totalResponses>=1000)throw new Error('Public response budget reached; owner review is required')
+        budget.responses++;budget.totalResponses++;await this.save(task)}
       if(task.untilRevoked)task.operations=Object.fromEntries(Object.entries(task.operations).filter(([item,value])=>item.startsWith(`${run.id}_`)||value.state==='uncertain'))
       if (Object.keys(task.operations).filter(k=>!task.untilRevoked || k.startsWith(`${run.id}_`)).length >= 30) throw new Error('Task message limit reached; report to the owner')
       task.operations = { ...task.operations, [key]: { text: args.text, state: 'uncertain' } }

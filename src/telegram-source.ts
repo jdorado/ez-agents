@@ -95,7 +95,11 @@ export class TelegramSource {
     const watches=await this.read('watches.json',{});if(!(watches[args.conversationId]>Date.now())&&!(watches['*']>Date.now()))throw new Error('Watch expired')
     const file=`send_${args.key}.json`,prior=await this.read(file,null)
     if(prior) {if(prior.text!==args.text||prior.conversationId!==args.conversationId)throw new Error('Key reused');return prior}
-    const receipt={accountId:this.accountId,conversationId:args.conversationId,key:args.key,text:args.text,state:'uncertain',receiptId:[] as number[]}
+    const receiptFiles=(await readdir(this.directory)).filter(name=>/^send_[a-zA-Z0-9_-]{1,240}\.json$/.test(name))
+    const accepted=(await Promise.all(receiptFiles.map(async name=>({name,value:await this.read(name,null)})))).filter(item=>item.value?.state==='accepted').sort((a,b)=>(a.value.createdAt??'').localeCompare(b.value.createdAt??''))
+    for(const item of accepted.slice(0,Math.max(0,receiptFiles.length-99)))await rm(join(this.directory,item.name),{force:true})
+    if(receiptFiles.length-accepted.length>=100)throw new Error('Too many uncertain Telegram sends')
+    const receipt={accountId:this.accountId,conversationId:args.conversationId,key:args.key,text:args.text,state:'uncertain',createdAt:new Date().toISOString(),receiptId:[] as number[]}
     await atomicTaskFile(join(this.directory,file),receipt)
     receipt.receiptId=await this.send(Number(args.conversationId),args.text);receipt.state='accepted'
     await atomicTaskFile(join(this.directory,file),receipt);return receipt
