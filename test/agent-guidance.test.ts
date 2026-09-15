@@ -25,6 +25,14 @@ test('shared guidance makes direct owner chat replies a native transport action'
   assert.match(guidance, /unchanged scheduled\nmonitoring stays quiet/)
 })
 
+test('shared guidance completes authorized contribution and release loops', () => {
+  const guidance = agentGuidance()
+  assert.match(guidance, /independent final-head review, required CI and\napplicable QA/)
+  assert.match(guidance, /mandate includes merge\nor release authority, then merge; release authority includes the merge needed for\nthe release. Otherwise leave the reviewed PR ready and state the remaining\nauthority/)
+  assert.match(guidance, /immutable\nartifact publication, the repository's reviewed GitHub publisher, registry\nreadback/)
+  assert.match(guidance, /Local QA,\ndiagnostics, auth-only work and deployment remain separate authority boundaries/)
+})
+
 test('package guidance resolution ignores a workspace shadow file', async () => {
   const root = path.join(tmpdir(), `ez-guidance-${randomUUID()}`)
   await mkdir(root, { recursive: true })

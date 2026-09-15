@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.0-beta.31
+
+- Make the owner-authorized contribution lifecycle explicit in shipped agent
+  guidance: take a coherent change through independent final-head review, CI,
+  applicable QA and, when authorized, merge. Release authority includes the
+  merge needed for publication, which continues through the reviewed GitHub
+  publisher, registry readback and eligible runtime verification. Preserve local
+  QA, diagnostics, auth-only work and deployment as separate boundaries.
+
 ## 0.1.0-beta.30
 
 - Bind installed native command launchers to the deployment's canonical control

@@ -67,6 +67,16 @@ a conflicting runner, context/prompt reconstruction or competing agent-turn queu
 Revise a violating patch before approval or merge; document real capability gaps
 instead of weakening the boundary to fit existing code.
 
+For an owner-authorized product, fix or contribution, complete one coherent
+loop: current main, focused PR, independent final-head review, required CI and
+applicable QA. When the owner request or saved maintainer mandate includes merge
+or release authority, then merge; release authority includes the merge needed for
+the release. Otherwise leave the reviewed PR ready and state the remaining
+authority. When release authority applies, continue through immutable
+artifact publication, the repository's reviewed GitHub publisher, registry
+readback and eligible installed-runtime verification. Local QA,
+diagnostics, auth-only work and deployment remain separate authority boundaries.
+
 Within the owner's request or saved contribution mandate, you may report evidenced
 existing violations and submit focused fixes. Check existing issues, PRs and active
 owners first; add sanitized evidence and a concrete next action to the existing
