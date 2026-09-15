@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -11,7 +11,7 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { InboxStore } from '../src/inbox.js'
 import { ApprovalStore } from '../src/approval.js'
-import { Tasks } from '../src/tasks.js'
+import { atomicTaskFile, Tasks } from '../src/tasks.js'
 import { EventSources } from '../src/event-sources.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { packageVersion } from '../src/version.js'
@@ -218,6 +218,9 @@ test('an approved any-conversation channel grant admits unknown private and grou
     await new Promise(resolve=>setTimeout(resolve,1100)) // Telegram timestamps have one-second precision.
     await f.relay.bot.handleUpdate(external(2,202,202))
     await f.relay.bot.handleUpdate(external(3,-303,303))
+    const unaddressedOwner=external(4,-404,101)
+    unaddressedOwner.message!.text='Plain owner follow-up'
+    await f.relay.bot.handleUpdate(unaddressedOwner)
     assert.equal((await new InboxStore(f.dir).status()).pending,1) // Only the owner's discovery message used owner intake.
     await new Promise(resolve=>setTimeout(resolve,2100))
     const sources=new EventSources(f.dir),registration=(await sources.list()).find(source=>source.id==='telegram')!
@@ -228,6 +231,25 @@ test('an approved any-conversation channel grant admits unknown private and grou
     await new Promise(resolve=>setTimeout(resolve,80));await f.relay.drainSources()
     const externalRuns=(await new RunStore(f.dir).list()).filter(run=>run.taskId===proposal.id)
     assert.deepEqual(externalRuns.map(run=>run.external?.eventIds[0]).sort(),['tg_202_2','tg_n303_3'])
+  } finally { await f.close() }
+})
+
+test('a full public Telegram buffer cannot reroute an addressed owner message to owner intake', async () => {
+  const f = await fixture()
+  const group = (id:number):Update => ({update_id:id,message:{message_id:id,date:Math.floor(Date.now()/1000),text:'@fixture_bot Public question',from:{id:101,is_bot:false,first_name:'Fixture'},chat:{id:-404,type:'supergroup',title:'Public'}}})
+  try {
+    await f.relay.bot.handleUpdate(group(1)) // Initialize the built-in source through legacy discovery.
+    const owner=await ownerRun(f.dir,'owner_public_full')
+    const tasks=new Tasks(f.dir),proposal:any=await tasks.ownerCall(owner.id,'propose',{sourceId:'telegram',conversationId:'*',purpose:'Answer public questions',context:'Public answers only',hours:24,waitForIncoming:true,untilRevoked:true,anyConversation:true})
+    await new ApprovalStore(f.dir).recordDecision(proposal.id,'approved',101)
+    await tasks.decide(proposal.id)
+    const [accountDirectory]=await readdir(join(f.dir,'telegram-source')),sourceDirectory=join(f.dir,'telegram-source',accountDirectory)
+    for(let cursor=1;cursor<=100;cursor++)await atomicTaskFile(join(sourceDirectory,`tg_500_${cursor}.json`),{id:`tg_500_${cursor}`,conversationId:'500',receivedAt:Date.now(),text:'Question',cursor})
+    await f.relay.bot.handleUpdate(group(2))
+    assert.equal((await new InboxStore(f.dir).status()).pending,1)
+    const events=(await readdir(sourceDirectory)).filter(file=>/^tg_(?:n)?\d+_\d+\.json$/.test(file))
+    assert.equal(events.length,100)
+    assert.equal(events.includes('tg_n404_2.json'),false)
   } finally { await f.close() }
 })
 

@@ -85,7 +85,7 @@ test('Telegram wildcard watches capture private chats and groups but still send 
   const sender={id:202,is_bot:false,first_name:'Visitor'}
   const message=(chat:number,id:number)=>({message_id:id,date:Math.ceil(Date.now()/1000),chat:chat>0?{id:chat,type:'private',first_name:'Visitor'}:{id:chat,type:'group',title:'Public'},text:'Question'} as any)
   assert.equal(await source.capture(1,message(202,1),sender),true)
-  assert.equal(await source.capture(2,message(-303,2),sender,false),false)
+  assert.equal(await source.capture(2,message(-303,2),sender,false),true)
   assert.equal(await source.capture(2,message(-303,2),sender,true),true)
   const registration=(await new EventSources(dir).list())[0],batch=await new EventSources(dir).batch(registration)
   assert.deepEqual(batch.events.map(event=>event.conversationId).sort(),['-303','202'])
