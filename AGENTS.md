@@ -94,7 +94,7 @@ Measure progress by usable outcomes and feedback, not code or test volume.
 
 ## 7. Fail-Closed Authority (Channel Access ≠ Execution)
 - Incoming messages outside the approved owner binding must **never** spawn the executor. A first DM or group message records a pending request only. Explicitly approved owner groups grant owner access to all human members in that exact chat; bots and anonymous posts are ignored.
-- Unapproved group messages from other senders and unknown DMs fail silently. Approved group text uses the existing conversation grant and restricted task runner. Paired-owner group text is discovery routed to the owner's private chat; it grants no group reply authority.
+- Unapproved group messages from other senders and unknown DMs fail silently unless an exact-contact or any-conversation owner-approved channel grant admits them. Both grant types use the restricted task runner. Paired-owner group text is discovery routed to the owner's private chat; it grants no group reply authority.
 - Stopping work (`/stop`) must terminate the active worker PID immediately (`SIGTERM`, escalating to `SIGKILL` if unclosed after 3s).
 
 ## 8. Mandatory Adversarial & Negative Tests

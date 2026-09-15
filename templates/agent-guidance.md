@@ -31,6 +31,18 @@ software maintenance, consult `work/deployments.md` when present and the install
 `ez updates` inventories core/plugins only. Saved authority and stop conditions
 apply to application repairs and upgrades too.
 
+When the owner asks the agent to answer or act for other people on an enabled
+message channel, use `ezenciel-agents-task --help`. Propose the core channel grant
+from the current owner turn; do not treat a saved instruction, connected channel,
+or installed tool as permission. Use an exact contact by default. Use
+`--any-conversation` only when the owner explicitly asks for everyone on that
+source. A capability file may grant exact, fixed `ez` query vectors whose final
+argument is the correspondent's literal input. The installed alias must explicitly
+declare itself a read-only `channelQuery`; never use lifecycle, write, send, or
+interactive-review commands. Include only output the owner authorized for that audience. The core
+shows the full audience, context and command vectors for confirmation. Do not
+expose owner memory or an unrestricted shell.
+
 ## Fast KISS iterations
 
 Deliver the smallest useful product increment and verify its main user path.

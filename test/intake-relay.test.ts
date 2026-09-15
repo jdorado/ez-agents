@@ -12,6 +12,7 @@ import { RunStore } from '../src/runs.js'
 import { InboxStore } from '../src/inbox.js'
 import { ApprovalStore } from '../src/approval.js'
 import { Tasks } from '../src/tasks.js'
+import { EventSources } from '../src/event-sources.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { packageVersion } from '../src/version.js'
 import type { Config } from '../src/config.js'
@@ -200,6 +201,33 @@ test('owner group discovery routes only to the private chat and rechecks identit
     await new ControlStore(f.dir, 1000).revokeOwner()
     await f.relay.drainInbox(true)
     assert.equal(f.launched.length, 1)
+  } finally { await f.close() }
+})
+
+test('an approved any-conversation channel grant admits unknown private and group text through restricted task runs', async () => {
+  const f = await fixture()
+  const external = (id:number,chatId:number,sender:number):Update => ({update_id:id,message:{message_id:id,date:Math.floor(Date.now()/1000),text:chatId>0?'Public question':'@fixture_bot Public question',from:{id:sender,is_bot:false,first_name:'Visitor'},chat:chatId>0?{id:chatId,type:'private',first_name:'Visitor'}:{id:chatId,type:'supergroup',title:'Public'}}})
+  try {
+    // One unbound owner group message initializes the built-in Telegram source.
+    await f.relay.bot.handleUpdate(external(1,-101,101))
+    const owner=await ownerRun(f.dir,'owner_public')
+    const tasks=new Tasks(f.dir),proposal:any=await tasks.ownerCall(owner.id,'propose',{sourceId:'telegram',conversationId:'*',purpose:'Answer public questions',context:'Public answers only',hours:24,waitForIncoming:true,untilRevoked:true,anyConversation:true})
+    await new ApprovalStore(f.dir).recordDecision(proposal.id,'approved',101)
+    await tasks.decide(proposal.id)
+    await new RunStore(f.dir).patch(owner.id,{status:'completed'})
+    await new Promise(resolve=>setTimeout(resolve,1100)) // Telegram timestamps have one-second precision.
+    await f.relay.bot.handleUpdate(external(2,202,202))
+    await f.relay.bot.handleUpdate(external(3,-303,303))
+    assert.equal((await new InboxStore(f.dir).status()).pending,1) // Only the owner's discovery message used owner intake.
+    await new Promise(resolve=>setTimeout(resolve,2100))
+    const sources=new EventSources(f.dir),registration=(await sources.list()).find(source=>source.id==='telegram')!
+    const batch=await sources.batch(registration)
+    assert.deepEqual(batch.events.map(event=>event.id).sort(),['tg_202_2','tg_n303_3'])
+    assert.equal((await tasks.match('telegram',registration.bindingId,batch.events.slice(0,1)))?.id,proposal.id)
+    await f.relay.drainSources()
+    await new Promise(resolve=>setTimeout(resolve,80));await f.relay.drainSources()
+    const externalRuns=(await new RunStore(f.dir).list()).filter(run=>run.taskId===proposal.id)
+    assert.deepEqual(externalRuns.map(run=>run.external?.eventIds[0]).sort(),['tg_202_2','tg_n303_3'])
   } finally { await f.close() }
 })
 

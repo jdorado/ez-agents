@@ -168,6 +168,13 @@ attention during setup/use; it does not enable an automated reviewer. Declaring
 false never grants permissions, disables core checks or certifies a plugin safe.
 The core owns authority; plugins own provider transport/authentication/receipts.
 
+A command may additionally set `"channelQuery": true` only when all four
+exposure fields are explicit and describe external input with no external send,
+record change, or interactive review. This is narrow eligibility for inclusion
+in an owner-approved restricted channel grant, not an activated permission or a
+safety label for the rest of the plugin. Mixed read/write aliases are ineligible;
+publish a dedicated query-only alias.
+
 Owner adapters retain owner access. External correspondence can run only in an
 approved core messaging task through the restricted task runner. Declarations
 and monitoring subscriptions alone never grant task execution. See

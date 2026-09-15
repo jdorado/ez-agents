@@ -31,9 +31,11 @@ creation; it does not promise exactly-once external actions after executor failu
 
 Before starting queued work, recheck binding, owner and provider eligibility.
 Unavailable sources keep work queued; removed subscriptions cancel empty runs.
-No check can retract work already started. Eligible external runs are now recorded
-as blocked (`external-execution-unavailable`), with no executor launch. They do
-not borrow the owner workspace, session or tools. The existing source cursor and
-deduplication remain intact; blocked work does not retry automatically. Work status
-shows the blocked count. No provider SDK or provider-specific authority is imported.
+Events matching exactly one active core task launch its restricted fresh-session
+runner; unmatched events are recorded as blocked (`external-execution-unavailable`)
+with no executor launch. Neither borrows the owner workspace, session or tools.
+Any-conversation tasks admit at most one outstanding run per conversation and
+eight across the public source queue; owner work is preferred and preempts an
+active public run. The source cursor and deterministic run IDs preserve replay.
+No provider SDK or provider-specific authority is imported into core.
 See [authority boundaries](authority-boundaries.md).

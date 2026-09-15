@@ -27,7 +27,7 @@ async function fixture(t: test.TestContext, taskProtocol = false) {
     let body = ''; for await (const c of req) body += c
     const { command, args } = JSON.parse(body)
     if (offline) { res.statusCode = 503; res.end('{}'); return }
-    const data = command === 'events-head' ? { cursor: rows.length, ...(taskProtocol ? { taskProtocol: 'message-v1', accountId: 'test-account' } : {}) }
+    const data = command === 'events-head' ? { cursor: rows.length, ...(taskProtocol ? { taskProtocol: 'message-v1', accountId: 'test-account', persistentWatch:true, wildcardWatch:true } : {}) }
       : command === 'events-check' ? { events: enabled ? rows.filter(e => args.ids.includes(e.id)) : [] }
       : { cursor: rows.length, events: enabled ? rows.filter(e => Number(e.id) > args.after) : [] }
     res.end(JSON.stringify({ ok: true, data }))
@@ -147,4 +147,17 @@ test('relay launches the approved initial task and routes only matching replies 
   await f.relay.drainSources()
   assert.equal(f.launches.length, 2)
   assert.equal((await f.runs.list()).find(r => r.external?.eventIds.includes('2'))?.status, 'cancelled')
+})
+
+test('any-conversation intake keeps a bounded public backlog',async t=>{
+  const f=await fixture(t,true);await f.sources.register('fixture',f.socketPath,f.owner)
+  const ownerRun=await f.runs.create({chatId:101,telegramUserId:101,texts:['Serve public questions']});await f.runs.patch(ownerRun.id,{status:'running',pid:process.pid})
+  const tasks=new Tasks(f.dir),proposal:any=await tasks.ownerCall(ownerRun.id,'propose',{sourceId:'fixture',conversationId:'*',purpose:'Answer public questions',context:'Public context',hours:24,waitForIncoming:true,untilRevoked:true,anyConversation:true})
+  await new ApprovalStore(f.dir).recordDecision(proposal.id,'approved',101);await tasks.decide(proposal.id)
+  f.setRows(Array.from({length:9},(_,index)=>({...event(String(index+1),`public-${index+1}`),receivedAt:Date.now()})))
+  await new Promise(resolve=>setTimeout(resolve,2100))
+  await f.relay.drainSources()
+  const taskRuns=(await f.runs.list()).filter(run=>run.taskId===proposal.id)
+  assert.equal(taskRuns.length,8)
+  assert.ok((await f.sources.batch((await f.sources.list())[0])).events.length>0,'unadmitted source batch stays pinned')
 })

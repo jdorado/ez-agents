@@ -231,7 +231,8 @@ export class RunStore {
   }
 
   async nextQueued(background?: boolean): Promise<RunRecord | undefined> {
-    return (await this.list()).find((run) => run.status === 'queued' && (background === undefined || Boolean(run.scheduled) === background))
+    const queued = (await this.list()).filter((run) => run.status === 'queued' && (background === undefined || Boolean(run.scheduled) === background))
+    return queued.find(run => !run.taskId) ?? queued[0]
   }
 
   async deliveryStatus(): Promise<{ failed: number; unknown: number }> {
@@ -438,6 +439,15 @@ export class RunStore {
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     }
     return [...messages.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(item => ({ id: item.id, text: item.text! }))
+  }
+
+  async applicationApprovals(runId:string):Promise<{id:string;prompt:string;state:string}[]> {
+    assertId(runId);await this.ensure();const result=[] as {id:string;prompt:string;state:string}[]
+    for(const name of await readdir(this.outboxDir))if(name.startsWith(`${runId}_`)&&name.endsWith('.json')&&!name.includes('.tmp')&&!name.endsWith('.failed.json'))try{
+      const item=JSON.parse(await readFile(path.join(this.outboxDir,name),'utf8')) as OutboxItem
+      if(item.runId===runId&&item.type==='approval'&&item.approvalActionId&&item.approvalPrompt)result.push({id:item.approvalActionId,prompt:item.approvalPrompt,state:name.endsWith('.sent.json')?'delivered':'pending'})
+    }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error}
+    return result
   }
 
   async claimOutbox(id: string): Promise<boolean> {

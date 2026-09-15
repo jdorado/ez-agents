@@ -260,6 +260,12 @@ test('exposure is conservative discovery metadata and does not change literal di
   f.manifest.commands.sample.exposure=value;
   assert.throws(()=>validate(f.manifest,f.deployment,after.files),/exposure/);
  }
+ const query=structuredClone(f.manifest);query.commands.sample={...query.commands.sample,channelQuery:true,exposure:{receivesExternalContent:true,sendsExternally:false,changesRecords:false,requiresReview:false}};
+ validate(query,f.deployment,after.files);
+ for(const exposure of [undefined,{receivesExternalContent:true,sendsExternally:false,changesRecords:true,requiresReview:false}]) {
+  const unsafe=structuredClone(query);unsafe.commands.sample.exposure=exposure;
+  assert.throws(()=>validate(unsafe,f.deployment,after.files),/Channel queries/);
+ }
 });
 
 test('standalone CLI has discoverable setup, independent guidance and status without Telegram',async t=>{

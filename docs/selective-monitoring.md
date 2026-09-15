@@ -12,8 +12,9 @@ is a reminder, never an activated source, watch or reply permission.
 Keep mode names internal. Linking/syncing an account defaults to quiet capture;
 finish connection verification, then at most one short optional prompt such as
 “WhatsApp is connected. Want me to follow up with anyone?” Do not present a
-technical three-mode menu or suggest blanket autonomous replies that v1 cannot
-safely authorize. If the owner already gave a job, continue it without this prompt.
+technical three-mode menu. Suggest an any-conversation reply grant only when the
+owner has actually asked to serve everyone on that source. If the owner already
+gave a job, continue it without this prompt.
 
 Infer the complete job from ordinary language:
 
@@ -42,7 +43,8 @@ when it matters to that proposed job; never silently expand or renew permission.
 - Selected: wake for named contacts only. Never turn on all-inbox mode to satisfy
   a one-contact request.
 - All: attention for all eligible incoming contacts; requires that broader
-  owner request. Attention alone never grants autonomous reply permission.
+  owner request. Attention alone never grants autonomous reply permission; a
+  separate approved any-conversation task does.
 
 For an approved core reply task, the provider's task-watch supplies expiring
 selected attention even if its general policy remains manual. That is expected:
@@ -94,6 +96,54 @@ Keep the shared context limited to what every group member may know. All human
 members of that approved group may converse; this does not grant owner tools.
 The group runs with the existing restricted messaging runner, and its notes are
 separate from private PA memory. Group text is supported; media is not yet.
+
+## Everyone on an enabled channel
+
+When the owner explicitly asks to answer anyone on one channel, propose one
+incoming-only `--any-conversation` grant for that registered source. The flag
+also selects `--until-revoked` and contact `*`. Do not widen “this group,” “this
+person,” or “customers in this list” into everyone. The source must support a
+wildcard watch; otherwise report that adapter gap without inventing a parallel
+poller. Telegram's built-in source supports private chats and groups. Other
+channels use the same core grant when their adapter advertises the same event-
+source contract. Authenticated owner application channels remain owner routes;
+an untrusted web, voice or phone audience needs an event-source adapter and this
+grant.
+
+Capabilities are optional and provider-neutral. Put an array in a private
+capability file; each entry has `id`, `description`, registered `command`, and a
+fixed `args` array ending in `"--", "{input}"`. Example for an already installed
+Library source:
+
+```json
+[
+  {
+    "id": "knowledge",
+    "description": "Search the approved public Library source",
+    "command": "library-query",
+    "args": ["--library", "public", "--limit", "5", "--", "{input}"]
+  }
+]
+```
+
+The registered alias must declare `channelQuery: true` with explicit exposure
+metadata showing that it accepts external input but cannot send, change records,
+or require interactive review. Core verifies that installed declaration on every
+invocation. Verify the selected source and query alias first, then propose:
+
+```sh
+ezenciel-agents-task propose --source telegram --any-conversation \
+  --purpose "Answer questions using approved public knowledge" \
+  --context-file work/public-answer-policy.txt \
+  --capability-file work/public-answer-capabilities.json
+```
+
+The approval names the audience, disclosure context and exact command vectors.
+Command output may be shown to anyone in that audience. External writes need
+their own bounded tool contract and receipts. Revocation stops new capture,
+cancels queued replies and rechecks every tool/send. Public Telegram groups must
+mention or reply to the bot; one conversation can have only one outstanding run
+and the source-wide public backlog is bounded.
 
 The core presents the exact proposal for owner confirmation. Ordinary messages
 inside that grant need no repeated confirmations. Incoming-only grants create

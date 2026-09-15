@@ -1,11 +1,12 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { assertId } from './identity.js'
+import { ownerEpoch, ownerId, type Owner } from './control-state.js'
 
 export type ApprovalDecision = 'pending' | 'approved' | 'denied'
 
 export type ApprovalRecord = {
-  version: 1
+  version: 1 | 2
   actionId: string
   runId?: string
   prompt: string
@@ -14,19 +15,22 @@ export type ApprovalRecord = {
   decidedAt?: string
   decidedBy?: number
   decisionUpdateId?: number
+  decidedOwnerId?: string
+  decidedOwnerEpoch?: string
 }
 
 const isApprovalRecord = (value: unknown): value is ApprovalRecord => {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<ApprovalRecord>
   return (
-    candidate.version === 1 &&
+    [1,2].includes(candidate.version ?? 0) &&
     typeof candidate.actionId === 'string' &&
     /^[a-zA-Z0-9_-]{1,40}$/.test(candidate.actionId) &&
     typeof candidate.prompt === 'string' &&
     ['pending', 'approved', 'denied'].includes(candidate.decision ?? '') &&
     typeof candidate.createdAt === 'string' &&
-    Number.isFinite(Date.parse(candidate.createdAt))
+    Number.isFinite(Date.parse(candidate.createdAt)) &&
+    (candidate.version === 1 || typeof candidate.decidedOwnerId === 'string' && typeof candidate.decidedOwnerEpoch === 'string')
   )
 }
 
@@ -102,6 +106,18 @@ export class ApprovalStore {
     const temporary = `${file}.${process.pid}.tmp`
     await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
     await rename(temporary, file)
+    return record
+  }
+
+  async recordOwnerDecision(actionId: string, decision: 'approved' | 'denied', owner: Owner): Promise<ApprovalRecord> {
+    await this.ensure()
+    const existing = await this.getDecision(actionId)
+    if (!existing) throw new Error('Unknown approval request')
+    if (existing.decision !== 'pending') throw new Error('Approval already decided')
+    if (Date.now() - Date.parse(existing.createdAt) > 900_000) throw new Error('Approval expired')
+    const record: ApprovalRecord = {...existing,version:2,decision,decidedAt:new Date().toISOString(),decidedOwnerId:ownerId(owner),decidedOwnerEpoch:ownerEpoch(owner)}
+    const file=this.filePath(actionId),temporary=`${file}.${process.pid}.tmp`
+    await writeFile(temporary,`${JSON.stringify(record,null,2)}\n`,{mode:0o600});await rename(temporary,file)
     return record
   }
 
