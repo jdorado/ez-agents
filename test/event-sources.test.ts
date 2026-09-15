@@ -2,7 +2,7 @@ import { Tasks } from '../src/tasks.js'
 import { ApprovalStore } from '../src/approval.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
@@ -181,4 +181,30 @@ test('application-only owner can approve and execute a public channel task',asyn
   const publicRun=(await f.runs.list()).find(run=>run.taskId===proposal.id)
   assert.equal(publicRun?.ownerId,ownerId(f.owner));assert.equal(publicRun?.chatId,undefined)
   f.children[0].kill();await until(async()=>!(await f.runs.list()).some(run=>run.status==='running'))
+})
+
+test('application-only public exhaustion cancels and releases without launching',async t=>{
+  const f=await fixture(t,true,true),source=(await f.sources.register('fixture',f.socketPath,f.owner))!
+  const binding=(await f.relay.applicationChannel.bindings.register('app','y'.repeat(48),f.owner))!
+  const ownerRun=await f.runs.create({id:`r_app_${'b'.repeat(64)}`,ownerId:ownerId(f.owner),ownerEpoch:ownerEpoch(f.owner),texts:['Serve public questions'],
+    application:{bindingId:binding.bindingId,requestId:'owner-request',scope:'main'}})
+  await f.runs.patch(ownerRun.id,{status:'running'})
+  const tasks=new Tasks(f.dir),proposal:any=await tasks.ownerCall(ownerRun.id,'propose',{sourceId:source.id,conversationId:'*',purpose:'Answer public questions',context:'Public context',hours:24,waitForIncoming:true,untilRevoked:true,anyConversation:true})
+  await new ApprovalStore(f.dir).recordOwnerDecision(proposal.id,'approved',f.owner);await tasks.decide(proposal.id)
+  const file=join(f.dir,'tasks',`${proposal.id}.json`),task=JSON.parse(await readFile(file,'utf8'));task.publicBudget.totalRuns=1000;await writeFile(file,JSON.stringify(task))
+  await f.runs.patch(ownerRun.id,{status:'completed',endedAt:new Date().toISOString()})
+  f.setRows([{...event('1','visitor'),receivedAt:Date.now()}]);await new Promise(resolve=>setTimeout(resolve,2100));await f.relay.drainSources()
+  assert.equal(f.launches.length,0)
+  const rejected=(await f.runs.list()).find(run=>run.external)
+  assert.equal(rejected?.status,'cancelled');assert.equal(rejected?.blockReason,'external-execution-unavailable');assert.equal(rejected?.externalReleased,true)
+  assert.equal((await tasks.get(proposal.id))?.state,'revoked');assert.deepEqual(f.releases,[['1']])
+})
+
+test('terminal event release persists success and retries a provider outage',async t=>{
+  const f=await fixture(t),source=(await f.sources.register('fixture',f.socketPath,f.owner))!,row=event('1')
+  const run=await f.runs.create({id:'event_release_retry',chatId:101,telegramUserId:101,texts:[],external:{sourceId:source.id,bindingId:source.bindingId,conversationId:row.conversationId,eventIds:[row.id]}})
+  await f.runs.patch(run.id,{status:'cancelled',endedAt:new Date().toISOString()})
+  f.setOffline(true);await f.relay.drainSources();assert.equal((await f.runs.get(run.id))?.externalReleased,undefined)
+  f.setOffline(false);f.setRows([]);await f.relay.drainSources()
+  assert.equal((await f.runs.get(run.id))?.externalReleased,true);assert.deepEqual(f.releases,[['1']])
 })

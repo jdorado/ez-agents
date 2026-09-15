@@ -46,8 +46,9 @@ the default.
 Public admission is capped at eight outstanding conversations, 60 conversations
 and 60 replies per hour, and 1,000 conversations or replies across the life of a
 grant. The cumulative limit revokes the grant and requires fresh owner review.
-Terminal public-run evidence retains the most recent 100 runs per grant; released
-provider events and accepted Telegram send receipts are also bounded.
+Terminal public-run evidence retains the most recent 100 released runs per grant;
+unreleased runs remain durable for retry. Released provider events and accepted
+Telegram send receipts are also bounded.
 
 A channel grant may include up to eight owner-approved query capabilities. Each is an
 exact registered `ez` command plus fixed arguments ending in literal

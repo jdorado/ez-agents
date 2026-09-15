@@ -38,8 +38,9 @@ Any-conversation tasks admit at most one outstanding run per conversation and
 eight across the public source queue, with persisted limits of 60 conversations
 and 60 replies per hour and 1,000 across a grant. The cumulative limit revokes
 the grant. Owner work is preferred and preempts an active public run. Terminal
-history retains the latest 100 runs per public grant; providers supporting
-`releaseEvents` are told to discard terminal source events. The source cursor and
+history retains the latest 100 released runs per public grant; providers supporting
+`releaseEvents` are told to discard terminal source events. Release completion is
+persisted, and a failed release is retried before that run can be pruned. The source cursor and
 deterministic run IDs preserve replay. No provider SDK or provider-specific
 authority is imported into core.
 See [authority boundaries](authority-boundaries.md).

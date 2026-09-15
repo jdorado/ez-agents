@@ -171,7 +171,10 @@ export class Tasks {
         const runStore = new RunStore(this.controlDir)
         for (const candidate of await runStore.list()) if(candidate.taskId===task.id && candidate.status==='queued') {
           await runStore.patch(candidate.id,{status:'cancelled',endedAt:new Date().toISOString()})
-          if(candidate.external)await new EventSources(this.controlDir).release(candidate.external,task.owner).catch(()=>{})
+          if(candidate.external)try {
+            await new EventSources(this.controlDir).release(candidate.external,task.owner)
+            await runStore.patch(candidate.id,{externalReleased:true})
+          } catch { /* The relay retries unreleased terminal events. */ }
         }
         await runStore.pruneTaskHistory(task.id)
         if(task.unwatchPending) await this.unwatch(task)

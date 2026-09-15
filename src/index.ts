@@ -161,7 +161,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // stat uses the effective UID; access uses the relay's isolated real UID.
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
-      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled && !(run.taskId && run.external)) return
+      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled && !run.external) return
       if (!run.scheduled && await runs.running(false)) return
       const owner = (await control.status()).owner
       if (!owner || !ownsRun(owner, run)) {
@@ -331,12 +331,20 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   }
 
   const unavailableSources = new Set<string>()
-  const releaseExternal = async (run: RunRecord) => {
-    if (!run.external) return
+  const releaseExternal = async (run: RunRecord):Promise<boolean> => {
+    if (!run.external) return true
+    const current=await runs.get(run.id)
+    if (current?.externalReleased) {if(run.taskId)await runs.pruneTaskHistory(run.taskId);return true}
     const task = run.taskId ? await tasks.get(run.taskId).catch(() => null) : null
-    const owner = task?.owner ?? (await control.status()).owner
-    if (owner) await sources.release(run.external,owner).catch(() => {})
-    if (run.taskId) await runs.pruneTaskHistory(run.taskId)
+    const registered=(await sources.list()).find(source=>source.id===run.external!.sourceId&&source.bindingId===run.external!.bindingId)
+    const owner=task?.owner ?? (registered&&ownsRun(registered.owner,run)?registered.owner:(await control.status()).owner)
+    if(!owner)return false
+    try {
+      await sources.release(run.external,owner)
+      await runs.patch(run.id,{externalReleased:true})
+      if(run.taskId)await runs.pruneTaskHistory(run.taskId)
+      return true
+    } catch {unavailableSources.add(run.external.sourceId);return false}
   }
   let sourceWork: Promise<void> | undefined
   const drainSources = (): Promise<void> => {
@@ -365,6 +373,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         } catch { ownerStopped.add(child); terminateJob(child); continue }
         if (await scheduler.cancelled(id)) terminateJob(child)
       }
+      const pendingRelease=(await runs.list()).find(run=>run.external&&!run.externalReleased&&['completed','failed','cancelled'].includes(run.status))
+      if(pendingRelease)await releaseExternal(pendingRelease)
       if (!owner) return
       if (!config.channelBackendUrl) {
       await drainTaskRequests()

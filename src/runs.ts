@@ -42,6 +42,7 @@ export type RunRecord = {
   nativeSessionId?: string
   scheduled?: ScheduledOrigin
   external?: ExternalOrigin
+  externalReleased?: true
   application?: ApplicationOrigin
   delivery?: { bindingId: string; scope: string }
 }
@@ -89,6 +90,7 @@ const isRun = (value: unknown): value is RunRecord => {
     (candidate.scheduled === undefined || validScheduledOrigin(candidate.scheduled)) &&
     (candidate.blockReason === undefined || ['owner-mismatch', 'external-execution-unavailable'].includes(candidate.blockReason)) &&
     (candidate.external === undefined || validOrigin(candidate.external)) &&
+    (candidate.externalReleased === undefined || candidate.external !== undefined && candidate.externalReleased === true) &&
     (candidate.id.startsWith('r_app_') === (candidate.application !== undefined)) &&
     (candidate.application === undefined || (validApplicationOrigin(candidate.application) && candidate.external === undefined && candidate.scheduled === undefined && candidate.taskId === undefined && !candidate.replyOnly)) &&
     (candidate.delivery === undefined || (!!candidate.scheduled && validApplicationOrigin({...candidate.delivery, requestId: candidate.id}) && candidate.application === undefined)) &&
@@ -186,7 +188,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased'>>,
   ): Promise<RunRecord> {
     const prior = this.changes.get(id) || Promise.resolve()
     const work = prior.catch(() => {}).then(async () => {
@@ -220,7 +222,7 @@ export class RunStore {
   }
 
   async pruneTaskHistory(taskId:string,keep=100):Promise<void>{
-    const terminal=(await this.list()).filter(run=>run.taskId===taskId&&['completed','failed','cancelled'].includes(run.status)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt))
+    const terminal=(await this.list()).filter(run=>run.taskId===taskId&&['completed','failed','cancelled'].includes(run.status)&&(run.external===undefined||run.externalReleased===true)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt))
     for(const run of terminal.slice(0,Math.max(0,terminal.length-keep)))await rm(this.runPath(run.id),{force:true})
   }
 
