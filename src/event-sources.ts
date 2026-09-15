@@ -2,21 +2,22 @@ import { mkdir, open, readFile, rename, unlink, lstat } from 'node:fs/promises'
 import { join, isAbsolute } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { request } from 'node:http'
-import type { Owner } from './control-state.js'
+import { sameOwner, validOwner, type Owner } from './control-state.js'
 
-export type ExternalOrigin = { sourceId: string; bindingId: string; eventIds: string[] }
+export type ExternalOrigin = { sourceId: string; bindingId: string; conversationId?: string; eventIds: string[] }
 export type SourceEvent = { id: string; conversationId: string; receivedAt: number; text: string }
 export type EventSource = { id: string; bindingId: string; socketPath: string; initialCursor: number; owner: Owner }
 const identifier = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(s)
 export const validOrigin = (o: unknown): o is ExternalOrigin => {
   const v = o as ExternalOrigin | undefined
-  return !!v && identifier(v.sourceId) && identifier(v.bindingId) && Array.isArray(v.eventIds) && v.eventIds.length > 0 && v.eventIds.length <= 10 && v.eventIds.every(identifier)
+  return !!v && identifier(v.sourceId) && identifier(v.bindingId) &&
+    (v.conversationId === undefined || typeof v.conversationId === 'string' && v.conversationId.length > 0 && v.conversationId.length <= 200) &&
+    Array.isArray(v.eventIds) && v.eventIds.length > 0 && v.eventIds.length <= 10 && v.eventIds.every(identifier)
 }
 const cursorOK = (v: unknown): v is number => Number.isSafeInteger(v) && Number(v) >= 0
 export const validEvents = (v: unknown): v is SourceEvent[] => Array.isArray(v) && v.length <= 10 && v.every(e =>
   identifier(e?.id) && typeof e.conversationId === 'string' && e.conversationId.length > 0 && e.conversationId.length <= 200 &&
   Number.isFinite(e.receivedAt) && typeof e.text === 'string' && e.text.length <= 16000) && new Set(v.map(e => e.id)).size === v.length
-const sameOwner = (a: Owner, b: Owner) => a.telegramUserId === b.telegramUserId && a.telegramChatId === b.telegramChatId
 async function read<T>(path: string, fallback: T): Promise<T> {
   try { return JSON.parse(await readFile(path, 'utf8')) as T } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return fallback; throw new Error('Unreadable event-source state') }
 }
@@ -49,8 +50,7 @@ export class EventSources {
     const value = await read<{ version: number; sources: EventSource[] }>(this.registry, { version: 1, sources: [] })
     if (value.version !== 1 || !Array.isArray(value.sources) || value.sources.some(s => !identifier(s.id) || !identifier(s.bindingId) ||
       typeof s.socketPath !== 'string' || !isAbsolute(s.socketPath) || !cursorOK(s.initialCursor) ||
-      !Number.isSafeInteger(s.owner?.telegramUserId) || s.owner.telegramUserId! <= 0 || !Number.isSafeInteger(s.owner.telegramChatId) ||
-      (s.owner.kind === 'group' ? s.owner.telegramChatId! >= 0 : s.owner.kind !== undefined || s.owner.telegramChatId! <= 0)) ||
+      !validOwner(s.owner)) ||
       new Set(value.sources.map(s => s.id)).size !== value.sources.length) throw new Error('Invalid event-source registry')
     return value.sources
   }
@@ -105,6 +105,13 @@ export class EventSources {
     const result = await sourceCall(source.socketPath, 'events-check', { ids: origin.eventIds })
     if (!validEvents(result?.events) || result.events.some((e: SourceEvent) => !origin.eventIds.includes(e.id))) throw new Error('Invalid event recheck')
     return result.events
+  }
+  async release(origin: ExternalOrigin, owner: Owner): Promise<void> {
+    if (!validOrigin(origin)) return
+    const source = (await this.available(owner)).find(s => s.id === origin.sourceId && s.bindingId === origin.bindingId)
+    if (!source) return
+    const head = await sourceCall(source.socketPath, 'events-head')
+    if (head.releaseEvents === true) await sourceCall(source.socketPath, 'events-release', {ids:origin.eventIds})
   }
 }
 export const eventRunId = (source: EventSource, events: SourceEvent[]) => 'event_' + createHash('sha256')

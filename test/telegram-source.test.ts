@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { TelegramSource } from '../src/telegram-source.js'
 import { ControlStore } from '../src/control-state.js'
 import { EventSources } from '../src/event-sources.js'
@@ -72,4 +73,30 @@ test('Telegram uses the existing persistent conversation grant, restricted conte
   await assert.rejects(tasks.workerCall(run.id,'send',{text:'After revoke',key:'late'}),/inactive/)
   assert.equal(sent.length,32)
   assert.equal(await source.capture(5,message(),sender),false)
+})
+
+test('Telegram wildcard watches capture private chats and groups but still send only to a concrete captured chat',async t=>{
+  const dir=await mkdtemp('/tmp/ez-tg-wildcard-'),sent:any[]=[]
+  await ownerRun(dir,'owner')
+  const source=new TelegramSource(dir,'999',async(chat,text)=>{sent.push({chat,text});return [1]})
+  t.after(async()=>{await source.stop();await rm(dir,{recursive:true,force:true})})
+  await source.start((await new ControlStore(dir,900000).status()).owner!)
+  await source.call('task-watch',{accountId:'999',conversationId:'*',expiresAt:8640000000000000})
+  const sender={id:202,is_bot:false,first_name:'Visitor'}
+  const message=(chat:number,id:number)=>({message_id:id,date:Math.ceil(Date.now()/1000),chat:chat>0?{id:chat,type:'private',first_name:'Visitor'}:{id:chat,type:'group',title:'Public'},text:'Question'} as any)
+  assert.equal(await source.capture(1,message(202,1),sender),true)
+  assert.equal(await source.capture(2,message(-303,2),sender,false),false)
+  assert.equal(await source.capture(2,message(-303,2),sender,true),true)
+  const registration=(await new EventSources(dir).list())[0],batch=await new EventSources(dir).batch(registration)
+  assert.deepEqual(batch.events.map(event=>event.conversationId).sort(),['-303','202'])
+  await source.call('task-send',{accountId:'999',conversationId:'202',key:'answer',text:'Answer'})
+  assert.deepEqual(sent,[{chat:202,text:'Answer'}])
+  for(let index=0;index<100;index++)await source.call('task-send',{accountId:'999',conversationId:'202',key:`bounded-${index}`,text:'Answer'})
+  const [accountDirectory]=await readdir(join(dir,'telegram-source'))
+  assert.equal((await readdir(join(dir,'telegram-source',accountDirectory))).filter(name=>name.startsWith('send_')).length,100)
+  await source.call('events-release',{ids:[batch.events[0].id]})
+  assert.equal((await source.call('events-check',{ids:[batch.events[0].id]})).events.length,0)
+  await assert.rejects(source.call('task-send',{accountId:'999',conversationId:'*',key:'bad',text:'No'}),/Invalid send/)
+  await source.call('task-unwatch',{accountId:'999',conversationId:'*'})
+  assert.equal(await source.capture(3,message(404,3),sender),false)
 })

@@ -126,7 +126,11 @@ export function validate(m,d,files) {
   if(JSON.stringify(Object.keys(m.commands).sort())!==JSON.stringify(Object.keys(d.commands).sort())) throw Error('Command bindings must match manifest');
   for(const [alias,c] of Object.entries(m.commands)) {
     id(alias); if(reserved.has(alias)) throw Error('Reserved alias');
-    keys(c,['executable','args','exposure']); strings(c.args); exposure(c.exposure);
+    keys(c,['executable','args','exposure','channelQuery']); strings(c.args); exposure(c.exposure);
+    if(c.channelQuery!==undefined && c.channelQuery!==true) throw Error('channelQuery must be true when declared');
+    if(c.channelQuery && (c.exposure?.receivesExternalContent!==true || c.exposure?.sendsExternally!==false ||
+      c.exposure?.changesRecords!==false || c.exposure?.requiresReview!==false))
+      throw Error('Channel queries must explicitly accept external input without sends, writes, or review');
     if(!files.has(c.executable)) throw Error('Missing package executable');
     const b=d.commands[alias];keys(b,['service','argv','suffix']);
     if(!d.services[b.service] || !strings(b.argv).length) throw Error('Invalid command service'); strings(b.suffix||[]);

@@ -111,15 +111,19 @@ own setup and authorized accounts.
 The current source supports persistent agent workspaces, a choice of host AI
 executors, owner-gated Telegram messaging, native scheduling, plugin lifecycle
 management and bounded, owner-approved correspondence. A messaging task can
-contact one approved person using only its explicitly shared task context;
+serve one approved conversation or, after an explicit broad approval, anyone on
+one capable source. Restricted runs receive only their shared context and exact
+installed read-only query capabilities; they do not inherit the owner workspace
+or tools.
+The built-in Telegram source supports text in private chats and groups;
 restricted task execution currently requires the pinned Codex runtime. See
 [authority boundaries](docs/architecture/authority-boundaries.md) for the exact
 scope and [scheduling](docs/scheduling.md) for scheduled work.
 
 The broader direction is assistants working across business roles, with deliberate
 workspace sharing and authority over who may direct work, see information and
-use accounts. General team delegation, family/group authority and enterprise
-reviewer roles remain future work. The current trusted-host beta is not an
+use accounts. General team delegation and enterprise reviewer roles remain
+future work. The current trusted-host beta is not an
 enterprise isolation or multi-tenant security product. See [security scope](SECURITY.md).
 
 ## For agents discovering this repository

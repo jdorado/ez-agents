@@ -89,6 +89,25 @@ test('RunStore enqueues document, voice, and approval items properly', async () 
   assert.equal(pending.length, 3)
 }))
 
+test('RunStore bounds terminal task history',async()=>fixture(async store=>{
+  const taskId=`task_${'a'.repeat(32)}`
+  for(let index=0;index<101;index++){
+    const run=await store.create({id:`event_history_${index}`,taskId,chatId:1,telegramUserId:1,texts:[]})
+    await store.patch(run.id,{status:'completed',endedAt:new Date().toISOString()})
+  }
+  await store.pruneTaskHistory(taskId)
+  assert.equal((await store.list()).filter(run=>run.taskId===taskId).length,100)
+}))
+
+test('RunStore retains unreleased external evidence until release is durable',async()=>fixture(async store=>{
+  const taskId=`task_${'b'.repeat(32)}`,external={sourceId:'fixture',bindingId:'binding',conversationId:'visitor',eventIds:['one']}
+  const run=await store.create({id:'event_unreleased',taskId,chatId:1,telegramUserId:1,texts:[],external})
+  await store.patch(run.id,{status:'completed',endedAt:new Date().toISOString()});await store.pruneTaskHistory(taskId,0)
+  assert.notEqual(await store.get(run.id),null)
+  await store.patch(run.id,{externalReleased:true});await store.pruneTaskHistory(taskId,0)
+  assert.equal(await store.get(run.id),null)
+}))
+
 test('claimOutbox prevents concurrent double-processing of the same item', async () => fixture(async (store) => {
   const created = await store.create({ chatId: 1, telegramUserId: 1, texts: ['test'] })
   await store.patch(created.id, { status: 'running' })

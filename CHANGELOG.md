@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add owner-approved, provider-neutral public channel grants so restricted fresh
+  agent runs can answer any private chat or mentioned group on one enabled source.
+  Grants may expose only fixed, read-only query aliases such as Library search;
+  they retain no owner memory, recheck revocation around every operation, and
+  enforce persisted concurrency, traffic, receipt and evidence bounds.
+
 ## 0.1.0-beta.31
 
 - Make the owner-authorized contribution lifecycle explicit in shipped agent
