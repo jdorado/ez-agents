@@ -175,6 +175,22 @@ in an owner-approved restricted channel grant, not an activated permission or a
 safety label for the rest of the plugin. Mixed read/write aliases are ineligible;
 publish a dedicated query-only alias.
 
+For original file bytes, declare `"channelFile": true` instead, with the same
+read-only exposure fields. The approved task capability must specify
+`"output": "file"`. Its command accepts one literal input and writes only the
+file bytes to stdout (maximum 20 MiB). Core returns an attachment ID and filename
+to the agent; binary content stays in private task staging. The input basename
+supplies the download filename.
+
+The task's existing `send` tool accepts `attachmentId` plus text and an
+idempotency key. Only a completed file capability from that run can supply it.
+The destination remains the authorized conversation. Providers opt in through
+`events-head.taskAttachments: true`, optionally declaring `attachmentCaptionLimit`,
+and accept the attachment metadata in `task-send`. Telegram delivers a document
+with a caption of at most 1024 characters; channels without this contract fail
+explicitly before dispatch. Staged bytes are removed when the external run is
+released. File capability access must be included in the owner's grant.
+
 Owner adapters retain owner access. External correspondence can run only in an
 approved core messaging task through the restricted task runner. Declarations
 and monitoring subscriptions alone never grant task execution. See

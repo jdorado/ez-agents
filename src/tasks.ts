@@ -7,8 +7,9 @@ import { EventSources, sourceCall, type SourceEvent } from './event-sources.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { ownsRun } from './identity.js'
+import {readTaskAttachment,type TaskAttachment} from './task-attachments.js'
 
-export type TaskCapability = { id: string; description: string; command: string; args: string[] }
+export type TaskCapability = { id: string; description: string; command: string; args: string[]; output?:'file' }
 type PublicBudget = {windowStartedAt:number;runs:number;responses:number;totalRuns:number;totalResponses:number}
 const validPublicBudget = (value: unknown): value is PublicBudget => {
   if (!value || typeof value !== 'object') return false
@@ -21,15 +22,16 @@ export type Task = {
   sourceId: string; bindingId: string; accountId: string; conversationId: string
   purpose: string; context: string; createdAt: number; expiresAt: number
   state: 'pending' | 'active' | 'revoked' | 'completed'
-  notes: string[]; operations: Record<string, { text: string; state: 'uncertain' | 'accepted'; receipt?: unknown }>
-  capabilityOperations?: Record<string, { capabilityId: string; inputHash: string; lease: string; state: 'authorized' | 'completed' }>
+  notes: string[]; operations: Record<string, { text: string; attachmentId?:string; state: 'uncertain' | 'accepted'; receipt?: unknown }>
+  capabilityOperations?: Record<string, { capabilityId: string; inputHash: string; lease: string; attachment?:TaskAttachment; state: 'authorized' | 'completed' }>
   publicBudget?: PublicBudget
 }
 const idOK = (v: unknown): v is string => typeof v === 'string' && /^task_[a-f0-9]{32}$/.test(v)
 const bounded = (v: unknown, max: number): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max
 const capability = (value: unknown): value is TaskCapability => {
   const item = value as TaskCapability | undefined
-  return !!item && typeof item === 'object' && Object.keys(item).every(key => ['id','description','command','args'].includes(key)) &&
+  return !!item && typeof item === 'object' && Object.keys(item).every(key => ['id','description','command','args','output'].includes(key)) &&
+    (item.output===undefined||item.output==='file') &&
     typeof item.id === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(item.id) && bounded(item.description,200) && !/[\x00-\x1f\x7f]/.test(item.description) &&
     typeof item.command === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(item.command) && Array.isArray(item.args) && item.args.length >= 2 && item.args.length <= 20 &&
     item.args.every(arg => typeof arg === 'string' && arg.length <= 200 && !/[\x00-\x1f\x7f]/.test(arg)) && item.args.at(-2) === '--' && item.args.at(-1) === '{input}' &&
@@ -154,7 +156,7 @@ export class Tasks {
   private prompt(task: Task) {
     const audience = task.anyConversation ? `Any human conversation received by source ${task.sourceId}` : `Contact: ${task.conversationId}`
     const capabilities = task.capabilities ? `\nApproved capabilities (their output may be disclosed):\n${task.capabilities.map(item => `- ${item.id}: ${item.description}; ez ${item.command} ${item.args.join(' ')}`).join('\n')}` : ''
-    return `Allow this messaging task?${task.waitForIncoming ? '\nWait for incoming messages; do not initiate contact.' : ''}\nSource: ${task.sourceId}\nAccount: ${task.accountId}\nAudience: ${audience}\nPurpose: ${task.purpose}\nShared context (all may be disclosed to this audience):\n${task.context}${capabilities}\n${task.anyConversation ? 'Budget: 60 conversations and 60 responses per hour; 1000 total, then owner review.' : ''}\n${task.untilRevoked ? 'Enabled until owner revocation.' : `Expires: ${new Date(task.expiresAt).toISOString()}`}\nText messages only. No payments, files, owner memory, unlisted capabilities, or settings changes.`
+    return `Allow this messaging task?${task.waitForIncoming ? '\nWait for incoming messages; do not initiate contact.' : ''}\nSource: ${task.sourceId}\nAccount: ${task.accountId}\nAudience: ${audience}\nPurpose: ${task.purpose}\nShared context (all may be disclosed to this audience):\n${task.context}${capabilities}\n${task.anyConversation ? 'Budget: 60 conversations and 60 responses per hour; 1000 total, then owner review.' : ''}\n${task.untilRevoked ? 'Enabled until owner revocation.' : `Expires: ${new Date(task.expiresAt).toISOString()}`}\n${task.capabilities?.some(item=>item.output==='file') ? 'Text and files returned by the approved file capabilities only. No payments, owner memory, unlisted capabilities, or settings changes.' : 'Text messages only. No payments, files, owner memory, unlisted capabilities, or settings changes.'}`
   }
   async ownerCall(runId: string, command: string, args: Record<string, unknown>) {
     return this.serial(async () => {
@@ -235,10 +237,17 @@ export class Tasks {
         const prior = task.capabilityOperations?.[key]
         if (command === 'capability_result') {
           if (!prior || prior.lease !== args.lease) throw new Error('Channel capability lease is invalid')
+          if(selected.output==='file') {
+            const file=args.attachment as TaskAttachment
+            if(file?.runId!==run.id||file?.id!==prior.lease)throw Error('Attachment lease mismatch')
+            await readTaskAttachment(this.controlDir,file)
+            prior.attachment=file
+          }else if(args.attachment!==undefined)throw Error('Text capability cannot register an attachment')
           prior.state = 'completed'; await this.save(task); return {accepted:true}
         }
         if (prior) return {capability:selected,lease:prior.lease}
-        task.capabilityOperations = Object.fromEntries(Object.entries(task.capabilityOperations ?? {}).filter(([item]) => item.startsWith(`${run.id}_`)))
+        const active=(await new RunStore(this.controlDir).list()).filter(item=>item.taskId===task.id&&['queued','running'].includes(item.status)).map(item=>`${item.id}_`)
+        task.capabilityOperations = Object.fromEntries(Object.entries(task.capabilityOperations ?? {}).filter(([item]) => active.some(prefix=>item.startsWith(prefix))))
         if (Object.keys(task.capabilityOperations ?? {}).filter(item => item.startsWith(`${run.id}_`)).length >= 8) throw new Error('Channel capability limit reached')
         const operation = {capabilityId:selected.id,inputHash,lease:randomUUID(),state:'authorized' as const}
         task.capabilityOperations = {...task.capabilityOperations,[key]:operation}
@@ -259,29 +268,46 @@ export class Tasks {
         return { queued: item.id }
       }
       if (command !== 'send' || typeof args.key !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(args.key)) throw new Error('Invalid task send')
+      let attachment:TaskAttachment|undefined
+      if(args.attachmentId!==undefined) {
+        const operation=Object.entries(task.capabilityOperations??{}).find(([key,value])=>key.startsWith(`${run.id}_`)&&value.lease===args.attachmentId&&value.state==='completed')?.[1]
+        attachment=operation?.attachment
+        if(!attachment||attachment.runId!==run.id)throw Error('Attachment is not authorized for this run')
+      }
       const key = task.untilRevoked ? `${run.id}_${args.key}` : args.key
       const providerKey = `${task.id}_${task.untilRevoked ? createHash('sha256').update(key).digest('hex') : key}`
       const prior = Object.hasOwn(task.operations, key) ? task.operations[key] : undefined
       if (prior) {
-        if (prior.text !== args.text) throw new Error('Message key already used for different text')
+        if (prior.text !== args.text || prior.attachmentId!==args.attachmentId) throw new Error('Message key already used for different text or attachment')
         return prior // Uncertain sends are never blindly retried.
+      }
+      const source = await this.source(task)
+      if(attachment) {
+        const head=await sourceCall(source.socketPath,'events-head')
+        if(head.taskAttachments!==true)throw Error('This channel does not support task attachments')
+        if(Number.isSafeInteger(head.attachmentCaptionLimit)&&args.text.length>head.attachmentCaptionLimit)throw Error(`Attachment caption exceeds channel limit of ${head.attachmentCaptionLimit}`)
+        await readTaskAttachment(this.controlDir,attachment)
       }
       if(task.anyConversation){const budget=task.publicBudget!,now=Date.now();if(now-budget.windowStartedAt>=3600000){budget.windowStartedAt=now;budget.runs=0;budget.responses=0}
         if(budget.responses>=60||budget.totalResponses>=1000)throw new Error('Public response budget reached; owner review is required')
         budget.responses++;budget.totalResponses++;await this.save(task)}
-      if(task.untilRevoked)task.operations=Object.fromEntries(Object.entries(task.operations).filter(([item,value])=>item.startsWith(`${run.id}_`)||value.state==='uncertain'))
+      if(task.untilRevoked) {
+        const active=(await new RunStore(this.controlDir).list()).filter(item=>item.taskId===task.id&&['queued','running'].includes(item.status)).map(item=>`${item.id}_`)
+        task.operations=Object.fromEntries(Object.entries(task.operations).filter(([item,value])=>active.some(prefix=>item.startsWith(prefix))||value.state==='uncertain'))
+      }
       if (Object.keys(task.operations).filter(k=>!task.untilRevoked || k.startsWith(`${run.id}_`)).length >= 30) throw new Error('Task message limit reached; report to the owner')
-      task.operations = { ...task.operations, [key]: { text: args.text, state: 'uncertain' } }
+      const message={text:args.text,...(attachment?{attachmentId:attachment.id}:{})}
+      task.operations = { ...task.operations, [key]: { ...message, state: 'uncertain' } }
       await this.save(task)
-      const source = await this.source(task)
       try {
         if (task.expiresAt <= Date.now()) throw new Error('Task expired before dispatch')
         const receipt = await sourceCall(source.socketPath, 'task-send', {
           accountId: task.accountId, conversationId: contact, text: args.text, key: providerKey,
+          ...(attachment?{attachment}:{}),
         })
         if (receipt.accountId !== task.accountId || receipt.conversationId !== contact || receipt.key !== providerKey || receipt.state !== 'accepted')
           throw new Error('Uncertain provider receipt')
-        task.operations = { ...task.operations, [key]: { text: args.text, state: 'accepted', receipt } }
+        task.operations = { ...task.operations, [key]: { ...message, state: 'accepted', receipt } }
         await this.save(task)
       } catch { /* Preserve uncertain across timeouts, crashes, and malformed receipts. */ }
       return task.operations[key]

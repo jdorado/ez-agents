@@ -4,25 +4,32 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { executorEnvironment } from './executor.js'
 import type { TaskCapability } from './tasks.js'
+import {attachmentLimit,stageTaskAttachment,type TaskAttachment} from './task-attachments.js'
 
 const execute = promisify(execFile)
 
 export async function assertChannelQuery(toolsHome: string | undefined, capability: TaskCapability) {
   if (!toolsHome || !path.isAbsolute(toolsHome)) throw new Error('Channel capabilities require an installed tool registry')
   const registry = JSON.parse(await readFile(path.join(toolsHome,'registry.json'),'utf8')) as {
-    commands?: Record<string,string>, plugins?: Record<string,{manifest?:{commands?:Record<string,{channelQuery?:boolean,exposure?:Record<string,boolean>}>}}>
+    commands?: Record<string,string>, plugins?: Record<string,{manifest?:{commands?:Record<string,{channelQuery?:boolean,channelFile?:boolean,exposure?:Record<string,boolean>}>}}>
   }
   const command = registry.plugins?.[registry.commands?.[capability.command] ?? '']?.manifest?.commands?.[capability.command]
   const exposure = command?.exposure
-  if (command?.channelQuery !== true || exposure?.receivesExternalContent !== true || exposure.sendsExternally !== false ||
+  if ((capability.output==='file'?command?.channelFile:command?.channelQuery) !== true || exposure?.receivesExternalContent !== true || exposure.sendsExternally !== false ||
       exposure.changesRecords !== false || exposure.requiresReview !== false)
     throw new Error(`Capability ${capability.id} is not an installed read-only channel query`)
 }
 
-export async function runTaskCapability(toolsHome: string | undefined, capability: TaskCapability, input: string) {
+export async function runTaskCapability(toolsHome: string | undefined, capability: TaskCapability, input: string, staging?:{controlDir:string;runId:string;lease:string}):Promise<{output:string;attachment?:never}|{attachment:TaskAttachment;output?:never}> {
   await assertChannelQuery(toolsHome,capability)
   const home = toolsHome!
   const args = [capability.command, ...capability.args.map(value => value === '{input}' ? input : value)]
+  if(capability.output==='file') {
+    if(!staging)throw Error('File capability requires task staging')
+    const result=await execute(path.join(home,'bin','ez'),args,{encoding:'buffer',env:executorEnvironment(),timeout:30000,maxBuffer:attachmentLimit})
+    const attachment=await stageTaskAttachment(staging.controlDir,staging.runId,staging.lease,input,result.stdout)
+    return {attachment}
+  }
   let stdout = '', code = 0
   try {
     const result = await execute(path.join(home,'bin','ez'),args,{encoding:'utf8',env:executorEnvironment(),timeout:15000,maxBuffer:131072})

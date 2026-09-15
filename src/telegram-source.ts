@@ -7,6 +7,7 @@ import { atomicTaskFile } from './tasks.js'
 import { EventSources, type SourceEvent } from './event-sources.js'
 import type { Owner } from './control-state.js'
 import type { Message, User } from 'grammy/types'
+import {readTaskAttachment,type TaskAttachment} from './task-attachments.js'
 
 // Provider transport only. The existing Tasks grant remains the execution and
 // disclosure authority, exactly as for a registered WhatsApp source.
@@ -15,7 +16,7 @@ export class TelegramSource {
   private server?: Server
   private pending?: Promise<void>
   private serial: Promise<unknown> = Promise.resolve()
-  constructor(private controlDir: string, private accountId: string, private send: (chatId: number, text: string) => Promise<number[]>) {
+  constructor(private controlDir: string, private accountId: string, private send: (chatId: number, text: string) => Promise<number[]>, private sendFile?: (chatId:number,text:string,data:Buffer,filename:string)=>Promise<number[]>) {
     this.socketPath = join(tmpdir(), `ez-tg-${createHash('sha256').update(`${controlDir}:${accountId}`).digest('hex').slice(0,16)}.sock`)
   }
   private get directory() { return join(this.controlDir, 'telegram-source', createHash('sha256').update(this.accountId).digest('hex')) }
@@ -66,7 +67,7 @@ export class TelegramSource {
     return true
   }
   async call(command: string,args: Record<string,any>) {
-    if(command==='events-head') return {cursor:0,accountId:this.accountId,taskProtocol:'message-v1',persistentWatch:true,wildcardWatch:true,releaseEvents:true}
+    if(command==='events-head') return {cursor:0,accountId:this.accountId,taskProtocol:'message-v1',persistentWatch:true,wildcardWatch:true,releaseEvents:true,...(this.sendFile?{taskAttachments:true,attachmentCaptionLimit:1024}:{})}
     if(command==='events-release') {
       if(!Array.isArray(args.ids)||args.ids.length>10||args.ids.some((id:unknown)=>typeof id!=='string'||!/^tg_(?:n)?\d+_\d+$/.test(id)))throw new Error('Invalid IDs')
       for(const id of args.ids)await rm(join(this.directory,`${id}.json`),{force:true})
@@ -98,14 +99,17 @@ export class TelegramSource {
     if(command!=='task-send'||wildcard||typeof args.text!=='string'||!args.text.trim()||args.text.length>4096||typeof args.key!=='string'||!/^[a-zA-Z0-9_-]{1,240}$/.test(args.key))throw new Error('Invalid send')
     const watches=await this.read('watches.json',{});if(!(watches[args.conversationId]>Date.now())&&!(watches['*']>Date.now()))throw new Error('Watch expired')
     const file=`send_${args.key}.json`,prior=await this.read(file,null)
-    if(prior) {if(prior.text!==args.text||prior.conversationId!==args.conversationId)throw new Error('Key reused');return prior}
+    if(prior) {if(prior.text!==args.text||prior.conversationId!==args.conversationId||JSON.stringify(prior.attachment)!==JSON.stringify(args.attachment))throw new Error('Key reused');return prior}
+    const attachment=args.attachment as TaskAttachment|undefined
+    if(attachment && (!this.sendFile||args.text.length>1024))throw Error('Document delivery requires a supported channel and a caption of at most 1024 characters')
+    const bytes=attachment?await readTaskAttachment(this.controlDir,attachment):undefined
     const receiptFiles=(await readdir(this.directory)).filter(name=>/^send_[a-zA-Z0-9_-]{1,240}\.json$/.test(name))
     const accepted=(await Promise.all(receiptFiles.map(async name=>({name,value:await this.read(name,null)})))).filter(item=>item.value?.state==='accepted').sort((a,b)=>(a.value.createdAt??'').localeCompare(b.value.createdAt??''))
     for(const item of accepted.slice(0,Math.max(0,receiptFiles.length-99)))await rm(join(this.directory,item.name),{force:true})
     if(receiptFiles.length-accepted.length>=100)throw new Error('Too many uncertain Telegram sends')
-    const receipt={accountId:this.accountId,conversationId:args.conversationId,key:args.key,text:args.text,state:'uncertain',createdAt:new Date().toISOString(),receiptId:[] as number[]}
+    const receipt={accountId:this.accountId,conversationId:args.conversationId,key:args.key,text:args.text,...(attachment?{attachment}:{}),state:'uncertain',createdAt:new Date().toISOString(),receiptId:[] as number[]}
     await atomicTaskFile(join(this.directory,file),receipt)
-    receipt.receiptId=await this.send(Number(args.conversationId),args.text);receipt.state='accepted'
+    receipt.receiptId=attachment?await this.sendFile!(Number(args.conversationId),args.text,bytes!,attachment.filename):await this.send(Number(args.conversationId),args.text);receipt.state='accepted'
     await atomicTaskFile(join(this.directory,file),receipt);return receipt
   }
 }
