@@ -1,4 +1,4 @@
-import {mkdir,lstat,open,rm} from 'node:fs/promises'
+import {mkdir,lstat,open,rm,readdir} from 'node:fs/promises'
 import {constants} from 'node:fs'
 import {join,basename} from 'node:path'
 import {createHash} from 'node:crypto'
@@ -25,6 +25,14 @@ async function safeDirectory(control:string,runId:string,create=false) {
 export async function stageTaskAttachment(control:string,runId:string,id:string,input:string,data:Buffer):Promise<TaskAttachment> {
   const file={runId,id,filename:basename(input),bytes:data.length,sha256:hash(data)};validate(file)
   const dir=await safeDirectory(control,runId,true)
+  // The task broker serializes its calls; bound the entire run, including unsent files.
+  let total=0
+  for(const entry of await readdir(dir)) {
+    const stat=await lstat(join(dir,entry))
+    if(!stat.isFile()||stat.isSymbolicLink())throw Error('Unsafe staged attachment')
+    if(entry!==id)total+=stat.size
+  }
+  if(total+data.length>attachmentLimit)throw Error('Task attachments exceed the 20 MiB run limit')
   const fd=await open(join(dir,id),constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600).catch(async error=>{
     if(error.code!=='EEXIST')throw error
     await readTaskAttachment(control,file);return null

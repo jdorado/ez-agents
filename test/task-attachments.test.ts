@@ -55,6 +55,7 @@ test('attachment staging rejects oversized bytes, traversal, symlinks and change
  await assert.rejects(stageTaskAttachment(dir,'../escape',randomUUID(),'x',Buffer.from('x')),/Invalid attachment run/)
  await assert.rejects(stageTaskAttachment(dir,'run','../escape','x',Buffer.from('x')),/Invalid task attachment/)
  await assert.rejects(stageTaskAttachment(dir,'run',randomUUID(),'x',Buffer.alloc(attachmentLimit+1)),/Invalid task attachment/)
+ await assert.rejects(stageTaskAttachment(dir,'run',randomUUID(),'x',Buffer.alloc(attachmentLimit)),/run limit/)
  const path=join(dir,'task-files','run',file.id)
  await writeFile(path,'modified');await assert.rejects(readTaskAttachment(dir,file),/changed/)
  await rm(path);await symlink('/etc/passwd',path);await assert.rejects(readTaskAttachment(dir,file))

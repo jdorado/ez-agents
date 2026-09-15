@@ -335,6 +335,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const unavailableSources = new Set<string>()
   const releaseExternal = async (run: RunRecord):Promise<boolean> => {
     if (!run.external) return true
+    try {await removeTaskAttachments(config.controlDir,run.id)} catch {return false}
     const current=await runs.get(run.id)
     if (current?.externalReleased) {if(run.taskId)await runs.pruneTaskHistory(run.taskId);return true}
     const task = run.taskId ? await tasks.get(run.taskId).catch(() => null) : null
@@ -343,7 +344,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if(!owner)return false
     try {
       await sources.release(run.external,owner)
-      await removeTaskAttachments(config.controlDir,run.id)
       await runs.patch(run.id,{externalReleased:true})
       if(run.taskId)await runs.pruneTaskHistory(run.taskId)
       return true

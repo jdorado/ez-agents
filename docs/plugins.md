@@ -178,7 +178,7 @@ publish a dedicated query-only alias.
 For original file bytes, declare `"channelFile": true` instead, with the same
 read-only exposure fields. The approved task capability must specify
 `"output": "file"`. Its command accepts one literal input and writes only the
-file bytes to stdout (maximum 20 MiB). Core returns an attachment ID and filename
+file bytes to stdout (maximum 20 MiB across a run). Core returns an attachment ID and filename
 to the agent; binary content stays in private task staging. The input basename
 supplies the download filename.
 
