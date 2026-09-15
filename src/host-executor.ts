@@ -15,7 +15,7 @@ import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
-export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; pluginNetworkBindings?: Record<string, PluginNetworkRoute> }
+export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]> }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
 
 export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {

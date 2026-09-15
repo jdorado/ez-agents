@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Prevent accidental cross-agent plugin access by rejecting relay-bound registry
+  calls outside the owning workspace, and restrict its host-folder bindings to
+  workspace roots explicitly granted by the host.
+
 ## 0.1.0-beta.31
 
 - Make the owner-authorized contribution lifecycle explicit in shipped agent
