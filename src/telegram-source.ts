@@ -48,12 +48,16 @@ export class TelegramSource {
   }
   private async captureMessage(updateId: number, message: Message.TextMessage, sender: User, wildcardEligible: boolean): Promise<boolean> {
     const watches=await this.read('watches.json',{})
-    if (!(watches[String(message.chat.id)]>Date.now()) && !(wildcardEligible && watches['*']>Date.now())) return false
+    const now=Date.now(),direct=watches[String(message.chat.id)]>now,wildcard=watches['*']>now
+    if (!direct && !wildcard) return false
+    // The active public watch owns admission; consume ineligible group chatter
+    // without turning an owner's message into legacy group discovery.
+    if (!direct && !wildcardEligible) return true
     const event: SourceEvent={id:`tg_${String(message.chat.id).replace('-','n')}_${message.message_id}`,conversationId:String(message.chat.id),receivedAt:message.date*1000,
       text:JSON.stringify({updateId,senderId:sender.id,senderName:sender.first_name,messageId:message.message_id,text:message.text})}
     if (!await this.read(`${event.id}.json`,null)) {
       const files=(await readdir(this.directory)).filter(file=>/^tg_(?:n)?\d+_\d+\.json$/.test(file))
-      if(files.length>=100)return false
+      if(files.length>=100)return true
       const cursor=(await this.read('cursor.json',0))+1
       if(!Number.isSafeInteger(cursor)||cursor<1)throw new Error('Invalid event cursor')
       await atomicTaskFile(join(this.directory,'cursor.json'),cursor)
