@@ -14,7 +14,10 @@ Grok/Claude accept caller-selected native UUIDs. Codex/OpenCode generate IDs, so
 the adapter reads only their typed JSONL session metadata; stdout never becomes a
 Telegram reply. `codex-gui` is a separate desktop adapter: it submits a dedicated
 app-server thread/turn and waits for that turn to finish. It does not run
-`codex exec`. A missing or mismatched native session fails closed, not `--last`.
+`codex exec`. If the native control socket is absent, the adapter asks the
+installed Codex CLI to idempotently start its own app-server daemon, then retries
+the connection once. It does not implement another daemon or fall back to the
+headless CLI. A missing or mismatched native session fails closed, not `--last`.
 Legacy unbound sessions require the owner's explicit `/new`.
 
 References used for the adapter contract:
