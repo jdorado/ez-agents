@@ -59,6 +59,8 @@ export const desktopCodexPath = async (home = homedir(), envPath = process.env.P
 const writableRoots = (options: DesktopTurnOptions): string[] =>
   [options.controlDir, options.toolsHome].filter((value): value is string => Boolean(value))
 
+const approvalPolicy = (scheduledDesktop: boolean): 'on-request' | 'never' => scheduledDesktop ? 'on-request' : 'never'
+
 const sendFrame = (socket: Socket, text: string) => {
   const payload = Buffer.from(text)
   const mask = randomBytes(4)
@@ -81,11 +83,15 @@ export const desktopServerRequestResult = (
     const params = message.params as { threadId?: unknown; turnId?: unknown; _meta?: Record<string, unknown> } | undefined
     const meta = params?._meta
     const toolParams = meta?.tool_params as Record<string, unknown> | undefined
-    if (context && params?.threadId === context.threadId && typeof params.turnId === 'string' &&
-      (!context.turnId || params.turnId === context.turnId) &&
-      meta?.connector_id === 'computer-use' && meta.codex_approval_kind === 'mcp_tool_call' &&
+    const origin = toolParams?.origin
+    const browserOrigin = meta?.connector_id === 'browser-use' && meta.codex_approval_kind === 'mcp_tool_call' &&
+      meta.codex_request_type === 'approval_request' && meta.tool_name === 'access_browser_origin' &&
+      typeof origin === 'string' && /^https?:\/\//.test(origin) && meta.origin === origin
+    const chromeApp = meta?.connector_id === 'computer-use' && meta.codex_approval_kind === 'mcp_tool_call' &&
       meta.codex_request_type !== 'approval_request' && meta.tool_name !== 'start_audio_recording' &&
-      toolParams?.app === 'com.google.Chrome')
+      toolParams?.app === 'com.google.Chrome'
+    if (context && params?.threadId === context.threadId && typeof params.turnId === 'string' &&
+      (!context.turnId || params.turnId === context.turnId) && (browserOrigin || chromeApp))
       return { action: 'accept', content: null, _meta: { persist: 'session' } }
     return { action: 'decline', content: null, _meta: null }
   }
@@ -264,6 +270,7 @@ export const runDesktopTurn = async (
   const emit = io.emit ?? ((line: string) => process.stdout.write(`${line}\n`))
   let client: DesktopClient | undefined
   try {
+    const scheduledDesktop = options.runId.startsWith('r_schedule_')
     client = await (io.connect ?? connectManagedDesktop)()
     await client.request('initialize', { clientInfo: { name: 'ezenciel-agents', title: 'ez', version: '1' } })
     client.notify('initialized', {})
@@ -283,7 +290,7 @@ export const runDesktopTurn = async (
       const started = await client.request('thread/start', {
         cwd: options.workspace,
         config,
-        approvalPolicy: 'never',
+        approvalPolicy: approvalPolicy(scheduledDesktop),
         sandbox: 'workspace-write',
         model: options.model,
         serviceName: 'ezenciel-agents',
@@ -294,7 +301,6 @@ export const runDesktopTurn = async (
     }
     if (!nativeThread(threadId)) throw new Error(DESKTOP_UNAVAILABLE)
     emit(JSON.stringify({ type: 'thread.started', thread_id: threadId }))
-    const scheduledDesktop = options.runId.startsWith('r_schedule_')
     client.setServerRequestContext(scheduledDesktop ? threadId! : undefined)
     const turn = await client.request('turn/start', {
       threadId,
@@ -302,7 +308,7 @@ export const runDesktopTurn = async (
       model: options.model,
       effort: options.effort,
       cwd: options.workspace,
-      approvalPolicy: 'never',
+      approvalPolicy: approvalPolicy(scheduledDesktop),
       sandboxPolicy: { type: 'workspaceWrite', writableRoots: roots, networkAccess: Boolean(options.toolsHome) },
     })
     const turnId = (turn.turn as { id?: string } | undefined)?.id
