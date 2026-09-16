@@ -3,6 +3,7 @@ import { executionDefaults } from './model-policy.js'
 import { access, constants } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { createConnection, type Socket } from 'node:net'
+import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -200,6 +201,32 @@ export const connectDesktop = (socketPath = desktopControlSocket()): Promise<Des
     socket.on('data', onData)
   })
 
+const startDesktopDaemon = async (
+  home = homedir(),
+  envPath = process.env.PATH || '',
+  run: typeof execFile = execFile,
+): Promise<void> => {
+  const codex = await desktopCodexPath(home, envPath)
+  if (!codex) throw new Error(DESKTOP_UNAVAILABLE)
+  await new Promise<void>((resolve, reject) => run(codex, ['app-server', 'daemon', 'start'], {
+    env: { HOME: home, PATH: envPath }, timeout: 15_000, maxBuffer: 64 * 1024,
+  }, (error) => error ? reject(new Error(DESKTOP_UNAVAILABLE)) : resolve()))
+}
+
+export const connectManagedDesktop = async (
+  connect: typeof connectDesktop = connectDesktop,
+  start: typeof startDesktopDaemon = startDesktopDaemon,
+): Promise<DesktopClient> => {
+  try { return await connect() }
+  catch {
+    // The native Codex daemon owns its lifecycle and is idempotent. New desktop
+    // builds do not necessarily create the control socket merely by opening the
+    // app, so ask Codex to restore its own bridge before failing closed.
+    await start()
+    return connect()
+  }
+}
+
 export const runDesktopTurn = async (
   options: DesktopTurnOptions,
   io: { connect?: typeof connectDesktop; emit?: (line: string) => void; signal?: AbortSignal } = {},
@@ -208,7 +235,7 @@ export const runDesktopTurn = async (
   const emit = io.emit ?? ((line: string) => process.stdout.write(`${line}\n`))
   let client: DesktopClient | undefined
   try {
-    client = await (io.connect ?? connectDesktop)()
+    client = await (io.connect ?? connectManagedDesktop)()
     await client.request('initialize', { clientInfo: { name: 'ezenciel-agents', title: 'ez', version: '1' } })
     client.notify('initialized', {})
     const roots = writableRoots(options)

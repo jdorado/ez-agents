@@ -5,7 +5,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
-import { DESKTOP_UNAVAILABLE, runDesktopTurn, type DesktopClient } from '../src/desktop-bridge.js'
+import { connectManagedDesktop, DESKTOP_UNAVAILABLE, runDesktopTurn, type DesktopClient } from '../src/desktop-bridge.js'
 import { executorKey, nativeSessionId, startExecutorJob } from '../src/executor.js'
 import { initialPreset, isPreset, readModels } from '../src/ai.js'
 
@@ -71,6 +71,28 @@ test('a dedicated desktop turn emits the thread id and waits for completion', as
   assert.equal(code, 0)
   assert.deepEqual(client.calls, ['initialize', 'initialized', 'thread/start', 'thread/name/set', 'turn/start'])
   assert.equal(nativeSessionId('codex-gui', lines[0]), 'thr_hello')
+})
+
+test('desktop connection starts the native daemon once when its socket is absent', async () => {
+  const client = fakeClient([])
+  let attempts = 0, starts = 0
+  const connected = await connectManagedDesktop(async () => {
+    attempts++
+    if (attempts === 1) throw new Error(DESKTOP_UNAVAILABLE)
+    return client
+  }, async () => { starts++ })
+  assert.equal(connected, client)
+  assert.equal(attempts, 2)
+  assert.equal(starts, 1)
+})
+
+test('desktop connection fails closed when the native daemon cannot start', async () => {
+  let attempts = 0
+  await assert.rejects(connectManagedDesktop(async () => {
+    attempts++
+    throw new Error(DESKTOP_UNAVAILABLE)
+  }, async () => { throw new Error(DESKTOP_UNAVAILABLE) }), /unavailable/i)
+  assert.equal(attempts, 1)
 })
 
 test('a UUID-shaped desktop thread is resumed instead of starting another task', async () => {
