@@ -101,6 +101,14 @@ test('desktop server requests use native response shapes and only accept compute
   assert.deepEqual(desktopServerRequestResult({
     method: 'mcpServer/elicitation/request',
     params: { ...context, _meta: {
+      connector_id: 'browser-use', codex_approval_kind: 'mcp_tool_call', codex_request_type: 'approval_request',
+      tool_name: 'access_browser_origin', origin: 'https://ae.iherb.com',
+      tool_params: { origin: 'https://ae.iherb.com' },
+    } },
+  }, context), { action: 'accept', content: null, _meta: { persist: 'session' } })
+  assert.deepEqual(desktopServerRequestResult({
+    method: 'mcpServer/elicitation/request',
+    params: { ...context, _meta: {
       connector_id: 'computer-use', codex_approval_kind: 'mcp_tool_call', tool_name: 'js',
       tool_params: { app: 'com.google.Chrome' },
     } },
@@ -122,6 +130,13 @@ test('desktop server requests use native response shapes and only accept compute
   }, context), { action: 'decline', content: null, _meta: null })
   assert.deepEqual(desktopServerRequestResult({
     method: 'mcpServer/elicitation/request',
+    params: { ...context, _meta: {
+      connector_id: 'browser-use', codex_approval_kind: 'mcp_tool_call', codex_request_type: 'approval_request',
+      tool_name: 'access_browser_origin', origin: 'file:///tmp/private', tool_params: { origin: 'file:///tmp/private' },
+    } },
+  }, context), { action: 'decline', content: null, _meta: null })
+  assert.deepEqual(desktopServerRequestResult({
+    method: 'mcpServer/elicitation/request',
     params: { ...context, turnId: 'other', _meta: {
       connector_id: 'computer-use', codex_approval_kind: 'mcp_tool_call', tool_name: 'js',
       tool_params: { app: 'com.google.Chrome' },
@@ -138,6 +153,12 @@ test('desktop browser authority is scheduled-only and is installed before turn s
       { result: { turn: { id: 'turn_browser' } }, notify: [{ method: 'turn/completed', params: { turn: { id: 'turn_browser', status: 'completed' } } }] },
     ])
     const calls: Array<[string | undefined, string | undefined]> = []
+    const policies: unknown[] = []
+    const request = client.request
+    client.request = async (method, params) => {
+      if (method === 'thread/start' || method === 'turn/start') policies.push((params as { approvalPolicy?: unknown }).approvalPolicy)
+      return request(method, params)
+    }
     client.setServerRequestContext = (threadId, turnId) => { calls.push([threadId, turnId]) }
     assert.equal(await runDesktopTurn({
       workspace: '/tmp/mind', controlDir: '/tmp/control', binDir: '/tmp/bin', runId, prompt: 'browser test',
@@ -145,6 +166,7 @@ test('desktop browser authority is scheduled-only and is installed before turn s
     assert.deepEqual(calls, runId.startsWith('r_schedule_')
       ? [['thread_browser', undefined], ['thread_browser', 'turn_browser']]
       : [[undefined, undefined]])
+    assert.deepEqual(policies, runId.startsWith('r_schedule_') ? ['on-request', 'on-request'] : ['never', 'never'])
   }
 })
 
