@@ -30,6 +30,7 @@ export type DesktopClient = {
   request: (method: string, params?: unknown) => Promise<Record<string, unknown>>
   notify: (method: string, params?: unknown) => void
   wait: (match: (message: Record<string, unknown>) => boolean, timeoutMs: number) => Promise<Record<string, unknown>>
+  setServerRequestContext: (threadId?: string, turnId?: string) => void
   close: () => void
 }
 
@@ -72,6 +73,25 @@ const sendFrame = (socket: Socket, text: string) => {
   socket.write(Buffer.concat([header, mask, masked]))
 }
 
+export const desktopServerRequestResult = (
+  message: Record<string, unknown>,
+  context?: { threadId: string; turnId?: string },
+): Record<string, unknown> => {
+  if (message.method === 'mcpServer/elicitation/request') {
+    const params = message.params as { threadId?: unknown; turnId?: unknown; _meta?: Record<string, unknown> } | undefined
+    const meta = params?._meta
+    const toolParams = meta?.tool_params as Record<string, unknown> | undefined
+    if (context && params?.threadId === context.threadId && typeof params.turnId === 'string' &&
+      (!context.turnId || params.turnId === context.turnId) &&
+      meta?.connector_id === 'computer-use' && meta.codex_approval_kind === 'mcp_tool_call' &&
+      meta.codex_request_type !== 'approval_request' && meta.tool_name !== 'start_audio_recording' &&
+      toolParams?.app === 'com.google.Chrome')
+      return { action: 'accept', content: null, _meta: { persist: 'session' } }
+    return { action: 'decline', content: null, _meta: null }
+  }
+  return { decision: 'decline' }
+}
+
 export const attachClient = (socket: Socket, pending: Buffer[] = []): DesktopClient => {
   let buffer = Buffer.concat(pending)
   let nextId = 1
@@ -80,6 +100,7 @@ export const attachClient = (socket: Socket, pending: Buffer[] = []): DesktopCli
   const failedWaits = new Set<() => void>()
   const notifications: Record<string, unknown>[] = []
   const watchers: Array<(message: Record<string, unknown>) => void> = []
+  let serverRequestContext: { threadId: string; turnId?: string } | undefined
   const deliver = (message: Record<string, unknown>) => {
     const id = message.id
     if (typeof id === 'number' && replies.has(id) && (message.result !== undefined || message.error)) {
@@ -90,8 +111,13 @@ export const attachClient = (socket: Socket, pending: Buffer[] = []): DesktopCli
       else reply.resolve(message.result as Record<string, unknown>)
       return
     }
-    if (typeof id === 'number' && typeof message.method === 'string') {
-      sendFrame(socket, JSON.stringify({ id, result: { decision: 'approved' } }))
+    if ((typeof id === 'number' || typeof id === 'string') && typeof message.method === 'string') {
+      const result = desktopServerRequestResult(message, serverRequestContext)
+      if (result.action === 'accept' && serverRequestContext && !serverRequestContext.turnId) {
+        const turnId = (message.params as { turnId?: unknown } | undefined)?.turnId
+        if (typeof turnId === 'string') serverRequestContext.turnId = turnId
+      }
+      sendFrame(socket, JSON.stringify({ id, result }))
       return
     }
     notifications.push(message)
@@ -169,6 +195,9 @@ export const attachClient = (socket: Socket, pending: Buffer[] = []): DesktopCli
       failedWaits.add(fail)
       watchers.push(watcher)
     }),
+    setServerRequestContext: (threadId, turnId) => {
+      serverRequestContext = threadId ? { threadId, turnId } : undefined
+    },
     close: () => socket.destroy(),
   }
 }
@@ -265,6 +294,8 @@ export const runDesktopTurn = async (
     }
     if (!nativeThread(threadId)) throw new Error(DESKTOP_UNAVAILABLE)
     emit(JSON.stringify({ type: 'thread.started', thread_id: threadId }))
+    const scheduledDesktop = options.runId.startsWith('r_schedule_')
+    client.setServerRequestContext(scheduledDesktop ? threadId! : undefined)
     const turn = await client.request('turn/start', {
       threadId,
       input: [{ type: 'text', text: options.prompt }],
@@ -276,6 +307,7 @@ export const runDesktopTurn = async (
     })
     const turnId = (turn.turn as { id?: string } | undefined)?.id
     if (!turnId) throw new Error(DESKTOP_UNAVAILABLE)
+    if (scheduledDesktop) client.setServerRequestContext(threadId!, turnId)
     const interrupt = () => { void client?.request('turn/interrupt', { threadId, turnId }).catch(() => {}) }
     io.signal?.addEventListener('abort', interrupt, { once: true })
     if (io.signal?.aborted) interrupt()
