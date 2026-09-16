@@ -18,6 +18,10 @@ app-server thread/turn and waits for that turn to finish. It does not run
 installed Codex CLI to idempotently start its own app-server daemon, then retries
 the connection once. It does not implement another daemon or fall back to the
 headless CLI. A missing or mismatched native session fails closed, not `--last`.
+Native server requests use their method-specific response schema. The adapter
+accepts only the active scheduled turn's session-scoped Computer Use Chrome app
+elicitation. Audio, cross-turn, unrelated elicitations and approval requests are
+declined rather than being guessed or forwarded to a hidden task UI.
 Legacy unbound sessions require the owner's explicit `/new`.
 
 References used for the adapter contract:
