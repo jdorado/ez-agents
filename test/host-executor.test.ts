@@ -180,8 +180,8 @@ test('one installed CLI executes two agent bindings with separate minds and sani
 
 
 test('host run IDs accept production formats and reject unsafe paths',()=>{
-  for(const id of ['tg_6293305','r_example_123','event_'+'a'.repeat(64)])assert.equal(isHostRunId(id),true)
-  for(const id of ['../tg_1','tg_1/other','tg_abc','event_bad','event_'+'a'.repeat(63),'event_'+'g'.repeat(64),'tg_1\n','r_',''])assert.equal(isHostRunId(id),false)
+  for(const id of ['tg_6293305','tg_replay_702267965_20260916','r_example_123','event_'+'a'.repeat(64)])assert.equal(isHostRunId(id),true)
+  for(const id of ['../tg_1','tg_1/other','tg_abc','tg_replay_702267965','tg_replay_702267965_2026091x','event_bad','event_'+'a'.repeat(63),'event_'+'g'.repeat(64),'tg_1\n','r_',''])assert.equal(isHostRunId(id),false)
 })
 
 test('client tolerates missing heartbeat and consumes completion before checking host health',async()=>{
