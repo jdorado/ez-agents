@@ -90,6 +90,18 @@ the existing owner or contract cannot solve the demonstrated problem. Use one
 bounded constraint review, then stop when sufficient evidence passes unless a
 concrete material risk remains.
 
+Frame that review as answers to these questions, not as an open-ended request to
+find flaws:
+
+1. Did the solution cross an architecture, ownership or authority boundary?
+2. Did it bypass a binding constraint or preserve the symptom through a workaround?
+3. Did it add machinery where deletion or a simpler existing contract would work?
+4. Does the evidence prove the real user-visible outcome rather than only a proxy?
+5. Is there one concrete unresolved risk severe enough to block completion?
+
+If no answer identifies a material blocker, finish. Do not start another review
+round merely to seek more criticism, tests or hypothetical edge cases.
+
 ## 3. Crash-Safe Atomic Disk State
 - All persistent stores (`ControlStore`, `RunStore`, outbox queue) must be disk-backed JSON files.
 - **Atomic write pattern:** Never write directly to a state file. Always write to a temporary file (`${target}.${process.pid}.tmp`) with mode `0o600`, then atomically `rename` it over the destination.
