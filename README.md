@@ -148,15 +148,19 @@ the user's request and preserve its scope.
 
 ## Package and runtime
 
-**Beta 0.1.0-beta.12 — for testing on a trusted machine.** Offline and Docker
-fixtures are verified. Live account onboarding and reboot acceptance for this
-release are deferred; this is not a production-readiness claim. The source branch
-may contain changes newer than the published beta; inspect the supplied artifact's
-documentation when installing a pinned release.
+**Published beta releases are for testing on a trusted machine.** Offline and
+Docker fixtures are verified for the selected release. Live account onboarding
+and reboot acceptance remain beta gates; this is not a production-readiness
+claim. The source branch may contain changes newer than the published beta, so
+inspect the supplied artifact's documentation when installing a pinned release.
 
-The npm package is `@jc_stack/ez-agents` (channel `beta`). Download a pinned
-release with `npm pack @jc_stack/ez-agents@0.1.0-beta.12`, or get the tarball and SHA256SUMS from
-[GitHub prereleases](https://github.com/jdorado/ez-agents/releases/tag/v0.1.0-beta.12).
+The npm package is `@jc_stack/ez-agents`. Approved beta publications use npm's
+`latest` distribution tag while their versions and GitHub releases remain
+prereleases. For a reproducible download, choose an exact version from
+[GitHub prereleases](https://github.com/jdorado/ez-agents/releases) and substitute
+it for `VERSION` in `npm pack @jc_stack/ez-agents@VERSION`.
+You can also download the release's candidate tarball and verify its SHA-256
+against the attached release receipt or release notes.
 GitHub remains under `jdorado`; npm uses `jc_stack`. Do not install the unrelated
 unscoped `ez-whatsapp` package.
 
