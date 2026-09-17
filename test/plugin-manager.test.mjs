@@ -41,6 +41,16 @@ async function fixture(t) {
  const call=(...args)=>exec(process.execPath,[bin,'--home',home,...args],{env});
  return {root,source,home,deploymentDir,workspace,control,hostConfig,fake,log,manifest,deployment,env,call};
 }
+test('persistent connection reuses one container and releases registry lock between frames',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nif(process.argv[2]==='container')process.exit(0);require('readline').createInterface({input:process.stdin}).on('line',line=>{const f=JSON.parse(line);console.log(JSON.stringify(f.coreResponse?{reply:f.coreResponse}:{coreRequest:{id:f.id,method:'tools.list',params:{}}}));});`,{mode:0o700});
+ const child=spawn(process.execPath,[bin,'--home',f.home,'tools','connect','sample','connect'],{env:f.env,stdio:['pipe','pipe','pipe']});t.after(()=>child.kill('SIGKILL'));
+ const frame=async id=>{const output=once(child.stdout,'data');child.stdin.write(JSON.stringify({id})+'\n');return JSON.parse((await output)[0].toString());};
+ assert.deepEqual((await frame('first')).reply.result,[]);
+ await locked(f.home,async()=>{});
+ assert.deepEqual((await frame('second')).reply.result,[]);
+ child.stdin.end();await once(child,'close');
+});
 test('catalog paths resolve relative to the catalog and pin each new agent independently',async t=>{
  const f=await fixture(t),catalog=path.join(f.root,'defaults.json');
  await fs.writeFile(catalog,JSON.stringify({sample:'./source'}));
@@ -103,6 +113,31 @@ test('bound launcher installs without startup; literal args and exit codes; scop
  await f.call(...install); // preserved snapshot is safe to reuse
  lines=(await fs.readFile(f.log,'utf8')).trim().split('\n').map(JSON.parse);assert(lines.every(x=>x.secret===undefined));assert(lines.every(x=>!x.argv.includes('-v')));
  const mode=(await fs.stat(path.join(f.home,'registry.json'))).mode&0o777;assert.equal(mode,0o600);
+});
+test('concurrent registered commands release the registry lock before execution',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ const started=path.join(f.root,'started');
+ await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst fs=require('fs'),a=process.argv.slice(2);if(a.includes('run')){fs.appendFileSync(${JSON.stringify(started)},JSON.stringify({name:a[a.indexOf('--name')+1]})+'\\n');setTimeout(()=>{console.log(JSON.stringify(a.slice(a.indexOf('/app/client.mjs')+1)))},800)}\n`,{mode:0o700});
+ const first=f.call('sample','first');
+ for(let i=0;i<100&&!await fs.access(started).then(()=>true,()=>false);i++)await new Promise(resolve=>setTimeout(resolve,5));
+ const second=f.call('sample','second');
+ for(let i=0;i<100&&(await fs.readFile(started,'utf8')).trim().split('\n').length<2;i++)await new Promise(resolve=>setTimeout(resolve,5));
+ const names=(await fs.readFile(started,'utf8')).trim().split('\n').map(line=>JSON.parse(line).name);
+ assert.equal(names.length,2);assert.equal(new Set(names).size,2);
+ await assert.rejects(f.call('plugins','uninstall','sample'),/commands are active/);
+ const outputs=await Promise.all([first,second]);
+ assert.deepEqual(outputs.map(result=>JSON.parse(result.stdout)).sort(),[['first'],['second']]);
+ await f.call('plugins','uninstall','sample');
+});
+test('unconfirmed direct-command cancellation retains its lifecycle lease',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='compose'&&a.includes('run')){console.log('ready');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)}else if(a[0]==='container'&&a[1]==='rm'){console.error('daemon unavailable');process.exit(19)}else if(a[0]==='container'&&a[1]==='inspect'){console.log('still-running')}\n`,{mode:0o700});
+ const child=spawn(path.join(f.home,'bin','ez'),['sample','wait'],{env:f.env,stdio:['ignore','pipe','pipe']});t.after(()=>child.kill('SIGKILL'));
+ let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
+ await once(child.stdout,'data');child.kill('SIGTERM');
+ const [code]=await once(child,'close');assert.equal(code,1);assert.match(stderr,/cleanup failed/);
+ assert.equal((await fs.readdir(path.join(f.home,'command-invocations'))).length,1);
+ await assert.rejects(f.call('plugins','uninstall','sample'),/Stale command invocation lease/);
 });
 test('changed source, symlinks, reserved aliases, arbitrary Docker fields rejected',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
@@ -249,6 +284,12 @@ test('exposure is conservative discovery metadata and does not change literal di
  for(const value of [null,[],true,{receivesExternalContent:'false'},{trusted:true},{requiresReview:'never'}]) {
   f.manifest.commands.sample.exposure=value;
   assert.throws(()=>validate(f.manifest,f.deployment,after.files),/exposure/);
+ }
+ const query=structuredClone(f.manifest);query.commands.sample={...query.commands.sample,channelQuery:true,exposure:{receivesExternalContent:true,sendsExternally:false,changesRecords:false,requiresReview:false}};
+ validate(query,f.deployment,after.files);
+ for(const exposure of [undefined,{receivesExternalContent:true,sendsExternally:false,changesRecords:true,requiresReview:false}]) {
+  const unsafe=structuredClone(query);unsafe.commands.sample.exposure=exposure;
+  assert.throws(()=>validate(unsafe,f.deployment,after.files),/Channel queries/);
  }
 });
 

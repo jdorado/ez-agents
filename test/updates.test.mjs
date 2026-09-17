@@ -210,8 +210,9 @@ test('bound dispatch follows active package root and retains private scope',asyn
  assert.match(await fs.readFile(path.join(f.agent.workspace,'AGENTS.md'),'utf8'),/tools list --details/);
  const config=await read(path.join(f.home,'config.json'));config.packageRoot=f.source;await atomic(path.join(f.home,'config.json'),config);
  // A native launcher from the real package looks up its entry point in the active root.
- await fs.writeFile(path.join(f.source,'bin/ezenciel-agents.mjs'),'#!/usr/bin/env node\nconsole.log(process.env.EZ_DEPLOYMENT_DIR)',{mode:0o755});
- const result=await exec(path.join(f.home,'bin/ezenciel-agents'),['--version']);assert.equal(result.stdout.trim(),f.config.deploymentDir);
+ await fs.writeFile(path.join(f.source,'bin/ezenciel-agents.mjs'),'#!/usr/bin/env node\nconsole.log(process.env.EZ_DEPLOYMENT_DIR+"|"+process.env.EZ_CONTROL_DIR)',{mode:0o755});
+ const result=await exec(path.join(f.home,'bin/ezenciel-agents'),['--version'],{env:{...process.env,EZ_CONTROL_DIR:'/attacker'}});
+ assert.equal(result.stdout.trim(),f.config.deploymentDir+'|'+f.agent.controlDir);
  assert((await fs.readFile(path.join(f.agent.workspace,'TOOLS.md'),'utf8')).startsWith('My notes'));
 });
 test('upgrade subprocess environment never inherits relay/provider secrets',()=>{

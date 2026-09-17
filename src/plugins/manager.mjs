@@ -41,12 +41,36 @@ export async function bindToolDiscovery(home,workspace) {
     try {await fs.writeFile(tmp,next,{mode:0o600,flag:'wx'});await fs.rename(tmp,file);}finally{await fs.rm(tmp,{force:true});}
   }
 }
-export async function locked(home, fn) {
+const invocationDirectory = home => path.join(home,'command-invocations');
+async function activeInvocations(home) {
+  const directory=invocationDirectory(home),files=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
+  for(const file of files) {
+    if(!/^[0-9a-f-]{36}\.json$/.test(file))throw Error('Invalid command invocation lease; inspect before recovery');
+    const lease=await json(path.join(directory,file));
+    if(!Number.isSafeInteger(lease.pid)||lease.pid<1||typeof lease.container!=='string'||!lease.container)throw Error('Invalid command invocation lease; inspect before recovery');
+    try {process.kill(lease.pid,0);return true;} catch(error) {if(error.code!=='ESRCH')throw error;}
+    const state=await run(['container','inspect',lease.container],{capture:true});
+    if(state.code===0)throw Error(`Stale command invocation lease; inspect container ${lease.container} before recovery`);
+    if(!/No such (?:object|container)/i.test(state.stderr+state.stdout))throw Error('Unable to verify a stale command invocation lease; inspect Docker before recovery');
+    await fs.rm(path.join(directory,file));
+  }
+  return false;
+}
+async function invocationLease(home,container) {
+  const directory=invocationDirectory(home);await privateDir(directory);
+  const file=path.join(directory,randomUUID()+'.json');await fs.writeFile(file,JSON.stringify({pid:process.pid,container}),{mode:0o600,flag:'wx'});
+  return async()=>{await fs.rm(file,{force:true});};
+}
+export async function locked(home, fn, {allowInvocations=false}={}) {
   const lock = path.join(home,'registry.lock');
   let handle;
   try { handle=await fs.open(lock,'wx',0o600); }
   catch(error) { if(error.code==='EEXIST') throw Error('Registry busy; inspect registry.lock before recovering an interrupted manager'); throw error; }
-  try { await handle.writeFile(JSON.stringify({pid:process.pid})); return await fn(); }
+  try {
+    await handle.writeFile(JSON.stringify({pid:process.pid}));
+    if(!allowInvocations&&await activeInvocations(home))throw Error('Plugin commands are active; retry the registry or lifecycle change after they finish');
+    return await fn();
+  }
   finally { await handle.close(); await fs.rm(lock); }
 }
 // Snapshot only explicitly packaged files. No symlinks, credentials inferred from cwd, or install scripts.
@@ -126,7 +150,13 @@ export function validate(m,d,files) {
   if(JSON.stringify(Object.keys(m.commands).sort())!==JSON.stringify(Object.keys(d.commands).sort())) throw Error('Command bindings must match manifest');
   for(const [alias,c] of Object.entries(m.commands)) {
     id(alias); if(reserved.has(alias)) throw Error('Reserved alias');
-    keys(c,['executable','args','exposure']); strings(c.args); exposure(c.exposure);
+    keys(c,['executable','args','exposure','channelQuery','channelFile']); strings(c.args); exposure(c.exposure);
+    if(c.channelFile!==undefined && c.channelFile!==true) throw Error('channelFile must be true when declared');
+    if(c.channelFile && c.channelQuery)throw Error('Choose one channel output type');
+    if(c.channelQuery!==undefined && c.channelQuery!==true) throw Error('channelQuery must be true when declared');
+    if((c.channelQuery || c.channelFile) && (c.exposure?.receivesExternalContent!==true || c.exposure?.sendsExternally!==false ||
+      c.exposure?.changesRecords!==false || c.exposure?.requiresReview!==false))
+      throw Error('Channel queries must explicitly accept external input without sends, writes, or review');
     if(!files.has(c.executable)) throw Error('Missing package executable');
     const b=d.commands[alias];keys(b,['service','argv','suffix']);
     if(!d.services[b.service] || !strings(b.argv).length) throw Error('Invalid command service'); strings(b.suffix||[]);
@@ -248,33 +278,58 @@ export async function compose(config, record, secrets={}, home) {
 function dockerEnv() {
   return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
 }
-export function run(argv,{capture=false,container}={}) {
+export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,timeoutMs=0,maxBytes=Infinity}={}) {
   return new Promise((resolve,reject)=>{
-    const child=spawn('docker',argv,{env:dockerEnv(),stdio:capture?['ignore','pipe','pipe']:['inherit','inherit','inherit']});
-    let stdout='',stderr='',cancelled=false,killTimer;
-    if(capture) {child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);}
+    const child=spawn('docker',argv,{env:dockerEnv(),stdio:capture?['pipe','pipe','pipe']:['inherit','inherit','inherit']});
+    let stdout='',stderr='',cancelled=false,killTimer,bytes=0,failure;
+    if(capture) {
+      const collect=(b,err)=>{bytes+=b.length;if(bytes>maxBytes){failure=Error('Command output limit exceeded');cancel('SIGTERM');return;}if(err)stderr+=b;else stdout+=b;};
+      child.stdout.on('data',b=>onStdout?onStdout(b):collect(b,false));child.stderr.on('data',b=>collect(b,true));
+      child.stdin.on('error',()=>{});
+    }
     const cancel=signal=>{cancelled=true;child.kill(signal);killTimer??=setTimeout(()=>child.kill('SIGKILL'),2000);};
     const term=()=>cancel('SIGTERM'),int=()=>cancel('SIGINT');
+    const timeout=timeoutMs?setTimeout(()=>{failure=Error('Command timed out');term();},timeoutMs):undefined;
+    signal?.addEventListener('abort',term,{once:true});if(signal?.aborted)term();
+    if(onStart)onStart(child);else if(capture)child.stdin.end(stdin);
     process.on('SIGTERM',term);process.on('SIGINT',int);
-    child.once('error',error=>{clearTimeout(killTimer);process.off('SIGTERM',term);process.off('SIGINT',int);reject(error);});
-    child.once('close',async(code,signal)=>{process.off('SIGTERM',term);process.off('SIGINT',int);
+    child.once('error',error=>{clearTimeout(timeout);signal?.removeEventListener('abort',term);clearTimeout(killTimer);process.off('SIGTERM',term);process.off('SIGINT',int);reject(error);});
+    child.once('close',async(code,childSignal)=>{process.off('SIGTERM',term);process.off('SIGINT',int);
       clearTimeout(killTimer);
+      clearTimeout(timeout);signal?.removeEventListener('abort',term);
       if(cancelled&&container) {
         try {
-          const cleanup=await run(['container','rm','--force',container],{capture:true});
-          // Compose --rm may already have removed this exact command container.
-          if(cleanup.code!==0&&!cleanup.stderr.includes(`No such container: ${container}`))
-            return reject(Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`));
-        } catch(error) {return reject(error);}
+          await removeCommandContainer(container);
+        } catch(error) {
+          const uncertain=error instanceof Error?error:Error('Cancelled command container cleanup failed');
+          uncertain.containerCleanupUncertain=true;return reject(uncertain);
+        }
       }
-      resolve({code:cancelled?130:code??(signal?130:1),stdout,stderr});});
+      if(failure)return reject(failure);
+      resolve({code:cancelled?130:code??(childSignal?130:1),stdout,stderr});});
   });
 }
+// Compose --rm can race cancellation. Confirm disappearance instead of treating
+// Docker's in-progress removal as either failure or completed cleanup.
+export async function removeCommandContainer(container,execute=run) {
+  const cleanup=await execute(['container','rm','--force',container],{capture:true});
+  if(cleanup.code===0||cleanup.stderr.includes(`No such container: ${container}`))return;
+  if(cleanup.stderr.includes(`removal of container ${container} is already in progress`)) {
+    for(let attempt=0;attempt<20;attempt++) {
+      const state=await execute(['container','inspect','--format','{{.Id}}',container],{capture:true});
+      if(state.code!==0&&(state.stderr.includes(`No such object: ${container}`)||state.stderr.includes(`No such container: ${container}`)))return;
+      if(state.code!==0)break;
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+  }
+  throw Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`);
+}
+
 async function checked(args) {
   const r=await run(args,{capture:true});if(r.code) throw Error(r.stderr||r.stdout||`Docker failed (${r.code})`);return r.stdout;
 }
 const composeArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
-async function registry(home) {
+export async function registry(home) {
   const r=await json(path.join(home,'registry.json'));
   if(r.schemaVersion!==1 || r.owner!==home || !r.plugins || !r.commands) throw Error('Corrupt registry');
   for(const [name,record] of Object.entries(r.plugins)) {
@@ -282,6 +337,22 @@ async function registry(home) {
   }
   for(const [alias,plugin] of Object.entries(r.commands)) if(!r.plugins[plugin]?.deployment?.commands?.[alias]) throw Error('Corrupt command registry');
   return r;
+}
+// The lock protects admission and compose refresh, never a persistent connection.
+export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false}={}) {
+  strings(args);
+  return locked(home,async()=>{
+    const config=await json(path.join(home,'config.json')),r=await registry(home);
+    const record=r.plugins[r.commands[alias]],binding=record?.deployment.commands[alias];
+    if(!binding||r.commands[alias]===exclude)throw Error('Unknown or unavailable registered CLI');
+    if(revision!==undefined&&revision!==record.revision)throw Error('Plugin changed; discover again');
+    await checkFolders(config,record);
+    const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
+    await atomic(record.compose,await compose(config,record,secrets,home));
+    const container=`${record.project}-call-${randomUUID()}`;
+    const release=invocation?await invocationLease(home,container):undefined;
+    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
+  },{allowInvocations:true});
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
   if(standalone && hostConfig) throw Error('Standalone setup cannot bind a relay host config');
@@ -363,7 +434,12 @@ export async function main(args) {
   const [group,action,...rest]=args;
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure','<registered CLI> ...'],scope:home});
+  if(group==='tools'&&action==='serve') {
+    const port=rest.shift();
+    return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1),{publish:port,serve:true});
+  }
+  if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
@@ -467,17 +543,15 @@ export async function main(args) {
       emit({ok:true,plugin:name,action,dataPreserved:true});
     });
   }
-  return locked(home,async()=>{
-  const config=await json(path.join(home,'config.json'));
-  const r=await registry(home),record=r.plugins[r.commands[group]],binding=record?.deployment.commands[group];
-  if(!binding)throw Error('Unknown registered CLI');
-  await checkFolders(config,record);
-  const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
-  await atomic(record.compose,await compose(config,record,secrets,home));
-  // Docker exec does not reliably forward cancellation to the in-container process.
-  // Run each client as a one-shot Compose container; docker compose run forwards signals.
-  const name=`${record.project}-call-${randomUUID()}`;
-  const result=await run([...composeArgs(record),'run','--rm','--no-deps','-T','--name',name,'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[group].args,...args.slice(1),...(binding.suffix||[])],{container:name});
-  process.exitCode=result.code;
-  });
+  const command=await prepareCommand(home,group,args.slice(1),{invocation:true});
+  try {
+    // Docker exec does not reliably forward cancellation to the in-container process.
+    // Run each client as a one-shot Compose container; docker compose run forwards signals.
+    const result=await run(command.argv,{container:command.container});
+    process.exitCode=result.code;
+    await command.release();
+  } catch(error) {
+    if(error?.containerCleanupUncertain!==true)await command.release();
+    throw error;
+  }
 }

@@ -9,6 +9,8 @@ import { applicationId, validApplicationOrigin } from './application-origin.js'
 import { isPreset, type AiPreset, type ModelChoice } from './ai.js'
 import { MAX_INCOMING_ATTACHMENT_BYTES, stageChatAttachment } from './files.js'
 import { assertEffort } from './model-policy.js'
+import { ApprovalStore } from './approval.js'
+import { Tasks } from './tasks.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const applicationScope = (bindingId: string, scope: string) => hash(JSON.stringify([bindingId, scope]))
@@ -250,11 +252,11 @@ export class ApplicationChannel {
     await this.bindings.authorize(run)
     const state = await new ControlStore(this.options.controlDir, 900000).status()
     const session = state.activeSession?.sessionId === run.execution?.sessionId ? state.activeSession : state.sessions?.find(item => item.sessionId === run.execution?.sessionId)
-    return { ...(session ? { sessionId: session.sessionId, nativeSessionId: session.nativeSessionId, cli: session.cli } : {}), ...(run.scheduled?.originRunId ? {originRunId:run.scheduled.originRunId} : {}), id: run.id, scope: (run.application ?? run.delivery)!.scope, status: run.status, messages: await this.runs.applicationMessages(run.id), ...(run.status === 'failed' ? { error: 'Agent execution failed; inspect the core run' } : {}) }
+    return { ...(session ? { sessionId: session.sessionId, nativeSessionId: session.nativeSessionId, cli: session.cli } : {}), ...(run.scheduled?.originRunId ? {originRunId:run.scheduled.originRunId} : {}), id: run.id, scope: (run.application ?? run.delivery)!.scope, status: run.status, messages: await this.runs.applicationMessages(run.id), approvals:await this.runs.applicationApprovals(run.id), ...(run.status === 'failed' ? { error: 'Agent execution failed; inspect the core run' } : {}) }
   }
   async deliver(run: RunRecord, item: OutboxItem): Promise<void> {
     await this.bindings.authorize(run)
-    if (item.type && item.type !== 'message') throw new Error('Application channel supports text messages only')
+    if (item.type && !['message','approval'].includes(item.type)) throw new Error('Application channel supports text messages and approvals only')
     await this.runs.markOutboxSent(item.id)
   }
   private async route(request: IncomingMessage, response: ServerResponse) {
@@ -298,6 +300,19 @@ export class ApplicationChannel {
         if (applicationId(input?.requestId)) admissionId = `r_app_${hash(JSON.stringify([binding.bindingId, input.requestId]))}`
         const run = await this.submit(binding.bindingId, input)
         send(202, await this.snapshot(binding.bindingId, run.id)); return
+      }
+      const approvalMatch=path.match(/^\/v1\/approvals\/(task_[a-f0-9]{32})$/)
+      if(approvalMatch && request.method==='POST') {
+        const approval=await new ApprovalStore(this.options.controlDir).getDecision(approvalMatch[1])
+        const run=approval?.runId ? await this.runs.get(approval.runId) : null
+        if(!run || run.application?.bindingId!==binding.bindingId)throw new Error('Unknown application approval')
+        await this.bindings.authorize(run)
+        const chunks:Buffer[]=[];let size=0;for await(const chunk of request){size+=chunk.length;if(size>1024)throw new Error('Invalid application approval');chunks.push(chunk)}
+        const input=JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        if(!input || !['approved','denied'].includes(input.decision) || Object.keys(input).some(key=>key!=='decision'))throw new Error('Invalid application approval')
+        await new ApprovalStore(this.options.controlDir).recordOwnerDecision(approvalMatch[1],input.decision,binding.owner)
+        if(!await new Tasks(this.options.controlDir).decide(approvalMatch[1]))throw new Error('Unknown application approval')
+        send(200,{id:approvalMatch[1],decision:input.decision});return
       }
       const match = path.match(/^\/v1\/runs\/(r_(?:app|schedule)_[a-f0-9]{64})(\/cancel)?$/)
       if (match && ((!match[2] && request.method === 'GET') || (match[2] && request.method === 'POST'))) {

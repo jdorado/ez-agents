@@ -140,8 +140,12 @@ The existing `ezenciel-agents-schedule context` exposes it as
 `run.application.context` only to the current native run. Domain tools and their
 filesystem mounts are installed using ordinary Ez plugin/runtime setup. No API
 field selects a native session, working directory, process environment or owner.
-This first version transports text only, without file delivery, reactions or
-approval UI.
+This version transports text plus core approval requests, without file delivery
+or reactions. Run snapshots include `approvals: [{id,prompt,state}]`. Render the
+prompt verbatim and POST `{"decision":"approved"}` or
+`{"decision":"denied"}` to `/v1/approvals/TASK_ID` with the same bearer
+credential. Core binds the decision to the authenticated owner generation; the
+application must not infer or auto-submit consent.
 
 ## Conversation continuity and migration
 

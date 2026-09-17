@@ -1,3 +1,4 @@
+import { parseWebLauncher, type WebLauncher } from './web-launcher.js'
 import { repairEnabled } from './repair-policy.js'
 import path from 'node:path'
 import { homedir } from 'node:os'
@@ -10,6 +11,7 @@ export type ControlConfig = {
 export type Config = ControlConfig & {
   repairEnabled?: boolean
   telegramEnabled?: boolean
+  webLauncher?: WebLauncher
   telegramBotToken: string
   workspace: string
   executorTimeoutMs: number
@@ -71,6 +73,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   return {
     ...loadControlConfig(env),
     telegramEnabled,
+    webLauncher: parseWebLauncher(env.EZ_TELEGRAM_WEB_APP),
     telegramBotToken,
     repairEnabled: repairEnabled(env.EZ_REPAIR_ENABLED),
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),

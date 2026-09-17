@@ -2,14 +2,61 @@
 
 ## Unreleased
 
+- Answer native app-server requests with their current protocol shapes. Scheduled
+  `codex-gui` browser work now surfaces approval requests and grants only its
+  active turn session-scoped HTTPS browser-origin and Chrome app elicitations,
+  while audio, cross-turn, unrelated elicitations and approvals remain declined.
+- Restore `codex-gui` tasks when newer Codex Desktop builds do not create the
+  legacy control socket at app launch: invoke the native idempotent app-server
+  daemon start command and retry the desktop connection once, while retaining
+  fail-closed behavior and never falling back to headless execution.
+- Add owner-approved, provider-neutral public channel grants so restricted fresh
+  agent runs can answer any private chat or mentioned group on one enabled source.
+  Grants may expose only fixed, read-only query aliases such as Library search;
+  they retain no owner memory, recheck revocation around every operation, and
+  enforce persisted concurrency, traffic, receipt and evidence bounds.
+
+## 0.1.0-beta.31
+
+- Make the owner-authorized contribution lifecycle explicit in shipped agent
+  guidance: take a coherent change through independent final-head review, CI,
+  applicable QA and, when authorized, merge. Release authority includes the
+  merge needed for publication, which continues through the reviewed GitHub
+  publisher, registry readback and eligible runtime verification. Preserve local
+  QA, diagnostics, auth-only work and deployment as separate boundaries.
+
+## 0.1.0-beta.30
+
+- Bind installed native command launchers to the deployment's canonical control
+  directory. This makes application registration use the owning agent's state
+  and prevents caller environment variables from redirecting that authority.
+
+## 0.1.0-beta.29
+
+- Republish the beta.28 Voice connection and web-serving contract at a monotonic
+  version so installations already running private beta.28 QA builds can upgrade
+  through the standard verified public-package path. Runtime behavior is unchanged.
+
+## 0.1.0-beta.28
+
 - Hide empty conversation placeholders from history and update the same menu
   when navigating Back, rather than adding another menu message.
-
 - Keep the conversation list to names only; show Archive/Restore for the selected
   conversation. Label older chats from saved owner messages instead of opaque IDs.
-
 - Add named Telegram conversations with switching, renaming, archiving and
   restoring. Preserve native engine bindings and queued work across switches.
+- Add the authenticated application channel to the standard runtime, including
+  botless deployments, explicit owner sharing, native conversation continuity,
+  isolated non-root containers and writable-folder grants.
+- Add owner-bound persistent plugin connections with installed-tool discovery,
+  native task access and revocation-safe Telegram delivery receipts.
+- Add explicit loopback-only `tools serve`, live read-only owner discovery and an
+  optional authenticated private-chat Mini App launcher for plugin-owned web UIs.
+- Fix packaged application command availability and private-plugin update checks.
+- Document agent-owned maintenance for separately deployed applications and add
+  owner-bound, on-demand Telegram delivery-history lookup across native sessions.
+- Clarify the native-engine, transport and plugin ownership boundaries and the
+  proportionate KISS contribution/review standard.
 
 ## 0.1.0-beta.27
 

@@ -168,6 +168,29 @@ attention during setup/use; it does not enable an automated reviewer. Declaring
 false never grants permissions, disables core checks or certifies a plugin safe.
 The core owns authority; plugins own provider transport/authentication/receipts.
 
+A command may additionally set `"channelQuery": true` only when all four
+exposure fields are explicit and describe external input with no external send,
+record change, or interactive review. This is narrow eligibility for inclusion
+in an owner-approved restricted channel grant, not an activated permission or a
+safety label for the rest of the plugin. Mixed read/write aliases are ineligible;
+publish a dedicated query-only alias.
+
+For original file bytes, declare `"channelFile": true` instead, with the same
+read-only exposure fields. The approved task capability must specify
+`"output": "file"`. Its command accepts one literal input and writes only the
+file bytes to stdout (maximum 20 MiB across a run). Core returns an attachment ID and filename
+to the agent; binary content stays in private task staging. The input basename
+supplies the download filename.
+
+The task's existing `send` tool accepts `attachmentId` plus text and an
+idempotency key. Only a completed file capability from that run can supply it.
+The destination remains the authorized conversation. Providers opt in through
+`events-head.taskAttachments: true`, optionally declaring `attachmentCaptionLimit`,
+and accept the attachment metadata in `task-send`. Telegram delivers a document
+with a caption of at most 1024 characters; channels without this contract fail
+explicitly before dispatch. Staged bytes are removed when the external run is
+released. File capability access must be included in the owner's grant.
+
 Owner adapters retain owner access. External correspondence can run only in an
 approved core messaging task through the restricted task runner. Declarations
 and monitoring subscriptions alone never grant task execution. See
@@ -314,3 +337,32 @@ is stopped. The grant applies only to that folder and survives compatible
 upgrades. Rebind without `--writable` to return it to read-only. Package
 descriptors cannot request this grant. Keep one synchronization owner for each
 source; a writable mount alone does not configure synchronization.
+
+## Browser endpoints for connected plugins
+
+`ez tools serve HOST_PORT:CONTAINER_PORT ALIAS ARGS...` runs a plugin's web command
+inside its command container while core handles the existing persistent tool
+protocol. Both ports must be 1024–65535. Publication is always on host 127.0.0.1;
+no plugin manifest can request public ingress. Run the foreground command under
+the host's normal service supervisor if it must survive terminal closure. SIGINT
+or SIGTERM cancels the connection and removes its command container.
+
+The plugin owns HTTP, browser authentication, sessions and static assets. HTTPS
+termination, DNS and forwarding are explicit operator configuration. Plugins may
+use the read-only `tools.owner` core request to check the current paired private
+Telegram user and opaque pairing epoch. This is identity data, not an access grant;
+the plugin must authenticate the requester and recheck identity on protected requests.
+No owner returns null, and no bot token is exposed. Standard plugin CLI operations
+still enforce their normal permissions. See the Voice plugin's README for a client.
+
+To add an optional launcher without replacing Telegram's command menu, set the
+relay Compose environment or `.env` (then recreate the relay container):
+
+```dotenv
+EZ_TELEGRAM_WEB_APP={"command":"voice","label":"Voice","url":"https://voice.example.com/"}
+```
+
+The command returns a Mini App button to the authenticated owner in private chat;
+`/menu` includes the same button. Reserved commands cannot be replaced. The HTTPS
+URL must not contain credentials, query parameters or a fragment. This setting
+only registers a launcher; it does not expose a port or authenticate web requests.

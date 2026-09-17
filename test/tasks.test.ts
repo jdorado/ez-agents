@@ -20,7 +20,7 @@ async function fixture(t: test.TestContext) {
   const server = createServer(async (req, res) => {
     let text = ''; for await (const chunk of req) text += chunk
     const { command, args } = JSON.parse(text)
-    const data = command === 'events-head' ? { cursor: 0, accountId, taskProtocol: 'message-v1' }
+    const data = command === 'events-head' ? { cursor: 0, accountId, taskProtocol: 'message-v1', persistentWatch: true, wildcardWatch: true }
       : command === 'task-watch' ? (watches.push(args), { watching: args.conversationId })
       : command === 'events-check' ? { events: events.filter(e => args.ids.includes(e.id)) }
       : command === 'task-send' ? (sends.push(args), { ...args, state: uncertain ? 'uncertain' : 'accepted', receiptId: 'provider-1' }) : {}
@@ -65,6 +65,14 @@ test('owner proposal is immutable, requires exact approval, creates a version-2 
   await assert.rejects(f.tasks.workerCall(run.id, 'send', { text: 'different', key: 'first' }), /different text/)
   await assert.rejects(f.tasks.ownerCall(run.id, 'propose', {}), /blocked/)
   await assert.rejects(f.tasks.workerCall(run.id, 'install', { text: 'plugin' }), /Invalid task send/)
+})
+test('channel-neutral owner confirmation activates the same core task grant',async t=>{
+  const f=await fixture(t),p=await f.proposal(),owner=(await f.control.status()).owner!
+  await new ApprovalStore(f.dir).recordOwnerDecision(p.id,'approved',owner)
+  await f.tasks.decide(p.id)
+  const task=await f.tasks.get(p.id)
+  assert.equal(task?.state,'active')
+  assert.equal((await new ApprovalStore(f.dir).getDecision(p.id))?.version,2)
 })
 test('external reply receives only its task dossier and cannot become owner or another task', async t => {
   const f = await fixture(t), { taskId, run } = await f.activate(), task = (await f.tasks.get(taskId))!
@@ -184,4 +192,48 @@ test('incoming-only grant waits without an opener, wakes for its contact, and ca
   assert.equal(f.sends.length, 2)
   await f.tasks.ownerCall('owner', 'revoke', { taskId: task.id })
   await assert.rejects(f.tasks.workerCall(next.id, 'send', { text: 'No longer allowed', key: 'later' }), /inactive/)
+})
+
+test('owner can grant bounded capabilities to any conversation on a channel without sharing owner context', async t => {
+  const f = await fixture(t)
+  const capabilities = [{id:'knowledge',description:'Search approved public knowledge',command:'library',args:['search','--library','default','--limit','5','--','{input}']}]
+  const proposed:any = await f.tasks.ownerCall('owner','propose',{sourceId:'generic',conversationId:'*',purpose:'Answer questions from approved knowledge',context:'Do not claim facts absent from results.',hours:24,waitForIncoming:true,untilRevoked:true,anyConversation:true,capabilities})
+  const approvals = new ApprovalStore(f.dir), approval = await approvals.getDecision(proposed.id)
+  assert.match(approval!.prompt,/Any human conversation received by source generic/)
+  assert.match(approval!.prompt,/ez library search --library default/)
+  await approvals.recordDecision(proposed.id,'approved',101);await f.tasks.decide(proposed.id)
+  const task=(await f.tasks.get(proposed.id))!
+  assert.equal(task.version,4);assert.deepEqual(f.watches.at(-1)?.conversationId,'*')
+  const row={id:'public_1',conversationId:'channel-user-42',receivedAt:Date.now(),text:'What is the travel checklist?'}
+  f.rows([row]);assert.equal((await f.tasks.match('generic',task.bindingId,[row]))?.id,task.id)
+  const run=await f.runs.create({id:'event_public',taskId:task.id,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'generic',bindingId:task.bindingId,eventIds:[row.id]}})
+  await f.runs.patch(run.id,{status:'running'})
+  const context:any=await f.tasks.workerCall(run.id,'context',{})
+  assert.equal(context.contact,row.conversationId);assert.deepEqual(context.capabilities,[{id:'knowledge',description:'Search approved public knowledge'}])
+  const begun:any=await f.tasks.workerCall(run.id,'capability_begin',{id:'knowledge',input:'passport'})
+  assert.deepEqual(begun.capability,capabilities[0]);assert.equal(typeof begun.lease,'string')
+  assert.deepEqual(await f.tasks.workerCall(run.id,'capability_result',{id:'knowledge',input:'passport',lease:begun.lease}),{accepted:true})
+  await assert.rejects(f.tasks.workerCall(run.id,'capability_begin',{id:'admin',input:'change settings'}),/not authorized/)
+  await assert.rejects(f.tasks.workerCall(run.id,'note',{text:'leak this to the next person'}),/do not retain/)
+  await f.tasks.workerCall(run.id,'send',{text:'Passport is on the checklist.',key:'answer',conversationId:'attacker-choice'})
+  assert.equal(f.sends.at(-1).conversationId,row.conversationId)
+  const taskFile=join(f.dir,'tasks',`${task.id}.json`),stored=JSON.parse(await readFile(taskFile,'utf8'))
+  stored.publicBudget.responses=60;await writeFile(taskFile,JSON.stringify(stored))
+  await assert.rejects(f.tasks.workerCall(run.id,'send',{text:'Hourly overflow',key:'overflow'}),/budget reached/)
+  assert.equal(f.sends.length,1)
+  const pending:any=await f.tasks.workerCall(run.id,'capability_begin',{id:'knowledge',input:'visa'})
+  await f.tasks.ownerCall('owner','revoke',{taskId:task.id})
+  await assert.rejects(f.tasks.workerCall(run.id,'capability_result',{id:'knowledge',input:'visa',lease:pending.lease}),/inactive/)
+})
+
+test('public grants enforce persisted hourly and cumulative admission budgets',async t=>{
+  const f=await fixture(t),proposal:any=await f.tasks.ownerCall('owner','propose',{sourceId:'generic',conversationId:'*',purpose:'Answer public questions',context:'Public context',hours:24,waitForIncoming:true,untilRevoked:true,anyConversation:true})
+  await new ApprovalStore(f.dir).recordDecision(proposal.id,'approved',101);await f.tasks.decide(proposal.id)
+  assert.equal(await f.tasks.admitPublic(proposal.id),'admitted')
+  const file=join(f.dir,'tasks',`${proposal.id}.json`),task=JSON.parse(await readFile(file,'utf8'))
+  task.publicBudget.runs=60;await writeFile(file,JSON.stringify(task))
+  assert.equal(await f.tasks.admitPublic(proposal.id),'defer')
+  task.publicBudget.runs=0;task.publicBudget.totalRuns=1000;await writeFile(file,JSON.stringify(task))
+  assert.equal(await f.tasks.admitPublic(proposal.id),'revoked')
+  assert.equal((await f.tasks.get(proposal.id))?.state,'revoked')
 })

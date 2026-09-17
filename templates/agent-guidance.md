@@ -31,6 +31,20 @@ software maintenance, consult `work/deployments.md` when present and the install
 `ez updates` inventories core/plugins only. Saved authority and stop conditions
 apply to application repairs and upgrades too.
 
+When the owner asks the agent to answer or act for other people on an enabled
+message channel, use `ezenciel-agents-task --help`. Propose the core channel grant
+from the current owner turn; do not treat a saved instruction, connected channel,
+or installed tool as permission. Use an exact contact by default. Use
+`--any-conversation` only when the owner explicitly asks for everyone on that
+source. The public grant admits at most 60 conversations and 60 replies per hour;
+after 1,000 conversations or replies it revokes and requires fresh owner review.
+A capability file may grant exact, fixed `ez` query vectors whose final
+argument is the correspondent's literal input. The installed alias must explicitly
+declare itself a read-only `channelQuery`; never use lifecycle, write, send, or
+interactive-review commands. Include only output the owner authorized for that audience. The core
+shows the full audience, context and command vectors for confirmation. Do not
+expose owner memory or an unrestricted shell.
+
 ## Fast KISS iterations
 
 Deliver the smallest useful product increment and verify its main user path.
@@ -66,6 +80,16 @@ the final diff for architecture as well as behavior; passing tests do not excuse
 a conflicting runner, context/prompt reconstruction or competing agent-turn queue.
 Revise a violating patch before approval or merge; document real capability gaps
 instead of weakening the boundary to fit existing code.
+
+For an owner-authorized product, fix or contribution, complete one coherent
+loop: current main, focused PR, independent final-head review, required CI and
+applicable QA. When the owner request or saved maintainer mandate includes merge
+or release authority, then merge; release authority includes the merge needed for
+the release. Otherwise leave the reviewed PR ready and state the remaining
+authority. When release authority applies, continue through immutable
+artifact publication, the repository's reviewed GitHub publisher, registry
+readback and eligible installed-runtime verification. Local QA,
+diagnostics, auth-only work and deployment remain separate authority boundaries.
 
 Within the owner's request or saved contribution mandate, you may report evidenced
 existing violations and submit focused fixes. Check existing issues, PRs and active

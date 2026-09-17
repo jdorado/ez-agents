@@ -3,6 +3,7 @@ import { executionDefaults } from './model-policy.js'
 import { access, constants } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { createConnection, type Socket } from 'node:net'
+import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -29,6 +30,7 @@ export type DesktopClient = {
   request: (method: string, params?: unknown) => Promise<Record<string, unknown>>
   notify: (method: string, params?: unknown) => void
   wait: (match: (message: Record<string, unknown>) => boolean, timeoutMs: number) => Promise<Record<string, unknown>>
+  setServerRequestContext: (threadId?: string, turnId?: string) => void
   close: () => void
 }
 
@@ -57,6 +59,8 @@ export const desktopCodexPath = async (home = homedir(), envPath = process.env.P
 const writableRoots = (options: DesktopTurnOptions): string[] =>
   [options.controlDir, options.toolsHome].filter((value): value is string => Boolean(value))
 
+const approvalPolicy = (scheduledDesktop: boolean): 'on-request' | 'never' => scheduledDesktop ? 'on-request' : 'never'
+
 const sendFrame = (socket: Socket, text: string) => {
   const payload = Buffer.from(text)
   const mask = randomBytes(4)
@@ -71,6 +75,29 @@ const sendFrame = (socket: Socket, text: string) => {
   socket.write(Buffer.concat([header, mask, masked]))
 }
 
+export const desktopServerRequestResult = (
+  message: Record<string, unknown>,
+  context?: { threadId: string; turnId?: string },
+): Record<string, unknown> => {
+  if (message.method === 'mcpServer/elicitation/request') {
+    const params = message.params as { threadId?: unknown; turnId?: unknown; _meta?: Record<string, unknown> } | undefined
+    const meta = params?._meta
+    const toolParams = meta?.tool_params as Record<string, unknown> | undefined
+    const origin = toolParams?.origin
+    const browserOrigin = meta?.connector_id === 'browser-use' && meta.codex_approval_kind === 'mcp_tool_call' &&
+      meta.codex_request_type === 'approval_request' && meta.tool_name === 'access_browser_origin' &&
+      typeof origin === 'string' && /^https?:\/\//.test(origin) && meta.origin === origin
+    const chromeApp = meta?.connector_id === 'computer-use' && meta.codex_approval_kind === 'mcp_tool_call' &&
+      meta.codex_request_type !== 'approval_request' && meta.tool_name !== 'start_audio_recording' &&
+      toolParams?.app === 'com.google.Chrome'
+    if (context && params?.threadId === context.threadId && typeof params.turnId === 'string' &&
+      (!context.turnId || params.turnId === context.turnId) && (browserOrigin || chromeApp))
+      return { action: 'accept', content: null, _meta: { persist: 'session' } }
+    return { action: 'decline', content: null, _meta: null }
+  }
+  return { decision: 'decline' }
+}
+
 export const attachClient = (socket: Socket, pending: Buffer[] = []): DesktopClient => {
   let buffer = Buffer.concat(pending)
   let nextId = 1
@@ -79,6 +106,7 @@ export const attachClient = (socket: Socket, pending: Buffer[] = []): DesktopCli
   const failedWaits = new Set<() => void>()
   const notifications: Record<string, unknown>[] = []
   const watchers: Array<(message: Record<string, unknown>) => void> = []
+  let serverRequestContext: { threadId: string; turnId?: string } | undefined
   const deliver = (message: Record<string, unknown>) => {
     const id = message.id
     if (typeof id === 'number' && replies.has(id) && (message.result !== undefined || message.error)) {
@@ -89,8 +117,13 @@ export const attachClient = (socket: Socket, pending: Buffer[] = []): DesktopCli
       else reply.resolve(message.result as Record<string, unknown>)
       return
     }
-    if (typeof id === 'number' && typeof message.method === 'string') {
-      sendFrame(socket, JSON.stringify({ id, result: { decision: 'approved' } }))
+    if ((typeof id === 'number' || typeof id === 'string') && typeof message.method === 'string') {
+      const result = desktopServerRequestResult(message, serverRequestContext)
+      if (result.action === 'accept' && serverRequestContext && !serverRequestContext.turnId) {
+        const turnId = (message.params as { turnId?: unknown } | undefined)?.turnId
+        if (typeof turnId === 'string') serverRequestContext.turnId = turnId
+      }
+      sendFrame(socket, JSON.stringify({ id, result }))
       return
     }
     notifications.push(message)
@@ -168,6 +201,9 @@ export const attachClient = (socket: Socket, pending: Buffer[] = []): DesktopCli
       failedWaits.add(fail)
       watchers.push(watcher)
     }),
+    setServerRequestContext: (threadId, turnId) => {
+      serverRequestContext = threadId ? { threadId, turnId } : undefined
+    },
     close: () => socket.destroy(),
   }
 }
@@ -200,6 +236,32 @@ export const connectDesktop = (socketPath = desktopControlSocket()): Promise<Des
     socket.on('data', onData)
   })
 
+const startDesktopDaemon = async (
+  home = homedir(),
+  envPath = process.env.PATH || '',
+  run: typeof execFile = execFile,
+): Promise<void> => {
+  const codex = await desktopCodexPath(home, envPath)
+  if (!codex) throw new Error(DESKTOP_UNAVAILABLE)
+  await new Promise<void>((resolve, reject) => run(codex, ['app-server', 'daemon', 'start'], {
+    env: { HOME: home, PATH: envPath }, timeout: 15_000, maxBuffer: 64 * 1024,
+  }, (error) => error ? reject(new Error(DESKTOP_UNAVAILABLE)) : resolve()))
+}
+
+export const connectManagedDesktop = async (
+  connect: typeof connectDesktop = connectDesktop,
+  start: typeof startDesktopDaemon = startDesktopDaemon,
+): Promise<DesktopClient> => {
+  try { return await connect() }
+  catch {
+    // The native Codex daemon owns its lifecycle and is idempotent. New desktop
+    // builds do not necessarily create the control socket merely by opening the
+    // app, so ask Codex to restore its own bridge before failing closed.
+    await start()
+    return connect()
+  }
+}
+
 export const runDesktopTurn = async (
   options: DesktopTurnOptions,
   io: { connect?: typeof connectDesktop; emit?: (line: string) => void; signal?: AbortSignal } = {},
@@ -208,7 +270,8 @@ export const runDesktopTurn = async (
   const emit = io.emit ?? ((line: string) => process.stdout.write(`${line}\n`))
   let client: DesktopClient | undefined
   try {
-    client = await (io.connect ?? connectDesktop)()
+    const scheduledDesktop = options.runId.startsWith('r_schedule_')
+    client = await (io.connect ?? connectManagedDesktop)()
     await client.request('initialize', { clientInfo: { name: 'ezenciel-agents', title: 'ez', version: '1' } })
     client.notify('initialized', {})
     const roots = writableRoots(options)
@@ -227,7 +290,7 @@ export const runDesktopTurn = async (
       const started = await client.request('thread/start', {
         cwd: options.workspace,
         config,
-        approvalPolicy: 'never',
+        approvalPolicy: approvalPolicy(scheduledDesktop),
         sandbox: 'workspace-write',
         model: options.model,
         serviceName: 'ezenciel-agents',
@@ -238,17 +301,19 @@ export const runDesktopTurn = async (
     }
     if (!nativeThread(threadId)) throw new Error(DESKTOP_UNAVAILABLE)
     emit(JSON.stringify({ type: 'thread.started', thread_id: threadId }))
+    client.setServerRequestContext(scheduledDesktop ? threadId! : undefined)
     const turn = await client.request('turn/start', {
       threadId,
       input: [{ type: 'text', text: options.prompt }],
       model: options.model,
       effort: options.effort,
       cwd: options.workspace,
-      approvalPolicy: 'never',
+      approvalPolicy: approvalPolicy(scheduledDesktop),
       sandboxPolicy: { type: 'workspaceWrite', writableRoots: roots, networkAccess: Boolean(options.toolsHome) },
     })
     const turnId = (turn.turn as { id?: string } | undefined)?.id
     if (!turnId) throw new Error(DESKTOP_UNAVAILABLE)
+    if (scheduledDesktop) client.setServerRequestContext(threadId!, turnId)
     const interrupt = () => { void client?.request('turn/interrupt', { threadId, turnId }).catch(() => {}) }
     io.signal?.addEventListener('abort', interrupt, { once: true })
     if (io.signal?.aborted) interrupt()

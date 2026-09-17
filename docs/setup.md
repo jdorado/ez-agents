@@ -19,7 +19,8 @@ Make the bot a group admin so Telegram delivers ordinary member messages and
 allows membership verification for approval and control buttons. Group ownership only authorizes
 the exact approved chat, not other groups or members' private DMs. Telegram group
 migration to a new chat ID requires a new explicit binding. Verify a real group
-reply before considering setup complete. All other groups retain their existing
+reply before considering setup complete. Unless an explicit any-conversation
+grant is active, all other groups retain their existing
 restricted conversation-grant behavior.
 
 Ez supports two independent, composable uses: an autonomous Telegram agent and
