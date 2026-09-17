@@ -13,10 +13,13 @@ import type { ChildProcess } from 'node:child_process'
 import { taskWorkspace } from './task-workspace.js'
 import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
+import { processSnapshot } from './process-tree.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
 export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute> }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
+
+const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth
 
 export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {
   resolveExecutor(installation.cli)
@@ -46,9 +49,17 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       const directory = path.join(agent.controlDir,'host-executor')
       await mkdir(directory,{recursive:true,mode:0o700})
       const lock=path.join(directory,'worker.lock')
-      try { const prior=JSON.parse(await readFile(lock,'utf8')); try { process.kill(prior.pid,0); throw new Error('Host executor already running') } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }; await rm(lock) }
+      try {
+        const prior=JSON.parse(await readFile(lock,'utf8'))
+        const currentStart=await processStart(prior.pid)
+        if (!prior.started || !currentStart || prior.started===currentStart) {
+          try { process.kill(prior.pid,0); throw new Error('Host executor already running') }
+          catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+        }
+        await rm(lock)
+      }
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-      await writeFile(lock,JSON.stringify({pid:process.pid}),{mode:0o600,flag:'wx'})
+      await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid)}),{mode:0o600,flag:'wx'})
       locks.push(lock)
       await installAgentGuidance(agent.workspace)
       await writeFile(path.join(directory,'models.json'),JSON.stringify(await catalog(agent)),{mode:0o600})
