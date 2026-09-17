@@ -13,6 +13,7 @@ import { scheduledTasksText } from './scheduled-tasks.js'
 import { taskWorkspace } from './task-workspace.js'
 import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
+import {removeTaskAttachments} from './task-attachments.js'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -153,7 +154,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     return ids
   }
 
-  const telegramSource = telegramEnabled ? new TelegramSource(config.controlDir, config.telegramBotToken.split(':')[0], sendChat) : null
+  const telegramSource = telegramEnabled ? new TelegramSource(config.controlDir, config.telegramBotToken.split(':')[0], sendChat,
+    async(chatId,text,bytes,filename)=>[(await bot!.api.sendDocument(chatId,new InputFile(bytes,filename),{caption:text})).message_id]) : null
 
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
@@ -333,6 +335,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const unavailableSources = new Set<string>()
   const releaseExternal = async (run: RunRecord):Promise<boolean> => {
     if (!run.external) return true
+    try {await removeTaskAttachments(config.controlDir,run.id)} catch {return false}
     const current=await runs.get(run.id)
     if (current?.externalReleased) {if(run.taskId)await runs.pruneTaskHistory(run.taskId);return true}
     const task = run.taskId ? await tasks.get(run.taskId).catch(() => null) : null
