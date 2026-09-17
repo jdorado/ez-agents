@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Answer native app-server requests with their current protocol shapes. Scheduled
+  `codex-gui` browser work now surfaces approval requests and grants only its
+  active turn session-scoped HTTPS browser-origin and Chrome app elicitations,
+  while audio, cross-turn, unrelated elicitations and approvals remain declined.
 - Restore `codex-gui` tasks when newer Codex Desktop builds do not create the
   legacy control socket at app launch: invoke the native idempotent app-server
   daemon start command and retry the desktop connection once, while retaining
