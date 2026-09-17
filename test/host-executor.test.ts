@@ -55,12 +55,13 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     process.env.TELEGRAM_BOT_TOKEN='must-not-reach-host-cli'
     const sharedAlias=path.join(root,'shared-alias')
     await symlink(root,sharedAlias)
+    const additionalWorkspace=path.join(root,'additional');await mkdir(additionalWorkspace)
     const agents=await Promise.all(['one','two'].map(async name=>{
       const workspace=path.join(root,name,'mind'),controlDir=path.join(root,name,'control')
       await mkdir(workspace,{recursive:true});await mkdir(controlDir,{recursive:true})
       const toolsHome=path.join(root,name,'tools');await mkdir(toolsHome)
       await writeFile(path.join(toolsHome,'config.json'),JSON.stringify({schemaVersion:1,workspace:await realpath(workspace)}))
-      return {name,workspace,controlDir,binDir:path.join(root,'bin'),toolsHome,sharedWorkspace:name==='two'?sharedAlias:root}
+      return {name,workspace,controlDir,binDir:path.join(root,'bin'),toolsHome,sharedWorkspace:name==='two'?sharedAlias:root,additionalWorkspaces:name==='two'?[additionalWorkspace]:undefined}
     }))
     server=serveHostExecutor({cli:'grok',agents},abort.signal)
     for(const agent of agents){
@@ -88,6 +89,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       assert.equal(result.repair,'true')
       assert.ok(result.args.includes(agent.toolsHome))
       assert.ok(result.args.includes(await realpath(root)))
+      assert.equal(result.args.includes(await realpath(additionalWorkspace)),agent.name==='two')
       assert.ok(!result.args.includes('/wrong'))
       assert.equal(result.home,process.env.HOME)
     }

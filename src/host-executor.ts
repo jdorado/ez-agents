@@ -15,7 +15,7 @@ import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
-export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]> }
+export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]> }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
 
 export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {
@@ -27,12 +27,17 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const tasks = new Set<Promise<void>>()
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
+  const additionalWorkspaces = new Map<HostBinding, string[]>()
   const catalog = (agent: HostBinding) => readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
   try {
     for (const agent of installation.agents) {
       if (![agent.workspace,agent.controlDir,agent.binDir].every(path.isAbsolute)) throw new Error('Host bindings require absolute paths')
       if (agent.sharedWorkspace && !path.isAbsolute(agent.sharedWorkspace)) throw new Error('Shared workspace requires an absolute path')
       if (agent.sharedWorkspace) sharedWorkspaces.set(agent, await realpath(agent.sharedWorkspace))
+      if (agent.additionalWorkspaces) {
+        if (!Array.isArray(agent.additionalWorkspaces) || agent.additionalWorkspaces.some(workspace=>typeof workspace!=='string' || !path.isAbsolute(workspace))) throw new Error('Additional workspaces require absolute paths')
+        additionalWorkspaces.set(agent,await Promise.all(agent.additionalWorkspaces.map(workspace=>realpath(workspace))))
+      }
       if (agent.toolsHome) {
         if (!path.isAbsolute(agent.toolsHome)) throw new Error('Plugin registry binding requires an absolute path')
         const config=JSON.parse(await readFile(path.join(agent.toolsHome,'config.json'),'utf8'))
@@ -114,7 +119,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               const cli = opts.cli || installation.cli
               resolveExecutor(cli)
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,model:opts.model,effort:opts.effort},await catalog(agent))
-              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,cli,
+              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort,codexAutoCompactTokens:opts.codexAutoCompactTokens}
               job=await launch(request.texts,options)
