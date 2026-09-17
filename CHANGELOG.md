@@ -5,6 +5,19 @@
 - Prevent accidental cross-agent plugin access by rejecting relay-bound registry
   calls outside the owning workspace, and restrict its host-folder bindings to
   workspace roots explicitly granted by the host.
+- Answer native app-server requests with their current protocol shapes. Scheduled
+  `codex-gui` browser work now surfaces approval requests and grants only its
+  active turn session-scoped HTTPS browser-origin and Chrome app elicitations,
+  while audio, cross-turn, unrelated elicitations and approvals remain declined.
+- Restore `codex-gui` tasks when newer Codex Desktop builds do not create the
+  legacy control socket at app launch: invoke the native idempotent app-server
+  daemon start command and retry the desktop connection once, while retaining
+  fail-closed behavior and never falling back to headless execution.
+- Add owner-approved, provider-neutral public channel grants so restricted fresh
+  agent runs can answer any private chat or mentioned group on one enabled source.
+  Grants may expose only fixed, read-only query aliases such as Library search;
+  they retain no owner memory, recheck revocation around every operation, and
+  enforce persisted concurrency, traffic, receipt and evidence bounds.
 
 ## 0.1.0-beta.31
 

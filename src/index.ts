@@ -13,6 +13,7 @@ import { scheduledTasksText } from './scheduled-tasks.js'
 import { taskWorkspace } from './task-workspace.js'
 import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
+import {removeTaskAttachments} from './task-attachments.js'
 import { dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -153,7 +154,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     return ids
   }
 
-  const telegramSource = telegramEnabled ? new TelegramSource(config.controlDir, config.telegramBotToken.split(':')[0], sendChat) : null
+  const telegramSource = telegramEnabled ? new TelegramSource(config.controlDir, config.telegramBotToken.split(':')[0], sendChat,
+    async(chatId,text,bytes,filename)=>[(await bot!.api.sendDocument(chatId,new InputFile(bytes,filename),{caption:text})).message_id]) : null
 
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
@@ -161,19 +163,20 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // stat uses the effective UID; access uses the relay's isolated real UID.
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
-      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled) return
+      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled && !run.external) return
       if (!run.scheduled && await runs.running(false)) return
       const owner = (await control.status()).owner
       if (!owner || !ownsRun(owner, run)) {
         await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
+        await releaseExternal(run)
         return
       }
       if (run.application || run.delivery) {
         try { await applicationChannel.bindings.authorize(run) }
-        catch { await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); return }
+        catch { await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); await releaseExternal(run); return }
       }
       if (config.channelBackendUrl) {
-        if (run.external || run.taskId || run.scheduled || run.id.startsWith('r_update_')) { await runs.patch(run.id, { status: 'failed' }); return }
+        if (run.external || run.taskId || run.scheduled || run.id.startsWith('r_update_')) { await runs.patch(run.id, { status: 'failed' }); await releaseExternal(run); return }
         activeBackend = true
         await runs.patch(run.id, { status: 'running', backendSubmitted: true })
         void dispatchChannel(config, run).then(async reply => {
@@ -201,18 +204,20 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         try { events = await sources.check(run.external, owner); unavailableSources.delete(run.external.sourceId) } catch { unavailableSources.add(run.external.sourceId); return }
         if (!events.length) {
           await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() })
+          await releaseExternal(run)
           return
         }
         texts = events.map(event => JSON.stringify(event))
       }
       if (run.taskId) {
         try { await tasks.authorize(run) } catch {
-          await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); return
+          await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); await releaseExternal(run); return
         }
       }
       const blockReason = run.taskId ? undefined : executionBlockReason(run, owner)
       if (blockReason) {
         await runs.patch(run.id, { status: 'cancelled', blockReason, endedAt: new Date().toISOString() })
+        await releaseExternal(run)
         return
       }
       try {
@@ -288,6 +293,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
                 if (code === 0 && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(session.sessionId)
                 const cancelled = ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id))
                 await runs.patch(started.id, { status: cancelled ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString(), exitCode: code, ...(code !== 0 && !cancelled ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
+                await releaseExternal(run)
               } catch (error) {
                 await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
                 console.error('Session completion failed', safeError(error))
@@ -313,6 +319,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           activeTypingTimer = null
         }
         await runs.patch(run.id, { status: 'failed', failureReason: 'executor-start', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
+        await releaseExternal(run)
         console.error('run start failed', run.id, safeError(error))
         if (bot && !run.application && !run.delivery && run.chatId !== undefined) await sendChat(run.chatId, `Run ${run.id} failed to start. Check the local relay log.`)
         setImmediate(() => {
@@ -326,6 +333,22 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   }
 
   const unavailableSources = new Set<string>()
+  const releaseExternal = async (run: RunRecord):Promise<boolean> => {
+    if (!run.external) return true
+    try {await removeTaskAttachments(config.controlDir,run.id)} catch {return false}
+    const current=await runs.get(run.id)
+    if (current?.externalReleased) {if(run.taskId)await runs.pruneTaskHistory(run.taskId);return true}
+    const task = run.taskId ? await tasks.get(run.taskId).catch(() => null) : null
+    const registered=(await sources.list()).find(source=>source.id===run.external!.sourceId&&source.bindingId===run.external!.bindingId)
+    const owner=task?.owner ?? (registered&&ownsRun(registered.owner,run)?registered.owner:(await control.status()).owner)
+    if(!owner)return false
+    try {
+      await sources.release(run.external,owner)
+      await runs.patch(run.id,{externalReleased:true})
+      if(run.taskId)await runs.pruneTaskHistory(run.taskId)
+      return true
+    } catch {unavailableSources.add(run.external.sourceId);return false}
+  }
   let sourceWork: Promise<void> | undefined
   const drainSources = (): Promise<void> => {
     if (sourceWork) return sourceWork
@@ -337,6 +360,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         try {
           if (!ownsRun(owner, foreground)) throw new Error('Owner channel revoked')
           if (foreground.application) await applicationChannel.bindings.authorize(foreground)
+          if (foreground.taskId) {
+            const task = await tasks.authorize(foreground,false)
+            const ownerWaiting=(await inbox.status()).pending>0 || (await runs.list()).some(run=>run.status==='queued'&&!run.taskId&&!run.scheduled)
+            if (task.anyConversation && ownerWaiting) throw new Error('Owner input preempts public work')
+          }
         }
         catch { ownerStopped.add(activeChild); terminateJob(activeChild) }
       }
@@ -348,6 +376,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         } catch { ownerStopped.add(child); terminateJob(child); continue }
         if (await scheduler.cancelled(id)) terminateJob(child)
       }
+      const pendingRelease=(await runs.list()).find(run=>run.external&&!run.externalReleased&&['completed','failed','cancelled'].includes(run.status))
+      if(pendingRelease)await releaseExternal(pendingRelease)
       if (!owner) return
       if (!config.channelBackendUrl) {
       await drainTaskRequests()
@@ -356,7 +386,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       if (telegramOwner(owner)) await queueUpdateAttention(config.controlDir,owner,runs,await durableWorkerChoice())
       }
-      for (const source of !telegramOwner(owner) || config.channelBackendUrl ? [] : await sources.available(owner)) {
+      for (const source of config.channelBackendUrl ? [] : await sources.available(owner)) {
         try {
           const batch = await sources.batch(source)
           unavailableSources.delete(source.id)
@@ -366,23 +396,37 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             await sources.remember(source, batch)
             const groups = new Map<string, SourceEvent[]>()
             for (const event of batch.events) groups.set(event.conversationId, [...(groups.get(event.conversationId) || []), event])
+            const known = await runs.list()
+            const publicTaskIds = new Set((await tasks.list()).filter(task=>task.anyConversation).map(task=>task.id))
+            let publicOutstanding = known.filter(run => run.taskId && publicTaskIds.has(run.taskId) && ['queued','running'].includes(run.status)).length
+            let admitted = true
             for (const events of groups.values()) {
-              const task = await tasks.match(source.id, source.bindingId, events)
-              await runs.create({
-              taskId: task?.id,
-              id: eventRunId(source, events), chatId: owner.telegramChatId, telegramUserId: owner.telegramUserId,
-              texts: [], execution: await durableWorkerChoice(),
-              external: { sourceId: source.id, bindingId: source.bindingId, eventIds: events.map(e => e.id) },
-            })
+              let task = await tasks.match(source.id, source.bindingId, events)
+              const id = eventRunId(source,events)
+              if (known.some(run => run.id === id)) continue
+              if (task?.anyConversation) {
+                const publicTaskId=task.id
+                if (publicOutstanding >= 8 || known.some(run => run.taskId === publicTaskId &&
+                  run.external?.conversationId === events[0].conversationId && ['queued','running'].includes(run.status))) { admitted=false; continue }
+                const admission = await tasks.admitPublic(task.id)
+                if (admission === 'defer') { admitted=false; continue }
+                if (admission === 'revoked') task=undefined
+              }
+              const identity = owner.telegramUserId !== undefined && owner.telegramChatId !== undefined
+                ? {chatId:owner.telegramChatId,telegramUserId:owner.telegramUserId}
+                : {ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner)}
+              const created = await runs.create({taskId:task?.id,id,...identity,texts:[],execution:await durableWorkerChoice(),
+                external:{sourceId:source.id,bindingId:source.bindingId,conversationId:events[0].conversationId,eventIds:events.map(e=>e.id)}})
+              known.push(created); if(task?.anyConversation)publicOutstanding++
             }
             // Acknowledgement follows durable run creation; replay uses the saved batch.
-            await sources.advance(source, batch.cursor)
+            if(admitted)await sources.advance(source, batch.cursor)
           })
         } catch { unavailableSources.add(source.id) }
       }
       await runs.running(true)
       if (!config.channelBackendUrl) await scheduler.tick(owner,runs)
-      for (const run of (await runs.list()).filter(r => r.status === 'queued')) {
+      for (const run of (await runs.list()).filter(r => r.status === 'queued').sort((a,b)=>Number(Boolean(a.taskId))-Number(Boolean(b.taskId)))) {
         if (shuttingDown) break
         await startJob(run)
       }
@@ -673,6 +717,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       for (const run of await runs.list()) {
         if (run.status !== 'queued' || run.backendSubmitted) continue
         await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() })
+        await releaseExternal(run)
         count++
       }
     })
@@ -683,26 +728,32 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // return after the authorized update has reached the atomic local journal.
   if (bot) {
   bot.use(async (ctx, next) => {
-    if (ctx.callbackQuery && (await control.status()).owner?.kind === 'group') {
-      if (!isOwner(ctx, (await control.status()).owner)) return
+    const currentOwner = (await control.status()).owner
+    if (ctx.callbackQuery && currentOwner?.kind === 'group') {
+      if (!isOwner(ctx, currentOwner)) return
       try {
         const member = await bot!.api.getChatMember(ctx.chat!.id, ctx.from!.id)
         if (!['creator', 'administrator', 'member'].includes(member.status) &&
           !(member.status === 'restricted' && member.is_member)) return
       } catch { throw new Error('Group membership verification unavailable; retry the update') }
     }
-    if ((ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') &&
-      !isOwner(ctx, (await control.status()).owner)) {
+    const externalText = !replay.has(ctx.update) && ctx.message?.text && !ctx.message.sender_chat && ctx.from && !ctx.from.is_bot && telegramOwner(currentOwner) && !isOwner(ctx,currentOwner)
+    if (externalText) {
+      await telegramSource!.start(currentOwner!)
+      const group = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup'
+      const addressed = !group || ctx.message.reply_to_message?.from?.id === bot!.botInfo.id || Boolean(bot!.botInfo.username &&
+        new RegExp(`(^|\\s)@${bot!.botInfo.username}(?=\\s|$|[,.!?;:])`,'i').test(ctx.message.text!))
+      if (await telegramSource!.capture(ctx.update.update_id,ctx.message as import('grammy/types').Message.TextMessage,ctx.from!,addressed)) return
+    }
+    if ((ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') && !isOwner(ctx, currentOwner)) {
       if (config.channelBackendUrl) return
-      const owner = telegramOwner((await control.status()).owner)
+      const owner = telegramOwner(currentOwner)
       const message = ctx.message
       if (!owner && message && !message.sender_chat && ctx.from && !ctx.from.is_bot) {
         await control.requestPairing(ctx.from.id, ctx.chat.id, ctx.chat.title)
         return
       }
       if (!owner || !message?.text || message.sender_chat || !ctx.from || ctx.from.is_bot) return
-      await telegramSource!.start(owner)
-      if (await telegramSource!.capture(ctx.update.update_id, message as import('grammy/types').Message.TextMessage, ctx.from)) return
       if (owner.kind === 'group') return
       if (ctx.from.id !== owner.telegramUserId) return
       if (replay.has(ctx.update)) {

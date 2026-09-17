@@ -32,14 +32,18 @@ export function taskArguments(directory: string, broker: string[], prompt: strin
     '-c', 'default_permissions="ez-task"',
     '-c', `permissions.ez-task.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(directory)}="write"}`,
     '-c', 'permissions.ez-task.network.enabled=false',
-    '-c', `mcp_servers.ez={command=${JSON.stringify(broker[0])},args=${JSON.stringify(broker.slice(1))},required=true,enabled_tools=${JSON.stringify(toolNames)}}`,
+    // The trusted broker needs the host's CLI configuration; the model keeps its isolated HOME.
+    '-c', `mcp_servers.ez={command=${JSON.stringify(broker[0])},args=${JSON.stringify(broker.slice(1))},env={HOME=${JSON.stringify(homedir())}},required=true,enabled_tools=${JSON.stringify(toolNames)}}`,
     ...toolNames.flatMap(name => ['-c', `mcp_servers.ez.tools.${name}.approval_mode="approve"`]),
     '-'] // Literal input travels on stdin, including slash commands and leading options.
 }
 export async function startTaskExecutor(options: ExecutorOptions) {
   const run = await new RunStore(options.controlDir).get(options.runId)
   if (!run || run.status !== 'running') throw new Error('No active task run')
-  await new Tasks(options.controlDir).authorize(run, false)
+  const task = await new Tasks(options.controlDir).authorize(run, false)
+  const capabilityNames = (task.capabilities ?? []).map(item => `capability_${item.id}`)
+  const toolNames = [...(task.anyConversation ? ['context','send'] : ['context','send','note','report','complete']),...capabilityNames]
+  if (capabilityNames.length && !options.toolsHome) throw new Error('Channel capabilities require an installed tool registry')
   const environment = executorEnvironment()
   const version = await promisify(execFile)('codex', ['--version'], { env: environment })
   if (version.stdout.trim() !== `codex-cli ${TASK_CODEX_VERSION}`) throw new Error(`Restricted tasks require audited Codex ${TASK_CODEX_VERSION}`)
@@ -51,9 +55,9 @@ export async function startTaskExecutor(options: ExecutorOptions) {
     await writeFile(join(temporary, 'models.json'), JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))), { mode: 0o600 })
     await symlink(join(homedir(), '.codex', 'auth.json'), join(home, 'auth.json'))
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
-      fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId]
+      fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId, options.toolsHome ?? '', JSON.stringify(task.capabilities ?? [])]
     const prompt = JSON.stringify({event: run.external ? 'correspondence_received' : 'task_activated', taskId: run.taskId})
-    const child = spawn('codex', taskArguments(directory, broker, prompt, undefined, options), {
+    const child = spawn('codex', taskArguments(directory, broker, prompt, toolNames, options), {
       cwd: directory, env: { ...environment, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     })
     await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })

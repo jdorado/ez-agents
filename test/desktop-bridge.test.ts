@@ -5,7 +5,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EventEmitter } from 'node:events'
-import { DESKTOP_UNAVAILABLE, runDesktopTurn, type DesktopClient } from '../src/desktop-bridge.js'
+import { connectManagedDesktop, desktopServerRequestResult, DESKTOP_UNAVAILABLE, runDesktopTurn, type DesktopClient } from '../src/desktop-bridge.js'
 import { executorKey, nativeSessionId, startExecutorJob } from '../src/executor.js'
 import { initialPreset, isPreset, readModels } from '../src/ai.js'
 
@@ -35,6 +35,7 @@ const fakeClient = (script: Array<Record<string, unknown>>): DesktopClient & { c
       }
       events.on('message', onMessage)
     }),
+    setServerRequestContext: () => {},
     close: () => events.removeAllListeners(),
   }
   return client
@@ -71,6 +72,102 @@ test('a dedicated desktop turn emits the thread id and waits for completion', as
   assert.equal(code, 0)
   assert.deepEqual(client.calls, ['initialize', 'initialized', 'thread/start', 'thread/name/set', 'turn/start'])
   assert.equal(nativeSessionId('codex-gui', lines[0]), 'thr_hello')
+})
+
+test('desktop connection starts the native daemon once when its socket is absent', async () => {
+  const client = fakeClient([])
+  let attempts = 0, starts = 0
+  const connected = await connectManagedDesktop(async () => {
+    attempts++
+    if (attempts === 1) throw new Error(DESKTOP_UNAVAILABLE)
+    return client
+  }, async () => { starts++ })
+  assert.equal(connected, client)
+  assert.equal(attempts, 2)
+  assert.equal(starts, 1)
+})
+
+test('desktop connection fails closed when the native daemon cannot start', async () => {
+  let attempts = 0
+  await assert.rejects(connectManagedDesktop(async () => {
+    attempts++
+    throw new Error(DESKTOP_UNAVAILABLE)
+  }, async () => { throw new Error(DESKTOP_UNAVAILABLE) }), /unavailable/i)
+  assert.equal(attempts, 1)
+})
+
+test('desktop server requests use native response shapes and only accept computer-use elicitations', () => {
+  const context = { threadId: 'thread_1', turnId: 'turn_1' }
+  assert.deepEqual(desktopServerRequestResult({
+    method: 'mcpServer/elicitation/request',
+    params: { ...context, _meta: {
+      connector_id: 'browser-use', codex_approval_kind: 'mcp_tool_call', codex_request_type: 'approval_request',
+      tool_name: 'access_browser_origin', origin: 'https://ae.iherb.com',
+      tool_params: { origin: 'https://ae.iherb.com' },
+    } },
+  }, context), { action: 'accept', content: null, _meta: { persist: 'session' } })
+  assert.deepEqual(desktopServerRequestResult({
+    method: 'mcpServer/elicitation/request',
+    params: { ...context, _meta: {
+      connector_id: 'computer-use', codex_approval_kind: 'mcp_tool_call', tool_name: 'js',
+      tool_params: { app: 'com.google.Chrome' },
+    } },
+  }, context), { action: 'accept', content: null, _meta: { persist: 'session' } })
+  assert.deepEqual(desktopServerRequestResult({
+    method: 'mcpServer/elicitation/request',
+    params: { ...context, _meta: {
+      connector_id: 'computer-use', codex_approval_kind: 'mcp_tool_call', tool_name: 'js',
+      tool_params: { app: 'com.google.Chrome' },
+    } },
+  }, { threadId: context.threadId }), { action: 'accept', content: null, _meta: { persist: 'session' } })
+  assert.deepEqual(desktopServerRequestResult({
+    method: 'mcpServer/elicitation/request',
+    params: { ...context, _meta: {
+      connector_id: 'computer-use', codex_approval_kind: 'mcp_tool_call',
+      codex_request_type: 'approval_request', tool_name: 'start_audio_recording',
+      tool_params: {}, riskLevel: 'high',
+    } },
+  }, context), { action: 'decline', content: null, _meta: null })
+  assert.deepEqual(desktopServerRequestResult({
+    method: 'mcpServer/elicitation/request',
+    params: { ...context, _meta: {
+      connector_id: 'browser-use', codex_approval_kind: 'mcp_tool_call', codex_request_type: 'approval_request',
+      tool_name: 'access_browser_origin', origin: 'file:///tmp/private', tool_params: { origin: 'file:///tmp/private' },
+    } },
+  }, context), { action: 'decline', content: null, _meta: null })
+  assert.deepEqual(desktopServerRequestResult({
+    method: 'mcpServer/elicitation/request',
+    params: { ...context, turnId: 'other', _meta: {
+      connector_id: 'computer-use', codex_approval_kind: 'mcp_tool_call', tool_name: 'js',
+      tool_params: { app: 'com.google.Chrome' },
+    } },
+  }, context), { action: 'decline', content: null, _meta: null })
+  assert.deepEqual(desktopServerRequestResult({ method: 'item/commandExecution/requestApproval' }), { decision: 'decline' })
+  assert.deepEqual(desktopServerRequestResult({ method: 'unknown/request' }), { decision: 'decline' })
+})
+
+test('desktop browser authority is scheduled-only and is installed before turn start', async () => {
+  for (const runId of ['owner_run', 'r_schedule_browser']) {
+    const client = fakeClient([
+      { result: {} }, { result: { thread: { id: 'thread_browser' } } }, { result: {} },
+      { result: { turn: { id: 'turn_browser' } }, notify: [{ method: 'turn/completed', params: { turn: { id: 'turn_browser', status: 'completed' } } }] },
+    ])
+    const calls: Array<[string | undefined, string | undefined]> = []
+    const policies: unknown[] = []
+    const request = client.request
+    client.request = async (method, params) => {
+      if (method === 'thread/start' || method === 'turn/start') policies.push((params as { approvalPolicy?: unknown }).approvalPolicy)
+      return request(method, params)
+    }
+    client.setServerRequestContext = (threadId, turnId) => { calls.push([threadId, turnId]) }
+    assert.equal(await runDesktopTurn({
+      workspace: '/tmp/mind', controlDir: '/tmp/control', binDir: '/tmp/bin', runId, prompt: 'browser test',
+    }, { connect: async () => client, emit: () => {} }), 0)
+    assert.deepEqual(calls, runId.startsWith('r_schedule_')
+      ? [['thread_browser', undefined], ['thread_browser', 'turn_browser']]
+      : [[undefined, undefined]])
+    assert.deepEqual(policies, runId.startsWith('r_schedule_') ? ['on-request', 'on-request'] : ['never', 'never'])
+  }
 })
 
 test('a UUID-shaped desktop thread is resumed instead of starting another task', async () => {
