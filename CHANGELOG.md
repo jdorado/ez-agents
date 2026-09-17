@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.32
+
+- Add shared authenticated inbound attachment staging for application and
+  Telegram channels, preserving literal comments and immutable retries.
+- Support separately scoped host-owned writable workspaces.
+- Reconcile reused host-lock PIDs using process birth identity while failing
+  closed on unknown or matching live-process identity.
+- Accept bounded scheduler recovery identifiers and preserve reviewed package
+  modes when extracting under a restrictive umask.
+- Allow concurrent plugin commands, scoped approved outgoing files, and the
+  host CLI configuration needed for restricted read-only plugin commands.
+- Clarify domain-agent positioning while preserving native engine ownership.
 
 - Answer native app-server requests with their current protocol shapes. Scheduled
   `codex-gui` browser work now surfaces approval requests and grants only its
