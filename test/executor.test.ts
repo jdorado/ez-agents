@@ -159,8 +159,8 @@ test('Codex jobs disable global memory and host skill discovery', () => {
 })
 
 test('Codex plugin access stays scoped to the explicitly bound registry', () => {
-  const args=EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent/mind',controlDir:'/agent/control',toolsHome:'/agent/tools'},'', 'install a plugin')
-  assert.deepEqual(args.flatMap((arg,i)=>arg==='--add-dir'?[args[i+1]]:[]),['/agent/control','/agent/tools'])
+  const args=EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent/mind',controlDir:'/agent/control',toolsHome:'/agent/tools',sharedWorkspace:'/app',additionalWorkspaces:['/agent/mind/work']},'', 'install a plugin')
+  assert.deepEqual(args.flatMap((arg,i)=>arg==='--add-dir'?[args[i+1]]:[]),['/agent/control','/app','/agent/mind/work','/agent/tools'])
   assert.ok(args.includes('sandbox_workspace_write.network_access=true'))
   assert.equal(args[args.indexOf('--sandbox')+1],'workspace-write')
   assert.ok(!EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent/mind'},'','hello').includes('sandbox_workspace_write.network_access=true'))
