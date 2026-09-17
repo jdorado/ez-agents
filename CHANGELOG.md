@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.33
+
+- Allow compatible plugin updates to add commands to existing services, registering
+  their aliases atomically while retaining collision checks and rejecting changes
+  to existing command routes or deployment authority.
+- Simplify contribution guidance and bound independent constraint reviews without
+  changing the native engine, transport or plugin responsibility boundaries.
+
 ## 0.1.0-beta.32
 
 - Add shared authenticated inbound attachment staging for application and
