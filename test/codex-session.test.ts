@@ -43,7 +43,7 @@ if(q.method==='thread/goal/get'){
     child.stdin.write=((chunk:any,...args:any[])=>{try{const q=JSON.parse(String(chunk));if(q.method==='turn/start'){turnPrompt=q.params.input[0].text;turnPolicy=q.params.sandboxPolicy}requests.push(q.method);if(q.method==='thread/start'){threadConfig=q.params.config;threadSandbox=q.params.sandbox}}catch{};return (write as any)(chunk,...args)}) as typeof child.stdin.write
     return child
   }
-  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',prompt,
+  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',additionalWorkspaces:['/agent/mind/work'],prompt,
     ...(mode==='external'?{codexSandbox:'external' as const}:{})},{launch,emit:line=>output.push(line)})
   assert.equal(threadSandbox!,mode==='external'?'danger-full-access':'workspace-write')
   assert.deepEqual(turnPolicy,mode==='external'?{type:'externalSandbox',networkAccess:'enabled'}:undefined)
@@ -51,6 +51,7 @@ if(q.method==='thread/goal/get'){
   assert.equal(turnPrompt,prompt,'full input reaches the engine without goal admission or truncation')
   if(mode==='long-goal')assert.ok(prompt.length>4000)
   assert.ok(threadConfig['sandbox_workspace_write.writable_roots'].includes('/canonical'))
+  assert.ok(threadConfig['sandbox_workspace_write.writable_roots'].includes('/agent/mind/work'))
   assert.equal(result,['external','plain','goal','long-goal','tool-goal'].includes(mode)?0:1)
   assert.equal(requests.filter(x=>x==='turn/start').length,1,'transport must not send goal continuation prompts')
   assert.equal(requests.filter(x=>x==='thread/goal/set').length,0)

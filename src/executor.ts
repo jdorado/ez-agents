@@ -21,6 +21,7 @@ export type ExecutorOptions = {
   binDir: string
   toolsHome?: string
   sharedWorkspace?: string
+  additionalWorkspaces?: string[]
   cli?: string
   sessionId?: string
   isResume?: boolean
@@ -75,7 +76,7 @@ export type CliAdapter = {
   command: string
   description: string
   buildArgs: (
-    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'codexAutoCompactTokens' | 'codexSandbox'> & { controlDir?: string },
+    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'additionalWorkspaces' | 'codexAutoCompactTokens' | 'codexSandbox'> & { controlDir?: string },
     promptFile: string,
     promptText: string,
   ) => string[]
@@ -94,6 +95,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       }
       if (opts.controlDir) args.push('--add-dir', opts.controlDir)
       if (opts.sharedWorkspace) args.push('--add-dir', opts.sharedWorkspace)
+      for (const workspace of opts.additionalWorkspaces ?? []) args.push('--add-dir', workspace)
       if (opts.toolsHome) args.push('--add-dir', opts.toolsHome, '-c', 'sandbox_workspace_write.network_access=true')
       if (opts.model) args.push('--model', opts.model)
       if (opts.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(opts.effort)}`)
