@@ -28,7 +28,10 @@ Before the first PR, provide:
 
 Copy CONTRIBUTING.md, SECURITY.md structure, PR template and docs/releasing.md
 from a released Ez repository; adapt commands and security facts to your plugin.
-Do not copy private QA, company policy, proposed features or unsupported claims.
+Add a short AGENTS.md that states the plugin's ownership boundary and applies the
+same compact feasibility frame and risk-based validation policy; do not copy
+core-only Telegram, state or dependency invariants. Do not copy private QA,
+company policy, proposed features or unsupported claims.
 Public instructions must work without the maintainer's parent workspace. Use
 reviewed local source and its inspected content hash; registry installation is
 inert. Installation is complete only after account onboarding and verified use.

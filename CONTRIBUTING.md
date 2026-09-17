@@ -16,9 +16,11 @@ repository. Public docs describe shipped behavior and explicit limitations.
    Packaging/runtime changes also need the Docker checks in docs/releasing.md.
 5. Open a PR explaining the problem, resulting behavior, verification and limits.
    Include a short sanitized reproduction. State which tests were not run.
-6. Obtain independent review and required CI, then complete the
-   maintainer-authorized merge. Maintainers use PRs too. No CLA, ticket
-   requirement, custom commit format or additional approval committee.
+6. Obtain one bounded independent final-head review and required CI, resolve
+   material findings, then complete the authorized merge. An owner or maintainer
+   request for a product change or fix authorizes this normal PR/merge loop;
+   unsolicited external contributions still require maintainer merge authority.
+   No CLA, ticket requirement, custom commit format or additional approval committee.
 
 You are responsible for understanding submitted code, including AI-generated
 code, and having the right to contribute it under this repository's license.
@@ -79,10 +81,10 @@ do not disguise them as supported architecture or start a duplicate repair.
   create one worktree/PR per repository and link dependencies and merge order.
   Branch from an unmerged feature only when the dependency is intentional and
   documented; do not quietly include it in an unrelated PR.
-- Push the task branch and open a draft PR as soon as the first coherent change
-  is reviewable, before reporting implementation complete. Do not leave completed
-  work only in a local branch. Continue through the release handoff below;
-  implementation completion alone does not authorize publication.
+- Push the task branch and open a PR when the coherent change is reviewable. Use
+  draft status only while implementation or a named gate remains incomplete; do
+  not leave completed mergeable work in a draft or only on a local branch.
+  Publication remains a separate authority boundary.
 - Every handoff names the repository, worktree, branch, exact commit, PR URL,
   checks, independent-review status and remaining QA with its next action. If
   pushing or PR creation is blocked, report the blocker and preserved local
@@ -98,9 +100,10 @@ do not disguise them as supported architecture or start a duplicate repair.
 - New substantive commits or conflict resolutions invalidate the affected review
   and test evidence. Refresh against current main, review the resulting diff and
   run the applicable checks. Do not bypass protected-branch requirements.
-- Merge only after review, required CI, applicable QA and maintainer authorization.
-  Publish only under the separate release process; commits and merges are not
-  releases. Record which source commit and artifact hash were tested.
+- Merge only after review, required CI and applicable QA under the authority in
+  the contribution checklist above. Publish only under the separate release
+  process; commits and merges are not releases. Record which source commit and
+  artifact hash were tested.
 - Keep the worktree while its PR or QA is open. After merge or explicit abandonment,
   inspect it for uncommitted/untracked files and local-only commits. Remove only
   the clean task worktree after valuable work is preserved; never force cleanup.
@@ -124,22 +127,22 @@ and prepare the release. Reuse valid final-commit evidence; repeat checks when
 changes or failures invalidate it. Do not leave a ready feature silently in draft
 or ask the maintainer to run commands, coordinate reviewers, or operate CI.
 
-The maintainer's request is authorization for the requested work and its normal
-implementation steps. Do not ask them to approve the same work again. Once the
-applicable gates pass, execute the requested merge/release and report the packages,
-versions, channel, verification and material limits. Batch related packages in
-dependency order. Prepare the reviewed commits, artifacts and checksums before
-shipping. A request to merge does not silently expand to publication or changing
-a private package's visibility; a request to release already authorizes release.
-If shipping was not requested, report readiness and the next step without treating
-every completed feature as permission to publish.
+The owner or maintainer request authorizes the requested work and its normal
+PR/merge steps; do not ask them to approve the same work again. Release remains
+separate authority: a request to merge does not authorize publication or changing
+a private package's visibility, while a request to release authorizes the merge
+and publication needed for that release. Prepare and verify the reviewed commits,
+artifacts and checksums before shipping. If release was not requested, stop after
+the merged contribution loop and report any distinct deployment or publication
+step without performing it.
 
-Complete the authorized merge, publication and rollout using
-docs/releasing.md, then verify registry metadata, downloaded artifact and the
-installed runtime. Report the outcome. Escalate only a product decision, missing
-credential/2FA, failed gate that cannot be repaired in scope, or material scope
-change. Human attention belongs on product intent;
-the agent operates the technical workflow.
+When release is authorized, complete publication using docs/releasing.md, then
+verify registry metadata, the downloaded artifact and any explicitly requested
+installed-runtime QA. Deployment is separate and requires a direct rollout
+request or the target's saved update policy. Report the outcome. Escalate only a
+product decision, missing credential/2FA, failed gate that cannot be repaired in
+scope, or material scope change. Human attention belongs on product intent; the
+agent operates the technical workflow.
 
 Example, substituting a unique task name and an absolute external directory:
 
