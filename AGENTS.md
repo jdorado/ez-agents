@@ -73,6 +73,23 @@ can be stated briefly and deferred. Reviewers distinguish those blockers from
 optional follow-ups and do not hold a working increment for hypothetical polish.
 Measure progress by usable outcomes and feedback, not code or test volume.
 
+## Feasibility frame for non-trivial work
+
+Before implementing a non-trivial coding, architecture or product change, state
+the user-visible objective, no more than five task-relevant binding constraints,
+the component that owns the failed boundary, the subtraction or simplification
+option, the minimum evidence needed to prove the outcome, and the stop condition.
+Do not restate the full prompt or add this ceremony to minor mechanical edits.
+
+A result that violates a binding constraint is invalid even when tests pass or
+the immediate symptom disappears. Check behavioral correctness, architecture and
+ownership, real user-path evidence and authorized side effects separately. Before
+completion, inspect whether the change added a runner, wrapper, state owner, queue,
+retry loop, prompt layer, dependency or configuration format; retain it only when
+the existing owner or contract cannot solve the demonstrated problem. Use one
+bounded constraint review, then stop when sufficient evidence passes unless a
+concrete material risk remains.
+
 ## 3. Crash-Safe Atomic Disk State
 - All persistent stores (`ControlStore`, `RunStore`, outbox queue) must be disk-backed JSON files.
 - **Atomic write pattern:** Never write directly to a state file. Always write to a temporary file (`${target}.${process.pid}.tmp`) with mode `0o600`, then atomically `rename` it over the destination.
@@ -97,37 +114,23 @@ Measure progress by usable outcomes and feedback, not code or test volume.
 - Unapproved group messages from other senders and unknown DMs fail silently unless an exact-contact or any-conversation owner-approved channel grant admits them. Both grant types use the restricted task runner. Paired-owner group text is discovery routed to the owner's private chat; it grants no group reply authority.
 - Stopping work (`/stop`) must terminate the active worker PID immediately (`SIGTERM`, escalating to `SIGKILL` if unclosed after 3s).
 
-## 8. Mandatory Adversarial & Negative Tests
-Every pull request modifying authority, execution, or routing must include negative tests:
-1. Unapproved Telegram ID $\rightarrow$ no process spawned.
-2. Non-owner group message $\rightarrow$ silent ignore; owner group discovery $\rightarrow$ private destination only.
-3. Executor environment check $\rightarrow$ asserts `TELEGRAM_BOT_TOKEN` is `undefined`.
-4. Corrupt JSON in store $\rightarrow$ handled gracefully without process crash.
-5. Injected path traversal in IDs $\rightarrow$ rejected.
+## 8. Risk-based negative validation
+
+Changes to authority, execution, routing, secret isolation or durable state must
+validate the affected failure boundary, not rerun or recreate an unrelated fixed
+checklist. Examples include proving that an unapproved sender spawns no process,
+executor secrets remain absent, invalid IDs cannot traverse paths, ambiguous
+external writes are not retried, and corrupt state fails safely. Add or change a
+test only when it protects the changed contract or a demonstrated regression.
+Existing relevant checks plus focused real-path evidence may be sufficient.
 
 ## Public contribution workflow
 
-Read CONTRIBUTING.md before edits and docs/releasing.md before a release.
-Maintainers and external agents use the same PR, tests and documentation standard.
-Keep internal plans and private evidence outside this repository.
-
-Before edits, follow CONTRIBUTING.md's isolated-work rules: one task per dedicated
-worktree/branch/PR, starting from fetched origin/main. Do not switch or mix work in
-another task's checkout. Stage only this task's changes. Keep its worktree through
-review and QA; independent review and green CI precede an authorized merge.
-Never treat task completion as permission to merge or publish.
-Own the complete engineering/release handoff in CONTRIBUTING.md. Once ready,
-proactively request only missing merge/release authority, then ship and verify;
-do not leave the maintainer to discover ready drafts or operate the release.
-
-For every core or plugin PR you author, revise or review, apply CONTRIBUTING.md's
-architecture check and the README's engine/application boundary. A symptom fix
-and green tests do not justify a conflicting execution or context owner. Existing
-legacy channel-backend code is a documented limitation, not a pattern for new
-integrations; applications submit agent turns through the native Ez execution path.
-
-A coding-task handoff must include the pushed commit and draft PR URL, checks,
-independent-review status and remaining QA. If PR creation is blocked, state the
-blocker and preserved commit. The merging agent owns the post-merge worktree
-cleanup check and reports removal or the specific reason to retain it. Follow
-CONTRIBUTING.md for squash-merge evidence, ignored files and active-use checks.
+Read CONTRIBUTING.md before edits and docs/releasing.md before a release. It owns
+the worktree, PR, review, merge, release and cleanup process; do not duplicate that
+process here or in feature documentation. For every core or plugin change, apply
+its architecture check and the README's engine/application boundary. A symptom
+fix and green tests do not justify a conflicting execution or context owner.
+Existing legacy channel-backend code is a documented limitation, not a pattern
+for new integrations. Keep internal plans and private evidence outside this
+repository.
