@@ -11,16 +11,17 @@ test('local QA staging preserves source and rejects label replacement and dirty 
   const root=await fs.mkdtemp(path.join(tmpdir(),'ez-qa-test-'));
   const source=path.join(root,'repo'),catalog=path.join(root,'catalog'),flow=path.join(root,'QA.md');
   await fs.mkdir(source);
-  const pkg={name:'@fixture/main',version:'0.1.0-beta.12',files:['feature.txt'],ezRelease:{kind:'main',protocol:1,stateSchema:1,mainProtocol:1}};
+  const pkg={name:'@fixture/main',version:'0.1.0-beta.12',files:['feature.txt','run.sh'],ezRelease:{kind:'main',protocol:1,stateSchema:1,mainProtocol:1}};
   await fs.writeFile(path.join(source,'package.json'),JSON.stringify(pkg));
   await fs.writeFile(path.join(source,'feature.txt'),'feature source');
+  await fs.writeFile(path.join(source,'run.sh'),'#!/bin/sh\n',{mode:0o755});
   await fs.writeFile(flow,'Ask for the feature. Verify its result.');
   const git=args=>execFileSync('git',args,{cwd:source,stdio:'pipe'}).toString().trim();
-  git(['init']);git(['add','package.json','feature.txt']);
+  git(['init']);git(['add','package.json','feature.txt','run.sh']);
   git(['-c','user.name=QA','-c','user.email=qa@example.invalid','-c','core.hooksPath=/dev/null','-c','commit.gpgsign=false','commit','-m','fixture']);
   const script=fileURLToPath(new URL('../scripts/stage-qa.mjs',import.meta.url));
   const args=[script,'--source',source,'--catalog',catalog,'--label','beta-12','--version','0.1.0-beta.12.qa.1','--flow',flow];
-  const stage=()=>execFileSync(process.execPath,args,{stdio:'pipe'}).toString();
+  const stage=()=>{const prior=process.umask(0o027);try{return execFileSync(process.execPath,args,{stdio:'pipe'}).toString();}finally{process.umask(prior);}};
   try {
     const result=JSON.parse(stage()),data=await fs.readFile(path.join(result.directory,result.file));
     assert.equal(result.sha256,digest(data));assert.equal(result.commit,git(['rev-parse','HEAD']));
@@ -29,6 +30,9 @@ test('local QA staging preserves source and rejects label replacement and dirty 
     const built=JSON.parse(await fs.readFile(path.join(root,'unpacked/package.json'),'utf8'));
     assert.equal(built.version,'0.1.0-beta.12.qa.1');assert.equal(built.ezQa.commit,result.commit);
     assert.equal(await fs.readFile(path.join(root,'unpacked/feature.txt'),'utf8'),'feature source');
+    assert.equal((await fs.stat(path.join(root,'unpacked'))).mode&0o777,0o755);
+    assert.equal((await fs.stat(path.join(root,'unpacked/feature.txt'))).mode&0o777,0o644);
+    assert.equal((await fs.stat(path.join(root,'unpacked/run.sh'))).mode&0o777,0o755);
     assert.throws(stage,error=>/QA label already exists/.test(error.stderr.toString()));
     assert.equal(digest(await fs.readFile(path.join(result.directory,result.file))),result.sha256);
     await fs.writeFile(path.join(source,'feature.txt'),'unreviewed edit');
