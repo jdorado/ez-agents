@@ -44,6 +44,12 @@ export async function check(home) {
   }
   return results;
 }
+function additiveCommands(previous,next) {
+  const before={...previous,commands:{}},after={...next,commands:{}};
+  if(JSON.stringify(before)!==JSON.stringify(after))return false;
+  for(const [name,command] of Object.entries(previous.commands||{}))if(JSON.stringify(next.commands?.[name])!==JSON.stringify(command))return false;
+  return Object.values(next.commands||{}).every(command=>next.services?.[command.service]);
+}
 export async function eligibility(home,target,root,automatic) {
   const old=await installed(home,target),pkg=await read(path.join(root,'package.json')),kind=target==='main'?'main':'plugin';
   if(pkg.name!==old.pkg.name)throw Error('Package identity mismatch');
@@ -54,7 +60,7 @@ export async function eligibility(home,target,root,automatic) {
   if(kind==='plugin') {
     const s=await snapshot(root);revision=s.revision;
     if(s.manifest.id!==target||s.manifest.version!==pkg.version)throw Error('Plugin identity/version mismatch');
-    if(JSON.stringify(s.deployment)!==JSON.stringify(old.record.deployment))throw Error('Deployment permissions/layout changed; a separately reviewed migration is required');
+    if(!additiveCommands(old.record.deployment,s.deployment))throw Error('Deployment permissions/layout changed; a separately reviewed migration is required');
   }else {
     for(const file of ['compose.yaml','compose.whatsapp.yaml'])if(!Buffer.from(await fs.readFile(path.join(root,file))).equals(await fs.readFile(path.join(old.root,file))))throw Error('Runtime deployment changed; a separately reviewed migration is required');
   }

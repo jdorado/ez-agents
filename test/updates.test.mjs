@@ -191,6 +191,15 @@ test('stopped plugins remain stopped; removed plugins and expanded mounts reject
  const reg=await read(path.join(f.home,'registry.json'));delete reg.plugins.sample;await atomic(path.join(f.home,'registry.json'),reg);
  await assert.rejects(prepare(f.home,'sample',{file:await f.pack()}),/not installed/);
 });
+test('plugin updates may add command routes on an unchanged deployment',async t=>{
+ const f=await fixture(t,'plugin'),manifest=await read(path.join(f.source,'ez-plugin.json')),deployment=await read(path.join(f.source,'ez-deployment.json'));
+ manifest.commands.query={executable:'bin/example.mjs',args:[],channelQuery:true,exposure:{receivesExternalContent:true,sendsExternally:false,changesRecords:false,requiresReview:false}};
+ deployment.commands.query={service:'sample',argv:['node','/app/bin/example.mjs','query']};
+ await atomic(path.join(f.source,'ez-plugin.json'),manifest);await atomic(path.join(f.source,'ez-deployment.json'),deployment);
+ assert.equal((await eligibility(f.home,'sample',f.source,false)).pkg.version,'0.1.1');
+ deployment.commands.sample.argv.push('--changed');await atomic(path.join(f.source,'ez-deployment.json'),deployment);
+ await assert.rejects(eligibility(f.home,'sample',f.source,false),/deployment/i);
+});
 test('interrupted activation recovers previous code; rollback failure is explicit and blocks further jobs',async t=>{
  const f=await fixture(t),job=await queued(f),r=runtime(f);await perform(f.home,job,r);
  const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
