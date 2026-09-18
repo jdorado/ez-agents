@@ -85,7 +85,7 @@ export const resolveHostCommand = (command: string, pathValue = process.env.PATH
       return candidate
     } catch { /* try the next PATH entry */ }
   }
-  return command
+  throw new Error(`Native CLI ${command} is not executable on the host PATH`)
 }
 
 export type CliAdapter = {

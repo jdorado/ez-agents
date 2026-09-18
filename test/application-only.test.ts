@@ -13,6 +13,7 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { EXECUTOR_REGISTRY } from '../src/executor.js'
 import { ApplicationBindings } from '../src/application-channel.js'
+import { initializeWorkspace } from '../src/workspace.js'
 
 const waitFor = async (condition: () => Promise<boolean>) => {
   for (let i=0;i<300;i++) { if (await condition()) return; await new Promise(r=>setTimeout(r,10)) }
@@ -60,6 +61,7 @@ test('administrator bootstrap is explicit, local-only and cannot replace identit
 
 test('botless daemon executes application turn and rejects Telegram-origin work/outbound', async t => {
   const root=await mkdtemp(join(tmpdir(),'ez-app-only-runtime-'))
+  const purpose=join(root,'purpose.md');await writeFile(purpose,'Fixture application agent\n');await initializeWorkspace(root,purpose)
   const portServer=createServer();await new Promise<void>(r=>portServer.listen(0,'127.0.0.1',r))
   const port=(portServer.address() as {port:number}).port;await new Promise<void>(r=>portServer.close(()=>r()))
   const config=loadConfig({EZ_TELEGRAM_ENABLED:'false',EZ_APPLICATION_PORT:String(port),EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'codex'})

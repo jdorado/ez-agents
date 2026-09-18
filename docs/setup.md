@@ -67,8 +67,23 @@ not imported into restricted sessions. No workflow prompt is added to input.
 Use the existing owner's host account. Unless a layout was supplied, use
 `${XDG_DATA_HOME:-$HOME/.local/share}/ez/packages/<version>/` for extracted main
 packages and `${XDG_DATA_HOME:-$HOME/.local/share}/ez/agents/` for private deployments.
-Never overwrite an existing package/deployment or extract over its state. Infer
-the agent name and purpose from the owner's request; ask only when missing.
+Never overwrite an existing package/deployment or extract over its state.
+
+Before creation, use your own reasoning and the context already available from
+the owner to write the agent's initial brief. This is not a label or a copy of
+the request. Describe, in concrete language, who the agent serves, what product
+or environment it works in, the outcomes it should help produce, the capabilities
+currently available to it, and important scope boundaries. Include material facts
+you already know about the application; do not invent unknown facts. Omit generic
+personality prose and sections irrelevant to this agent. Keep the result compact
+enough to read on every turn. Ask the owner only when a missing fact would
+materially change the agent being installed.
+
+Pass that generated brief as the purpose. For example, a request to create a
+personal assistant should produce a brief tailored to that person's stated work,
+preferences and connected capabilities—not merely `Personal assistant`. A product
+agent should identify the product, user, current product scope and available
+actions without embedding product-specific behavior in Ez Core.
 
 Before running Node commands, check `command -v node` and `node --version`.
 If Node 22+ or this package's pinned pnpm is missing, provision it using the
@@ -163,7 +178,7 @@ so later service starts use the same build without depending on shell environmen
 
 ```sh
 export EZ_AGENTS_HOME=/absolute/private/agents
-bin/ezenciel-agents-create --name family-shopper --purpose 'Help my family plan shopping.' < /private/bot-token
+bin/ezenciel-agents-create --name family-shopper --purpose 'You are the shopping assistant for the owner and their family. Help plan shared shopping, organize confirmed requests, and use only the installed shopping and messaging capabilities. Do not purchase, message others, or infer household preferences without owner authority.' < /private/bot-token
 export EZ_DEPLOYMENT_DIR="$EZ_AGENTS_HOME/family-shopper"
 ```
 
@@ -238,7 +253,7 @@ current heartbeats and owner-bound completed-run delivery receipts without sendi
 messages or exposing tokens. Receipt evidence is historical: separately verify
 the current conversation and restart persistence before declaring setup complete.
 
-Purpose seeds SOUL.md once; future customization survives restart. Conversations,
+Purpose scopes AGENTS.md once; future customization survives restart. Conversations,
 pairing, files and plugin accounts are separate. The existing host CLI login is
 shared, so this is not a security sandbox against other agents under that user.
 Plugins run in their own containers and own their authentication. Install and

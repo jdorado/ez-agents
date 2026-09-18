@@ -50,7 +50,7 @@ services:
       retries: 3
 configs:
   agent_purpose:
-    file: ${EZ_AGENT_PURPOSE_FILE:-./templates/agent/SOUL.md}
+    file: ${EZ_AGENT_PURPOSE_FILE:-./templates/agent-purpose.md}
 secrets:
   relay_env:
     file: ${EZ_RELAY_ENV_FILE:?Set EZ_RELAY_ENV_FILE to the private relay env file}

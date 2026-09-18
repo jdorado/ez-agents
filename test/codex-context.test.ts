@@ -38,6 +38,25 @@ require('fs').writeFileSync(require('path').join(process.env.HOME, 'hijacked'), 
   }
 })
 
+test('a package-bin Codex shim is not a fallback when the host CLI is missing', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-codex-host-cli-missing-'))
+  const packageBin = path.join(root, 'package-bin')
+  const controlDir = path.join(root, 'agent')
+  const priorPath = process.env.PATH
+  try {
+    await mkdir(packageBin)
+    await writeFile(path.join(packageBin, 'codex'), `#!${process.execPath}\nprocess.exit(91)\n`, { mode: 0o700 })
+    process.env.PATH = '/usr/bin:/bin'
+    await ownerRun(controlDir, 'r_test')
+    await assert.rejects(startExecutorJob(['hello'], {
+      workspace: root, controlDir, binDir: packageBin, cli: 'codex', runId: 'r_test', timeoutMs: 5000,
+    }), /Native CLI codex is not executable on the host PATH/)
+  } finally {
+    if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('Codex shares only auth through a link and keeps each agent runtime state separate',async()=>{
  const root=await mkdtemp(path.join(tmpdir(),'ez-codex-context-'))
  const priorHome=process.env.HOME,priorPath=process.env.PATH

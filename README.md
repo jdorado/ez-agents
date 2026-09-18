@@ -246,15 +246,15 @@ credentials, startup, and verified pairing; never present this as human homework
 | `ezenciel-agents-install build` | Build once per artifact, with a private log and duplicate-build detection |
 | `ezenciel-agents-install status --deployment <path>` | Distinguish runtime/configuration, pairing and Telegram reply evidence |
 | `ezenciel-agents-create --register-cli <current-cli>` | Record the CLI that installs the initial package |
-| `ezenciel-agents-create --name <name> --purpose <purpose>` | Create an agent inheriting the installation CLI; token via stdin |
+| `ezenciel-agents-create --name <name> --purpose <agent-brief>` | Create an agent from the installing LLM's compact, context-specific brief; token via stdin |
 | `ezenciel-agents-host` | Invoke the existing shared host CLI for this deployment |
-| `ezenciel-agents-setup configure <executor>` | Private configuration and missing starter files; preserves personal files |
-| `ezenciel-agents-setup configure <executor> --token-stdin` | Same, with the BotFather token supplied privately through stdin |
+| `ezenciel-agents-setup configure <executor> --purpose-file <path>` | Private configuration and missing starter files; fresh workspaces require installer-scoped purpose; preserves personal files |
+| `ezenciel-agents-setup configure <executor> --purpose-file <path> --token-stdin` | Same, with the BotFather token supplied privately through stdin |
 | `ezenciel-agents-setup service` | Start only the Docker relay bound by `docker.env` in the current directory; register the [host service](docs/host-service.md) separately |
 | `ezenciel-agents-owner status` | Inspect the owner and pending pairing requests |
 | `ezenciel-agents-owner approve <telegram-user-id>` | Approve the verified owner; never an arbitrary first sender |
 | `ezenciel-agents-setup status` | Inspect installed executor choices |
-| `ezenciel-agents-setup init` | Seed only missing workspace guidance |
+| `ezenciel-agents-setup init --purpose-file <path>` | Seed missing workspace guidance; purpose is optional only when AGENTS.md already exists |
 
 Run runtime tools through `ezenciel-agents-docker run --rm relay <command>`
 as shown in the Docker guide. Keep the Docker engine available; Compose owns
@@ -264,8 +264,10 @@ restart and shutdown. The installing agent registers the small host CLI transpor
 
 The selected host CLI runs in this agent's persistent workspace and owns its
 Markdown/work files. New conversations and AI changes preserve those files.
-`AGENTS.md`, `SOUL.md`, and `USER.md` are seeded; `MEMORY.md` is
-optional. Installed plugin snippets and skill paths come from `ez tools list --details`; no tool inventory file needs maintenance. Received files go in `inbox/`, tasks and deliverables in `work/`.
+One compact, purpose-scoped `AGENTS.md` is seeded; `MEMORY.md` is optional.
+The installing LLM authors the initial brief from the owner's request and known
+application context; Ez stores it without trying to infer the product itself.
+Installed plugin snippets and skill paths come from `ez tools list --details`; no tool inventory file needs maintenance. Received files go in `inbox/`, tasks and deliverables in `work/`.
 Credentials and control state stay outside the mind. File separation is not
 OS isolation against a process running as the same user.
 
