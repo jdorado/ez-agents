@@ -1,9 +1,9 @@
 # Docker runtime and shared host CLI
 
-Docker Compose owns each relay and executable plugin. The CLI the user installs
-Ez from stays on the host, with its existing authentication. All agents in that
-installation use that CLI; there is no second CLI installation or agent-specific
-CLI login. The relay image contains Node, relay dependencies and ffmpeg.
+Docker Compose owns each relay and executable plugin. Isolated agents run the
+native CLI from the relay image (pinned Codex). Host-capable agents reuse the
+CLI the user installed Ez from, with its existing authentication. The relay
+image contains Node, relay dependencies, ffmpeg and that pinned Codex CLI.
 The runtime image exposes Ez commands through the wrappers in `/app/bin`, including
 `ezenciel-agents-application`; application images do not need to link Ez themselves.
 The image also installs package-manifest commands in `/usr/local/bin`, so native
@@ -154,9 +154,9 @@ default. Existing queued jobs retain their captured execution choice.
 
 ## Codex context isolation
 
-Isolated agents run Codex in the relay with `EZ_CODEX_SANDBOX=external`. Auth
-belongs in that agent's `control/cli/codex`; do not import the host user's
-global store. Host-capable agents reuse the host Codex binary and login, with a
+Isolated agents run the image Codex with `EZ_CODEX_SANDBOX=external`. Auth is a
+real file at that agent's `control/cli/codex/auth.json`. Do not bind-mount the
+operator `~/.codex` or `$HOME` into an isolated relay. Host-capable agents reuse the host Codex binary and login, with a
 per-agent `control/cli/codex` state directory. Only authentication is linked to
 the host login; global configuration, sessions and memories are not imported.
 Global memory and host skill discovery are disabled for relay jobs. A conversation

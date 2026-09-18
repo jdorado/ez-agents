@@ -8,6 +8,9 @@
   Mismatched class and transport fail closed. Isolated Codex sets
   `EZ_CODEX_SANDBOX=external`. Host transport is not started for isolated
   agents. Unlabeled existing host transports stay host-capable.
+- Install pinned Codex CLI `0.153.4` in the relay runtime image so isolated
+  agents resolve `codex` on PATH. Isolated jobs keep auth in
+  `control/cli/codex` and do not link the operator `~/.codex`.
 
 ## 0.1.0-beta.33
 

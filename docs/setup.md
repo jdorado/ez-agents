@@ -175,10 +175,11 @@ browser, local git, host files). That class reuses the host CLI login and is
 not an OS tenant boundary. The class cannot be changed later by flipping
 Compose; recreate the agent.
 
-Isolated Codex sets `EZ_CODEX_SANDBOX=external` so Codex does not nest a sandbox
-inside the container. The CLI binary and its login must exist in the relay
-image; the host LaunchAgent is not started. Host-capable agents still need
-[host startup](host-service.md).
+Isolated Codex uses the pinned CLI in the relay image and
+`EZ_CODEX_SANDBOX=external` so Codex does not nest a sandbox inside the
+container. Provision that agent's `control/cli/codex/auth.json`; do not bind-mount
+the operator `~/.codex`. The host LaunchAgent is not started. Host-capable agents
+still need [host startup](host-service.md).
 
 Agent creation defaults to the CLI recorded when the initial package was
 installed. It needs no `--cli` argument. A later shell or different available CLI

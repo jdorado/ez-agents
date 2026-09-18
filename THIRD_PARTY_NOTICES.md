@@ -8,7 +8,7 @@ The container is built locally; no bundled third-party binary image is promised.
 
 Direct runtime dependencies: grammy (MIT), tsx (MIT). Development dependencies
 include TypeScript (Apache-2.0) and Node type definitions (MIT). The runtime
-image installs ffmpeg and Debian packages: redistributing that image requires
-review of its exact package build, notices and corresponding-source obligations.
-Docker and the selected host AI CLI are separately installed products, not covered
-by this repository's MIT license.
+image installs ffmpeg, Debian packages, and pinned `@openai/codex` (Apache-2.0):
+redistributing that image requires review of its exact package build, notices and
+corresponding-source obligations. Docker and a host-capable AI CLI remain
+separately installed products, not covered by this repository's MIT license.

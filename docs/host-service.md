@@ -82,10 +82,12 @@ main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). E
 
 ## Shared application workspace
 
-Codex tasks inherit the agent's `control/cli/codex/auth.json` binding. Its default
-is a link to the host user's existing login. An operator may provision a private
-agent credential there during migration; new task homes link to that binding,
-preserving it rather than reverting to a different or expired host login.
+Codex tasks inherit the agent's `control/cli/codex/auth.json` binding. Host-capable
+default is a link to the host user's existing login. Isolated agents use a real
+file in that directory and the image Codex; they do not link `~/.codex`. An
+operator may provision a private agent credential there during migration; new
+task homes link to that binding, preserving it rather than reverting to a
+different or expired host login.
 
 An agent binding may set `sharedWorkspace` to an absolute canonical application
 repository. The host resolves its canonical path, adds that directory to Codex
