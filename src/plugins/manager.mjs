@@ -369,6 +369,41 @@ async function checked(args) {
   const r=await run(args,{capture:true});if(r.code) throw Error(r.stderr||r.stdout||`Docker failed (${r.code})`);return r.stdout;
 }
 const composeArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
+// Application context is opaque domain data. A command container receives only
+// the object addressed to its installed plugin ID, never core state or another
+// plugin's context. The current run and binding are re-authorized before it is
+// forwarded to Docker.
+const ownerKey = owner => owner?.id || (Number.isSafeInteger(owner?.telegramUserId) && Number.isSafeInteger(owner?.telegramChatId)
+  ? `telegram:${owner.telegramUserId}:${owner.telegramChatId}` : undefined);
+const ownerEpoch = owner => owner?.generation || owner?.pairedAt;
+const readJson = async file => JSON.parse(await fs.readFile(file,'utf8'));
+// This manager is intentionally runnable as plain Node. Read only the current
+// run and existing application binding rather than importing the TypeScript
+// relay, and fail closed on missing/revoked ownership.
+const authorizedApplicationRun = async (controlDir,runId) => {
+  if(!path.isAbsolute(controlDir)||!/^[A-Za-z0-9_-]+$/.test(runId))throw Error('Plugin context requires a bound active run');
+  const run=await readJson(path.join(controlDir,'runs',`${runId}.json`)).catch(error=>{if(error.code==='ENOENT')return undefined;throw error;});
+  const application=run?.application;
+  if(!application?.context||run?.id!==runId||run.status!=='running'||typeof application.bindingId!=='string')return undefined;
+  const state=await readJson(path.join(controlDir,'control-state.json'));
+  const bindings=await readJson(path.join(controlDir,'application-bindings.json'));
+  const binding=Array.isArray(bindings)?bindings.find(candidate=>candidate?.bindingId===application.bindingId):undefined;
+  if(!binding?.owner||!state?.owner||ownerKey(binding.owner)!==ownerKey(state.owner)||ownerEpoch(binding.owner)!==ownerEpoch(state.owner)||
+    run.ownerId!==ownerKey(state.owner)||run.ownerEpoch!==ownerEpoch(state.owner))throw Error('Application authority revoked');
+  return application;
+};
+export async function applicationPluginContext(pluginId, environment=process.env) {
+  const controlDir=environment.EZ_CONTROL_DIR?.trim(),runId=environment.EZ_RUN_ID?.trim();
+  if(!controlDir||!runId)return undefined;
+  const application=await authorizedApplicationRun(controlDir,runId);
+  const contexts=application?.context?.plugins;
+  if(!contexts||typeof contexts!=='object'||Array.isArray(contexts)||!Object.hasOwn(contexts,pluginId))return undefined;
+  const context=contexts[pluginId];
+  if(!context||typeof context!=='object'||Array.isArray(context))throw Error('Plugin application context must be an object');
+  const encoded=JSON.stringify(context);
+  if(Buffer.byteLength(encoded)>16*1024)throw Error('Plugin application context is too large');
+  return encoded;
+}
 export async function registry(home) {
   const r=await json(path.join(home,'registry.json'));
   if(r.schemaVersion!==1 || r.owner!==home || !r.plugins || !r.commands) throw Error('Corrupt registry');
@@ -379,7 +414,7 @@ export async function registry(home) {
   return r;
 }
 // The lock protects admission and compose refresh, never a persistent connection.
-export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false}={}) {
+export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false,environment=process.env}={}) {
   strings(args);
   return locked(home,async()=>{
     const config=await json(path.join(home,'config.json')),r=await registry(home);
@@ -391,7 +426,8 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     await atomic(record.compose,await compose(config,record,secrets,home));
     const container=`${record.project}-call-${randomUUID()}`;
     const release=invocation?await invocationLease(home,container):undefined;
-    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
+    const context=await applicationPluginContext(record.manifest.id,environment);
+    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),...(context?['--env',`EZ_PLUGIN_CONTEXT=${context}`]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
   },{allowInvocations:true});
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {

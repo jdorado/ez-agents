@@ -6,7 +6,11 @@ import path from 'node:path';
 import {execFile,spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {promisify} from 'node:util';
-import {snapshot,init as initManager,validate,compose,locked,bindToolDiscovery} from '../src/plugins/manager.mjs';
+import {snapshot,init as initManager,validate,compose,locked,bindToolDiscovery,prepareCommand} from '../src/plugins/manager.mjs';
+import { ControlStore, ownerId, ownerEpoch } from '../src/control-state.js';
+import { ApplicationBindings } from '../src/application-channel.js';
+import { RunStore } from '../src/runs.js';
+import { randomBytes } from 'node:crypto';
 // Synthetic manager tests explicitly opt out of the product's default packages.
 async function init(home,workspace,catalog,hostConfig) {
  const file=path.join(path.dirname(home),'test-catalog.json');
@@ -98,6 +102,20 @@ test('installed snippets follow install, upgrade and uninstall without files or 
   await f.call('plugins','uninstall','sample');assert.deepEqual(await details(),{});
  }
  await assert.rejects(fs.access(path.join(f.workspace,'TOOLS.md')),{code:'ENOENT'});
+});
+test('application plugin context is namespaced, authorized, and absent from ordinary commands',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ const home=await fs.realpath(f.home);
+ const control=new ControlStore(f.control,1000);await control.requestPairing(42,42);const owner=await control.approveOwner(42);
+ const binding=await new ApplicationBindings(f.control).register('app',randomBytes(32).toString('base64url'),owner);
+ assert.ok(binding);
+ const runs=new RunStore(f.control),run=await runs.create({id:'r_app_plugin',ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),texts:['Use the plugin'],application:{bindingId:binding.bindingId,requestId:'plugin',scope:'owner-chat',context:{plugins:{sample:{capability:'scoped-value'},other:{capability:'must-not-leak'}}}}});
+ await runs.patch(run.id,{status:'running'});
+ const command=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}});
+ const index=command.argv.indexOf('--env');assert.ok(index>0);assert.deepEqual(command.argv.slice(index,index+2),['--env','EZ_PLUGIN_CONTEXT={"capability":"scoped-value"}']);
+ assert.equal(command.argv.join(' ' ).includes('must-not-leak'),false);
+ const ordinary=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control}});
+ assert.equal(ordinary.argv.includes('--env'),false);
 });
 test('bound launcher installs without startup; literal args and exit codes; scopes and secrets',async t=>{
  const f=await fixture(t);const p=await snapshot(f.source);await init(f.home,f.workspace);
