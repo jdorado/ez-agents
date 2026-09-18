@@ -6,6 +6,57 @@ import {tmpdir} from 'node:os'
 import path from 'node:path'
 import {startExecutorJob} from '../src/executor.js'
 
+test('a package-bin Codex shim cannot retarget another agent home', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-codex-host-cli-'))
+  const hostBin = path.join(root, 'host-bin')
+  const packageBin = path.join(root, 'package-bin')
+  const controlDir = path.join(root, 'agent')
+  const priorHome = process.env.HOME, priorPath = process.env.PATH
+  try {
+    await mkdir(hostBin); await mkdir(packageBin); await mkdir(path.join(root, '.codex'))
+    await writeFile(path.join(root, '.codex/auth.json'), '{}')
+    await writeFile(path.join(packageBin, 'codex'), `#!${process.execPath}
+require('fs').writeFileSync(require('path').join(process.env.HOME, 'hijacked'), 'yes'); process.exit(2)
+`, { mode: 0o700 })
+    await writeFile(path.join(hostBin, 'codex'), `#!${process.execPath}\nconsole.log(process.env.CODEX_HOME)`, { mode: 0o700 })
+    process.env.HOME = root
+    process.env.PATH = hostBin + path.delimiter + (priorPath ?? '')
+    await ownerRun(controlDir, 'r_test')
+    const job = await startExecutorJob(['hello'], {
+      workspace: root, controlDir, binDir: packageBin, cli: 'codex', runId: 'r_test', timeoutMs: 5000,
+    })
+    let output = ''
+    job.child.stdout?.on('data', chunk => output += chunk)
+    assert.equal(await new Promise(resolve => job.child.once('close', resolve)), 0)
+    await job.cleanup()
+    assert.equal(output.trim(), path.join(controlDir, 'cli/codex'))
+    await assert.rejects(readFile(path.join(root, 'hijacked')))
+  } finally {
+    if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome
+    if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a package-bin Codex shim is not a fallback when the host CLI is missing', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-codex-host-cli-missing-'))
+  const packageBin = path.join(root, 'package-bin')
+  const controlDir = path.join(root, 'agent')
+  const priorPath = process.env.PATH
+  try {
+    await mkdir(packageBin)
+    await writeFile(path.join(packageBin, 'codex'), `#!${process.execPath}\nprocess.exit(91)\n`, { mode: 0o700 })
+    process.env.PATH = '/usr/bin:/bin'
+    await ownerRun(controlDir, 'r_test')
+    await assert.rejects(startExecutorJob(['hello'], {
+      workspace: root, controlDir, binDir: packageBin, cli: 'codex', runId: 'r_test', timeoutMs: 5000,
+    }), /Native CLI codex is not executable on the host PATH/)
+  } finally {
+    if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('Codex shares only auth through a link and keeps each agent runtime state separate',async()=>{
  const root=await mkdtemp(path.join(tmpdir(),'ez-codex-context-'))
  const priorHome=process.env.HOME,priorPath=process.env.PATH
