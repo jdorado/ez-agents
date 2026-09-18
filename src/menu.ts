@@ -38,8 +38,11 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     assertEffort(preset.effort, preset.model, preset.cli)
     if (preset.id === initial.id) return
     if (preset.id.startsWith('detected_')) {
-      const detected = await discoverDefaults(workspace, { codexHome })
-      if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. Refresh available AIs and select the updated choice.')
+      if (host) await validateSelection(preset, await catalog(), async name => (await catalog()).some(model => model.cli === name))
+      else {
+        const detected = await discoverDefaults(workspace, { codexHome })
+        if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. Refresh available AIs and select the updated choice.')
+      }
     } else await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
   }
   const buttons = new Map<string, { expires: number; action: (ctx: Context) => Promise<void> }>()
