@@ -143,9 +143,11 @@ test('application controls share native choices, protect hidden scopes and prese
   assert.deepEqual((await control.aiState(menu.initial)).presets,presetsBefore)
   const selected = await request({action:'model',cli:'codex',model:'gpt-6-astra',effort:'high',expectedSession:old.sessionId})
   assert.equal(selected.status,200)
-  assert.equal((await control.captureChoice(menu.initial)).preset.effort,'high')
+  const modelChoice = await control.captureChoice(menu.initial)
+  assert.equal(modelChoice.preset.effort,'high')
+  assert.notEqual(modelChoice.sessionId,old.sessionId)
   assert.deepEqual((await new RunStore(root).get(run.id))!.execution,old)
-  const reset = await request({action:'new',expectedSession:old.sessionId})
+  const reset = await request({action:'new',expectedSession:modelChoice.sessionId})
   assert.equal(reset.status,200)
   const next = (await control.getActiveSession())!
   assert.notEqual(next.sessionId,old.sessionId)
