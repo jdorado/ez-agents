@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, startExecutorJob, terminateJob } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob } from '../src/executor.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
 
@@ -52,6 +52,11 @@ test('Telegram replies are split within the configured message limit', () => {
   const chunks = splitTelegramText(text, 10)
   assert.deepEqual(chunks, ['aaaaaaaaa', 'bbbbbbbbb', 'ccccccccc'])
   assert.ok(chunks.every((chunk) => chunk.length <= 10))
+})
+
+test('native CLIs resolve from the host PATH, not a relative package name', () => {
+  assert.equal(resolveHostCommand('/usr/bin/codex'), '/usr/bin/codex')
+  assert.equal(resolveHostCommand('missing-cli-xyz', '/usr/bin'), 'missing-cli-xyz')
 })
 
 test('the executor receives a deliberately small environment', () => {

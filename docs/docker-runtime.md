@@ -147,7 +147,9 @@ default. Existing queued jobs retain their captured execution choice.
 ## Codex context isolation
 
 The host Codex binary and existing login are reused, but each agent has its own
-`control/cli/codex` state directory. Only authentication is linked to the host
+`control/cli/codex` state directory. The native CLI is resolved from the host
+PATH, not the package `binDir`, so a shared runtime or one agent's wrapper cannot
+retarget another agent's `CODEX_HOME`. Only authentication is linked to the host
 login; global configuration, sessions and memories are not imported. Global
 memory and host skill discovery are disabled for relay jobs. A conversation
 that already received unrelated global context must be replaced with a fresh

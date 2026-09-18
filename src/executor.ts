@@ -4,6 +4,7 @@ import { RunStore } from './runs.js'
 import { startTaskExecutor } from './task-executor.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { mkdtemp, rm, writeFile, mkdir, symlink, readFile } from 'node:fs/promises'
+import { accessSync, constants as fsConstants } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -70,6 +71,21 @@ export const executorJobEnv = (
 }
 
 export const grokJobEnv = executorJobEnv
+
+// Package binDir is Ez tools (ezenciel-agents-message). Native CLIs come from the
+// host PATH so one agent's wrapper cannot retarget another agent's CODEX_HOME.
+export const resolveHostCommand = (command: string, pathValue = process.env.PATH): string => {
+  if (!command || command.includes(path.sep) || command.includes('/')) return command
+  for (const directory of (pathValue ?? '').split(path.delimiter)) {
+    if (!directory) continue
+    const candidate = path.join(directory, command)
+    try {
+      accessSync(candidate, fsConstants.X_OK)
+      return candidate
+    } catch { /* try the next PATH entry */ }
+  }
+  return command
+}
 
 export type CliAdapter = {
   name: string
@@ -268,7 +284,7 @@ export const startExecutorJob = async (
       ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./codex-session.ts', import.meta.url))])
     : gui
       ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./desktop-bridge.ts', import.meta.url))])
-      : executorInvocation(command, args)
+      : executorInvocation(resolveHostCommand(command, executorEnvironment().PATH), args)
   const environment = executorJobEnv(options)
   if (!host && !gui && command === 'codex') {
     // Share the existing authentication, never the user's memory/config/sessions.
