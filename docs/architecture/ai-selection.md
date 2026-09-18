@@ -8,7 +8,9 @@ At intake each journal entry receives an immutable preset and conversation ID.
 Batches cannot cross that boundary. The run copies that choice and invokes the
 native adapter with its exact model/effort. A later menu change cannot reroute it.
 Old conversation metadata is retained only so accepted work can finish; selecting
-a different CLI never restores that CLI's old history.
+a different CLI never restores that CLI's old history. Selecting a different provider
+or model on the same client does not resume the previous selection's native thread; the next
+admitted turn starts a new native conversation.
 
 Grok/Claude accept caller-selected native UUIDs. Codex/OpenCode generate IDs, so
 the adapter reads only their typed JSONL session metadata; stdout never becomes a

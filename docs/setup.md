@@ -201,6 +201,38 @@ Agent creation defaults to the CLI recorded when the initial package was
 installed. It needs no `--cli` argument. A later shell or different available CLI
 does not change that saved default. No installed-binary ranking or Grok fallback
 is used.
+
+For a Codex installation that may use OpenRouter, register the provider and the
+agent's initial model set as non-secret installation metadata. Repeat
+`--codex-model` for every model the agent may select:
+
+```sh
+bin/ezenciel-agents-create \
+  --name family-shopper \
+  --purpose 'Help my family plan shopping.' \
+  --codex-provider openrouter \
+  --codex-provider-name OpenRouter \
+  --codex-base-url https://openrouter.ai/api/v1 \
+  --codex-env-key OPENROUTER_API_KEY \
+  --codex-model google/gemini-3.8-flash \
+  --codex-model deepseek/deepseek-v4.1-flash \
+  < /private/bot-token
+```
+
+This stores provider configuration and model IDs in `host-executor.json`, never
+the API key. The key belongs only in the private host-service environment. The
+agent or owner can later change the active provider/model through the existing
+runtime control without reinstalling or editing an environment file:
+
+```sh
+ezenciel-agents-ai list
+ezenciel-agents-ai select --cli codex --provider openrouter \
+  --model google/gemini-3.8-flash
+```
+
+Changing provider starts a fresh native session so a session is never resumed
+against a different backend. Queued work retains the provider/model captured
+when it was admitted.
 The creator writes `host-executor.json`, private secrets, mind/control paths,
 purpose and unique plugin volume names. Duplicate names fail without overwriting.
 `ezenciel-agents-create --list` lists deployments without secrets.

@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, startExecutorJob, terminateJob } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
 
@@ -52,6 +52,11 @@ test('Telegram replies are split within the configured message limit', () => {
   const chunks = splitTelegramText(text, 10)
   assert.deepEqual(chunks, ['aaaaaaaaa', 'bbbbbbbbb', 'ccccccccc'])
   assert.ok(chunks.every((chunk) => chunk.length <= 10))
+})
+
+test('native CLIs resolve from the host PATH, not a relative package name', () => {
+  assert.equal(resolveHostCommand('/usr/bin/codex'), '/usr/bin/codex')
+  assert.throws(() => resolveHostCommand('missing-cli-xyz', '/usr/bin'), /not executable on the host PATH/)
 })
 
 test('the executor receives a deliberately small environment', () => {
@@ -156,6 +161,38 @@ test('Codex jobs disable global memory and host skill discovery', () => {
   assert.ok(args.includes('memories'))
   assert.equal(args[args.indexOf('memories')-1],'--disable')
   assert.equal(args[args.indexOf('skip_host_skill_discovery')-1],'--enable')
+})
+
+test('Codex custom providers use declared runtime state and an environment key reference', () => {
+  const provider=validateCodexProvider({id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1/',envKey:'OPENROUTER_API_KEY',models:['google/gemini-3.8-flash']})
+  const args=EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',model:'google/gemini-3.8-flash',codexProvider:provider},'','hello')
+  assert.ok(args.includes('model_provider="openrouter"'))
+  assert.ok(args.some(value=>value.includes('env_key="OPENROUTER_API_KEY"')))
+  assert.ok(args.includes('google/gemini-3.8-flash'))
+  assert.equal(JSON.stringify(args).includes('provider-secret'),false)
+  assert.throws(()=>validateCodexProvider({...provider,envKey:'TELEGRAM-BOT'}),/environment key/)
+  for (const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN','PAGERDUTY_ROUTING_KEY'])
+    assert.throws(()=>validateCodexProvider({...provider,envKey}),/Reserved/)
+  assert.throws(()=>validateCodexProvider({...provider,models:[]}),/provider models/)
+})
+
+test('a configured Codex provider receives only its declared key and runtime selection', async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'ez-codex-provider-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const bin=path.join(root,'bin');await mkdir(bin)
+  await writeFile(path.join(bin,'codex'),`#!${process.execPath}\nconst fs=require('fs');let text='';process.stdin.on('data',b=>text+=b);process.stdin.on('end',()=>fs.writeFileSync(${JSON.stringify(path.join(root,'observed.json'))},JSON.stringify({args:process.argv.slice(2),key:process.env.OPENROUTER_API_KEY,telegram:process.env.TELEGRAM_BOT_TOKEN,text})));`,{mode:0o755})
+  const prior={path:process.env.PATH,key:process.env.OPENROUTER_API_KEY,telegram:process.env.TELEGRAM_BOT_TOKEN}
+  const provider=validateCodexProvider({id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',envKey:'OPENROUTER_API_KEY',models:['google/gemini-3.8-flash']})
+  await ownerRun(root,'r_provider')
+  try {
+    process.env.PATH=bin+path.delimiter+prior.path;process.env.OPENROUTER_API_KEY='provider-secret';process.env.TELEGRAM_BOT_TOKEN='relay-secret'
+    const job=await startExecutorJob(['hello'],{workspace:root,controlDir:root,binDir:bin,runId:'r_provider',timeoutMs:0,cli:'codex',provider:'openrouter',model:'google/gemini-3.8-flash',codexProvider:provider})
+    assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0);await job.cleanup()
+    const observed=JSON.parse(await readFile(path.join(root,'observed.json'),'utf8'))
+    assert.equal(observed.key,'provider-secret');assert.equal(observed.telegram,undefined);assert.equal(observed.text,'hello')
+    assert.ok(observed.args.includes('model_provider="openrouter"'));assert.ok(observed.args.includes('google/gemini-3.8-flash'))
+  } finally {
+    for(const [key,value] of [['PATH',prior.path],['OPENROUTER_API_KEY',prior.key],['TELEGRAM_BOT_TOKEN',prior.telegram]]) if(value===undefined)delete process.env[key!];else process.env[key!]=value
+  }
 })
 
 test('Codex plugin access stays scoped to the explicitly bound registry', () => {

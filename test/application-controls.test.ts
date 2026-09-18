@@ -110,6 +110,7 @@ test('application controls share native choices, protect hidden scopes and prese
   await control.requestPairing(42, 42); const owner = await control.approveOwner(42)
   const menu = createAiMenu(control, 'codex', async () => [
     {cli:'codex', model:'gpt-6-astra', name:'Fixture model', efforts:['low','high']},
+    {cli:'codex', provider:'openrouter', model:'gpt-6-astra', name:'OpenRouter fixture', efforts:['low','high']},
   ], root, join(root, 'native-home'), async () => true)
   const channel = new ApplicationChannel({controlDir:root, initial:menu.initial, aiControls:menu, wake:()=>{}, cancel:async()=>{}})
   t.after(async()=>{await channel.stop(); await rm(root,{recursive:true,force:true})})
@@ -142,9 +143,11 @@ test('application controls share native choices, protect hidden scopes and prese
   assert.deepEqual((await control.aiState(menu.initial)).presets,presetsBefore)
   const selected = await request({action:'model',cli:'codex',model:'gpt-6-astra',effort:'high',expectedSession:old.sessionId})
   assert.equal(selected.status,200)
-  assert.equal((await control.captureChoice(menu.initial)).preset.effort,'high')
+  const modelChoice = await control.captureChoice(menu.initial)
+  assert.equal(modelChoice.preset.effort,'high')
+  assert.notEqual(modelChoice.sessionId,old.sessionId)
   assert.deepEqual((await new RunStore(root).get(run.id))!.execution,old)
-  const reset = await request({action:'new',expectedSession:old.sessionId})
+  const reset = await request({action:'new',expectedSession:modelChoice.sessionId})
   assert.equal(reset.status,200)
   const next = (await control.getActiveSession())!
   assert.notEqual(next.sessionId,old.sessionId)
@@ -152,6 +155,21 @@ test('application controls share native choices, protect hidden scopes and prese
   assert.equal((await control.getActiveSession())!.sessionId,next.sessionId)
   await channel.bindings.register('shared',null,owner)
   assert.equal((await request()).status,401)
+})
+
+test('application model controls disambiguate the same model by provider', async t => {
+  const root=await mkdtemp(join(tmpdir(),'ez-app-provider-control-')),control=new ControlStore(root,1000)
+  await control.requestPairing(42,42);const owner=await control.approveOwner(42)
+  const menu=createAiMenu(control,'codex',async()=>[
+    {cli:'codex',model:'shared-model',name:'Native',efforts:[]},
+    {cli:'codex',provider:'openrouter',model:'shared-model',name:'OpenRouter',efforts:[]},
+  ],root,join(root,'native-home'),async()=>true)
+  const channel=new ApplicationChannel({controlDir:root,initial:menu.initial,aiControls:menu,wake:()=>{},cancel:async()=>{}})
+  t.after(async()=>{await channel.stop();await rm(root,{recursive:true,force:true})})
+  const binding=(await channel.bindings.register('shared',randomBytes(32).toString('base64url'),owner,true))!
+  const current=await control.captureChoice(menu.initial)
+  await channel.changeControls(binding.bindingId,{action:'model',cli:'codex',provider:'openrouter',model:'shared-model',expectedSession:current.sessionId})
+  assert.equal((await control.captureChoice(menu.initial)).preset.provider,'openrouter')
 })
 
 test('atomic control mutations reject a replaced owner even when both active sessions are empty', async t => {
