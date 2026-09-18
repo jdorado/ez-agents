@@ -84,7 +84,9 @@ test('HTTP auth, idempotency, origin/context isolation, revocation and persisted
   await runs.claimOutbox(message.id)
   await channel.deliver(run,message)
   assert.deepEqual(await runs.waitForDelivery(message.id),{delivered:true})
-  assert.deepEqual((await channel.snapshot(first.bindingId,run.id)).messages,[{id:message.id,text:'Here is the proposal'}])
+  const snapshot=await channel.snapshot(first.bindingId,run.id)
+  assert.deepEqual(snapshot.messages,[{id:message.id,text:'Here is the proposal'}])
+  assert.deepEqual(snapshot.preset,run.execution?.preset)
   const approval=await runs.enqueueApproval(run.id,'Allow this channel grant?','task_'+'a'.repeat(32))
   await runs.claimOutbox(approval.id);await channel.deliver(run,approval)
   assert.deepEqual((await channel.snapshot(first.bindingId,run.id)).approvals,[{id:'task_'+'a'.repeat(32),prompt:'Allow this channel grant?',state:'delivered'}])
@@ -202,8 +204,9 @@ test('application AI choice retains same-engine history and rejects cross-engine
   t.after(() => rm(root, { recursive: true, force: true }))
   const channel = new ApplicationChannel({ controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {} })
   const binding = (await channel.bindings.register('app', token(), await owner(root)))!
-  const input = { requestId: 'one', scope: 'main:codex', text: 'Hello', ai: { cli: 'codex', model: 'gpt-5.6-luna', effort: 'high' } }
+  const input = { requestId: 'one', scope: 'main:codex', text: 'Hello', ai: { cli: 'codex', provider:'openrouter', model: 'gpt-5.6-luna', effort: 'high' } }
   const first = await channel.submit(binding.bindingId, input)
+  assert.equal(first.execution!.preset.provider,'openrouter')
   assert.equal(first.execution!.preset.model, input.ai.model)
   const second = await channel.submit(binding.bindingId, { ...input, requestId: 'two', ai: { ...input.ai, model: 'gpt-5.6-terra' } })
   assert.equal(first.execution!.sessionId, second.execution!.sessionId)

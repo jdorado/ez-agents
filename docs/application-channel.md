@@ -6,6 +6,10 @@ outbox. The application supplies domain tools and keeps its UI/content API; it
 can remove its own model runner, continuation loop and engine authentication.
 This is separate from the older outbound channel-backend integration.
 
+Run admission, status and inbox receipts include the immutable `preset` captured
+for that run so an application can label delivered messages with the engine choice
+that actually produced them.
+
 ## Shared runtime controls
 
 Register with `--share-owner` (the existing `--share-telegram` spelling is an

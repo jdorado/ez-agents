@@ -31,6 +31,7 @@ test('new agents receive independent projects, secrets and plugin bindings; dupl
     assert.equal((await readFile(join(root,'family/relay.env'),'utf8')).includes(base.token),true)
     await assert.rejects(createAgent({...base,name:'../family'}),/agent name/)
     await assert.rejects(createAgent({...base,name:'bad',token:'do-not-echo'}),e=>!String(e).includes('do-not-echo'))
+    await assert.rejects(createAgent({...base,name:'verbose',purpose:'x'.repeat(2001)}),/concise purpose/)
   } finally { await rm(root,{recursive:true,force:true}) }
 })
 
@@ -44,5 +45,18 @@ test('package installer records its CLI before any agent exists; creation inheri
     assert.equal(agent.executor,'codex')
     assert.equal(await installationCli(root),'codex')
     await assert.rejects(installationCli(root,'grok'),/already selected/)
+  } finally { await rm(root,{recursive:true,force:true}) }
+})
+
+test('agent installation records an isolated Codex provider profile without its key', async () => {
+  const root=await mkdtemp(join(tmpdir(),'ez-installer-provider-'))
+  try {
+    const codexProvider={id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',envKey:'OPENROUTER_API_KEY',models:['google/gemini-3.8-flash','deepseek/deepseek-v4.1-flash']}
+    const agent=await createAgent({root,hostRoot:'/private/agents',composeFile:'/opt/ez/compose.yaml',name:'coach',purpose:'Fitness coach',token:'123456789:'+'a'.repeat(30),cli:'codex',codexProvider})
+    const host=JSON.parse(await readFile(join(root,'coach/host-executor.json'),'utf8'))
+    assert.deepEqual(host.agents[0].codexProviders,[codexProvider])
+    assert.equal(JSON.stringify(agent).includes('OPENROUTER_API_KEY'),false)
+    assert.equal(JSON.stringify(host).includes('sk-'),false)
+    await assert.rejects(createAgent({root,hostRoot:'/private/agents',composeFile:'/opt/ez/compose.yaml',name:'bad-provider',purpose:'x',token:'123456789:'+'b'.repeat(30),codexProvider:{...codexProvider,baseUrl:'http://openrouter.ai/api/v1'}}),/provider URL/)
   } finally { await rm(root,{recursive:true,force:true}) }
 })
