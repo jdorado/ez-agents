@@ -59,13 +59,14 @@ test('a package-bin Codex shim is not a fallback when the host CLI is missing', 
 
 test('Codex shares only auth through a link and keeps each agent runtime state separate',async()=>{
  const root=await mkdtemp(path.join(tmpdir(),'ez-codex-context-'))
- const priorHome=process.env.HOME,priorPath=process.env.PATH
+ const priorHome=process.env.HOME,priorPath=process.env.PATH,priorIsolation=process.env.EZ_ISOLATION
  try{
   await mkdir(path.join(root,'.codex'));await mkdir(path.join(root,'bin'))
   await writeFile(path.join(root,'.codex/auth.json'),'{}')
   await writeFile(path.join(root,'.codex/config.toml'),'# unrelated personal config')
   await writeFile(path.join(root,'bin/codex'),`#!${process.execPath}\nconsole.log(process.env.CODEX_HOME)`,{mode:0o700})
   process.env.HOME=root;process.env.PATH=path.join(root,'bin')+path.delimiter+priorPath
+  delete process.env.EZ_ISOLATION
   for(const agent of ['one','two']){
    const controlDir=path.join(root,agent)
    await ownerRun(controlDir, 'r_test')
@@ -78,9 +79,17 @@ test('Codex shares only auth through a link and keeps each agent runtime state s
    assert.deepEqual(await readdir(home),['auth.json'])
    assert.equal(await readlink(path.join(home,'auth.json')),path.join(root,'.codex/auth.json'))
   }
+  process.env.EZ_ISOLATION='isolated'
+  const isolated=path.join(root,'isolated')
+  await ownerRun(isolated, 'r_test')
+  const isolatedJob=await startExecutorJob(['hello'],{workspace:root,controlDir:isolated,binDir:path.join(root,'bin'),cli:'codex',runId:'r_test',timeoutMs:5000})
+  assert.equal(await new Promise(resolve=>isolatedJob.child.once('close',resolve)),0)
+  await isolatedJob.cleanup()
+  await assert.rejects(readlink(path.join(isolated,'cli/codex/auth.json')),{code:'ENOENT'})
  }finally{
   if(priorHome===undefined)delete process.env.HOME;else process.env.HOME=priorHome
   if(priorPath===undefined)delete process.env.PATH;else process.env.PATH=priorPath
+  if(priorIsolation===undefined)delete process.env.EZ_ISOLATION;else process.env.EZ_ISOLATION=priorIsolation
   await rm(root,{recursive:true,force:true})
  }
 })

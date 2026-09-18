@@ -354,10 +354,12 @@ export const startExecutorJob = async (
       try{await writeFile(path.join(home,'config.toml'),await readFile(path.join(base,'config.toml')),{flag:'wx',mode:0o600})}
       catch(error){if(!['ENOENT','EEXIST'].includes((error as NodeJS.ErrnoException).code || ''))throw error}
     }
-    // Tasks inherit this agent's auth binding, including an operator-provisioned
-    // private credential after host migration. Never replace an existing binding.
-    const authLinks = [[path.join(base, 'auth.json'), path.join(homedir(), '.codex', 'auth.json')]]
-    if (nativeSession) authLinks.push([path.join(home, 'auth.json'), path.join(base, 'auth.json')])
+    // Isolated agents keep auth in this CODEX_HOME. Host-capable may link the
+    // installer login. Never replace an existing binding.
+    const authLinks = process.env.EZ_ISOLATION === 'isolated'
+      ? nativeSession ? [[path.join(home, 'auth.json'), path.join(base, 'auth.json')]] : []
+      : [[path.join(base, 'auth.json'), path.join(homedir(), '.codex', 'auth.json')],
+        ...(nativeSession ? [[path.join(home, 'auth.json'), path.join(base, 'auth.json')]] : [])]
     for (const [link, target] of authLinks) {
       try { await symlink(target, link) }
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }

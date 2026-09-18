@@ -21,15 +21,16 @@ try {
     '--mount',`type=bind,src=${join(dir,'purpose.md')},dst=/run/agent-purpose.md,readonly`,'-e','EZ_AGENT_PURPOSE_FILE=/run/agent-purpose.md',
     '--tmpfs','/tmp:mode=1777','--tmpfs','/state/control:uid=20000,gid=20000,mode=700',
     '--tmpfs','/state/home:uid=20000,gid=20000,mode=700','--tmpfs','/workspace:uid=20000,gid=20000,mode=700',
-    '-e','EZ_TELEGRAM_ENABLED=false','-e','EZ_APPLICATION_PORT=8110','-e','EZ_EXECUTOR_TRANSPORT=local','-e','EZ_EXECUTOR_CLI=codex'];
+    '-e','EZ_TELEGRAM_ENABLED=false','-e','EZ_APPLICATION_PORT=8110','-e','EZ_ISOLATION=isolated','-e','EZ_EXECUTOR_TRANSPORT=local','-e','EZ_EXECUTOR_CLI=codex'];
   const help = run(['run','--rm',...nonroot,image,'application','--help']);
   assert.equal(help.status,0,help.stderr);
   assert.match(help.stdout,/ezenciel-agents-application/);
   const login = run(['run','--rm',...nonroot,'--entrypoint','/bin/bash',image,'-lc',
-    'command -v ezenciel-agents-application && command -v ezenciel-agents-message && ezenciel-agents-message --help']);
+    'command -v ezenciel-agents-application && command -v ezenciel-agents-message && command -v codex && ezenciel-agents-message --help && codex --version']);
   assert.equal(login.status,0,login.stderr);
   assert.match(login.stdout,/\/usr\/local\/bin\/ezenciel-agents-application/);
   assert.match(login.stdout,/\/usr\/local\/bin\/ezenciel-agents-message/);
+  assert.match(login.stdout,/codex-cli 0\.153\.4/);
   const started = run(['run','-d','--name',application,...nonroot,image,'start']);
   assert.equal(started.status,0,started.stderr);
   let ready = false;
@@ -84,5 +85,5 @@ try {
   assert.equal(run(['kill',holder]).status,0);
   const recovered=run(['run','--rm','-v',`${volume}:/state/control`,image,'exec','node','-e','process.exit(0)']);
   assert.equal(recovered.status,0,recovered.stderr);
-  console.log('Docker smoke passed: direct non-root application help/start/health/stop, inherited private descriptor, non-root executor, private secret isolation, literal argv, exit code, no Docker socket, duplicate writer rejection and crash lock release.');
+  console.log('Docker smoke passed: direct non-root application help/start/health/stop, inherited private descriptor, non-root executor, isolated Codex on PATH, private secret isolation, literal argv, exit code, no Docker socket, duplicate writer rejection and crash lock release.');
 } finally { run(['rm','-f',holder,application]); run(['volume','rm',volume]); rmSync(dir, {recursive:true, force:true}); }

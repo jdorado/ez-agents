@@ -53,7 +53,10 @@ export async function startTaskExecutor(options: ExecutorOptions) {
     await mkdir(directory, { mode: 0o700 }); await mkdir(home, { mode: 0o700 })
     const catalog = await promisify(execFile)('codex', ['debug', 'models', '--bundled'], { env: environment, maxBuffer: 4 * 1024 * 1024 })
     await writeFile(join(temporary, 'models.json'), JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))), { mode: 0o600 })
-    await symlink(join(homedir(), '.codex', 'auth.json'), join(home, 'auth.json'))
+    const auth = process.env.EZ_ISOLATION === 'isolated'
+      ? join(options.controlDir, 'cli', 'codex', 'auth.json')
+      : join(homedir(), '.codex', 'auth.json')
+    await symlink(auth, join(home, 'auth.json'))
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
       fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId, options.toolsHome ?? '', JSON.stringify(task.capabilities ?? [])]
     const prompt = JSON.stringify({event: run.external ? 'correspondence_received' : 'task_activated', taskId: run.taskId})
