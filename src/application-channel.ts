@@ -252,7 +252,7 @@ export class ApplicationChannel {
     await this.bindings.authorize(run)
     const state = await new ControlStore(this.options.controlDir, 900000).status()
     const session = state.activeSession?.sessionId === run.execution?.sessionId ? state.activeSession : state.sessions?.find(item => item.sessionId === run.execution?.sessionId)
-    return { ...(session ? { sessionId: session.sessionId, nativeSessionId: session.nativeSessionId, cli: session.cli } : {}), ...(run.scheduled?.originRunId ? {originRunId:run.scheduled.originRunId} : {}), id: run.id, scope: (run.application ?? run.delivery)!.scope, status: run.status, messages: await this.runs.applicationMessages(run.id), approvals:await this.runs.applicationApprovals(run.id), ...(run.status === 'failed' ? { error: 'Agent execution failed; inspect the core run' } : {}) }
+    return { ...(session ? { sessionId: session.sessionId, nativeSessionId: session.nativeSessionId, cli: session.cli } : {}), ...(run.execution?.preset ? {preset:run.execution.preset} : {}), ...(run.scheduled?.originRunId ? {originRunId:run.scheduled.originRunId} : {}), id: run.id, scope: (run.application ?? run.delivery)!.scope, status: run.status, messages: await this.runs.applicationMessages(run.id), approvals:await this.runs.applicationApprovals(run.id), ...(run.status === 'failed' ? { error: 'Agent execution failed; inspect the core run' } : {}) }
   }
   async deliver(run: RunRecord, item: OutboxItem): Promise<void> {
     await this.bindings.authorize(run)

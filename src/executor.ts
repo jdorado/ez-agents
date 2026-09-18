@@ -220,16 +220,21 @@ export const validateCodexProvider = (value: CodexProviderBinding): CodexProvide
   if (!value || typeof value !== 'object') throw new Error('Invalid Codex provider binding')
   const id = providerToken(value.id, 'id', /^[a-z][a-z0-9_-]{0,31}$/)
   const name = providerToken(value.name, 'name', /^[^\r\n\0]{1,80}$/, 80)
-  const envKey = providerToken(value.envKey, 'environment key', /^[A-Z][A-Z0-9_]{1,63}$/, 64)
-  if (allowedEnvironmentKeys.includes(envKey as typeof allowedEnvironmentKeys[number]) || envKey === 'CODEX_HOME' || envKey === 'NODE_OPTIONS' ||
-      envKey.startsWith('EZ_') || envKey.startsWith('TELEGRAM_') || envKey.startsWith('PAGERDUTY_'))
-    throw new Error('Reserved Codex provider environment key')
+  const envKey = validateCodexProviderEnvironmentKey(value.envKey)
   let url: URL
   try { url = new URL(value.baseUrl) } catch { throw new Error('Invalid Codex provider URL') }
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Invalid Codex provider URL')
   const models = value.models?.map(model => providerToken(model, 'model', /^[a-zA-Z0-9_./:-]{1,160}$/))
   if (!models?.length || models.length > 64 || new Set(models).size !== models.length) throw new Error('Invalid Codex provider models')
   return {id,name,baseUrl:url.toString().replace(/\/$/,''),envKey,models}
+}
+
+export const validateCodexProviderEnvironmentKey = (value: unknown): string => {
+  const envKey = providerToken(value, 'environment key', /^[A-Z][A-Z0-9_]{1,63}$/, 64)
+  if (allowedEnvironmentKeys.includes(envKey as typeof allowedEnvironmentKeys[number]) || envKey === 'CODEX_HOME' || envKey === 'NODE_OPTIONS' ||
+      envKey.startsWith('EZ_') || envKey.startsWith('TELEGRAM_') || envKey.startsWith('PAGERDUTY_'))
+    throw new Error('Reserved Codex provider environment key')
+  return envKey
 }
 
 export const resolveExecutor = (name?: string): CliAdapter => EXECUTOR_REGISTRY[executorKey(name)]

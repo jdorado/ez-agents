@@ -19,6 +19,8 @@ test('supervisor forwards only provider keys declared by the agent installation'
  const host={agents:[{codexProviders:[{envKey:'OPENROUTER_API_KEY'}]}]};
  assert.deepEqual(providerEnvironment(host,{OPENROUTER_API_KEY:'provider-secret',TELEGRAM_BOT_TOKEN:'relay-secret'}),{OPENROUTER_API_KEY:'provider-secret'});
  assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey:'bad-key'}]}]},{}),/environment key/);
+ for(const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN','PAGERDUTY_ROUTING_KEY'])
+  assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey}]}]},{}),/Reserved Codex provider environment key/);
 });
 const contract=kind=>({protocol:1,kind,stateSchema:1,mainProtocol:1});
 function tar(entries) {
@@ -90,7 +92,7 @@ test('status distinguishes installed, running, legacy and stale main versions wi
  }
  await fs.writeFile(relay,'broken');s=await command(f.home,['status']);assert.equal(s.main.state,'unknown');
  await fs.rm(relay);s=await command(f.home,['status']);assert.equal(s.main.state,'offline');
- const result=await exec(process.execPath,[new URL('../bin/ezenciel-agents-tools.mjs',import.meta.url).pathname,'--home',f.home,'status']);
+ const result=await exec(process.execPath,[new URL('../bin/ezenciel-agents-tools.mjs',import.meta.url).pathname,'--home',f.home,'status'],{cwd:f.agent.workspace});
  assert.equal(JSON.parse(result.stdout).main.installedVersion,'0.1.0');
 });
 test('relay healthcheck emits bounded predicate evidence without state contents',async t=>{

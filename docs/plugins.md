@@ -291,6 +291,21 @@ already exist on the host. Keep indexes and writable metadata in the plugin's
 normal volume. This uses Docker bind mounts; it copies no source bytes and
 starts no provider sync. Read-only is the default.
 
+For a relay-bound agent, the source must be inside its workspace/shared workspace
+or under a plugin-specific root granted in the agent's external host configuration:
+
+```json
+{
+  "pluginFolderRoots": {
+    "library": ["/absolute/existing/notes"]
+  }
+}
+```
+
+The agent cannot add this grant through its registry. A missing grant fails before
+Compose or registry state changes. Standalone registries remain operator-owned and
+do not use a relay host allowlist.
+
 Stop the plugin before changing a binding:
 
 ```sh

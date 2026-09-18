@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, open } from 'node:fs/promises'
+import { mkdtemp, rm, open, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomBytes } from 'node:crypto'
@@ -8,6 +8,41 @@ import { ApplicationChannel, applicationScope } from '../src/application-channel
 import { ControlStore } from '../src/control-state.js'
 import { createAiMenu } from '../src/menu.js'
 import { RunStore } from '../src/runs.js'
+
+test('shared controls validate detected host presets against the host catalog', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-host-controls-'))
+  const previousTransport = process.env.EZ_EXECUTOR_TRANSPORT
+  const previousControl = process.env.EZ_CONTROL_DIR
+  process.env.EZ_EXECUTOR_TRANSPORT = 'host'
+  process.env.EZ_CONTROL_DIR = root
+  t.after(async () => {
+    if (previousTransport === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT
+    else process.env.EZ_EXECUTOR_TRANSPORT = previousTransport
+    if (previousControl === undefined) delete process.env.EZ_CONTROL_DIR
+    else process.env.EZ_CONTROL_DIR = previousControl
+    await rm(root, {recursive:true, force:true})
+  })
+  await mkdir(join(root, 'host-executor'), {recursive:true})
+  await writeFile(join(root, 'host-executor', 'models.json'), JSON.stringify([
+    {cli:'grok', model:'grok-4.6', name:'Grok 4.6', efforts:['high']},
+  ]))
+  const control = new ControlStore(root, 1000)
+  await control.requestPairing(42, 42); const owner = await control.approveOwner(42)
+  const menu = createAiMenu(control, 'codex')
+  const detected = {id:'detected_fixture', name:'Grok 4.6 High', cli:'grok', model:'grok-4.6', effort:'high'}
+  await control.aiState(menu.initial)
+  await control.savePreset(detected)
+  const initial = await control.captureChoice(menu.initial)
+  await control.selectPreset(detected.id, initial.sessionId, true)
+  const current = (await control.getActiveSession())!
+  const channel = new ApplicationChannel({controlDir:root, initial:menu.initial, aiControls:menu, wake:()=>{}, cancel:async()=>{}})
+  const binding = (await channel.bindings.register('shared', randomBytes(32).toString('base64url'), owner, true))!
+
+  const selected = await channel.changeControls(binding.bindingId, {
+    action:'select', presetId:detected.id, expectedSession:current.sessionId,
+  })
+  assert.equal(selected.ai.selectedId, detected.id)
+})
 
 test('private scope reset and model controls preserve running sessions and shared state', async t => {
   const root = await mkdtemp(join(tmpdir(),'ez-private-controls-'))
