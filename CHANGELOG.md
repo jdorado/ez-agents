@@ -33,6 +33,9 @@
   host CLI configuration needed for restricted read-only plugin commands.
 - Clarify domain-agent positioning while preserving native engine ownership.
 
+- Prevent accidental cross-agent plugin access by rejecting relay-bound registry
+  calls outside the owning workspace, and restrict its host-folder bindings to
+  workspace roots explicitly granted by the host.
 - Answer native app-server requests with their current protocol shapes. Scheduled
   `codex-gui` browser work now surfaces approval requests and grants only its
   active turn session-scoped HTTPS browser-origin and Chrome app elicitations,

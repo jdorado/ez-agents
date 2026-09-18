@@ -11,7 +11,7 @@ const inside = (parent: string, child: string) => {
 }
 
 // Configuration only: no provider calls, owner approval, service start, or AI turn.
-export const configureInstallation = async (directory: string, cli: string, token?: string) => {
+export const configureInstallation = async (directory: string, cli: string, token?: string, purposeFile?: string) => {
   let executor: string
   try { executor = resolveExecutor(cli).name }
   catch { throw new Error('Unsupported executor. See ezenciel-agents-setup status.') }
@@ -44,7 +44,7 @@ export const configureInstallation = async (directory: string, cli: string, toke
     if (!quote) throw new Error('Existing .env has a value requiring manual quoting; it was not changed.')
     return `${key}=${quote}${value}${quote}\n`
   }).join('')
-  const created = await initializeWorkspace(workspace)
+  const created = await initializeWorkspace(workspace, purposeFile)
   const temporary = `${envFile}.${randomUUID()}.tmp`
   try {
     await writeFile(temporary, content, { mode: 0o600, flag: 'wx' })

@@ -10,6 +10,7 @@ const volume = `${holder}-control`;
 const application = `${holder}-application`;
 const marker = 'qa-private-secret-never-in-executor';
 writeFileSync(join(dir, 'relay.env'), `TELEGRAM_BOT_TOKEN=${marker}\n`, { mode: 0o600 });
+writeFileSync(join(dir, 'purpose.md'), 'Verify the packaged Ez runtime.\n', { mode: 0o644 });
 writeFileSync(join(dir, 'node'), `#!/bin/sh\nIFS= read -r value <&3\n[ "$value" = "TELEGRAM_BOT_TOKEN=${marker}" ] || exit 91\nexec /usr/local/bin/node "$@"\n`, { mode: 0o555 });
 const run = (args) => spawnSync('docker', args, { encoding: 'utf8', timeout: 60000 });
 try {
@@ -17,6 +18,7 @@ try {
     '--mount',`type=bind,src=${join(dir,'node')},dst=/qa/node,readonly`,'-e','PATH=/qa:/usr/local/bin:/usr/bin:/bin',image,'application','--help']);
   assert.equal(inherited.status,0,inherited.stderr);
   const nonroot = ['--user','20000:20000','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges',
+    '--mount',`type=bind,src=${join(dir,'purpose.md')},dst=/run/agent-purpose.md,readonly`,'-e','EZ_AGENT_PURPOSE_FILE=/run/agent-purpose.md',
     '--tmpfs','/tmp:mode=1777','--tmpfs','/state/control:uid=20000,gid=20000,mode=700',
     '--tmpfs','/state/home:uid=20000,gid=20000,mode=700','--tmpfs','/workspace:uid=20000,gid=20000,mode=700',
     '-e','EZ_TELEGRAM_ENABLED=false','-e','EZ_APPLICATION_PORT=8110','-e','EZ_ISOLATION=isolated','-e','EZ_EXECUTOR_TRANSPORT=local','-e','EZ_EXECUTOR_CLI=codex'];
