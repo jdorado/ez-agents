@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility, jobs } from '../src/updates/control.mjs';
 import { perform, environment, packageManager } from '../src/updates/runtime.mjs';
-import { atomic, snapshot, compose } from '../src/plugins/manager.mjs';
+import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
 const exec=promisify(execFile);
@@ -190,6 +190,29 @@ test('stopped plugins remain stopped; removed plugins and expanded mounts reject
  await assert.rejects(eligibility(f.home,'sample',f.source,false));
  const reg=await read(path.join(f.home,'registry.json'));delete reg.plugins.sample;await atomic(path.join(f.home,'registry.json'),reg);
  await assert.rejects(prepare(f.home,'sample',{file:await f.pack()}),/not installed/);
+});
+test('plugin updates register additive command routes on an unchanged deployment',async t=>{
+ const f=await fixture(t,'plugin'),manifest=await read(path.join(f.source,'ez-plugin.json')),deployment=await read(path.join(f.source,'ez-deployment.json'));
+ manifest.commands.query={executable:'bin/example.mjs',args:[],channelQuery:true,exposure:{receivesExternalContent:true,sendsExternally:false,changesRecords:false,requiresReview:false}};
+ deployment.commands.query={service:'sample',argv:['node','/app/bin/example.mjs','query']};
+ await atomic(path.join(f.source,'ez-plugin.json'),manifest);await atomic(path.join(f.source,'ez-deployment.json'),deployment);
+ assert.equal((await eligibility(f.home,'sample',f.source,false)).pkg.version,'0.1.1');
+ const job=await queued(f),r=runtime(f);assert.equal((await perform(f.home,job,r)).status,'completed');
+ const registry=await read(path.join(f.home,'registry.json'));assert.equal(registry.commands.query,'sample');
+ const dispatch=await prepareCommand(f.home,'query',[]);assert.deepEqual(dispatch.argv.slice(-4),['node','sample','/app/bin/example.mjs','query']);
+ assert(r.calls.some(call=>call.includes('up')));
+});
+test('plugin command additions ignore object key order but reject collisions and changed routes',async t=>{
+ const f=await fixture(t,'plugin'),deployment=await read(path.join(f.source,'ez-deployment.json'));
+ deployment.services.sample={healthcheck:deployment.services.sample.healthcheck,volumes:deployment.services.sample.volumes,buildTarget:deployment.services.sample.buildTarget};
+ await atomic(path.join(f.source,'ez-deployment.json'),deployment);assert.equal((await eligibility(f.home,'sample',f.source,false)).pkg.version,'0.1.1');
+ const manifest=await read(path.join(f.source,'ez-plugin.json'));manifest.commands.other={executable:'bin/example.mjs',args:[]};deployment.commands.other={service:'sample',argv:['node','/app/bin/example.mjs','other']};
+ await atomic(path.join(f.source,'ez-plugin.json'),manifest);await atomic(path.join(f.source,'ez-deployment.json'),deployment);
+ const registry=await read(path.join(f.home,'registry.json'));registry.commands.other='different';await atomic(path.join(f.home,'registry.json'),registry);
+ await assert.rejects(eligibility(f.home,'sample',f.source,false),/alias collision/);
+ delete registry.commands.other;await atomic(path.join(f.home,'registry.json'),registry);
+ deployment.commands.sample.argv.push('--changed');await atomic(path.join(f.source,'ez-deployment.json'),deployment);
+ await assert.rejects(eligibility(f.home,'sample',f.source,false),/deployment/i);
 });
 test('interrupted activation recovers previous code; rollback failure is explicit and blocks further jobs',async t=>{
  const f=await fixture(t),job=await queued(f),r=runtime(f);await perform(f.home,job,r);

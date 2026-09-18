@@ -44,6 +44,14 @@ export async function check(home) {
   }
   return results;
 }
+const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+const same=(left,right)=>JSON.stringify(canonical(left))===JSON.stringify(canonical(right));
+function additiveCommands(previous,next) {
+  const before={...previous,commands:{}},after={...next,commands:{}};
+  if(!same(before,after))return false;
+  for(const [name,command] of Object.entries(previous.commands||{}))if(!same(next.commands?.[name],command))return false;
+  return Object.values(next.commands||{}).every(command=>next.services?.[command.service]);
+}
 export async function eligibility(home,target,root,automatic) {
   const old=await installed(home,target),pkg=await read(path.join(root,'package.json')),kind=target==='main'?'main':'plugin';
   if(pkg.name!==old.pkg.name)throw Error('Package identity mismatch');
@@ -54,7 +62,9 @@ export async function eligibility(home,target,root,automatic) {
   if(kind==='plugin') {
     const s=await snapshot(root);revision=s.revision;
     if(s.manifest.id!==target||s.manifest.version!==pkg.version)throw Error('Plugin identity/version mismatch');
-    if(JSON.stringify(s.deployment)!==JSON.stringify(old.record.deployment))throw Error('Deployment permissions/layout changed; a separately reviewed migration is required');
+    if(!additiveCommands(old.record.deployment,s.deployment))throw Error('Deployment permissions/layout changed; a separately reviewed migration is required');
+    const registry=await read(path.join(home,'registry.json'));
+    for(const alias of Object.keys(s.manifest.commands))if(registry.commands[alias]&&registry.commands[alias]!==target)throw Error('CLI alias collision');
   }else {
     for(const file of ['compose.yaml','compose.whatsapp.yaml'])if(!Buffer.from(await fs.readFile(path.join(root,file))).equals(await fs.readFile(path.join(old.root,file))))throw Error('Runtime deployment changed; a separately reviewed migration is required');
   }

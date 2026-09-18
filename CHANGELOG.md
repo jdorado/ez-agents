@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.33
+
+- Allow compatible plugin updates to add commands to existing services, registering
+  their aliases atomically while retaining collision checks and rejecting changes
+  to existing command routes or deployment authority.
+- Simplify contribution guidance and bound independent constraint reviews without
+  changing the native engine, transport or plugin responsibility boundaries.
+
+## 0.1.0-beta.32
+
+- Add shared authenticated inbound attachment staging for application and
+  Telegram channels, preserving literal comments and immutable retries.
+- Support separately scoped host-owned writable workspaces.
+- Reconcile reused host-lock PIDs using process birth identity while failing
+  closed on unknown or matching live-process identity.
+- Accept bounded scheduler recovery identifiers and preserve reviewed package
+  modes when extracting under a restrictive umask.
+- Allow concurrent plugin commands, scoped approved outgoing files, and the
+  host CLI configuration needed for restricted read-only plugin commands.
+- Clarify domain-agent positioning while preserving native engine ownership.
 
 - Prevent accidental cross-agent plugin access by rejecting relay-bound registry
   calls outside the owning workspace, and restrict its host-folder bindings to

@@ -662,6 +662,33 @@ test('older conversation names come from owner messages and detail keeps archive
   } finally { await f.close() }
 })
 
+test('Telegram and application image/PDF/text use identical native attachment metadata and owner session', async () => {
+  const f=await fixture()
+  const originalFetch=globalThis.fetch
+  try {
+    const control=new ControlStore(f.dir,1000)
+    const binding=(await f.relay.applicationChannel.bindings.register('web','a'.repeat(43),(await control.status()).owner!,true))!
+    let updateId=500
+    for (const [name,bytes] of [['image.png',Buffer.from('89504e470d0a1a0a','hex')],['file.pdf',Buffer.from('%PDF-1.4\nfixture')],['notes.md',Buffer.from('# Fixture')]] as const) {
+      globalThis.fetch=async()=>new Response(bytes)
+      const update=message(updateId++)
+      delete update.message!.text
+      update.message!.document={file_id:'fixture',file_unique_id:'fixture',file_name:name}
+      update.message!.caption='  literal /goal\n comment  '
+      await f.relay.bot.handleUpdate(update)
+      await f.relay.drainInbox(true)
+      const telegram=(await new RunStore(f.dir).list()).find(run=>run.messageId===update.message!.message_id)!
+      assert.ok(telegram)
+      const application=await f.relay.applicationChannel.submit(binding.bindingId,{requestId:name,scope:'chat',followOwner:true,text:update.message!.caption,attachment:{name,data:bytes.toString('base64')}})
+      const normalize=(text:string)=>text.replace(/inbox\/[a-f0-9-]+_/,'inbox/ID_')
+      assert.equal(normalize(application.texts[0]),normalize(telegram.texts[0]))
+      assert.equal(application.ownerId,telegram.ownerId)
+      assert.equal(application.execution?.sessionId,telegram.execution?.sessionId)
+      assert.deepEqual(application.execution?.preset,telegram.execution?.preset)
+      await new Promise(resolve=>setTimeout(resolve,200))
+    }
+  } finally {globalThis.fetch=originalFetch;await f.close()}
+})
 
 test('web launcher is private-owner-only and bypasses native intake without replacing controls', async () => {
   const f=await fixture({webLauncher:{command:'voice',label:'Voice',url:'https://voice.example/'}})
