@@ -29,7 +29,7 @@ import { startExecutorJob, terminateJob } from './executor.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
 import { markdownToTelegramHtml, escapeHtml } from './format.js'
-import { sanitizeFileName, stageIncomingFile, workspaceFile } from './files.js'
+import { sanitizeFileName, stageChatAttachment, workspaceFile } from './files.js'
 import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
@@ -109,7 +109,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   }
 
   const applicationChannel = new ApplicationChannel({
-    controlDir: config.controlDir, initial: aiMenu.initial,
+    controlDir: config.controlDir, workspace: config.workspace, initial: aiMenu.initial,
     aiControls: aiMenu,
     wake: () => { void drainSources().catch(error => console.error('Application queue unavailable', safeError(error))) },
     cancel: id => withStartLock(async () => {
@@ -911,12 +911,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const fileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${fileInfo.file_path}`
       const buffer = await downloadTelegramFile(fileUrl)
       const fileName = sanitizeFileName(basename(fileInfo.file_path) || 'photo.jpg')
-      const staged = await stageIncomingFile(config.workspace, fileName, buffer)
-      const caption = ctx.message.caption?.trim() || ''
-      const prompt = `[Attached image staged at ${staged.relativePath} (type: ${staged.fileType}, size: ${buffer.length} bytes)]${caption ? `\n\nCaption: ${caption}` : ''}`
+      const staged = await stageChatAttachment(config.workspace, fileName, buffer, ctx.message.caption ?? '')
       collectItem({
-        text: prompt,
-        attachment: { path: staged.relativePath, type: staged.fileType },
+        text: staged.text,
+        attachment: staged.attachment,
         messageId: ctx.message.message_id,
         updateId: ctx.update.update_id,
         chatId: ctx.chat.id,
@@ -940,12 +938,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const fileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${fileInfo.file_path}`
       const buffer = await downloadTelegramFile(fileUrl)
       const fileName = sanitizeFileName(doc.file_name || basename(fileInfo.file_path) || 'document.bin')
-      const staged = await stageIncomingFile(config.workspace, fileName, buffer)
-      const caption = ctx.message.caption?.trim() || ''
-      const prompt = `[Attached document staged at ${staged.relativePath} (type: ${staged.fileType}, size: ${buffer.length} bytes)]${caption ? `\n\nCaption: ${caption}` : ''}`
+      const staged = await stageChatAttachment(config.workspace, fileName, buffer, ctx.message.caption ?? '')
       collectItem({
-        text: prompt,
-        attachment: { path: staged.relativePath, type: staged.fileType },
+        text: staged.text,
+        attachment: staged.attachment,
         messageId: ctx.message.message_id,
         updateId: ctx.update.update_id,
         chatId: ctx.chat.id,

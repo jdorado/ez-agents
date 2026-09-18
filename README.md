@@ -1,14 +1,20 @@
-# Ez — AI assistants for small businesses
+# Ez — Build domain-expert AI agents on the harnesses you already use
 
-**A lightweight, open-source foundation for persistent AI assistants, powered by
-existing AI harnesses.** Give an assistant a purpose, a workspace and tools for
-your business, then work with it through chat.
+**The open-source composition layer for turning Codex, Grok and other native
+agent harnesses into persistent, tool-using specialists.**
 
-Ez is for owners of shops, studios and small teams who want help doing everyday
-work: preparing quotes, maintaining business records, researching decisions or
-following up on an agreed task. Each assistant has its own working context and
-responsibilities. The tools and permissions you configure determine what it can
-do.
+Combine domain knowledge, portable plugins, messaging, scheduling and explicit
+authority around the AI tools you already have. Start with one useful agent and
+grow into a team whose responsibilities, accounts and access remain clear.
+
+Ez does not replace your agent engine or hide it behind another platform. The
+native harness keeps ownership of reasoning, sessions, tools and delegation. Ez
+connects that intelligence to a durable workspace, real applications, trusted
+people and the operational controls required to work reliably.
+
+Use Ez for a personal project, a specialist research system or an operating role
+inside a startup or small business. Each agent gets a defined domain, its own
+working context and only the tools and authority its job requires.
 
 ## Engine and application boundaries
 
@@ -58,20 +64,20 @@ not implemented. The legacy channel-backend mode delegates execution and changes
 standard controls, so it does not meet this integration boundary. New integrations
 use the [native application channel](docs/application-channel.md).
 
-## What makes an Ez assistant
+## What makes an Ez domain agent
 
 | Part | What it contributes |
 |---|---|
-| **Workspace** | Markdown instructions, business context and working files that persist across conversations and changes of AI. |
+| **Workspace** | Markdown instructions, domain knowledge and working files that persist across conversations and changes of AI. |
 | **Native engine** | Inference, native sessions, context management and tool execution. See [AI selection](docs/architecture/ai-selection.md). |
 | **Authority** | A verified owner and explicit limits on delegated work. Receiving a message or installing a tool does not grant permission to act. |
 | **Plugins** | Documented CLI commands and agent instructions for application capabilities. Commands enforce authentication, authorization, validation and canonical persistence directly or through authoritative application services. |
 | **Ez transport and runtime** | Channel delivery, scheduling and standard runtime controls around the native engine. |
 
-The design starts with one assistant, one mind and clear responsibilities.
-Business instructions live in the workspace; reusable capabilities live in tools
-and plugins. The agent decides how to do the work using those instructions and
-the capabilities available to it.
+The design starts with one agent, one domain and clear responsibilities. Domain
+instructions live in the workspace; reusable capabilities live in tools and
+plugins. The agent decides how to do the work using those instructions and the
+capabilities available to it.
 
 Use the engine's native capabilities when they meet the need. Add a standalone
 plugin when a missing integration earns the maintenance. Ez keeps the surrounding
@@ -81,9 +87,9 @@ clients improve.
 ## Plugin catalog
 
 Browse the [available plugins](docs/plugin-catalog.md) for capabilities you can
-add to your assistant. The first released plugin is
+add to an agent. The first released plugin is
 [WhatsApp](https://github.com/jdorado/ez-whatsapp), which connects an existing
-WhatsApp account. Ask your working Ez assistant to set it up in Telegram.
+WhatsApp account. Ask your working Ez agent to set it up in Telegram.
 
 ## Start with one useful job
 
@@ -97,12 +103,12 @@ requested, keep each workspace's authority and registry explicit.
 Ask an AI agent with computer access to install Ez for a concrete purpose:
 
 > Install Ez from https://github.com/jdorado/ez-agents for my business.
-> I want an assistant that helps me prepare customer quotes from my own files.
+> I want a quoting specialist that works from my own files.
 > Set it up and verify that I can talk to it in Telegram.
 
 The installing agent follows [the setup guide](docs/setup.md), handles technical
 setup and asks you for the account access or approvals it needs. Once the
-assistant replies in Telegram, explain your business, give it the relevant
+agent replies in Telegram, explain the domain, give it the relevant
 materials and request any additional tools there. Integrations require their
 own setup and authorized accounts.
 
@@ -120,7 +126,7 @@ restricted task execution currently requires the pinned Codex runtime. See
 [authority boundaries](docs/architecture/authority-boundaries.md) for the exact
 scope and [scheduling](docs/scheduling.md) for scheduled work.
 
-The broader direction is assistants working across business roles, with deliberate
+The broader direction is agents working across distinct domains, with deliberate
 workspace sharing and authority over who may direct work, see information and
 use accounts. General team delegation and enterprise reviewer roles remain
 future work. The current trusted-host beta is not an
@@ -128,8 +134,9 @@ enterprise isolation or multi-tenant security product. See [security scope](SECU
 
 ## For agents discovering this repository
 
-Ez may fit when a user needs a persistent business assistant reachable through
-chat, using an existing AI client and separately installed tools. Start here:
+Ez may fit when a user needs a persistent domain-specific AI agent reachable
+through chat, using an existing AI client and separately installed tools. Start
+here:
 
 - **Install for a user:** [setup and verified onboarding](docs/setup.md), then the installer instructions below.
 - **Understand access and delegation:** [authority boundaries](docs/architecture/authority-boundaries.md) and [security scope](SECURITY.md).
@@ -141,15 +148,19 @@ the user's request and preserve its scope.
 
 ## Package and runtime
 
-**Beta 0.1.0-beta.12 — for testing on a trusted machine.** Offline and Docker
-fixtures are verified. Live account onboarding and reboot acceptance for this
-release are deferred; this is not a production-readiness claim. The source branch
-may contain changes newer than the published beta; inspect the supplied artifact's
-documentation when installing a pinned release.
+**Published beta releases are for testing on a trusted machine.** Offline and
+Docker fixtures are verified for the selected release. Live account onboarding
+and reboot acceptance remain beta gates; this is not a production-readiness
+claim. The source branch may contain changes newer than the published beta, so
+inspect the supplied artifact's documentation when installing a pinned release.
 
-The npm package is `@jc_stack/ez-agents` (channel `beta`). Download a pinned
-release with `npm pack @jc_stack/ez-agents@0.1.0-beta.12`, or get the tarball and SHA256SUMS from
-[GitHub prereleases](https://github.com/jdorado/ez-agents/releases/tag/v0.1.0-beta.12).
+The npm package is `@jc_stack/ez-agents`. Approved beta publications use npm's
+`latest` distribution tag while their versions and GitHub releases remain
+prereleases. For a reproducible download, choose an exact version from
+[GitHub prereleases](https://github.com/jdorado/ez-agents/releases) and substitute
+it for `VERSION` in `npm pack @jc_stack/ez-agents@VERSION`.
+You can also download the release's candidate tarball and verify its SHA-256
+against the attached release receipt or release notes.
 GitHub remains under `jdorado`; npm uses `jc_stack`. Do not install the unrelated
 unscoped `ez-whatsapp` package.
 

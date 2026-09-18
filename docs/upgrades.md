@@ -174,10 +174,12 @@ No backup deletes live data or revokes credentials. Retain old package roots and
 images until QA and any recovery window are complete; there is no automatic GC.
 
 The updater accepts only matching state-schema and protocol contracts and an
-unchanged deployment layout. Changes to privileges, services, volumes or Compose
-configuration fail before replacement, even for an explicit candidate. These
-need a separately reviewed migration, not an override flag. Release authors must
-truthfully declare schema compatibility. Code rollback **does not rewind private
+unchanged deployment layout. Plugins may add command routes to existing services;
+existing routes and all services, privileges, volumes and other deployment
+configuration must remain unchanged. Incompatible changes fail before replacement,
+even for an explicit candidate, and need a separately reviewed migration rather
+than an override flag. Release authors must truthfully declare schema compatibility.
+Code rollback **does not rewind private
 state**, provider cursors or operation receipts; uncertain actions are never
 replayed. Docker health is not proof of live provider identity or delivery.
 

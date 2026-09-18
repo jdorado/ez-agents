@@ -122,7 +122,9 @@ export async function perform(home,job,hooks) {
       for(const name of volumes)await backupVolume(run,old,name,backup);
       await atomic(old.compose,await compose(config,candidate,secrets,home));
       if(running)await run('docker',[...pluginArgs(candidate),'up','-d','--wait','--wait-timeout','90','--no-build']);
-      r.plugins[job.target]=candidate;await atomic(path.join(home,'registry.json'),r);
+      r.plugins[job.target]=candidate;
+      for(const alias of Object.keys(candidate.manifest.commands))r.commands[alias]=job.target;
+      await atomic(path.join(home,'registry.json'),r);
       job.runtimeVerified=running;
     }
     job.status='completed';job.endedAt=new Date().toISOString();await save();return job;

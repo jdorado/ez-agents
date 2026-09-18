@@ -7,6 +7,7 @@ import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
 import { ownsRun } from './identity.js'
 import { applicationId, validApplicationOrigin } from './application-origin.js'
 import { isPreset, type AiPreset, type ModelChoice } from './ai.js'
+import { MAX_INCOMING_ATTACHMENT_BYTES, stageChatAttachment } from './files.js'
 import { assertEffort } from './model-policy.js'
 import { ApprovalStore } from './approval.js'
 import { Tasks } from './tasks.js'
@@ -70,7 +71,7 @@ export class ApplicationChannel {
   private admissions = Promise.resolve()
   readonly bindings: ApplicationBindings
   constructor(private options: {
-    controlDir: string; initial: AiPreset
+    controlDir: string; workspace?: string; initial: AiPreset
     wake: () => void
     cancel: (id: string) => Promise<void>
     aiControls?: {
@@ -194,8 +195,8 @@ export class ApplicationChannel {
         if ('followTelegram' in rest) throw new Error('Invalid application request: choose one conversation option')
         input = {...rest, followTelegram: followOwner}
       }
-      const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; followTelegram?: unknown; ai?: { cli?: unknown; model?: unknown; effort?: unknown } }
-      if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || !value.text.trim() || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','context','expectedNativeSessionId','activateTelegram','followTelegram','ai'].includes(key))) throw new Error('Invalid application request')
+      const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; attachment?: { name?: unknown; data?: unknown }; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; followTelegram?: unknown; ai?: { cli?: unknown; model?: unknown; effort?: unknown } }
+      if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || (!value.text.trim() && value.attachment === undefined) || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','attachment','context','expectedNativeSessionId','activateTelegram','followTelegram','ai'].includes(key))) throw new Error('Invalid application request')
       if (value.expectedNativeSessionId !== undefined && (typeof value.expectedNativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(value.expectedNativeSessionId))) throw new Error('Invalid application native session assertion')
       if (value.activateTelegram !== undefined && typeof value.activateTelegram !== 'boolean') throw new Error('Invalid application Telegram activation')
       if (value.followTelegram !== undefined && typeof value.followTelegram !== 'boolean') throw new Error('Invalid application Telegram following')
@@ -207,7 +208,17 @@ export class ApplicationChannel {
         assertEffort(candidate.effort, candidate.model, candidate.cli)
         requestedPreset = candidate
       }
-      const application = { bindingId, requestId: value.requestId, scope: value.scope, ...(value.followTelegram ? { followTelegram: true } : {}), ...(value.context === undefined ? {} : { context: value.context }) }
+      let bytes: Buffer | undefined
+      if (value.attachment !== undefined) {
+        const attachment = value.attachment
+        if (!attachment || typeof attachment.name !== 'string' || !attachment.name.length || attachment.name.length > 255 ||
+          typeof attachment.data !== 'string' || attachment.data.length > Math.ceil(MAX_INCOMING_ATTACHMENT_BYTES / 3) * 4 ||
+          Object.keys(attachment).some(key => !['name', 'data'].includes(key))) throw new Error('Invalid application attachment')
+        bytes = Buffer.from(attachment.data, 'base64')
+        if (!bytes.length || bytes.length > MAX_INCOMING_ATTACHMENT_BYTES || bytes.toString('base64') !== attachment.data) throw new Error('Invalid application attachment encoding or size')
+      }
+      const attachmentHash = bytes ? hash(JSON.stringify([value.attachment!.name, bytes.toString('base64')])) : undefined
+      const application = { bindingId, requestId: value.requestId, scope: value.scope, ...(attachmentHash ? {inputText: value.text, attachmentHash} : {}), ...(value.followTelegram ? { followTelegram: true } : {}), ...(value.context === undefined ? {} : { context: value.context }) }
       if (!validApplicationOrigin(application)) throw new Error('Invalid application context')
       const binding = (await this.bindings.list()).find(item => item.bindingId === bindingId)
       if (!binding) throw new Error('Application authority revoked')
@@ -217,13 +228,18 @@ export class ApplicationChannel {
       if (existing) {
         await this.bindings.authorize(existing)
         if (requestedPreset && (existing.execution?.preset.cli !== requestedPreset.cli || existing.execution?.preset.provider !== requestedPreset.provider || existing.execution?.preset.model !== requestedPreset.model || existing.execution?.preset.effort !== requestedPreset.effort)) throw new Error('Application request ID conflicts with prior AI selection')
-        if (Boolean(existing.application?.followTelegram) !== Boolean(value.followTelegram) || existing.application?.scope !== value.scope || existing.texts[0] !== value.text) throw new Error('Application request ID conflicts with prior scope or text')
+        if (Boolean(existing.application?.followTelegram) !== Boolean(value.followTelegram) || existing.application?.scope !== value.scope || (existing.application?.inputText ?? existing.texts[0]) !== value.text || existing.application?.attachmentHash !== attachmentHash) throw new Error('Application request ID conflicts with prior scope or text')
         return existing // Retried context never replaces already admitted capabilities.
       }
       const control = new ControlStore(this.options.controlDir, 900000)
       if (!sameOwner(binding.owner, (await control.status()).owner)) throw new Error('Application authority revoked')
+      if (bytes && !this.options.workspace) throw new Error('Invalid application attachment: workspace unavailable')
+      const staged = bytes ? await stageChatAttachment(this.options.workspace!, value.attachment!.name as string, bytes, value.text) : undefined
+      let run: RunRecord
+      try {
       const execution = value.followTelegram ? await control.captureChoice(this.options.initial) : await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope), binding.shareTelegram === true && value.activateTelegram === true, requestedPreset, value.expectedNativeSessionId as string | undefined)
-      const run = await this.runs.create({ id, ownerId: ownerId(binding.owner), ownerEpoch: ownerEpoch(binding.owner), texts: [value.text], execution, application })
+        run = await this.runs.create({ id, ownerId: ownerId(binding.owner), ownerEpoch: ownerEpoch(binding.owner), texts: [staged?.text ?? value.text], execution, application }) }
+      catch (error) { if (staged) await unlink(staged.fullPath).catch(() => {}); throw error }
       this.options.wake()
       return run
     })
@@ -279,7 +295,7 @@ export class ApplicationChannel {
       }
       if (request.method === 'POST' && path === '/v1/runs') {
         const chunks: Buffer[] = []; let size = 0
-        for await (const chunk of request) { size += chunk.length; if (size > 65536) throw new Error('Application request too large'); chunks.push(chunk) }
+        for await (const chunk of request) { size += chunk.length; if (size > Math.ceil(MAX_INCOMING_ATTACHMENT_BYTES / 3) * 4 + 256 * 1024) throw new Error('Application request too large'); chunks.push(chunk) }
         const input = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         if (applicationId(input?.requestId)) admissionId = `r_app_${hash(JSON.stringify([binding.bindingId, input.requestId]))}`
         const run = await this.submit(binding.bindingId, input)

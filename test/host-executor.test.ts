@@ -14,6 +14,33 @@ import { packageVersion } from '../src/version.js'
 import { executionDefaults } from '../src/model-policy.js'
 import { workspaceLease } from '../src/plugins/workspace-lease.mjs'
 
+test('host restart replaces a lock whose PID was reused by another process',async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'ez-host-reused-pid-'))
+  const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),directory=path.join(controlDir,'host-executor')
+  const abort=new AbortController();let server:Promise<void>|undefined
+  try {
+    await mkdir(workspace);await mkdir(directory,{recursive:true})
+    await writeFile(path.join(directory,'worker.lock'),JSON.stringify({pid:process.pid,started:'reused-pid'}))
+    server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal)
+    for(let n=0;n<100;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+    await readFile(path.join(directory,'heartbeat.json'))
+    const lock=JSON.parse(await readFile(path.join(directory,'worker.lock'),'utf8'))
+    assert.equal(lock.pid,process.pid)
+    assert.notEqual(lock.started,'reused-pid')
+  }finally{abort.abort();await server;await rm(root,{recursive:true,force:true})}
+})
+
+test('legacy host lock fails closed while its PID is alive',async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'ez-host-legacy-lock-'))
+  const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),directory=path.join(controlDir,'host-executor')
+  try {
+    await mkdir(workspace);await mkdir(directory,{recursive:true})
+    await writeFile(path.join(directory,'worker.lock'),JSON.stringify({pid:process.pid}))
+    await assert.rejects(serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},new AbortController().signal),/already running/)
+    assert.deepEqual(JSON.parse(await readFile(path.join(directory,'worker.lock'),'utf8')),{pid:process.pid})
+  }finally{await rm(root,{recursive:true,force:true})}
+})
+
 test('host restart clears dead native lease only after proving previous CLI stopped',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'ez-native-recovery-'));
   const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),toolsHome=path.join(root,'tools'),directory=path.join(controlDir,'host-executor');
@@ -55,12 +82,13 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     process.env.TELEGRAM_BOT_TOKEN='must-not-reach-host-cli'
     const sharedAlias=path.join(root,'shared-alias')
     await symlink(root,sharedAlias)
+    const additionalWorkspace=path.join(root,'additional');await mkdir(additionalWorkspace)
     const agents=await Promise.all(['one','two'].map(async name=>{
       const workspace=path.join(root,name,'mind'),controlDir=path.join(root,name,'control')
       await mkdir(workspace,{recursive:true});await mkdir(controlDir,{recursive:true})
       const toolsHome=path.join(root,name,'tools');await mkdir(toolsHome)
       await writeFile(path.join(toolsHome,'config.json'),JSON.stringify({schemaVersion:1,workspace:await realpath(workspace)}))
-      return {name,workspace,controlDir,binDir:path.join(root,'bin'),toolsHome,sharedWorkspace:name==='two'?sharedAlias:root}
+      return {name,workspace,controlDir,binDir:path.join(root,'bin'),toolsHome,sharedWorkspace:name==='two'?sharedAlias:root,additionalWorkspaces:name==='two'?[additionalWorkspace]:undefined}
     }))
     server=serveHostExecutor({cli:'grok',agents},abort.signal)
     for(const agent of agents){
@@ -88,6 +116,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       assert.equal(result.repair,'true')
       assert.ok(result.args.includes(agent.toolsHome))
       assert.ok(result.args.includes(await realpath(root)))
+      assert.equal(result.args.includes(await realpath(additionalWorkspace)),agent.name==='two')
       assert.ok(!result.args.includes('/wrong'))
       assert.equal(result.home,process.env.HOME)
     }
@@ -180,8 +209,8 @@ test('one installed CLI executes two agent bindings with separate minds and sani
 
 
 test('host run IDs accept production formats and reject unsafe paths',()=>{
-  for(const id of ['tg_6293305','r_example_123','event_'+'a'.repeat(64)])assert.equal(isHostRunId(id),true)
-  for(const id of ['../tg_1','tg_1/other','tg_abc','event_bad','event_'+'a'.repeat(63),'event_'+'g'.repeat(64),'tg_1\n','r_',''])assert.equal(isHostRunId(id),false)
+  for(const id of ['tg_6293305','tg_replay_702267965_20260916','r_example_123','event_'+'a'.repeat(64)])assert.equal(isHostRunId(id),true)
+  for(const id of ['../tg_1','tg_1/other','tg_abc','tg_replay_702267965','tg_replay_702267965_2026091x','event_bad','event_'+'a'.repeat(63),'event_'+'g'.repeat(64),'tg_1\n','r_',''])assert.equal(isHostRunId(id),false)
 })
 
 test('client tolerates missing heartbeat and consumes completion before checking host health',async()=>{

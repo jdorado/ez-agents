@@ -13,10 +13,13 @@ import type { ChildProcess } from 'node:child_process'
 import { taskWorkspace } from './task-workspace.js'
 import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
+import { processSnapshot } from './process-tree.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
-export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; codexProviders?: CodexProviderBinding[] }
+export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; codexProviders?: CodexProviderBinding[] }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
+
+const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth
 
 export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {
   resolveExecutor(installation.cli)
@@ -27,6 +30,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const tasks = new Set<Promise<void>>()
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
+  const additionalWorkspaces = new Map<HostBinding, string[]>()
   const catalog = async (agent: HostBinding) => {
     const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
     const providers = (agent.codexProviders ?? []).map(validateCodexProvider)
@@ -40,6 +44,10 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       if (new Set(providers.map(provider=>provider.id)).size !== providers.length) throw new Error('Codex provider IDs must be unique')
       if (agent.sharedWorkspace && !path.isAbsolute(agent.sharedWorkspace)) throw new Error('Shared workspace requires an absolute path')
       if (agent.sharedWorkspace) sharedWorkspaces.set(agent, await realpath(agent.sharedWorkspace))
+      if (agent.additionalWorkspaces) {
+        if (!Array.isArray(agent.additionalWorkspaces) || agent.additionalWorkspaces.some(workspace=>typeof workspace!=='string' || !path.isAbsolute(workspace))) throw new Error('Additional workspaces require absolute paths')
+        additionalWorkspaces.set(agent,await Promise.all(agent.additionalWorkspaces.map(workspace=>realpath(workspace))))
+      }
       if (agent.toolsHome) {
         if (!path.isAbsolute(agent.toolsHome)) throw new Error('Plugin registry binding requires an absolute path')
         const config=JSON.parse(await readFile(path.join(agent.toolsHome,'config.json'),'utf8'))
@@ -48,9 +56,17 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       const directory = path.join(agent.controlDir,'host-executor')
       await mkdir(directory,{recursive:true,mode:0o700})
       const lock=path.join(directory,'worker.lock')
-      try { const prior=JSON.parse(await readFile(lock,'utf8')); try { process.kill(prior.pid,0); throw new Error('Host executor already running') } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }; await rm(lock) }
+      try {
+        const prior=JSON.parse(await readFile(lock,'utf8'))
+        const currentStart=await processStart(prior.pid)
+        if (!prior.started || !currentStart || prior.started===currentStart) {
+          try { process.kill(prior.pid,0); throw new Error('Host executor already running') }
+          catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+        }
+        await rm(lock)
+      }
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-      await writeFile(lock,JSON.stringify({pid:process.pid}),{mode:0o600,flag:'wx'})
+      await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid)}),{mode:0o600,flag:'wx'})
       locks.push(lock)
       await installAgentGuidance(agent.workspace)
       await writeFile(path.join(directory,'models.json'),JSON.stringify(await catalog(agent)),{mode:0o600})
@@ -130,7 +146,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               if (!provider && model && (agent.codexProviders ?? []).some(binding=>binding.models.includes(model)))
                 throw new Error('Selected Codex provider is required for this model')
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},await catalog(agent))
-              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,cli,
+              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider}
               job=await launch(request.texts,options)

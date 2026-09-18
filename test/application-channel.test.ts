@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { ApplicationChannel, ApplicationBindings, applicationScope } from '../src/application-channel.js'
-import { ControlStore } from '../src/control-state.js'
+import { ControlStore, ownerId } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
@@ -284,4 +284,51 @@ test('following Telegram requires an explicit sharing grant and cannot override 
     await assert.rejects(channel.submit(shared.bindingId, { ...input, ...extra }), /Invalid application/)
   }
   assert.equal((await new RunStore(root).list()).length, 0)
+})
+
+test('generic attachments stage after auth, preserve literal comments and reject retry/isolation failures', async t => {
+  const root=await mkdtemp(join(tmpdir(),'ez-app-attachment-'))
+  const owned=await owner(root), runs=new RunStore(root)
+  const channel=new ApplicationChannel({controlDir:root,workspace:root,initial:initialPreset('codex'),wake:()=>{},cancel:async()=>{}})
+  t.after(async()=>{await channel.stop();await rm(root,{recursive:true,force:true})})
+  const secret=token(), other=token()
+  const binding=(await channel.bindings.register('web',secret,owned,true))!
+  await channel.bindings.register('other',other,owned)
+  const address=await channel.listen(0) as {port:number}
+  const post=(body:unknown,bearer=secret)=>fetch(`http://127.0.0.1:${address.port}/v1/runs`,{method:'POST',headers:{Authorization:`Bearer ${bearer}`},body:JSON.stringify(body)})
+  const input={requestId:'image',scope:'chat',followOwner:true,text:'  /goal literal\n comment  ',attachment:{name:'image.png',data:Buffer.from('89504e470d0a1a0a','hex').toString('base64')}}
+  assert.equal((await post(input,'bad')).status,401)
+  const {readdir,stat}=await import('node:fs/promises')
+  await assert.rejects(readdir(join(root,'inbox')),/ENOENT/)
+  for (const [name,bytes] of [['image.png',Buffer.from('89504e470d0a1a0a','hex')],['file.pdf',Buffer.from('%PDF-1.4\nfixture')],['notes.md',Buffer.from('# Fixture')]] as const) {
+    const body={...input,requestId:name,attachment:{name,data:bytes.toString('base64')}}
+    const response=await post(body);assert.equal(response.status,202)
+    const snapshot=await response.json() as {id:string}
+    const run=(await runs.get(snapshot.id))!
+    assert.equal(run.ownerId,ownerId(owned))
+    assert.equal(run.application?.inputText,input.text)
+    assert.ok(run.texts[0].endsWith(`Caption: ${input.text}`))
+    const path=run.texts[0].match(/staged at (inbox\/[^ ]+)/)![1]
+    assert.deepEqual(await readFile(join(root,path)),bytes)
+    assert.equal((await stat(join(root,path))).mode & 0o777,0o600)
+    const before=(await readdir(join(root,'inbox'))).length
+    assert.equal((await post(body)).status,202)
+    assert.equal((await readdir(join(root,'inbox'))).length,before)
+    assert.equal((await post({...body,text:'changed'})).status,409)
+    assert.equal((await post({...body,attachment:{name,data:Buffer.from('changed').toString('base64')}})).status,409)
+    assert.equal((await fetch(`http://127.0.0.1:${address.port}/v1/runs/${snapshot.id}`,{headers:{Authorization:`Bearer ${other}`}})).status,404)
+  }
+  const control=new ControlStore(root,1000)
+  const priorSession=(await control.status()).activeSession
+  const invalidActivation=await post({...input,requestId:'invalid-activation',followOwner:false,activateTelegram:true,scope:'new-scope',attachment:{name:'x.exe',data:Buffer.from('text').toString('base64')}})
+  assert.equal(invalidActivation.status,400)
+  assert.deepEqual((await control.status()).activeSession,priorSession)
+  const before=(await readdir(join(root,'inbox'))).length
+  for (const attachment of [{name:'x.exe',data:Buffer.from('text').toString('base64')},{name:'x.txt',data:'%%%invalid'},{name:'x.txt',data:Buffer.alloc(10*1024*1024+1,65).toString('base64')}]) {
+    assert.equal((await post({...input,requestId:'bad',attachment})).status,400)
+  }
+  assert.equal((await readdir(join(root,'inbox'))).length,before)
+  await channel.bindings.register('web',null,owned)
+  await assert.rejects(channel.submit(binding.bindingId,{...input,requestId:'revoked'}),/revoked/)
+  assert.equal((await readdir(join(root,'inbox'))).length,before)
 })

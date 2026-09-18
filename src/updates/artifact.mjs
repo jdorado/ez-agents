@@ -59,8 +59,8 @@ export async function extract(buffer,destination) {
   await fs.mkdir(destination,{recursive:true,mode:0o700});
   for(const f of files) {
     const dest=path.join(destination,f.relative);
-    if(f.type==='5'){await fs.mkdir(dest,{recursive:true,mode:0o755});continue;}
-    await fs.mkdir(path.dirname(dest),{recursive:true,mode:0o755});await fs.writeFile(dest,f.data,{flag:'wx',mode:f.mode});
+    if(f.type==='5'){await fs.mkdir(dest,{recursive:true,mode:0o755});await fs.chmod(dest,0o755);continue;}
+    await fs.mkdir(path.dirname(dest),{recursive:true,mode:0o755});await fs.chmod(path.dirname(dest),0o755);await fs.writeFile(dest,f.data,{flag:'wx',mode:f.mode});await fs.chmod(dest,f.mode);
   }
 }
 export async function registryVersion(name,tag='latest') {

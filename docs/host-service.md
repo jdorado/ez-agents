@@ -97,6 +97,9 @@ preserving it rather than reverting to a different or expired host login.
 An agent binding may set `sharedWorkspace` to an absolute canonical application
 repository. The host resolves its canonical path, adds that directory to Codex
 write permissions for chat and scheduled jobs, including symlink aliases.
+If the agent needs more than one separately scoped writable directory, keep the
+canonical application in `sharedWorkspace` and list the others as absolute paths
+in `additionalWorkspaces`; do not grant a broader common parent.
 The host claims requests independently; a running job does not block another
 request sharing its workspace. The selected engine owns execution concurrency.
 Task sessions and artifacts remain isolated. The binding is host-owned and cannot

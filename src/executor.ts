@@ -21,6 +21,7 @@ export type ExecutorOptions = {
   binDir: string
   toolsHome?: string
   sharedWorkspace?: string
+  additionalWorkspaces?: string[]
   cli?: string
   sessionId?: string
   isResume?: boolean
@@ -85,7 +86,7 @@ export type CliAdapter = {
   command: string
   description: string
   buildArgs: (
-    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'codexAutoCompactTokens' | 'codexSandbox' | 'codexProvider'> & { controlDir?: string },
+    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'additionalWorkspaces' | 'codexAutoCompactTokens' | 'codexSandbox' | 'codexProvider'> & { controlDir?: string },
     promptFile: string,
     promptText: string,
   ) => string[]
@@ -111,6 +112,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       }
       if (opts.controlDir) args.push('--add-dir', opts.controlDir)
       if (opts.sharedWorkspace) args.push('--add-dir', opts.sharedWorkspace)
+      for (const workspace of opts.additionalWorkspaces ?? []) args.push('--add-dir', workspace)
       if (opts.toolsHome) args.push('--add-dir', opts.toolsHome, '-c', 'sandbox_workspace_write.network_access=true')
       if (opts.model) args.push('--model', opts.model)
       if (opts.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(opts.effort)}`)
@@ -283,7 +285,7 @@ export const startExecutorJob = async (
   const nativeSession = !host && key === 'codex' && options.runId.startsWith('r_schedule_')
   // Chat-mode experiment: only direct chat input at the engine boundary.
   const applicationReminder = !host && (run?.application || run?.delivery)
-    ? '\n\n[Application channel] This is an owner-authorized application conversation. Send text replies using ezenciel-agents-message; stdout alone is not delivered. Attachments/reactions/approval controls are unsupported here. Domain tools can retrieve private context from ezenciel-agents-schedule context under run.application.context; do not expose credentials from that data. The application scope is ' + JSON.stringify((run.application ?? run.delivery)!.scope) + '.'
+    ? '\n\n[Application channel] This is an owner-authorized application conversation. Send text replies using ezenciel-agents-message; stdout alone is not delivered. Outgoing file delivery, reactions and approval controls are unsupported here. Domain tools can retrieve private context from ezenciel-agents-schedule context under run.application.context; do not expose credentials from that data. The application scope is ' + JSON.stringify((run.application ?? run.delivery)!.scope) + '.'
     : ''
   const chatReminder = !host && !run?.taskId && run?.messageId !== undefined
     ? '\n\n[Chat context] You are replying in chat. Send replies with ezenciel-agents-message --text "..."; your final answer alone is not delivered. Before lengthy tool or repository work, briefly acknowledge through that CLI. Keep chat responsive: use ezenciel-agents-schedule for long-running work and native subagents for useful independent parts. Decide when to delegate and what to send.'

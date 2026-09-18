@@ -73,3 +73,15 @@ export const workspaceFile = async (workspace: string, file: string, regular = t
   if (regular && !(await stat(target)).isFile()) throw new Error('Expected a regular file')
   return target
 }
+
+// Canonical native-engine attachment metadata for every inbound channel.
+export const MAX_INCOMING_ATTACHMENT_BYTES = 10 * 1024 * 1024
+export const stageChatAttachment = async (workspace: string, name: string, bytes: Buffer, comment: string) => {
+  const type = detectFileType(bytes)
+  if (!bytes.length || bytes.length > MAX_INCOMING_ATTACHMENT_BYTES || type === 'unknown' ||
+    (type === 'text' && !/\.(txt|md|markdown)$/i.test(name))) throw new Error('Invalid application attachment: unsupported type or size')
+  const staged = await stageIncomingFile(workspace, name, bytes)
+  const kind = ['jpeg', 'png', 'webp'].includes(staged.fileType) ? 'image' : 'document'
+  return { text: `[Attached ${kind} staged at ${staged.relativePath} (type: ${staged.fileType}, size: ${bytes.length} bytes)]${comment ? `\n\nCaption: ${comment}` : ''}`,
+    attachment: {path: staged.relativePath, type: staged.fileType}, fullPath: staged.fullPath }
+}
