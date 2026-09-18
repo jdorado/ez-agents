@@ -65,8 +65,23 @@ test('external Codex isolation requires explicit native local deployment', () =>
   assert.equal(loadConfig(env).codexSandbox, 'external')
   assert.equal(loadConfig({...env,EZ_TELEGRAM_ENABLED:'true',TELEGRAM_BOT_TOKEN:'test'}).codexSandbox, 'external')
   assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test'}).codexSandbox, undefined)
-  for (const override of [{EZ_EXECUTOR_TRANSPORT:'host'}, {EZ_EXECUTOR_TRANSPORT:''}, {EZ_CODEX_SANDBOX:'danger-full-access'}])
-    assert.throws(() => loadConfig({...env,...override}), /sandbox|SANDBOX/)
+  assert.equal(loadConfig({...env,EZ_EXECUTOR_TRANSPORT:''}).isolation, 'isolated')
+  assert.throws(() => loadConfig({...env,EZ_EXECUTOR_TRANSPORT:'host'}), /sandbox|SANDBOX|Isolation/)
+  assert.throws(() => loadConfig({...env,EZ_CODEX_SANDBOX:'danger-full-access'}), /sandbox|SANDBOX/)
+})
+
+test('isolation class is isolated by default and rejects host transport mismatch', () => {
+  assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test'}).isolation, 'isolated')
+  assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test',EZ_ISOLATION:'isolated',EZ_EXECUTOR_TRANSPORT:'local'}).isolation, 'isolated')
+  assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test',EZ_EXECUTOR_TRANSPORT:'host'}).isolation, 'host-capable')
+  assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test',EZ_ISOLATION:'host-capable',EZ_EXECUTOR_TRANSPORT:'host'}).isolation, 'host-capable')
+  assert.throws(() => loadConfig({TELEGRAM_BOT_TOKEN:'test',EZ_ISOLATION:'isolated',EZ_EXECUTOR_TRANSPORT:'host'}), /Isolation isolated requires EZ_EXECUTOR_TRANSPORT=local/)
+  assert.throws(() => loadConfig({TELEGRAM_BOT_TOKEN:'test',EZ_ISOLATION:'host-capable',EZ_EXECUTOR_TRANSPORT:'local'}), /Isolation host-capable requires EZ_EXECUTOR_TRANSPORT=host/)
+  assert.throws(() => loadConfig({TELEGRAM_BOT_TOKEN:'test',EZ_ISOLATION:'seatbelt'}), /isolated or host-capable/)
+  assert.throws(() => loadConfig({
+    TELEGRAM_BOT_TOKEN:'test',EZ_ISOLATION:'host-capable',EZ_EXECUTOR_TRANSPORT:'host',
+    EZ_CHANNEL_BACKEND_URL:'https://backend.example',EZ_CHANNEL_BACKEND_TOKEN:'secret',
+  }), /Host-capable isolation requires the host native CLI/)
 })
 
 test('optional web launcher preserves reserved commands and accepts only HTTPS without secrets', () => {

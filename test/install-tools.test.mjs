@@ -24,6 +24,12 @@ test('installation status separates files, pairing and current-owner Telegram de
   const write=(name,obj)=>fs.writeFile(path.join(control,name),JSON.stringify(obj));
   await write('heartbeat.json',{at:Date.now(),polling:true});await write('host-executor/heartbeat.json',{at:Date.now()});
   assert.equal((await installationStatus(root)).stage,'awaiting-owner');
+  await fs.writeFile(path.join(root,'agent.json'),JSON.stringify({isolation:'isolated'}));
+  await fs.rm(path.join(control,'host-executor/heartbeat.json'));
+  assert.equal((await installationStatus(root)).stage,'awaiting-owner');
+  await fs.writeFile(path.join(root,'agent.json'),'private');
+  await write('host-executor/heartbeat.json',{at:Date.now()});
+  assert.equal((await installationStatus(root)).stage,'awaiting-owner');
   const owner={telegramUserId:123,telegramChatId:123,pairedAt:new Date(Date.now()-10000).toISOString()};await write('control-state.json',{owner});
   assert.equal((await installationStatus(root)).stage,'awaiting-telegram-reply');
   const item={runId:'tg_12',chatId:123,receipt:{messageIds:[42],deliveredAt:new Date().toISOString()}};

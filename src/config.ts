@@ -1,5 +1,6 @@
 import { parseWebLauncher, type WebLauncher } from './web-launcher.js'
 import { repairEnabled } from './repair-policy.js'
+import { isolationTransport, resolveIsolation, type IsolationClass } from './isolation.js'
 import path from 'node:path'
 import { homedir } from 'node:os'
 
@@ -15,6 +16,7 @@ export type Config = ControlConfig & {
   telegramBotToken: string
   workspace: string
   executorTimeoutMs: number
+  isolation?: IsolationClass
   codexSandbox?: 'external'
   codexAutoCompactTokens?: number
   executorCli: string
@@ -56,9 +58,11 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
 
   if (env.EZ_CHANNEL_BACKEND_URL && !env.EZ_CHANNEL_BACKEND_TOKEN?.trim()) throw new Error('EZ_CHANNEL_BACKEND_TOKEN is required')
   if (env.EZ_APPLICATION_PORT && env.EZ_CHANNEL_BACKEND_URL) throw new Error('Application input requires the native Ez executor, not a channel backend')
+  const isolation = resolveIsolation(env)
+  const transport = env.EZ_EXECUTOR_TRANSPORT?.trim() || isolationTransport(isolation)
   const codexSandbox = env.EZ_CODEX_SANDBOX?.trim()
   if (codexSandbox && codexSandbox !== 'external') throw new Error('EZ_CODEX_SANDBOX must be external or unset')
-  if (codexSandbox && (env.EZ_CHANNEL_BACKEND_URL || env.EZ_EXECUTOR_TRANSPORT !== 'local')) throw new Error('External Codex sandbox requires native local execution')
+  if (codexSandbox && (env.EZ_CHANNEL_BACKEND_URL || transport !== 'local')) throw new Error('External Codex sandbox requires native local execution')
   const pagerDutyRoutingKey = env.PAGERDUTY_ROUTING_KEY?.trim()
   const pagerDutyStocksHealthUrl = env.EZ_PAGERDUTY_STOCKS_HEALTH_URL?.trim()
   if (pagerDutyStocksHealthUrl && !pagerDutyRoutingKey)
@@ -78,6 +82,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     repairEnabled: repairEnabled(env.EZ_REPAIR_ENABLED),
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
     executorTimeoutMs: 0,
+    isolation,
     codexSandbox: codexSandbox === 'external' ? 'external' : undefined,
     codexAutoCompactTokens: !env.EZ_CODEX_AUTO_COMPACT_TOKENS?.trim() ? undefined : positiveInteger(env.EZ_CODEX_AUTO_COMPACT_TOKENS, 'EZ_CODEX_AUTO_COMPACT_TOKENS'),
     executorCli: env.EZ_EXECUTOR_CLI?.trim() || 'agy',

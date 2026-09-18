@@ -41,6 +41,12 @@ test('legacy host lock fails closed while its PID is alive',async()=>{
   }finally{await rm(root,{recursive:true,force:true})}
 })
 
+test('isolated installations cannot start host transport', async () => {
+  const abort=new AbortController()
+  await assert.rejects(serveHostExecutor({cli:'grok',isolation:'isolated',agents:[]},abort.signal),/Isolated agents run the native CLI in the relay/)
+  abort.abort()
+})
+
 test('host restart clears dead native lease only after proving previous CLI stopped',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'ez-native-recovery-'));
   const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),toolsHome=path.join(root,'tools'),directory=path.join(controlDir,'host-executor');

@@ -246,7 +246,8 @@ credentials, startup, and verified pairing; never present this as human homework
 | `ezenciel-agents-install build` | Build once per artifact, with a private log and duplicate-build detection |
 | `ezenciel-agents-install status --deployment <path>` | Distinguish runtime/configuration, pairing and Telegram reply evidence |
 | `ezenciel-agents-create --register-cli <current-cli>` | Record the CLI that installs the initial package |
-| `ezenciel-agents-create --name <name> --purpose <agent-brief>` | Create an agent from the installing LLM's compact, context-specific brief; token via stdin |
+| `ezenciel-agents-create --name <name> --purpose <agent-brief>` | Create an agent from the installing LLM's compact brief; packaged Codex defaults isolated, other CLIs stay host-capable; token via stdin |
+| `ezenciel-agents-create --name <name> --purpose <agent-brief> --isolation host-capable` | Explicitly reuse the host CLI and installer UID |
 | `ezenciel-agents-host` | Invoke the existing shared host CLI for this deployment |
 | `ezenciel-agents-setup configure <executor> --purpose-file <path>` | Private configuration and missing starter files; fresh workspaces require installer-scoped purpose; preserves personal files |
 | `ezenciel-agents-setup configure <executor> --purpose-file <path> --token-stdin` | Same, with the BotFather token supplied privately through stdin |
@@ -258,7 +259,7 @@ credentials, startup, and verified pairing; never present this as human homework
 
 Run runtime tools through `ezenciel-agents-docker run --rm relay <command>`
 as shown in the Docker guide. Keep the Docker engine available; Compose owns
-restart and shutdown. The installing agent registers the small host CLI transport with the native service manager.
+restart and shutdown. Host-capable agents register the small host CLI transport with the native service manager. Isolated agents do not.
 
 ## Runtime and development reference
 
@@ -268,8 +269,9 @@ One compact, purpose-scoped `AGENTS.md` is seeded; `MEMORY.md` is optional.
 The installing LLM authors the initial brief from the owner's request and known
 application context; Ez stores it without trying to infer the product itself.
 Installed plugin snippets and skill paths come from `ez tools list --details`; no tool inventory file needs maintenance. Received files go in `inbox/`, tasks and deliverables in `work/`.
-Credentials and control state stay outside the mind. File separation is not
-OS isolation against a process running as the same user.
+Credentials and control state stay outside the mind. Isolated agents use relay
+mounts as the filesystem boundary. Host-capable file separation is not OS
+isolation against a process running as the same user.
 
 In Telegram, **Conversations** (or `/chats`) lists this agent's saved Ez
 conversations by name. Tap a name to continue its native engine session and
