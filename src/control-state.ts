@@ -470,7 +470,16 @@ export class ControlStore {
       const preset = state.ai.presets.find((p) => p.id === state.ai!.selectedId)!
       state.activeSession ??= { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
       if (!state.activeSession.cli && !state.activeSession.hasStarted) state.activeSession.cli = preset.cli
-      if (state.activeSession.cli === preset.cli) state.activeSession.preset = preset
+      if (state.activeSession.cli === preset.cli) {
+        const previous = state.activeSession.preset
+        // Same CLI, different model: web/Telegram must not resume the old native thread.
+        if (state.activeSession.hasStarted && previous?.model && preset.model && previous.model !== preset.model) {
+          ;(state.sessions ??= []).push(state.activeSession)
+          state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset }
+        } else {
+          state.activeSession.preset = preset
+        }
+      }
       if (!state.activeSession.title && !state.activeSession.hasStarted && title?.trim())
         state.activeSession.title = title.replace(/\s+/g, ' ').trim().slice(0, 80)
       await this.writeState(state)

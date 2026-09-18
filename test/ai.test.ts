@@ -11,6 +11,35 @@ import { InboxStore } from '../src/inbox.js'
 import { executionDefaults } from '../src/model-policy.js'
 import type { Update } from 'grammy/types'
 
+test('same-client model switch does not resume the previous native thread', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-model-switch-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    const deepseek = { id: 'deepseek', name: 'DeepSeek', cli: 'codex', model: 'deepseek/flash', effort: 'max' }
+    const luna = { id: 'luna', name: 'Luna', cli: 'codex', model: 'gpt-5.6-luna', effort: 'max' }
+    const first = await store.captureChoice(initialPreset('codex'))
+    await store.savePreset(deepseek)
+    await store.selectPreset(deepseek.id, first.sessionId, false)
+    const started = await store.captureChoice(initialPreset('codex'))
+    await store.saveNativeSession(started.sessionId, 'native-deepseek')
+    const same = await store.captureChoice(initialPreset('codex'))
+    assert.equal(same.sessionId, started.sessionId)
+    assert.equal((await store.executionSession(same)).nativeSessionId, 'native-deepseek')
+    await store.savePreset(luna)
+    await store.selectPreset(luna.id, started.sessionId, false)
+    const next = await store.captureChoice(initialPreset('codex'))
+    assert.notEqual(next.sessionId, started.sessionId)
+    assert.equal(next.preset.model, luna.model)
+    assert.equal((await store.executionSession(next)).hasStarted, false)
+    assert.equal((await store.executionSession(next)).nativeSessionId, undefined)
+    assert.equal((await store.executionSession(started)).nativeSessionId, 'native-deepseek')
+    const args = EXECUTOR_REGISTRY.codex.buildArgs({
+      workspace: dir, isResume: false, sessionId: next.sessionId,
+    }, '', '')
+    assert.equal(args.includes('resume'), false)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
 test('AI choices pin model, effort and session; defaults and CLI switches do not reroute old work', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-'))
   try {
