@@ -30,7 +30,7 @@ True makes the capability available; it does not itself grant a repair mandate.
 The setting does not change filesystem/GitHub permissions and does
 not cancel an already running task. Explicitly stop active repair work when needed.
 An owner can also disable repairs globally or for a repository in the agent's
-saved USER.md preferences; carry those restrictions into background task context.
+saved AGENTS.md preferences; carry those restrictions into background task context.
 
 ## Setup boundary
 

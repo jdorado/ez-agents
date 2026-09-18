@@ -13,21 +13,31 @@ export const initializeWorkspace = async (workspace: string, purposeFile: string
     if (!(await lstat(dir)).isDirectory()) throw new Error(`Workspace directory must not be a symlink: ${dir}`)
   }
   const created: string[] = []
-  for (const name of ['AGENTS.md', 'SOUL.md', 'USER.md']) {
-    const target = path.join(workspace, name)
-    const temporary = path.join(workspace, `.${name}.${randomUUID()}.tmp`)
+  const name = 'AGENTS.md'
+  const target = path.join(workspace, name)
+  try {
+    if (!(await lstat(target)).isFile()) throw new Error(`Workspace seed must be a regular file: ${target}`)
+    await installAgentGuidance(workspace)
+    return created
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  if (!purposeFile) throw new Error('A concise purpose file is required to initialize a new workspace.')
+  const temporary = path.join(workspace, `.${name}.${randomUUID()}.tmp`)
+  try {
+    const template = await readFile(path.join(templates, name), 'utf8')
+    const purpose = (await readFile(purposeFile, 'utf8')).trim()
+    if (!purpose) throw new Error('Purpose file must not be empty.')
+    await writeFile(temporary, `${template.trim()}\n\n## Purpose\n\n${purpose}\n`, { mode: 0o600, flag: 'wx' })
     try {
-      await writeFile(temporary, await readFile(name === 'SOUL.md' && purposeFile ? purposeFile : path.join(templates, name)), { mode: 0o600, flag: 'wx' })
-      try {
-        await link(temporary, target)
-        created.push(name)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        if (!(await lstat(target)).isFile()) throw new Error(`Workspace seed must be a regular file: ${target}`)
-      }
-    } finally {
-      await rm(temporary, { force: true })
+      await link(temporary, target)
+      created.push(name)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      if (!(await lstat(target)).isFile()) throw new Error(`Workspace seed must be a regular file: ${target}`)
     }
+  } finally {
+    await rm(temporary, { force: true })
   }
   await installAgentGuidance(workspace)
   return created

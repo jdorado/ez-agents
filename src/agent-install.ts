@@ -36,7 +36,7 @@ export const createAgent = async (options: {
   if (!/^[a-z][a-z0-9-]{0,39}$/.test(name)) throw new Error('Use an agent name of 1–40 lowercase letters, digits or hyphens, starting with a letter.')
   if (![root, hostRoot, composeFile].every(p => isAbsolute(p) && !/[\r\n\0']/.test(p)))
     throw new Error('Installation paths must be absolute and contain no newline or single quote.')
-  if (!purpose.trim() || purpose.length > 12000) throw new Error('Supply a purpose of 1–12000 characters.')
+  if (!purpose.trim() || purpose.length > 2000) throw new Error('Supply a concise purpose of 1–2000 characters.')
   if (!/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(token)) throw new Error('Supply the BotFather token through stdin.')
   const image=options.image||'ezenciel-agents:local'
   if(!/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(image))throw new Error('Invalid relay image reference')

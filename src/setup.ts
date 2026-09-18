@@ -113,7 +113,7 @@ export const runCli = async (): Promise<void> => {
   const envFilePath = path.resolve(process.cwd(), '.env')
 
   if (args[0] === '--help' || args[0] === '-h') {
-    console.log('Usage: ezenciel-agents-setup configure <executor> [--token-stdin] | service | init | status | <executor>\nconfigure writes private .env paths and seeds missing mind files; it does not start or pair the bot.\n--token-stdin accepts the BotFather token without putting it in command arguments or output.\nservice starts only the Docker Compose relay bound by docker.env in the current directory. It does not install the host-executor service; follow docs/host-service.md. It does not pair the owner.\nFollow docs/setup.md through a real Telegram reply; package installation alone is incomplete.')
+    console.log('Usage: ezenciel-agents-setup configure <executor> [--purpose-file PATH] [--token-stdin] | service | init [--purpose-file PATH] | status | <executor>\nFresh workspace setup requires a concise purpose file written from the owner request. configure writes private .env paths and seeds missing mind files; it does not start or pair the bot.\n--token-stdin accepts the BotFather token without putting it in command arguments or output.\nservice starts only the Docker Compose relay bound by docker.env in the current directory. It does not install the host-executor service; follow docs/host-service.md. It does not pair the owner.\nFollow docs/setup.md through a real Telegram reply; package installation alone is incomplete.')
     return
   }
 
@@ -124,10 +124,13 @@ export const runCli = async (): Promise<void> => {
   }
 
   if (args[0] === 'configure') {
-    if (!args[1] || args.length > 3 || (args[2] && args[2] !== '--token-stdin'))
-      throw new Error('Usage: ezenciel-agents-setup configure <executor> [--token-stdin]')
+    const tail = args.slice(2), purposeAt = tail.indexOf('--purpose-file'), tokenAt = tail.indexOf('--token-stdin')
+    const purposeFile = purposeAt >= 0 ? tail[purposeAt + 1] : undefined
+    const consumed = new Set([...(purposeAt >= 0 ? [purposeAt, purposeAt + 1] : []), ...(tokenAt >= 0 ? [tokenAt] : [])])
+    if (!args[1] || (purposeAt >= 0 && !purposeFile) || tail.some((_, index) => !consumed.has(index)))
+      throw new Error('Usage: ezenciel-agents-setup configure <executor> [--purpose-file PATH] [--token-stdin]')
     let token: string | undefined
-    if (args[2]) {
+    if (tokenAt >= 0) {
       if (process.stdin.isTTY) throw new Error('Supply the token through stdin, not a command argument.')
       let input = ''
       for await (const chunk of process.stdin) {
@@ -136,14 +139,15 @@ export const runCli = async (): Promise<void> => {
       }
       token = input.trim()
     }
-    console.log(JSON.stringify(await configureInstallation(process.cwd(), args[1], token)))
+    console.log(JSON.stringify(await configureInstallation(process.cwd(), args[1], token, purposeFile && path.resolve(purposeFile))))
     return
   }
 
   if (args[0] === 'init') {
-    if (args.length !== 1) throw new Error('Usage: ezenciel-agents-setup init (uses EZ_AGENT_WORKSPACE or ./agent)')
+    if (args.length !== 1 && !(args.length === 3 && args[1] === '--purpose-file'))
+      throw new Error('Usage: ezenciel-agents-setup init [--purpose-file PATH] (uses EZ_AGENT_WORKSPACE or ./agent)')
     const workspace = path.resolve(process.env.EZ_AGENT_WORKSPACE?.trim() || './agent')
-    const created = await initializeWorkspace(workspace)
+    const created = await initializeWorkspace(workspace, args[2] && path.resolve(args[2]))
     const config = loadControlConfig()
     await new ControlStore(config.controlDir, config.pairingTtlMs).syncClientPresets(
       chatPreset(await readActiveExecutor(envFilePath)), await discoverDefaults(workspace,
