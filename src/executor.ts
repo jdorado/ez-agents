@@ -316,7 +316,8 @@ export const startExecutorJob = async (
   if (denies.length) {
     const profile = path.join(outputDirectory, 'workspace.sb')
     await writeFile(profile, macosWorkspaceProfile(denies, [
-      options.controlDir, options.binDir, options.toolsHome, outputDirectory,
+      options.controlDir, options.binDir, options.toolsHome, options.sharedWorkspace,
+      ...(options.additionalWorkspaces ?? []), outputDirectory,
     ].filter((value): value is string => Boolean(value))), { mode: 0o600 })
     invocation = { command: 'sandbox-exec', args: ['-f', profile, invocation.command, ...invocation.args] }
   }
