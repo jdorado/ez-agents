@@ -472,8 +472,10 @@ export class ControlStore {
       if (!state.activeSession.cli && !state.activeSession.hasStarted) state.activeSession.cli = preset.cli
       if (state.activeSession.cli === preset.cli) {
         const previous = state.activeSession.preset
-        // Same CLI, different model: web/Telegram must not resume the old native thread.
-        if (state.activeSession.hasStarted && previous?.model && preset.model && previous.model !== preset.model) {
+        // Same CLI, different provider/model: web/Telegram must not resume the old native thread.
+        // Undefined is the native client default and is a distinct selection.
+        if (state.activeSession.hasStarted && previous &&
+            (previous.provider !== preset.provider || previous.model !== preset.model)) {
           ;(state.sessions ??= []).push(state.activeSession)
           state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset }
         } else {

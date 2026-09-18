@@ -271,7 +271,7 @@ separate CLI histories. A retry cannot change an admitted turn's AI choice.
 
 Register owner-chat channels with `--share-owner` and submit `followOwner:true`.
 Web, phone and Telegram then use the same selected native conversation and AI.
-A later same-client model change starts a new native conversation for the next
+A later same-client provider or model change starts a new native conversation for the next
 admitted turn; already-queued work keeps its original engine.
 This works without Telegram and requires no transcript replay or new runner.
 Scoped application conversations remain separate when the flag is omitted.
