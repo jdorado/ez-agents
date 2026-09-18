@@ -83,7 +83,7 @@ test('status distinguishes installed, running, legacy and stale main versions wi
  }
  await fs.writeFile(relay,'broken');s=await command(f.home,['status']);assert.equal(s.main.state,'unknown');
  await fs.rm(relay);s=await command(f.home,['status']);assert.equal(s.main.state,'offline');
- const result=await exec(process.execPath,[new URL('../bin/ezenciel-agents-tools.mjs',import.meta.url).pathname,'--home',f.home,'status']);
+ const result=await exec(process.execPath,[new URL('../bin/ezenciel-agents-tools.mjs',import.meta.url).pathname,'--home',f.home,'status'],{cwd:f.agent.workspace});
  assert.equal(JSON.parse(result.stdout).main.installedVersion,'0.1.0');
 });
 test('relay healthcheck emits bounded predicate evidence without state contents',async t=>{
