@@ -2,6 +2,9 @@
 
 ## 0.1.0-beta.34
 
+- Correct setup guidance for host-capable custom Codex providers and replace
+  stale pinned-beta installation guidance with current release records.
+
 - Record an isolation class at agent creation. The default is `isolated`: the
   native CLI runs in the relay (`EZ_EXECUTOR_TRANSPORT=local`). Pass
   `--isolation host-capable` to reuse the installer UID and host CLI login.

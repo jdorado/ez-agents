@@ -202,14 +202,17 @@ installed. It needs no `--cli` argument. A later shell or different available CL
 does not change that saved default. No installed-binary ranking or Grok fallback
 is used.
 
-For a Codex installation that may use OpenRouter, register the provider and the
-agent's initial model set as non-secret installation metadata. Repeat
-`--codex-model` for every model the agent may select:
+Custom Codex providers such as OpenRouter currently require an explicitly
+host-capable agent: their keys are supplied by the private host-service
+environment. The isolated relay has no custom-provider key injection path.
+Register the provider and initial model set as non-secret installation metadata;
+repeat `--codex-model` for every model the agent may select:
 
 ```sh
 bin/ezenciel-agents-create \
   --name family-shopper \
   --purpose 'Help my family plan shopping.' \
+  --isolation host-capable \
   --codex-provider openrouter \
   --codex-provider-name OpenRouter \
   --codex-base-url https://openrouter.ai/api/v1 \
