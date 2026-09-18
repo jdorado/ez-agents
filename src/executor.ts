@@ -12,6 +12,7 @@ import { processSnapshot, matchingProcessIds } from './process-tree.js'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { DESKTOP_UNAVAILABLE } from './desktop-bridge.js'
+import { macosWorkspaceProfile, workspaceSiblingDenies } from './workspace-confine.js'
 
 export type ExecutorOptions = {
   repairEnabled?: boolean
@@ -278,7 +279,7 @@ export const startExecutorJob = async (
   const adapter = resolveExecutor(options.cli)
   const command = adapter.command
   const args = host || nativeSession || key === 'codex-gui' ? [] : adapter.buildArgs(options, promptFile, promptText)
-  const invocation = host
+  let invocation = host
     ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./host-executor-client.ts', import.meta.url)), options.controlDir, options.runId])
     : nativeSession
       ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./codex-session.ts', import.meta.url))])
@@ -307,6 +308,16 @@ export const startExecutorJob = async (
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
     environment.CODEX_HOME = home
+  }
+  if (process.platform === 'darwin' && !host && !gui && options.codexSandbox !== 'external') {
+    const denies = workspaceSiblingDenies(options.workspace)
+    if (denies.length) {
+      const profile = path.join(outputDirectory, 'workspace.sb')
+      await writeFile(profile, macosWorkspaceProfile(denies, [
+        options.controlDir, options.binDir, options.toolsHome, outputDirectory,
+      ].filter((value): value is string => Boolean(value))), { mode: 0o600 })
+      invocation = { command: 'sandbox-exec', args: ['-f', profile, invocation.command, ...invocation.args] }
+    }
   }
   const child = spawn(invocation.command, invocation.args, {
     cwd: options.workspace,

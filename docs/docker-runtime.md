@@ -155,6 +155,8 @@ memory and host skill discovery are disabled for relay jobs. A conversation
 that already received unrelated global context must be replaced with a fresh
 native conversation; disabling injection does not remove prior turn content.
 This prevents automatic context sharing, not adversarial access by the host user.
+On macOS host jobs, Seatbelt also denies sibling directories of the bound
+workspace (a tenant farm), while leaving `$HOME` readable for the host CLI.
 
 ## Chat latency
 
