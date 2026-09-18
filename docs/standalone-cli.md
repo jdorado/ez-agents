@@ -32,8 +32,9 @@ Use `ez tools list --details` for generated installed-plugin descriptions, help 
 Add that instruction to its existing project instructions without replacing them.
 Use the absolute launcher, or prepend its bin directory to that session's PATH.
 Never overwrite another global `ez`; it may belong to a different installation.
-A company registry remains explicit even when invoked from a different directory.
-Other projects/accounts should use separate registries and private plugin state.
+A standalone company registry remains explicit even when invoked from a different
+directory. A relay-bound registry rejects calls from outside its workspace. Other
+projects/accounts must use separate registries and private plugin state.
 
 ## Install and verify a capability
 
@@ -54,9 +55,9 @@ Native client plugins/connectors are not converted into Ez plugins automatically
 
 A relay can coexist with CLI-only registries on the same machine. It retains its
 own pairing, single-writer queue, mind and plugin registry. Calling its existing
-bound launcher explicitly reuses that registry and its accounts; never initialize
-over it or silently select it from another workspace. Coordinate writes with its
-active jobs. Separate registries do not automatically share credentials or data.
+bound launcher must be run from the owning agent workspace. Never initialize over
+it or select it from another workspace. Coordinate writes with its active jobs.
+Separate registries do not automatically share credentials or data.
 
 Continuous monitoring requires a configured event consumer/relay and the plugin's
 supported watcher. CLI-only installation does not create background agent turns.

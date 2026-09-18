@@ -16,7 +16,7 @@ import { installedPluginVersions } from './software-status.js'
 import { processSnapshot } from './process-tree.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
-export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute> }
+export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]> }
 export type HostInstallation = { cli: string; agents: HostBinding[] }
 
 const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth

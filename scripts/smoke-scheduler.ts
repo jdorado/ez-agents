@@ -15,7 +15,8 @@ const duration=Number(process.argv[2] || 1860),cli=process.argv[3] || 'codex'
 const nativeGoal=process.argv[4]==='goal'
 if(!Number.isSafeInteger(duration) || duration<30)throw new Error('Duration must be at least 30 seconds')
 const root=await mkdtemp(join(tmpdir(),'ez-scheduler-smoke-')),workspace=join(root,'agent'),controlDir=join(root,'control')
-await initializeWorkspace(workspace)
+const purpose=join(root,'purpose.md');await writeFile(purpose,'Verify native scheduled work and responsive owner chat.\n')
+await initializeWorkspace(workspace,purpose)
 const control=new ControlStore(controlDir,1000),scheduler=new Scheduler(controlDir),runs=new RunStore(controlDir)
 await control.requestPairing(101,101);await control.approveOwner(101)
 const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset(cli))
