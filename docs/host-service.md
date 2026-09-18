@@ -21,6 +21,7 @@ Description=Ez family host CLI transport
 Type=simple
 Environment=EZ_DEPLOYMENT_DIR=/absolute/private/agents/family
 Environment=PATH=/absolute/node/bin:/absolute/package-manager/bin:/absolute/cli/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-%h/.config/ez/family-provider.env
 ExecStart=/absolute/ez-package/package/bin/ezenciel-agents-host
 Restart=on-failure
 RestartSec=5
@@ -28,6 +29,13 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 ```
+
+When the installation declares a custom Codex provider, create that private
+environment file with mode `0600` and only the referenced key, for example
+`OPENROUTER_API_KEY=...`. Provider and model selection do not belong in the
+environment; they remain agent runtime state. The supervisor forwards only keys
+explicitly named by the agent's provider binding, and the Codex subprocess still
+receives none of the relay or plugin secrets.
 
 ```sh
 systemctl --user daemon-reload

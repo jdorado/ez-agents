@@ -12,7 +12,14 @@ import { perform, environment, packageManager } from '../src/updates/runtime.mjs
 import { atomic, snapshot, compose } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
+import { providerEnvironment } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
+
+test('supervisor forwards only provider keys declared by the agent installation',()=>{
+ const host={agents:[{codexProviders:[{envKey:'OPENROUTER_API_KEY'}]}]};
+ assert.deepEqual(providerEnvironment(host,{OPENROUTER_API_KEY:'provider-secret',TELEGRAM_BOT_TOKEN:'relay-secret'}),{OPENROUTER_API_KEY:'provider-secret'});
+ assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey:'bad-key'}]}]},{}),/environment key/);
+});
 const contract=kind=>({protocol:1,kind,stateSchema:1,mainProtocol:1});
 function tar(entries) {
  const chunks=[];

@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve, dirname } from 'node:path'
 import { parseArgs } from 'node:util'
 import { executorKey } from './executor.js'
 import { fileURLToPath } from 'node:url'
+import { validateCodexProvider, type CodexProviderBinding } from './executor.js'
 
 // Recorded by the installing CLI once; agent creation inherits this binding.
 export const installationCli = async (root: string, installerCli?: string): Promise<string> => {
@@ -30,7 +31,7 @@ export const installationCli = async (root: string, installerCli?: string): Prom
 }
 
 export const createAgent = async (options: {
-  root: string; hostRoot: string; composeFile: string; name: string; purpose: string; token: string; cli?: string; image?: string
+  root: string; hostRoot: string; composeFile: string; name: string; purpose: string; token: string; cli?: string; image?: string; codexProvider?: CodexProviderBinding
 }) => {
   const { root, hostRoot, composeFile, name, purpose, token } = options
   if (!/^[a-z][a-z0-9-]{0,39}$/.test(name)) throw new Error('Use an agent name of 1–40 lowercase letters, digits or hyphens, starting with a letter.')
@@ -42,6 +43,8 @@ export const createAgent = async (options: {
   if(!/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(image))throw new Error('Invalid relay image reference')
   await mkdir(root, {recursive:true, mode:0o700})
   const cli = await installationCli(root, options.cli)
+  const codexProvider = options.codexProvider ? validateCodexProvider(options.codexProvider) : undefined
+  if (codexProvider && cli !== 'codex') throw new Error('A Codex provider requires the Codex installation CLI')
   const directory = join(root, name), deploymentDir = join(hostRoot, name)
   // Exclusive directory creation: a repeated name never overwrites another agent.
   await mkdir(directory, {mode:0o700})
@@ -65,7 +68,7 @@ export const createAgent = async (options: {
     await mkdir(join(directory,'mind'),{mode:0o700})
     await mkdir(join(directory,'control'),{mode:0o700})
     const agent = {name, project, deploymentDir, purpose:purpose.trim(), executor:cli}
-    const host = {cli,agents:[{name,workspace:join(deploymentDir,'mind'),controlDir:join(deploymentDir,'control'),binDir:join(dirname(composeFile),'bin')}]}
+    const host = {cli,agents:[{name,workspace:join(deploymentDir,'mind'),controlDir:join(deploymentDir,'control'),binDir:join(dirname(composeFile),'bin'),...(codexProvider?{codexProviders:[codexProvider]}:{})}]}
     await writeFile(join(directory,'host-executor.json'),JSON.stringify(host,null,2)+'\n',{mode:0o600,flag:'wx'})
     await writeFile(join(directory, 'agent.json'), JSON.stringify(agent,null,2)+'\n', {mode:0o600, flag:'wx'})
     return agent
@@ -84,13 +87,15 @@ export const listAgents = async (root: string) => {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const {values:v} = parseArgs({options:{name:{type:'string'},purpose:{type:'string'},'host-root':{type:'string'},'compose-file':{type:'string'},'relay-image':{type:'string'},list:{type:'boolean'},cli:{type:'string'},'register-cli':{type:'string'}}})
+    const {values:v} = parseArgs({options:{name:{type:'string'},purpose:{type:'string'},'host-root':{type:'string'},'compose-file':{type:'string'},'relay-image':{type:'string'},list:{type:'boolean'},cli:{type:'string'},'register-cli':{type:'string'},'codex-provider':{type:'string'},'codex-provider-name':{type:'string'},'codex-base-url':{type:'string'},'codex-env-key':{type:'string'},'codex-model':{type:'string',multiple:true}}})
     if (v['register-cli']) console.log(JSON.stringify({cli:await installationCli('/installations',v['register-cli'])}))
     else if (v.list) console.log(JSON.stringify(await listAgents('/installations')))
     else {
       let token=''
       for await (const chunk of process.stdin) { token+=chunk; if(token.length>512) throw new Error('Token input is too long.') }
-      console.log(JSON.stringify(await createAgent({root:'/installations',hostRoot:v['host-root']||'',composeFile:v['compose-file']||'',name:v.name||'',purpose:v.purpose||'',token:token.trim(),cli:v.cli||'',image:v['relay-image']})))
+      const providerValues=[v['codex-provider'],v['codex-provider-name'],v['codex-base-url'],v['codex-env-key'],v['codex-model']]
+      const codexProvider=providerValues.some(Boolean)?validateCodexProvider({id:v['codex-provider']||'',name:v['codex-provider-name']||v['codex-provider']||'',baseUrl:v['codex-base-url']||'',envKey:v['codex-env-key']||'',models:v['codex-model']||[]}):undefined
+      console.log(JSON.stringify(await createAgent({root:'/installations',hostRoot:v['host-root']||'',composeFile:v['compose-file']||'',name:v.name||'',purpose:v.purpose||'',token:token.trim(),cli:v.cli||'',image:v['relay-image'],codexProvider})))
     }
   } catch (error) { console.error((error as Error).message); process.exitCode=1 }
 }

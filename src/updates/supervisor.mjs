@@ -7,6 +7,12 @@ import { state, read, jobs, jobPath, check, missing } from './control.mjs';
 import { perform, environment } from './runtime.mjs';
 import { digest } from './artifact.mjs';
 
+export function providerEnvironment(host, environment=process.env) {
+  const names=(host.agents||[]).flatMap(agent=>(agent.codexProviders||[]).map(provider=>provider.envKey));
+  if(names.some(name=>typeof name!=='string'||!/^[A-Z][A-Z0-9_]{1,63}$/.test(name)))throw Error('Invalid Codex provider environment key');
+  return Object.fromEntries([...new Set(names)].flatMap(name=>environment[name]===undefined?[]:[[name,environment[name]]]));
+}
+
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function idle(control) {
   const host=await fs.readdir(path.join(control,'host-executor')).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
@@ -39,7 +45,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   };
   const startHost=async root=>{
     child=spawn(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'src/host-executor.ts'),path.join(deployment,'host-executor.json')],
-      {env:{...environment(),EZ_HOST_SUPERVISOR_PID:String(process.pid)},stdio:['ignore','inherit','inherit']});
+      {env:{...environment(),...providerEnvironment(host),EZ_HOST_SUPERVISOR_PID:String(process.pid)},stdio:['ignore','inherit','inherit']});
     let error;child.once('error',e=>{error=e;});
     for(let n=0;n<100;n++) {
       if(error||child.exitCode!==null)throw error||Error('Host transport failed to start');

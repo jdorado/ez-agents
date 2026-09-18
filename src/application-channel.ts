@@ -216,7 +216,7 @@ export class ApplicationChannel {
       const existing = await this.runs.get(id)
       if (existing) {
         await this.bindings.authorize(existing)
-        if (requestedPreset && (existing.execution?.preset.cli !== requestedPreset.cli || existing.execution?.preset.model !== requestedPreset.model || existing.execution?.preset.effort !== requestedPreset.effort)) throw new Error('Application request ID conflicts with prior AI selection')
+        if (requestedPreset && (existing.execution?.preset.cli !== requestedPreset.cli || existing.execution?.preset.provider !== requestedPreset.provider || existing.execution?.preset.model !== requestedPreset.model || existing.execution?.preset.effort !== requestedPreset.effort)) throw new Error('Application request ID conflicts with prior AI selection')
         if (Boolean(existing.application?.followTelegram) !== Boolean(value.followTelegram) || existing.application?.scope !== value.scope || existing.texts[0] !== value.text) throw new Error('Application request ID conflicts with prior scope or text')
         return existing // Retried context never replaces already admitted capabilities.
       }

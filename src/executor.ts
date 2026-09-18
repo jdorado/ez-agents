@@ -27,9 +27,19 @@ export type ExecutorOptions = {
   eventSource?: string
   model?: string
   effort?: string
+  provider?: string
   codexSandbox?: 'external'
   codexAutoCompactTokens?: number
+  codexProvider?: CodexProviderBinding
   onSession?: (id: string) => Promise<void>
+}
+
+export type CodexProviderBinding = {
+  id: string
+  name: string
+  baseUrl: string
+  envKey: string
+  models: string[]
 }
 
 const allowedEnvironmentKeys = [
@@ -75,7 +85,7 @@ export type CliAdapter = {
   command: string
   description: string
   buildArgs: (
-    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'codexAutoCompactTokens' | 'codexSandbox'> & { controlDir?: string },
+    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'codexAutoCompactTokens' | 'codexSandbox' | 'codexProvider'> & { controlDir?: string },
     promptFile: string,
     promptText: string,
   ) => string[]
@@ -87,6 +97,13 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
     buildArgs: (opts, _file, prompt) => {
       if (opts.codexSandbox !== undefined && opts.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
       const args = ['exec', '--skip-git-repo-check', '--json', '--sandbox', opts.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write', '--disable', 'memories', '--enable', 'skip_host_skill_discovery', '-c', 'approval_policy="never"']
+      if (opts.codexProvider) {
+        const provider = validateCodexProvider(opts.codexProvider)
+        args.push(
+          '-c', `model_provider=${JSON.stringify(provider.id)}`,
+          '-c', `model_providers.${provider.id}={name=${JSON.stringify(provider.name)},base_url=${JSON.stringify(provider.baseUrl)},env_key=${JSON.stringify(provider.envKey)},wire_api="responses",supports_websockets=false}`,
+        )
+      }
       const limit = opts.codexAutoCompactTokens
       if (limit !== undefined) {
         if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid Codex compaction token limit')
@@ -192,6 +209,24 @@ export const executorKey = (name?: string): string => {
   return resolvedKey
 }
 
+const providerToken = (value: unknown, label: string, pattern: RegExp, limit = 160): string => {
+  if (typeof value !== 'string' || value.length > limit || !pattern.test(value)) throw new Error(`Invalid Codex provider ${label}`)
+  return value
+}
+
+export const validateCodexProvider = (value: CodexProviderBinding): CodexProviderBinding => {
+  if (!value || typeof value !== 'object') throw new Error('Invalid Codex provider binding')
+  const id = providerToken(value.id, 'id', /^[a-z][a-z0-9_-]{0,31}$/)
+  const name = providerToken(value.name, 'name', /^[^\r\n\0]{1,80}$/, 80)
+  const envKey = providerToken(value.envKey, 'environment key', /^[A-Z][A-Z0-9_]{1,63}$/, 64)
+  let url: URL
+  try { url = new URL(value.baseUrl) } catch { throw new Error('Invalid Codex provider URL') }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Invalid Codex provider URL')
+  const models = value.models?.map(model => providerToken(model, 'model', /^[a-zA-Z0-9_./:-]{1,160}$/))
+  if (!models?.length || models.length > 64 || new Set(models).size !== models.length) throw new Error('Invalid Codex provider models')
+  return {id,name,baseUrl:url.toString().replace(/\/$/,''),envKey,models}
+}
+
 export const resolveExecutor = (name?: string): CliAdapter => EXECUTOR_REGISTRY[executorKey(name)]
 
 export const grokInvocation = (
@@ -268,6 +303,14 @@ export const startExecutorJob = async (
       ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./desktop-bridge.ts', import.meta.url))])
       : executorInvocation(command, args)
   const environment = executorJobEnv(options)
+  if (!host && !gui && key === 'codex' && options.provider && !options.codexProvider)
+    throw new Error('Selected Codex provider is not configured for this agent')
+  if (!host && !gui && key === 'codex' && options.codexProvider) {
+    const provider = validateCodexProvider(options.codexProvider)
+    const secret = process.env[provider.envKey]
+    if (!secret) throw new Error(`Missing Codex provider credential ${provider.envKey}`)
+    environment[provider.envKey] = secret
+  }
   if (!host && !gui && command === 'codex') {
     // Share the existing authentication, never the user's memory/config/sessions.
     const base = path.join(options.controlDir, 'cli', 'codex')
