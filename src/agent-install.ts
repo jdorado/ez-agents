@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises'
 import { isAbsolute, join, resolve, dirname } from 'node:path'
 import { parseArgs } from 'node:util'
 import { executorKey } from './executor.js'
+import { isolationTransport, parseIsolationClass, type IsolationClass } from './isolation.js'
 import { fileURLToPath } from 'node:url'
 
 // Recorded by the installing CLI once; agent creation inherits this binding.
@@ -30,9 +31,11 @@ export const installationCli = async (root: string, installerCli?: string): Prom
 }
 
 export const createAgent = async (options: {
-  root: string; hostRoot: string; composeFile: string; name: string; purpose: string; token: string; cli?: string; image?: string
+  root: string; hostRoot: string; composeFile: string; name: string; purpose: string; token: string; cli?: string; image?: string; isolation?: string
 }) => {
   const { root, hostRoot, composeFile, name, purpose, token } = options
+  const isolation: IsolationClass = parseIsolationClass(options.isolation?.trim() || 'isolated')
+  const transport = isolationTransport(isolation)
   if (!/^[a-z][a-z0-9-]{0,39}$/.test(name)) throw new Error('Use an agent name of 1–40 lowercase letters, digits or hyphens, starting with a letter.')
   if (![root, hostRoot, composeFile].every(p => isAbsolute(p) && !/[\r\n\0']/.test(p)))
     throw new Error('Installation paths must be absolute and contain no newline or single quote.')
@@ -54,6 +57,9 @@ export const createAgent = async (options: {
       EZ_RELAY_ENV_FILE: join(deploymentDir, 'relay.env'),
       EZ_AGENT_PURPOSE_FILE: join(deploymentDir, 'purpose.md'),
       EZ_EXECUTOR_CLI: cli,
+      EZ_ISOLATION: isolation,
+      EZ_EXECUTOR_TRANSPORT: transport,
+      ...(isolation === 'isolated' && cli === 'codex' ? { EZ_CODEX_SANDBOX: 'external' } : {}),
       EZ_AGENT_WORKSPACE: join(deploymentDir, 'mind'),
       EZ_CONTROL_DIR: join(deploymentDir, 'control'),
       EZ_WHATSAPP_IPC_VOLUME: `${project}-whatsapp-ipc`,
@@ -64,8 +70,8 @@ export const createAgent = async (options: {
     await writeFile(join(directory, 'purpose.md'), purpose.trim()+'\n', {mode:0o644, flag:'wx'})
     await mkdir(join(directory,'mind'),{mode:0o700})
     await mkdir(join(directory,'control'),{mode:0o700})
-    const agent = {name, project, deploymentDir, purpose:purpose.trim(), executor:cli}
-    const host = {cli,agents:[{name,workspace:join(deploymentDir,'mind'),controlDir:join(deploymentDir,'control'),binDir:join(dirname(composeFile),'bin')}]}
+    const agent = {name, project, deploymentDir, purpose:purpose.trim(), executor:cli, isolation}
+    const host = {cli,isolation,agents:[{name,workspace:join(deploymentDir,'mind'),controlDir:join(deploymentDir,'control'),binDir:join(dirname(composeFile),'bin')}]}
     await writeFile(join(directory,'host-executor.json'),JSON.stringify(host,null,2)+'\n',{mode:0o600,flag:'wx'})
     await writeFile(join(directory, 'agent.json'), JSON.stringify(agent,null,2)+'\n', {mode:0o600, flag:'wx'})
     return agent
@@ -84,13 +90,13 @@ export const listAgents = async (root: string) => {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const {values:v} = parseArgs({options:{name:{type:'string'},purpose:{type:'string'},'host-root':{type:'string'},'compose-file':{type:'string'},'relay-image':{type:'string'},list:{type:'boolean'},cli:{type:'string'},'register-cli':{type:'string'}}})
+    const {values:v} = parseArgs({options:{name:{type:'string'},purpose:{type:'string'},isolation:{type:'string'},'host-root':{type:'string'},'compose-file':{type:'string'},'relay-image':{type:'string'},list:{type:'boolean'},cli:{type:'string'},'register-cli':{type:'string'}}})
     if (v['register-cli']) console.log(JSON.stringify({cli:await installationCli('/installations',v['register-cli'])}))
     else if (v.list) console.log(JSON.stringify(await listAgents('/installations')))
     else {
       let token=''
       for await (const chunk of process.stdin) { token+=chunk; if(token.length>512) throw new Error('Token input is too long.') }
-      console.log(JSON.stringify(await createAgent({root:'/installations',hostRoot:v['host-root']||'',composeFile:v['compose-file']||'',name:v.name||'',purpose:v.purpose||'',token:token.trim(),cli:v.cli||'',image:v['relay-image']})))
+      console.log(JSON.stringify(await createAgent({root:'/installations',hostRoot:v['host-root']||'',composeFile:v['compose-file']||'',name:v.name||'',purpose:v.purpose||'',token:token.trim(),cli:v.cli||'',image:v['relay-image'],isolation:v.isolation})))
     }
   } catch (error) { console.error((error as Error).message); process.exitCode=1 }
 }

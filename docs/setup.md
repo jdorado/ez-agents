@@ -167,6 +167,19 @@ bin/ezenciel-agents-create --name family-shopper --purpose 'Help my family plan 
 export EZ_DEPLOYMENT_DIR="$EZ_AGENTS_HOME/family-shopper"
 ```
 
+Creation records an isolation class. The default is `isolated`: the native CLI
+runs inside the relay, which only has that agent's workspace and control mounts.
+Sibling host paths are absent (`ENOENT`), not merely unreadable. Pass
+`--isolation host-capable` only when the owner needs the installer UID (host
+browser, local git, host files). That class reuses the host CLI login and is
+not an OS tenant boundary. The class cannot be changed later by flipping
+Compose; recreate the agent.
+
+Isolated Codex sets `EZ_CODEX_SANDBOX=external` so Codex does not nest a sandbox
+inside the container. The CLI binary and its login must exist in the relay
+image; the host LaunchAgent is not started. Host-capable agents still need
+[host startup](host-service.md).
+
 Agent creation defaults to the CLI recorded when the initial package was
 installed. It needs no `--cli` argument. A later shell or different available CLI
 does not change that saved default. No installed-binary ranking or Grok fallback
@@ -175,8 +188,10 @@ The creator writes `host-executor.json`, private secrets, mind/control paths,
 purpose and unique plugin volume names. Duplicate names fail without overwriting.
 `ezenciel-agents-create --list` lists deployments without secrets.
 
-Before starting that host transport, initialize the main package’s built-in plugin manager. It runs on the host
+Before starting a host-capable transport, initialize the main package’s built-in plugin manager. It runs on the host
 for Docker access and adds no separate package or provider library. The packaged catalog is empty so the relay installs independently.
+Isolated agents still initialize this registry for plugin discovery; they do not
+start `ezenciel-agents-host`.
 Use its empty default catalog. Plugin preparation follows the verified Telegram
 handoff, not this step. Run:
 
@@ -202,16 +217,21 @@ the plugin skill through onboarding and verified use under that same request.
    Registry initialization itself does not connect accounts or start plugins.
 Never silently reuse a global `ez` from the old sandbox runtime.
 
-4. Follow [host startup templates](host-service.md). Register `bin/ezenciel-agents-host` with the host's native service manager,
-   binding `EZ_DEPLOYMENT_DIR` and the user's existing CLI PATH/HOME. On macOS use
-   a LaunchAgent; on Linux use a user service. Use the absolute Node/package
+4. Isolated agents skip host transport. Run `bin/ezenciel-agents-docker up -d --wait`
+   from the deployment directory. Do not register `ezenciel-agents-host` for them;
+   starting it fails closed.
+
+   Host-capable agents follow [host startup templates](host-service.md). Register
+   `bin/ezenciel-agents-host` with the host's native service manager, binding
+   `EZ_DEPLOYMENT_DIR` and the user's existing CLI PATH/HOME. On macOS use a
+   LaunchAgent; on Linux use a user service. Use the absolute Node/package
    paths. This generic transport is the only host execution bridge. Do not start
    another host relay or install another CLI. Verify its heartbeat, then run
    `bin/ezenciel-agents-docker up -d --wait`.
 
    `ezenciel-agents-setup service` is Docker-only startup: run it from the
    deployment directory containing `docker.env`. It starts the relay and does
-   not install or start the host-executor user service. Complete the host
+   not install or start the host-executor user service. Complete host-capable
    registration above separately.
 
 5. Ask the owner to message the exact bot. Verify the pending numeric identity,
@@ -224,8 +244,8 @@ Never silently reuse a global `ez` from the old sandbox runtime.
    stopped to verify repairs, then restore the poller; never replay uncertain
    user actions merely to test delivery.
 
-The main runtime is fully installer-owned: build it, register its host
-transport, bring its Compose project up, and verify restart persistence. Plugins
+The main runtime is fully installer-owned: build it, register host transport
+only for host-capable agents, bring its Compose project up, and verify restart persistence. Plugins
 are installed by the working Telegram agent when the owner requests their
 capability there; account onboarding and provider confirmation follow that request.
 Never use a missing plugin as a reason
@@ -239,8 +259,9 @@ messages or exposing tokens. Receipt evidence is historical: separately verify
 the current conversation and restart persistence before declaring setup complete.
 
 Purpose seeds SOUL.md once; future customization survives restart. Conversations,
-pairing, files and plugin accounts are separate. The existing host CLI login is
-shared, so this is not a security sandbox against other agents under that user.
+pairing, files and plugin accounts are separate. Isolated agents use the relay mount namespace as the filesystem boundary.
+Host-capable agents share the installer UID and CLI login; that class is not a
+security sandbox against other agents under that user.
 Plugins run in their own containers and own their authentication. Install and
 register them only for the requested agent. Never clone another agent's plugin
 credentials. See [runtime, migration and QA](docker-runtime.md).
@@ -256,7 +277,7 @@ default. Existing queued jobs retain their captured execution choice.
 | Symptom | Inspect and recover |
 |---|---|
 | Docker unavailable | Check engine and Compose, start the supported installation; complete any required OS consent. |
-| Bot stays silent | Check pending owner identity, relay health, host heartbeat and outbox; approve only the verified owner. |
+| Bot stays silent | Check pending owner identity, relay health, host heartbeat (host-capable only) and outbox; approve only the verified owner. |
 | CLI exits without reply | Inspect the actual tool result and delivery receipt; stdout is not Telegram output. |
 | Exit 73 | An existing writer holds this deployment; stop the exact duplicate, never delete the kernel lock. |
 | Plugin absent | Check the bound catalog and install/start the reviewed package explicitly; no plugin ships by default. |

@@ -49,7 +49,9 @@ export async function installationStatus(deployment) {
   const paired=Boolean(owner&&Number.isSafeInteger(owner.telegramUserId)&&owner.telegramUserId>0&&Number.isSafeInteger(owner.telegramChatId)&&(owner.kind==='group'?owner.telegramChatId<0:owner.kind===undefined&&owner.telegramChatId>0)&&Number.isFinite(Date.parse(owner.pairedAt)));
   const relay=await read(path.join(control,'heartbeat.json')).catch(absent),host=await read(path.join(control,'host-executor/heartbeat.json')).catch(absent);
   const fresh=(h,ms)=>Boolean(h&&Number.isFinite(h.at)&&h.at<=Date.now()+1000&&Date.now()-h.at<ms);
-  const runtimeReady=Boolean(relay?.polling&&fresh(relay,20000)&&fresh(host,15000));
+  let isolated=false;
+  try { isolated=(await read(path.join(deployment,'agent.json'))).isolation==='isolated'; } catch { isolated=false; }
+  const runtimeReady=Boolean(relay?.polling&&fresh(relay,20000)&&(isolated||fresh(host,15000)));
   let reply=null;
   if(paired)for(const name of await fs.readdir(path.join(control,'outbox')).catch(e=>{if(e.code==='ENOENT')return [];throw e;})) {
     if(!name.endsWith('.sent.json'))continue;

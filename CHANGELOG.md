@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Record an isolation class at agent creation. The default is `isolated`: the
+  native CLI runs in the relay (`EZ_EXECUTOR_TRANSPORT=local`). Pass
+  `--isolation host-capable` to reuse the installer UID and host CLI login.
+  Mismatched class and transport fail closed. Isolated Codex sets
+  `EZ_CODEX_SANDBOX=external`. Host transport is not started for isolated
+  agents. Unlabeled existing host transports stay host-capable.
+
 ## 0.1.0-beta.33
 
 - Allow compatible plugin updates to add commands to existing services, registering

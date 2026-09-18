@@ -8,6 +8,7 @@ import path from 'node:path'
 import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
 import { startExecutorJob, terminateJob, resolveExecutor, type ExecutorOptions } from './executor.js'
+import { parseIsolationClass, type IsolationClass } from './isolation.js'
 import { readModels, validateSelection } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
 import { taskWorkspace } from './task-workspace.js'
@@ -17,11 +18,13 @@ import { processSnapshot } from './process-tree.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
 export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute> }
-export type HostInstallation = { cli: string; agents: HostBinding[] }
+export type HostInstallation = { cli: string; isolation?: IsolationClass; agents: HostBinding[] }
 
 const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth
 
 export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {
+  if (installation.isolation !== undefined) parseIsolationClass(installation.isolation)
+  if (installation.isolation === 'isolated') throw new Error('Isolated agents run the native CLI in the relay; do not start host transport')
   resolveExecutor(installation.cli)
   if (new Set(installation.agents.map(a=>a.workspace)).size !== installation.agents.length ||
       new Set(installation.agents.map(a=>a.controlDir)).size !== installation.agents.length)

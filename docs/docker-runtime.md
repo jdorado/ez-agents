@@ -13,26 +13,33 @@ belongs to Ez packaging, not an application image or an engine-specific prompt.
 ## Agent binding
 
 Use [agent-led setup](setup.md). `ezenciel-agents-create` accepts a name, purpose,
+optional `--isolation isolated|host-capable` (default `isolated`),
 a bot token through stdin; the CLI defaults to the one recorded at package
 installation by `--register-cli <current-cli>`. It creates a private deployment
 with a unique Compose project, mind, control directory and secret file. Names
 cannot overwrite existing agents. `installation.json` keeps subsequent agents
 on the same CLI. Each agent gets its own purpose and native conversation IDs.
+`isolated` sets `EZ_EXECUTOR_TRANSPORT=local` and runs the native CLI in the
+relay. `host-capable` sets `host` and reuses the installer UID; unlabeled
+existing host transports stay host-capable so they are not flipped.
 
 `docker.env` contains explicit absolute paths, never token values:
 
 ```dotenv
 COMPOSE_PROJECT_NAME=ez-agent-family
 EZ_EXECUTOR_CLI=grok
+EZ_ISOLATION=isolated
+EZ_EXECUTOR_TRANSPORT=local
 EZ_AGENT_WORKSPACE=/absolute/private/agents/family/mind
 EZ_CONTROL_DIR=/absolute/private/agents/family/control
 EZ_RELAY_ENV_FILE=/absolute/private/agents/family/relay.env
 EZ_AGENT_PURPOSE_FILE=/absolute/private/agents/family/purpose.md
 ```
 
-The installing agent runs `ezenciel-agents-host` under the host's service manager
+Host-capable agents run `ezenciel-agents-host` under the host's service manager
 with `EZ_DEPLOYMENT_DIR` bound to that deployment. This small transport invokes
-the existing CLI; it is not a second relay or model loop. It reads requests from
+the existing CLI; it is not a second relay or model loop. Isolated agents do not
+start it. It reads requests from
 the agent's control directory, fixes cwd/control/tool paths from its installation
 binding, strips environment secrets, forwards native output and exit status, and
 propagates cancellation. Requests cannot select another executable. No network
@@ -41,9 +48,10 @@ is required. Host Node 22+ and the package dependencies run this transport.
 
 Mount mind and control at identical absolute paths in Docker and on the host,
 so incoming files, message attachments and CLI outputs need no path translation.
-Only that agent's directories are mounted into its relay. The host CLI reuses the existing login. Codex receives a private per-agent
+Only that agent's directories are mounted into its relay. Host-capable CLI reuses the existing login. Codex receives a private per-agent
 state home with linked authentication; global memory/configuration is excluded.
-This is not an OS security boundary between agents running as the same user.
+Host-capable is not an OS security boundary between agents running as the same user.
+Isolated agents use the relay mounts; sibling host paths are not present.
 Plugin setup also binds `toolsHome` in the host configuration. Codex receives
 write access to that registry and network access for the Docker client; the host
 rejects registries belonging to a different workspace. Restart the host worker
@@ -146,13 +154,16 @@ default. Existing queued jobs retain their captured execution choice.
 
 ## Codex context isolation
 
-The host Codex binary and existing login are reused, but each agent has its own
-`control/cli/codex` state directory. Only authentication is linked to the host
-login; global configuration, sessions and memories are not imported. Global
-memory and host skill discovery are disabled for relay jobs. A conversation
+Isolated agents run Codex in the relay with `EZ_CODEX_SANDBOX=external`. Auth
+belongs in that agent's `control/cli/codex`; do not import the host user's
+global store. Host-capable agents reuse the host Codex binary and login, with a
+per-agent `control/cli/codex` state directory. Only authentication is linked to
+the host login; global configuration, sessions and memories are not imported.
+Global memory and host skill discovery are disabled for relay jobs. A conversation
 that already received unrelated global context must be replaced with a fresh
 native conversation; disabling injection does not remove prior turn content.
-This prevents automatic context sharing, not adversarial access by the host user.
+Host-capable context isolation prevents automatic sharing, not adversarial access
+by the host user.
 
 ## Chat latency
 

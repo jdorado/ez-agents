@@ -1,7 +1,8 @@
 # Host transport startup
 
-Register one service per deployment after initializing its tools. Substitute the
-exact absolute paths below. Use the existing authenticated host user and include
+Register one service per **host-capable** deployment after initializing its tools.
+Isolated agents run the native CLI in the relay and must not start this service.
+Substitute the exact absolute paths below. Use the existing authenticated host user and include
 its Node 22+, pnpm (or Corepack), Docker and CLI directories in PATH. Resolve the
 actual installed launchers first; shell aliases and interactive shell startup
 files are not available to services. No bot token goes in these service files.

@@ -38,6 +38,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     const timer=setTimeout(()=>running.kill('SIGKILL'),10000);await closed;clearTimeout(timer);
   };
   const startHost=async root=>{
+    if(host.isolation==='isolated')return
     child=spawn(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'src/host-executor.ts'),path.join(deployment,'host-executor.json')],
       {env:{...environment(),EZ_HOST_SUPERVISOR_PID:String(process.pid)},stdio:['ignore','inherit','inherit']});
     let error;child.once('error',e=>{error=e;});
@@ -62,10 +63,11 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     const interrupted=(await jobs(home)).find(j=>j.status==='applying');
     if(interrupted){
       await atomic(pause,{id:interrupted.id});await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));await fs.rm(pause,{force:true});await notice(agent.controlDir,interrupted.id);}
-    if(!child)await startHost((await state(home)).config.packageRoot);
+    const isolated=host.isolation==='isolated'
+    if(!isolated && !child)await startHost((await state(home)).config.packageRoot);
     let nextCheck=0;
     while(!signal.aborted) {
-      if(child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
+      if(!isolated && child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
       const pending=(await jobs(home)).find(j=>j.status==='queued');
       if(pending) {
         await atomic(pause,{id:pending.id});
