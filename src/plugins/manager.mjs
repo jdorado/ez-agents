@@ -188,10 +188,49 @@ export function folderMounts(config, record) {
   }
   return mounts;
 }
-export async function checkFolders(config, record) {
+async function hostFolderRoots(config, record, home) {
+  const configuredHost = config.hostConfig ?? (typeof config.deploymentDir === 'string' && path.isAbsolute(config.deploymentDir) ? path.join(config.deploymentDir, 'host-executor.json') : undefined);
+  if (configuredHost === undefined) return null;
+  if (!home || typeof configuredHost !== 'string' || !path.isAbsolute(configuredHost)) throw Error('Invalid host folder binding');
+  home = realpathSync(home);
+  const hostConfig = realpathSync(configuredHost);
+  if (hostConfig !== configuredHost || path.basename(hostConfig) !== 'host-executor.json' || childOf(hostConfig, home))
+    throw Error('Host folder bindings require an external host config');
+  const host = JSON.parse(readFileSync(hostConfig, 'utf8'));
+  if (!host || typeof host !== 'object' || !Array.isArray(host.agents)) throw Error('Invalid host folder bindings');
+  const candidates = host.agents.filter(agent => agent && typeof agent === 'object' && typeof agent.toolsHome === 'string' && realpathSync(agent.toolsHome) === home);
+  if (candidates.length !== 1) throw Error('Host folder binding does not belong to this registry');
+  const agent = candidates[0], deployment = path.dirname(hostConfig);
+  if (typeof agent.workspace !== 'string' || typeof agent.controlDir !== 'string' ||
+      realpathSync(agent.workspace) !== config.workspace || realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
+      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir) ||
+      childOf(hostConfig, config.workspace) || childOf(hostConfig, realpathSync(agent.controlDir)))
+    throw Error('Invalid host folder binding deployment');
+  const configured = agent.pluginFolderRoots;
+  if (configured !== undefined && (!configured || typeof configured !== 'object' || Array.isArray(configured)))
+    throw Error('Invalid host folder roots');
+  for (const [plugin, roots] of Object.entries(configured || {})) {
+    id(plugin); strings(roots);
+    for (const root of roots) {
+      if (!path.isAbsolute(root) || root === '/' || realpathSync(root) !== root) throw Error('Invalid host folder root');
+      if (!((await fs.stat(root)).isDirectory())) throw Error('Invalid host folder root');
+    }
+  }
+  const roots = [config.workspace];
+  if (agent.sharedWorkspace !== undefined) {
+    if (typeof agent.sharedWorkspace !== 'string' || !path.isAbsolute(agent.sharedWorkspace)) throw Error('Invalid shared workspace folder root');
+    roots.push(realpathSync(agent.sharedWorkspace));
+  }
+  roots.push(...(configured?.[record.manifest.id] || []).map(root => realpathSync(root)));
+  return roots;
+}
+export async function checkFolders(config, record, home) {
+  const allowed = await hostFolderRoots(config, record, home);
   for (const { source } of folderMounts(config, record)) {
     if (await fs.realpath(source) !== source || !(await fs.stat(source)).isDirectory())
       throw Error('Folder source must remain an existing real directory');
+    if (allowed && !allowed.some(root => childOf(source, root)))
+      throw Error('Folder source is not granted to this agent');
   }
 }
 const childOf = (candidate, parent) => candidate === parent || candidate.startsWith(parent + path.sep);
@@ -346,7 +385,7 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     const record=r.plugins[r.commands[alias]],binding=record?.deployment.commands[alias];
     if(!binding||r.commands[alias]===exclude)throw Error('Unknown or unavailable registered CLI');
     if(revision!==undefined&&revision!==record.revision)throw Error('Plugin changed; discover again');
-    await checkFolders(config,record);
+    await checkFolders(config,record,home);
     const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
     await atomic(record.compose,await compose(config,record,secrets,home));
     const container=`${record.project}-call-${randomUUID()}`;
@@ -431,6 +470,10 @@ export async function main(args) {
   home=await fs.realpath(home);
   const config=await json(path.join(home,'config.json'));
   if(config.schemaVersion!==1 || !path.isAbsolute(config.workspace)) throw Error('Invalid binding');
+  if(config.hostConfig || config.deploymentDir) {
+    const cwd=await fs.realpath(process.cwd());
+    if(!childOf(cwd,config.workspace)) throw Error(`Registry belongs to ${config.workspace}; invoke its launcher only from that owning workspace`);
+  }
   const [group,action,...rest]=args;
   if(group==='status'){if(args.length!==1)throw Error('Use status without arguments');await registry(home);return emit(await (await import('../updates/status.mjs')).status(home));}
   if(group==='updates')return emit(await (await import('../updates/control.mjs')).command(home,args.slice(1)));
@@ -439,7 +482,7 @@ export async function main(args) {
     return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1),{publish:port,serve:true});
   }
   if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
@@ -490,7 +533,7 @@ export async function main(args) {
         const folders=(settings.folders?.[name] || []).filter(f => f.service !== service || f.target !== target);
         if(action === 'folder-bind') folders.push({service,source,target,...(writable ? {writable:true} : {})});
         settings.folders={...settings.folders,[name]:folders};
-        await checkFolders(settings,latest);
+        await checkFolders(settings,latest,home);
         const secrets=await json(path.join(home,'packages',name,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
         const generated=await compose(settings,latest,secrets,home);
         await atomic(path.join(home,'config.json'),settings);
@@ -506,7 +549,7 @@ export async function main(args) {
         const current = await registry(home), latest = current.plugins[name];
         if (latest?.revision !== record.revision) throw Error('Plugin changed during shared service request');
         const currentConfig=await json(path.join(home,'config.json'));
-        await checkFolders(currentConfig, latest);
+        await checkFolders(currentConfig, latest,home);
         const result = action === 'shared-enable' ? await sharedService(latest, key, 'enable', run) : { state: 'detached' };
         latest.sharedEnabled = [...new Set([...(latest.sharedEnabled || []).filter(k => k !== key), ...(action === 'shared-enable' ? [key] : [])])];
         const secrets = await json(path.join(home, 'packages', name, 'secrets.json')).catch(e => { if (e.code === 'ENOENT') return {}; throw e; });
@@ -534,7 +577,7 @@ export async function main(args) {
       const current=await registry(home);if(current.plugins[name]?.revision!==record.revision)throw Error('Plugin changed during lifecycle request');
       if(action==='start') {
         const currentConfig=await json(path.join(home,'config.json'));
-        await checkFolders(currentConfig,current.plugins[name]);
+        await checkFolders(currentConfig,current.plugins[name],home);
         const secrets=await json(path.join(home,'packages',name,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
         await atomic(record.compose,await compose(currentConfig,current.plugins[name],secrets,home));
       }
