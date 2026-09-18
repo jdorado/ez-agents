@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.34
+
+- Correct setup guidance for host-capable custom Codex providers and replace
+  stale pinned-beta installation guidance with current release records.
 
 - Record an isolation class at agent creation. The default is `isolated`: the
   native CLI runs in the relay (`EZ_EXECUTOR_TRANSPORT=local`). Pass
@@ -11,6 +14,13 @@
 - Install pinned Codex CLI `0.153.4` in the relay runtime image so isolated
   agents resolve `codex` on PATH. Isolated jobs keep auth in
   `control/cli/codex` and do not link the operator `~/.codex`.
+
+- Confine macOS host jobs to their bound workspace and prevent cross-agent
+  plugin registry access.
+- Support agent-scoped OpenRouter models through the native Codex engine and
+  start a new native session when the provider or model changes.
+- Resolve native CLIs from the host PATH, expose captured presets in application
+  run receipts, and seed one purpose-scoped AGENTS.md for new agents.
 
 ## 0.1.0-beta.33
 
