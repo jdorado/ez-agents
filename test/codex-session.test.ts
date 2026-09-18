@@ -43,7 +43,8 @@ if(q.method==='thread/goal/get'){
     child.stdin.write=((chunk:any,...args:any[])=>{try{const q=JSON.parse(String(chunk));if(q.method==='turn/start'){turnPrompt=q.params.input[0].text;turnPolicy=q.params.sandboxPolicy}requests.push(q.method);if(q.method==='thread/start'){threadConfig=q.params.config;threadSandbox=q.params.sandbox}}catch{};return (write as any)(chunk,...args)}) as typeof child.stdin.write
     return child
   }
-  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',additionalWorkspaces:['/agent/mind/work'],prompt,
+  const codexProvider=mode==='tool-goal'?{id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',envKey:'OPENROUTER_API_KEY',models:['open/model']}:undefined
+  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',additionalWorkspaces:['/agent/mind/work'],prompt,codexProvider,model:codexProvider?'open/model':undefined,
     ...(mode==='external'?{codexSandbox:'external' as const}:{})},{launch,emit:line=>output.push(line)})
   assert.equal(threadSandbox!,mode==='external'?'danger-full-access':'workspace-write')
   assert.deepEqual(turnPolicy,mode==='external'?{type:'externalSandbox',networkAccess:'enabled'}:undefined)
@@ -52,6 +53,10 @@ if(q.method==='thread/goal/get'){
   if(mode==='long-goal')assert.ok(prompt.length>4000)
   assert.ok(threadConfig['sandbox_workspace_write.writable_roots'].includes('/canonical'))
   assert.ok(threadConfig['sandbox_workspace_write.writable_roots'].includes('/agent/mind/work'))
+  if(codexProvider){
+    assert.equal(threadConfig.model_provider,'openrouter')
+    assert.deepEqual(threadConfig['model_providers.openrouter'],{name:'OpenRouter',base_url:'https://openrouter.ai/api/v1',env_key:'OPENROUTER_API_KEY',wire_api:'responses',supports_websockets:false})
+  }
   assert.equal(result,['external','plain','goal','long-goal','tool-goal'].includes(mode)?0:1)
   assert.equal(requests.filter(x=>x==='turn/start').length,1,'transport must not send goal continuation prompts')
   assert.equal(requests.filter(x=>x==='thread/goal/set').length,0)

@@ -4,6 +4,7 @@ import { RunStore } from './runs.js'
 import { startTaskExecutor } from './task-executor.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { mkdtemp, rm, writeFile, mkdir, symlink, readFile } from 'node:fs/promises'
+import { accessSync, constants as fsConstants } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -11,6 +12,7 @@ import { processSnapshot, matchingProcessIds } from './process-tree.js'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { DESKTOP_UNAVAILABLE } from './desktop-bridge.js'
+import { macosWorkspaceProfile, workspaceSiblingDenies } from './workspace-confine.js'
 
 export type ExecutorOptions = {
   repairEnabled?: boolean
@@ -28,9 +30,19 @@ export type ExecutorOptions = {
   eventSource?: string
   model?: string
   effort?: string
+  provider?: string
   codexSandbox?: 'external'
   codexAutoCompactTokens?: number
+  codexProvider?: CodexProviderBinding
   onSession?: (id: string) => Promise<void>
+}
+
+export type CodexProviderBinding = {
+  id: string
+  name: string
+  baseUrl: string
+  envKey: string
+  models: string[]
 }
 
 const allowedEnvironmentKeys = [
@@ -71,12 +83,27 @@ export const executorJobEnv = (
 
 export const grokJobEnv = executorJobEnv
 
+// Package binDir is Ez tools (ezenciel-agents-message). Native CLIs come from the
+// host PATH so one agent's wrapper cannot retarget another agent's CODEX_HOME.
+export const resolveHostCommand = (command: string, pathValue = process.env.PATH): string => {
+  if (!command || command.includes(path.sep) || command.includes('/')) return command
+  for (const directory of (pathValue ?? '').split(path.delimiter)) {
+    if (!directory) continue
+    const candidate = path.join(directory, command)
+    try {
+      accessSync(candidate, fsConstants.X_OK)
+      return candidate
+    } catch { /* try the next PATH entry */ }
+  }
+  throw new Error(`Native CLI ${command} is not executable on the host PATH`)
+}
+
 export type CliAdapter = {
   name: string
   command: string
   description: string
   buildArgs: (
-    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'additionalWorkspaces' | 'codexAutoCompactTokens' | 'codexSandbox'> & { controlDir?: string },
+    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'additionalWorkspaces' | 'codexAutoCompactTokens' | 'codexSandbox' | 'codexProvider'> & { controlDir?: string },
     promptFile: string,
     promptText: string,
   ) => string[]
@@ -88,6 +115,13 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
     buildArgs: (opts, _file, prompt) => {
       if (opts.codexSandbox !== undefined && opts.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
       const args = ['exec', '--skip-git-repo-check', '--json', '--sandbox', opts.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write', '--disable', 'memories', '--enable', 'skip_host_skill_discovery', '-c', 'approval_policy="never"']
+      if (opts.codexProvider) {
+        const provider = validateCodexProvider(opts.codexProvider)
+        args.push(
+          '-c', `model_provider=${JSON.stringify(provider.id)}`,
+          '-c', `model_providers.${provider.id}={name=${JSON.stringify(provider.name)},base_url=${JSON.stringify(provider.baseUrl)},env_key=${JSON.stringify(provider.envKey)},wire_api="responses",supports_websockets=false}`,
+        )
+      }
       const limit = opts.codexAutoCompactTokens
       if (limit !== undefined) {
         if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid Codex compaction token limit')
@@ -194,6 +228,32 @@ export const executorKey = (name?: string): string => {
   return resolvedKey
 }
 
+const providerToken = (value: unknown, label: string, pattern: RegExp, limit = 160): string => {
+  if (typeof value !== 'string' || value.length > limit || !pattern.test(value)) throw new Error(`Invalid Codex provider ${label}`)
+  return value
+}
+
+export const validateCodexProvider = (value: CodexProviderBinding): CodexProviderBinding => {
+  if (!value || typeof value !== 'object') throw new Error('Invalid Codex provider binding')
+  const id = providerToken(value.id, 'id', /^[a-z][a-z0-9_-]{0,31}$/)
+  const name = providerToken(value.name, 'name', /^[^\r\n\0]{1,80}$/, 80)
+  const envKey = validateCodexProviderEnvironmentKey(value.envKey)
+  let url: URL
+  try { url = new URL(value.baseUrl) } catch { throw new Error('Invalid Codex provider URL') }
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Invalid Codex provider URL')
+  const models = value.models?.map(model => providerToken(model, 'model', /^[a-zA-Z0-9_./:-]{1,160}$/))
+  if (!models?.length || models.length > 64 || new Set(models).size !== models.length) throw new Error('Invalid Codex provider models')
+  return {id,name,baseUrl:url.toString().replace(/\/$/,''),envKey,models}
+}
+
+export const validateCodexProviderEnvironmentKey = (value: unknown): string => {
+  const envKey = providerToken(value, 'environment key', /^[A-Z][A-Z0-9_]{1,63}$/, 64)
+  if (allowedEnvironmentKeys.includes(envKey as typeof allowedEnvironmentKeys[number]) || envKey === 'CODEX_HOME' || envKey === 'NODE_OPTIONS' ||
+      envKey.startsWith('EZ_') || envKey.startsWith('TELEGRAM_') || envKey.startsWith('PAGERDUTY_'))
+    throw new Error('Reserved Codex provider environment key')
+  return envKey
+}
+
 export const resolveExecutor = (name?: string): CliAdapter => EXECUTOR_REGISTRY[executorKey(name)]
 
 export const grokInvocation = (
@@ -261,15 +321,27 @@ export const startExecutorJob = async (
 
   const adapter = resolveExecutor(options.cli)
   const command = adapter.command
-  const args = host || nativeSession || key === 'codex-gui' ? [] : adapter.buildArgs(options, promptFile, promptText)
-  const invocation = host
+  const denies = process.platform === 'darwin' && !host && !gui && options.codexSandbox !== 'external'
+    ? workspaceSiblingDenies(options.workspace) : []
+  // Codex must not apply a nested Seatbelt; this process is already confined.
+  const launchOptions = denies.length && command === 'codex' ? { ...options, codexSandbox: 'external' as const } : options
+  const args = host || nativeSession || key === 'codex-gui' ? [] : adapter.buildArgs(launchOptions, promptFile, promptText)
+  let invocation = host
     ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./host-executor-client.ts', import.meta.url)), options.controlDir, options.runId])
     : nativeSession
       ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./codex-session.ts', import.meta.url))])
     : gui
       ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./desktop-bridge.ts', import.meta.url))])
-      : executorInvocation(command, args)
+      : executorInvocation(resolveHostCommand(command, executorEnvironment().PATH), args)
   const environment = executorJobEnv(options)
+  if (!host && !gui && key === 'codex' && options.provider && !options.codexProvider)
+    throw new Error('Selected Codex provider is not configured for this agent')
+  if (!host && !gui && key === 'codex' && options.codexProvider) {
+    const provider = validateCodexProvider(options.codexProvider)
+    const secret = process.env[provider.envKey]
+    if (!secret) throw new Error(`Missing Codex provider credential ${provider.envKey}`)
+    environment[provider.envKey] = secret
+  }
   if (!host && !gui && command === 'codex') {
     // Share the existing authentication, never the user's memory/config/sessions.
     const base = path.join(options.controlDir, 'cli', 'codex')
@@ -292,6 +364,14 @@ export const startExecutorJob = async (
     }
     environment.CODEX_HOME = home
   }
+  if (denies.length) {
+    const profile = path.join(outputDirectory, 'workspace.sb')
+    await writeFile(profile, macosWorkspaceProfile(denies, [
+      options.controlDir, options.binDir, options.toolsHome, options.sharedWorkspace,
+      ...(options.additionalWorkspaces ?? []), outputDirectory,
+    ].filter((value): value is string => Boolean(value))), { mode: 0o600 })
+    invocation = { command: 'sandbox-exec', args: ['-f', profile, invocation.command, ...invocation.args] }
+  }
   const child = spawn(invocation.command, invocation.args, {
     cwd: options.workspace,
     env: environment,
@@ -307,7 +387,7 @@ export const startExecutorJob = async (
   })
   child.stdin?.end(host
     ? JSON.stringify({texts,options:{...options,onSession:undefined,codexSandbox:undefined}})
-    : nativeSession ? JSON.stringify({...options,onSession:undefined,prompt:promptText})
+    : nativeSession ? JSON.stringify({...launchOptions,onSession:undefined,prompt:promptText})
     : gui ? JSON.stringify({prompt:promptText,options:{...options,onSession:undefined}})
     : ['codex', 'claude'].includes(key) ? promptText : undefined)
   const timeout = options.timeoutMs > 0 ? setTimeout(() => terminateJob(child), options.timeoutMs) : undefined

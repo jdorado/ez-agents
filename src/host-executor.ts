@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath }
 import path from 'node:path'
 import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
-import { startExecutorJob, terminateJob, resolveExecutor, type ExecutorOptions } from './executor.js'
+import { startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
 import { readModels, validateSelection } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
@@ -17,7 +17,7 @@ import { installedPluginVersions } from './software-status.js'
 import { processSnapshot } from './process-tree.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
-export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]> }
+export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]>; codexProviders?: CodexProviderBinding[] }
 export type HostInstallation = { cli: string; isolation?: IsolationClass; agents: HostBinding[] }
 
 const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth
@@ -34,10 +34,17 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
   const additionalWorkspaces = new Map<HostBinding, string[]>()
-  const catalog = (agent: HostBinding) => readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
+  const catalog = async (agent: HostBinding) => {
+    const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
+    const providers = (agent.codexProviders ?? []).map(validateCodexProvider)
+    const declared = providers.flatMap(provider => provider.models.map(model => ({cli:'codex',provider:provider.id,model,name:`${provider.name} · ${model}`.slice(0,80),efforts:[]})))
+    return [...discovered, ...declared]
+  }
   try {
     for (const agent of installation.agents) {
       if (![agent.workspace,agent.controlDir,agent.binDir].every(path.isAbsolute)) throw new Error('Host bindings require absolute paths')
+      const providers=(agent.codexProviders ?? []).map(validateCodexProvider)
+      if (new Set(providers.map(provider=>provider.id)).size !== providers.length) throw new Error('Codex provider IDs must be unique')
       if (agent.sharedWorkspace && !path.isAbsolute(agent.sharedWorkspace)) throw new Error('Shared workspace requires an absolute path')
       if (agent.sharedWorkspace) sharedWorkspaces.set(agent, await realpath(agent.sharedWorkspace))
       if (agent.additionalWorkspaces) {
@@ -132,10 +139,19 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               const opts=request.options as ExecutorOptions
               const cli = opts.cli || installation.cli
               resolveExecutor(cli)
-              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,model:opts.model,effort:opts.effort},await catalog(agent))
+              const provider = cli === 'codex' && opts.provider
+                ? (agent.codexProviders ?? []).map(validateCodexProvider).find(candidate=>candidate.id===opts.provider)
+                : undefined
+              if (opts.provider && !provider) throw new Error('Selected Codex provider is not installed for this agent')
+              const model = opts.model
+              if (provider && !model) throw new Error('Selected Codex provider requires a declared model')
+              if (provider && model && !provider.models.includes(model)) throw new Error('Selected model is not declared for this Codex provider')
+              if (!provider && model && (agent.codexProviders ?? []).some(binding=>binding.models.includes(model)))
+                throw new Error('Selected Codex provider is required for this model')
+              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},await catalog(agent))
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
-                sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model:opts.model,effort:opts.effort,codexAutoCompactTokens:opts.codexAutoCompactTokens}
+                sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider}
               job=await launch(request.texts,options)
               active.set(base,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})

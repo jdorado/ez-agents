@@ -105,10 +105,10 @@ export class ApplicationChannel {
     const owner = await this.sharedBinding(bindingId)
     const controls = this.options.aiControls
     if (!controls) throw new Error('Application controls unavailable')
-    const value = input as {action?: unknown; expectedSession?: unknown; sessionId?: unknown; presetId?: unknown; cli?: unknown; model?: unknown; effort?: unknown}
+    const value = input as {action?: unknown; expectedSession?: unknown; sessionId?: unknown; presetId?: unknown; cli?: unknown; provider?: unknown; model?: unknown; effort?: unknown}
     if (!value || !['new','switch','select','model'].includes(String(value.action)) ||
       !(value.expectedSession === null || (typeof value.expectedSession === 'string' && /^[a-f0-9-]{36}$/.test(value.expectedSession)))) throw new Error('Invalid application control request')
-    const fields = {new:[],switch:['sessionId'],select:['presetId'],model:['cli','model','effort']}[value.action as 'new'|'switch'|'select'|'model']!
+    const fields = {new:[],switch:['sessionId'],select:['presetId'],model:['cli','provider','model','effort']}[value.action as 'new'|'switch'|'select'|'model']!
     if (Object.keys(value).some(key => !['action','expectedSession',...fields].includes(key))) throw new Error('Invalid application control fields')
     const control = new ControlStore(this.options.controlDir, 900000)
     const expected = value.expectedSession as string | null
@@ -131,7 +131,7 @@ export class ApplicationChannel {
       await controls.select(preset, expected, guard)
     }
     if (value.action === 'model') {
-      const model = (await controls.catalog()).find(item => item.cli === value.cli && item.model === value.model)
+      const model = (await controls.catalog()).find(item => item.cli === value.cli && item.provider === value.provider && item.model === value.model)
       if (!model || (value.effort !== undefined && (typeof value.effort !== 'string' || !model.efforts.includes(value.effort)))) throw new Error('Invalid application model selection')
       await this.sharedBinding(bindingId)
       const preset = await controls.saveSelection(model, value.effort as string | undefined, guard)
@@ -160,10 +160,10 @@ export class ApplicationChannel {
     const owner = await this.sharedBinding(bindingId, false)
     const controls = this.options.aiControls
     if (!controls) throw new Error('Application controls unavailable')
-    const value = input as {action?:unknown; expectedSession?:unknown; presetId?:unknown; cli?:unknown; model?:unknown; effort?:unknown}
+    const value = input as {action?:unknown; expectedSession?:unknown; presetId?:unknown; cli?:unknown; provider?:unknown; model?:unknown; effort?:unknown}
     if (!value || !['new','select','model'].includes(String(value.action)) ||
       !(value.expectedSession===null || (typeof value.expectedSession==='string' && /^[a-f0-9-]{36}$/.test(value.expectedSession)))) throw new Error('Invalid application control request')
-    const fields = {new:[],select:['presetId'],model:['cli','model','effort']}[value.action as 'new'|'select'|'model']!
+    const fields = {new:[],select:['presetId'],model:['cli','provider','model','effort']}[value.action as 'new'|'select'|'model']!
     if (Object.keys(value).some(key=>!['action','expectedSession',...fields].includes(key))) throw new Error('Invalid application control fields')
     const hashedScope = applicationScope(bindingId,scope)
     const guard:ControlGuard = {owner,applicationScope:hashedScope,expectedSession:value.expectedSession as string|null,
@@ -180,7 +180,7 @@ export class ApplicationChannel {
       await controls.validate(preset)
     }
     if (value.action==='model') {
-      const model = (await controls.catalog()).find(item=>item.cli===value.cli && item.model===value.model)
+      const model = (await controls.catalog()).find(item=>item.cli===value.cli && item.provider===value.provider && item.model===value.model)
       if (!model || model.cli==='agy' || (value.effort!==undefined && (typeof value.effort!=='string' || !model.efforts.includes(value.effort)))) throw new Error('Invalid application model selection')
       preset = await controls.saveSelection(model,value.effort as string|undefined,guard)
     }
@@ -195,7 +195,7 @@ export class ApplicationChannel {
         if ('followTelegram' in rest) throw new Error('Invalid application request: choose one conversation option')
         input = {...rest, followTelegram: followOwner}
       }
-      const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; attachment?: { name?: unknown; data?: unknown }; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; followTelegram?: unknown; ai?: { cli?: unknown; model?: unknown; effort?: unknown } }
+      const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; attachment?: { name?: unknown; data?: unknown }; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; followTelegram?: unknown; ai?: { cli?: unknown; provider?: unknown; model?: unknown; effort?: unknown } }
       if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || (!value.text.trim() && value.attachment === undefined) || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','attachment','context','expectedNativeSessionId','activateTelegram','followTelegram','ai'].includes(key))) throw new Error('Invalid application request')
       if (value.expectedNativeSessionId !== undefined && (typeof value.expectedNativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(value.expectedNativeSessionId))) throw new Error('Invalid application native session assertion')
       if (value.activateTelegram !== undefined && typeof value.activateTelegram !== 'boolean') throw new Error('Invalid application Telegram activation')
@@ -204,7 +204,7 @@ export class ApplicationChannel {
       let requestedPreset: AiPreset | undefined
       if (value.ai !== undefined) {
         const candidate = { ...value.ai, id: 'application', name: 'Application selection' }
-        if (!value.ai || Object.keys(value.ai).some(key => !['cli', 'model', 'effort'].includes(key)) || !isPreset(candidate)) throw new Error('Invalid application AI selection')
+        if (!value.ai || Object.keys(value.ai).some(key => !['cli', 'provider', 'model', 'effort'].includes(key)) || !isPreset(candidate)) throw new Error('Invalid application AI selection')
         assertEffort(candidate.effort, candidate.model, candidate.cli)
         requestedPreset = candidate
       }
@@ -227,7 +227,7 @@ export class ApplicationChannel {
       const existing = await this.runs.get(id)
       if (existing) {
         await this.bindings.authorize(existing)
-        if (requestedPreset && (existing.execution?.preset.cli !== requestedPreset.cli || existing.execution?.preset.model !== requestedPreset.model || existing.execution?.preset.effort !== requestedPreset.effort)) throw new Error('Application request ID conflicts with prior AI selection')
+        if (requestedPreset && (existing.execution?.preset.cli !== requestedPreset.cli || existing.execution?.preset.provider !== requestedPreset.provider || existing.execution?.preset.model !== requestedPreset.model || existing.execution?.preset.effort !== requestedPreset.effort)) throw new Error('Application request ID conflicts with prior AI selection')
         if (Boolean(existing.application?.followTelegram) !== Boolean(value.followTelegram) || existing.application?.scope !== value.scope || (existing.application?.inputText ?? existing.texts[0]) !== value.text || existing.application?.attachmentHash !== attachmentHash) throw new Error('Application request ID conflicts with prior scope or text')
         return existing // Retried context never replaces already admitted capabilities.
       }

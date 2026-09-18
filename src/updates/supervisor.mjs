@@ -7,6 +7,18 @@ import { state, read, jobs, jobPath, check, missing } from './control.mjs';
 import { perform, environment } from './runtime.mjs';
 import { digest } from './artifact.mjs';
 
+const reservedProviderKeys=new Set(['HOME','LANG','LC_ALL','LOGNAME','PATH','SHELL','TERM','TMPDIR','USER','CODEX_HOME','NODE_OPTIONS']);
+const providerEnvironmentKey=value=>{
+  if(typeof value!=='string'||value.length>64||!/^[A-Z][A-Z0-9_]{1,63}$/.test(value))throw Error('Invalid Codex provider environment key');
+  if(reservedProviderKeys.has(value)||value.startsWith('EZ_')||value.startsWith('TELEGRAM_')||value.startsWith('PAGERDUTY_'))throw Error('Reserved Codex provider environment key');
+  return value;
+};
+
+export function providerEnvironment(host, environment=process.env) {
+  const names=(host.agents||[]).flatMap(agent=>(agent.codexProviders||[]).map(provider=>providerEnvironmentKey(provider.envKey)));
+  return Object.fromEntries([...new Set(names)].flatMap(name=>environment[name]===undefined?[]:[[name,environment[name]]]));
+}
+
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function idle(control) {
   const host=await fs.readdir(path.join(control,'host-executor')).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
@@ -40,7 +52,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   const startHost=async root=>{
     if(host.isolation==='isolated')return
     child=spawn(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'src/host-executor.ts'),path.join(deployment,'host-executor.json')],
-      {env:{...environment(),EZ_HOST_SUPERVISOR_PID:String(process.pid)},stdio:['ignore','inherit','inherit']});
+      {env:{...environment(),...providerEnvironment(host),EZ_HOST_SUPERVISOR_PID:String(process.pid)},stdio:['ignore','inherit','inherit']});
     let error;child.once('error',e=>{error=e;});
     for(let n=0;n<100;n++) {
       if(error||child.exitCode!==null)throw error||Error('Host transport failed to start');

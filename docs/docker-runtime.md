@@ -157,13 +157,18 @@ default. Existing queued jobs retain their captured execution choice.
 Isolated agents run Codex in the relay with `EZ_CODEX_SANDBOX=external`. Auth
 belongs in that agent's `control/cli/codex`; do not import the host user's
 global store. Host-capable agents reuse the host Codex binary and login, with a
-per-agent `control/cli/codex` state directory. Only authentication is linked to
-the host login; global configuration, sessions and memories are not imported.
-Global memory and host skill discovery are disabled for relay jobs. A conversation
+`control/cli/codex` state directory. The native CLI is resolved from the host
+PATH, not the package `binDir`, so a shared runtime or one agent's wrapper cannot
+retarget another agent's `CODEX_HOME`. Only authentication is linked to the host
+login; global configuration, sessions and memories are not imported. Global
+memory and host skill discovery are disabled for relay jobs. A conversation
 that already received unrelated global context must be replaced with a fresh
 native conversation; disabling injection does not remove prior turn content.
-Host-capable context isolation prevents automatic sharing, not adversarial access
-by the host user.
+This prevents automatic context sharing, not adversarial access by the host user.
+On macOS host jobs, Seatbelt also denies sibling directories of the bound
+workspace (a tenant farm), while allowing explicitly shared and additional
+workspace grants and leaving `$HOME` readable for the host CLI.
+Codex then uses `danger-full-access` so it does not apply a nested Seatbelt.
 
 ## Chat latency
 
