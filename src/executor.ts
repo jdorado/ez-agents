@@ -221,6 +221,9 @@ export const validateCodexProvider = (value: CodexProviderBinding): CodexProvide
   const id = providerToken(value.id, 'id', /^[a-z][a-z0-9_-]{0,31}$/)
   const name = providerToken(value.name, 'name', /^[^\r\n\0]{1,80}$/, 80)
   const envKey = providerToken(value.envKey, 'environment key', /^[A-Z][A-Z0-9_]{1,63}$/, 64)
+  if (allowedEnvironmentKeys.includes(envKey as typeof allowedEnvironmentKeys[number]) || envKey === 'CODEX_HOME' || envKey === 'NODE_OPTIONS' ||
+      envKey.startsWith('EZ_') || envKey.startsWith('TELEGRAM_') || envKey.startsWith('PAGERDUTY_'))
+    throw new Error('Reserved Codex provider environment key')
   let url: URL
   try { url = new URL(value.baseUrl) } catch { throw new Error('Invalid Codex provider URL') }
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Invalid Codex provider URL')

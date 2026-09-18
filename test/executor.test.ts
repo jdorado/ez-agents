@@ -166,6 +166,8 @@ test('Codex custom providers use declared runtime state and an environment key r
   assert.ok(args.includes('google/gemini-3.8-flash'))
   assert.equal(JSON.stringify(args).includes('provider-secret'),false)
   assert.throws(()=>validateCodexProvider({...provider,envKey:'TELEGRAM-BOT'}),/environment key/)
+  for (const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN','PAGERDUTY_ROUTING_KEY'])
+    assert.throws(()=>validateCodexProvider({...provider,envKey}),/Reserved/)
   assert.throws(()=>validateCodexProvider({...provider,models:[]}),/provider models/)
 })
 
