@@ -56,7 +56,7 @@ test('Telegram replies are split within the configured message limit', () => {
 
 test('native CLIs resolve from the host PATH, not a relative package name', () => {
   assert.equal(resolveHostCommand('/usr/bin/codex'), '/usr/bin/codex')
-  assert.equal(resolveHostCommand('missing-cli-xyz', '/usr/bin'), 'missing-cli-xyz')
+  assert.throws(() => resolveHostCommand('missing-cli-xyz', '/usr/bin'), /not executable on the host PATH/)
 })
 
 test('the executor receives a deliberately small environment', () => {
