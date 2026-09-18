@@ -13,7 +13,7 @@ test('owner, resumed and native scheduled subprocesses receive literal input and
  const root=await mkdtemp(path.join(tmpdir(),'ez-literal-'))
  t.after(()=>rm(root,{recursive:true,force:true}))
  const bin=path.join(root,'bin'),workspace=path.join(root,'mind'),controlDir=path.join(root,'control')
- await mkdir(bin);await initializeWorkspace(workspace)
+ await mkdir(bin);const purpose=path.join(root,'purpose.md');await writeFile(purpose,'Fixture agent\n');await initializeWorkspace(workspace,purpose)
  const fixture=`#!${process.execPath}
 const fs=require('fs'), args=process.argv.slice(2);
 const capture=prompt=>fs.writeFileSync('capture.json',JSON.stringify({prompt,args,env:{run:process.env.EZ_RUN_ID,control:process.env.EZ_CONTROL_DIR,repair:process.env.EZ_REPAIR_ENABLED,secret:process.env.TELEGRAM_BOT_TOKEN}}));

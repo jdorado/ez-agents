@@ -19,18 +19,11 @@ const runNode = (code: string, cwd: string) => execFileAsync(process.execPath, [
   '--import', tsxLoaderPath, '--input-type=module', '-e', code,
 ], { cwd, encoding: 'utf8' })
 
-test('shared guidance makes direct owner chat replies a native transport action', () => {
+test('shared guidance stays compact and preserves native engine ownership', () => {
   const guidance = agentGuidance()
-  assert.match(guidance, /Reply to direct owner messages through `ezenciel-agents-message`/)
-  assert.match(guidance, /unchanged scheduled\nmonitoring stays quiet/)
-})
-
-test('shared guidance completes authorized contribution and release loops', () => {
-  const guidance = agentGuidance()
-  assert.match(guidance, /independent final-head review, required CI and\napplicable QA/)
-  assert.match(guidance, /mandate includes merge\nor release authority, then merge; release authority includes the merge needed for\nthe release. Otherwise leave the reviewed PR ready and state the remaining\nauthority/)
-  assert.match(guidance, /immutable\nartifact publication, the repository's reviewed GitHub publisher, registry\nreadback/)
-  assert.match(guidance, /Local QA,\ndiagnostics, auth-only work and deployment remain separate authority boundaries/)
+  assert.match(guidance, /native engine owns reasoning, sessions, context, goals and tool choice/)
+  assert.match(guidance, /ezenciel-agents-message/)
+  assert.ok(Buffer.byteLength(guidance) < 1000)
 })
 
 test('package guidance resolution ignores a workspace shadow file', async () => {
@@ -56,7 +49,10 @@ test('workspace initialization preserves a customized AGENTS.md', async () => {
   const root = path.join(tmpdir(), `ez-guidance-workspace-${randomUUID()}`)
   const workspace = path.join(root, 'agent')
   try {
-    await initializeWorkspace(workspace)
+    await mkdir(root, { recursive: true })
+    const purpose = path.join(root, 'purpose.md')
+    await writeFile(purpose, 'Fixture agent\n')
+    await initializeWorkspace(workspace, purpose)
     const custom = '# Workspace-specific purpose\nKeep this local guidance unchanged.\n'
     await writeFile(path.join(workspace, 'AGENTS.md'), custom)
     await initializeWorkspace(workspace)

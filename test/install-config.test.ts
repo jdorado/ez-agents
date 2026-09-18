@@ -14,8 +14,10 @@ test('configure preserves custom paths and unknown settings, keeps token private
   const root = await mkdtemp(path.join(tmpdir(), 'ez-configure-'))
   try {
     await writeFile(path.join(root, '.env'), 'EZ_AGENT_WORKSPACE="my mind"\nEZ_CONTROL_DIR="private control"\nEXTRA="keep me"\n')
+    const purpose = path.join(root, 'purpose.md')
+    await writeFile(purpose, 'Configured assistant\n')
     const token = '123456789:' + 'a'.repeat(30)
-    const result = await configureInstallation(root, 'codex', token)
+    const result = await configureInstallation(root, 'codex', token, purpose)
     assert.equal(result.tokenConfigured, true)
     assert.equal(JSON.stringify(result).includes(token), false)
     const env = parseEnv(await readFile(result.envFile, 'utf8'))
@@ -24,12 +26,12 @@ test('configure preserves custom paths and unknown settings, keeps token private
     assert.equal(env.EZ_AGENT_WORKSPACE, path.join(root, 'my mind'))
     assert.equal((await stat(result.envFile)).mode & 0o777, 0o600)
     assert.equal(await readActiveExecutor(result.envFile), 'codex')
-    const soul = path.join(result.workspace, 'SOUL.md')
-    await writeFile(soul, 'Customized purpose')
+    const agents = path.join(result.workspace, 'AGENTS.md')
+    await writeFile(agents, 'Customized purpose')
     const repeated = await configureInstallation(root, 'codex')
     assert.deepEqual(repeated.created, [])
     assert.equal(repeated.tokenConfigured, true)
-    assert.equal(await readFile(soul, 'utf8'), 'Customized purpose')
+    assert.match(await readFile(agents, 'utf8'), /Customized purpose/)
     await assert.rejects(stat(result.controlDir), { code: 'ENOENT' }) // No control/owner mutation.
   } finally { await rm(root, { recursive: true, force: true }) }
 })
@@ -56,12 +58,21 @@ test('packaged configure accepts token through stdin without echo or extra initi
   const root = await mkdtemp(path.join(tmpdir(), 'ez-configure-cli-'))
   try {
     const token = '123456789:' + 'b'.repeat(30)
+    const purpose = path.join(root, 'purpose.md')
+    await writeFile(purpose, 'Packaged assistant\n')
     const bin = fileURLToPath(new URL('../bin/ezenciel-agents-setup.mjs', import.meta.url))
-    const result = spawnSync(process.execPath, [bin, 'configure', 'codex', '--token-stdin'], { cwd: root, input: token, encoding: 'utf8', timeout: 10000 })
+    const result = spawnSync(process.execPath, [bin, 'configure', 'codex', '--purpose-file', purpose, '--token-stdin'], { cwd: root, input: token, encoding: 'utf8', timeout: 10000 })
     assert.equal(result.status, 0, result.stderr)
     assert.equal((result.stdout + result.stderr).includes(token), false)
-    assert.equal(JSON.parse(result.stdout).created.length, 3)
+    assert.deepEqual(JSON.parse(result.stdout).created, ['AGENTS.md'])
     assert.equal(parseEnv(await readFile(path.join(root, '.env'), 'utf8')).TELEGRAM_BOT_TOKEN, token)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('fresh configure refuses to invent a generic purpose', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-configure-purpose-'))
+  try {
+    await assert.rejects(configureInstallation(root, 'codex'), /purpose file is required/)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

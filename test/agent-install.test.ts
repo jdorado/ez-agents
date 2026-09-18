@@ -31,6 +31,7 @@ test('new agents receive independent projects, secrets and plugin bindings; dupl
     assert.equal((await readFile(join(root,'family/relay.env'),'utf8')).includes(base.token),true)
     await assert.rejects(createAgent({...base,name:'../family'}),/agent name/)
     await assert.rejects(createAgent({...base,name:'bad',token:'do-not-echo'}),e=>!String(e).includes('do-not-echo'))
+    await assert.rejects(createAgent({...base,name:'verbose',purpose:'x'.repeat(2001)}),/concise purpose/)
   } finally { await rm(root,{recursive:true,force:true}) }
 })
 

@@ -78,10 +78,10 @@ test('pause, edit, removal, owner revocation, corrupt records and traversal fail
 })
 test('task workspaces are distinct and cannot escape through symlinks',async t=>{
  const f=await fixture(t)
- await writeFile(join(f.dir,'SOUL.md'),'Owner context')
+ await writeFile(join(f.dir,'private.md'),'Owner context')
  const first=await taskWorkspace(f.dir,'r_one'),second=await taskWorkspace(f.dir,'r_two')
  assert.notEqual(first,second)
- await assert.rejects(readFile(join(first,'SOUL.md'),'utf8'),{code:'ENOENT'})
+ await assert.rejects(readFile(join(first,'private.md'),'utf8'),{code:'ENOENT'})
  await assert.rejects(readFile(join(first,'AGENTS.md'),'utf8'),{code:'ENOENT'})
  await assert.rejects(taskWorkspace(f.dir,'../escape'))
  const other=join(f.dir,'other');await mkdir(other)

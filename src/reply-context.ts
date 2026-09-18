@@ -20,7 +20,6 @@ export async function ownerConversationContext(controlDir: string, run: RunRecor
       try { const item = JSON.parse(await readFile(join(controlDir, 'outbox', file), 'utf8')); if (item.chatId === run.chatId && recentResults.some(r => r.id === item.runId)) messages.push({ runId: item.runId, text: item.text, createdAt: item.createdAt }) } catch {}
     }
     return { request: run.texts, selectedAI: run.execution?.preset, recent: recent.map(r => ({ id: r.id, texts: r.texts.join('\n').slice(-1600), status: r.status })), replies: messages.sort((a,b) => String(a.createdAt).localeCompare(String(b.createdAt))).slice(-8).map(m => ({...m,text:String(m.text || '').slice(-2400)})),
-      agent: workspace ? await snapshot(join(workspace, 'SOUL.md')) : undefined, owner: workspace ? await snapshot(join(workspace, 'USER.md')) : undefined,
       work: await Promise.all(active.map(async r => ({ id: r.id, name: r.scheduled?.id, status: r.status, startedAt: r.startedAt, endedAt: r.endedAt,
         request: r.texts.join('\n').slice(0,800), exitCode: r.exitCode, failureReason: r.failureReason, interrupted: r.interrupted,
         hostStarted: await snapshot(join(controlDir, 'host-executor', r.id + '.process.json')) ? true : await snapshot(join(controlDir, 'host-executor', r.id + '.request.json')) ? false : undefined,
