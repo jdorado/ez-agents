@@ -15,12 +15,14 @@ import { initialPreset } from '../src/ai.js'
 import { createRelay } from '../src/index.js'
 import { TelegramSource } from '../src/telegram-source.js'
 import { packageVersion } from '../src/version.js'
+import { initializeWorkspace } from '../src/workspace.js'
 import type { Update } from 'grammy/types'
 const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
 // This integration test starts subprocesses, persists their receipts, and invokes
 // the schedule CLI. Give a busy CI worker time to settle without changing the
 // production recovery deadline.
 const until=async(check:()=>Promise<boolean>,timeoutMs=15_000)=>{const deadline=Date.now()+timeoutMs;while(!(await check())){if(Date.now()>=deadline)throw new Error(`Timed out after ${timeoutMs}ms`);await new Promise(r=>setTimeout(r,20))}}
+const seedWorkspace=async(dir:string)=>{const purpose=join(dir,'purpose.md');await writeFile(purpose,'Fixture relay agent\n');await initializeWorkspace(dir,purpose)}
 
 test('failure evidence is bounded and redacts configured credentials, headers, tokens, URLs and keys',()=>{
  const token='123456789:abcdefghijklmnopqrstuvwxyz123456789'
@@ -142,6 +144,7 @@ test('relay shutdown waits for executor cleanup and final run state', async () =
 
 test('a fresh relay initializes its bot identity before polling', async () => {
  const dir=await mkdtemp(join(tmpdir(),'ez-cold-start-'))
+ await seedWorkspace(dir)
  const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{throw new Error('No executor expected')})
  const methods:string[]=[]
  relay.bot.api.config.use(async(_prev,method,_payload,signal)=>{
@@ -165,6 +168,7 @@ test('a fresh relay initializes its bot identity before polling', async () => {
 
 for (const cleanupFails of [false,true]) test(`polling conflict preserves work until an explicit shutdown (cleanup fails: ${cleanupFails})`, async t => {
  const dir=await mkdtemp(join(tmpdir(),'ez-polling-conflict-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
+ await seedWorkspace(dir)
  let release!:()=>void,entered!:()=>void,releaseDelivery!:()=>void,sending!:()=>void,child:ReturnType<typeof spawn>|undefined,polls=0
  const gate=new Promise<void>(resolve=>{release=resolve}),cleaning=new Promise<void>(resolve=>{entered=resolve})
  const deliveryGate=new Promise<void>(resolve=>{releaseDelivery=resolve}),deliveryStarted=new Promise<void>(resolve=>{sending=resolve})
@@ -285,6 +289,7 @@ test('group members can inspect failures and wake review without exposing other 
 
 for (const failure of [400,401,503,'programming'] as const) test(`setup failure ${failure} retries only transient errors`,async t=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-setup-failure-'))
+ await seedWorkspace(dir)
  const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{throw Error('No executor expected')})
  let commands=0,polls=0
  relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
@@ -310,6 +315,7 @@ for (const failure of [400,401,503,'programming'] as const) test(`setup failure 
 
 test('shutdown aborts a pending bot initialization without starting polling',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-init-stop-'))
+ await seedWorkspace(dir)
  const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{throw Error('No executor expected')})
  let initSignal:Parameters<typeof relay.bot.init>[0],polls=0
  relay.bot.api.config.use(async(_prev,method,_payload,signal)=>{

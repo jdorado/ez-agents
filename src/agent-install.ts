@@ -34,17 +34,20 @@ export const createAgent = async (options: {
   root: string; hostRoot: string; composeFile: string; name: string; purpose: string; token: string; cli?: string; image?: string; isolation?: string
 }) => {
   const { root, hostRoot, composeFile, name, purpose, token } = options
-  const isolation: IsolationClass = parseIsolationClass(options.isolation?.trim() || 'isolated')
-  const transport = isolationTransport(isolation)
+  const requestedIsolation = options.isolation?.trim()
+  if (requestedIsolation) parseIsolationClass(requestedIsolation)
   if (!/^[a-z][a-z0-9-]{0,39}$/.test(name)) throw new Error('Use an agent name of 1–40 lowercase letters, digits or hyphens, starting with a letter.')
   if (![root, hostRoot, composeFile].every(p => isAbsolute(p) && !/[\r\n\0']/.test(p)))
     throw new Error('Installation paths must be absolute and contain no newline or single quote.')
-  if (!purpose.trim() || purpose.length > 12000) throw new Error('Supply a purpose of 1–12000 characters.')
+  if (!purpose.trim() || purpose.length > 2000) throw new Error('Supply a concise purpose of 1–2000 characters.')
   if (!/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(token)) throw new Error('Supply the BotFather token through stdin.')
   const image=options.image||'ezenciel-agents:local'
   if(!/^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(image))throw new Error('Invalid relay image reference')
   await mkdir(root, {recursive:true, mode:0o700})
   const cli = await installationCli(root, options.cli)
+  const isolation: IsolationClass = requestedIsolation ? parseIsolationClass(requestedIsolation) : cli === 'codex' ? 'isolated' : 'host-capable'
+  if (isolation === 'isolated' && cli !== 'codex') throw new Error(`Isolated execution is unavailable for ${cli}; use host-capable isolation`)
+  const transport = isolationTransport(isolation)
   const directory = join(root, name), deploymentDir = join(hostRoot, name)
   // Exclusive directory creation: a repeated name never overwrites another agent.
   await mkdir(directory, {mode:0o700})
