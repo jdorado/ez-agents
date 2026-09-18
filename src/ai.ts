@@ -6,26 +6,26 @@ import { join, delimiter } from 'node:path'
 import { executorKey, resolveExecutor } from './executor.js'
 import { desktopCodexPath } from './desktop-bridge.js'
 
-export type AiPreset = { id: string; name: string; cli: string; model?: string; effort?: string }
+export type AiPreset = { id: string; name: string; cli: string; provider?: string; model?: string; effort?: string }
 export type ExecutionChoice = { sessionId: string; preset: AiPreset }
-export type ModelChoice = { cli: string; model?: string; name: string; efforts: string[] }
+export type ModelChoice = { cli: string; provider?: string; model?: string; name: string; efforts: string[] }
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
 export const isPreset = (p: unknown): p is AiPreset => {
   if (!p || typeof p !== 'object') return false
   const v = p as AiPreset
   return safe(v.id) && typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 80 &&
     ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy'].includes(v.cli) &&
-    (v.model === undefined || safe(v.model)) && (v.effort === undefined || safe(v.effort))
+    (v.provider === undefined || safe(v.provider)) && (v.model === undefined || safe(v.model)) && (v.effort === undefined || safe(v.effort))
 }
 export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
   const c = v as ExecutionChoice | undefined
   return Boolean(c && /^[0-9a-f-]{36}$/i.test(c.sessionId) && isPreset(c.preset))
 }
-export const presetLabel = (p: AiPreset) => `${p.cli} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
+export const presetLabel = (p: AiPreset) => `${p.cli}${p.provider ? ` (${p.provider})` : ''} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
 // The seed delegates model selection to the native client. Project its resolved
 // settings for status without pinning future conversations to that snapshot.
 export const statusPreset = (preset: AiPreset, discovered: AiPreset[]): AiPreset =>
-  ['codex','codex-gui'].includes(preset.cli) && !preset.model && !preset.effort
+  ['codex','codex-gui'].includes(preset.cli) && !preset.provider && !preset.model && !preset.effort
     ? discovered.find((candidate) => candidate.cli === preset.cli) ?? preset
     : preset
 export const initialPreset = (cli: string): AiPreset => {
@@ -87,8 +87,8 @@ export const readModels = async (home = homedir(), available = installed, codexH
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {
   assertEffort(p.effort, p.model, p.cli)
   if (!isPreset(p) || !(await available(p.cli))) throw new Error('This CLI is not installed.')
-  if (!p.model && !p.effort && p.cli !== 'agy') return
-  const model = catalog.find((m) => m.cli === p.cli && m.model === p.model)
+  if (!p.provider && !p.model && !p.effort && p.cli !== 'agy') return
+  const model = catalog.find((m) => m.cli === p.cli && m.provider === p.provider && m.model === p.model)
   if (!model || (p.effort && !model.efforts.includes(p.effort)))
     throw new Error('This model/effort is not in the installed client catalog. Refresh the client and try again; no fallback was selected.')
 }

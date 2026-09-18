@@ -3,9 +3,9 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { terminateJob } from './executor.js'
+import { terminateJob, validateCodexProvider, type CodexProviderBinding } from './executor.js'
 
-type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;additionalWorkspaces?:string[];model?:string;effort?:string;prompt:string;codexSandbox?:'external'}
+type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;additionalWorkspaces?:string[];model?:string;effort?:string;prompt:string;codexSandbox?:'external';codexProvider?:CodexProviderBinding}
 type Message = {id?:number;method?:string;params?:any;result?:any;error?:{message:string;code?:number}}
 
 // Keep Codex's native session alive. Codex itself starts goal continuation turns;
@@ -13,6 +13,7 @@ type Message = {id?:number;method?:string;params?:any;result?:any;error?:{messag
 export async function runCodexSession(options:Options, io:{launch?:()=>ChildProcess;emit?:(line:string)=>void}={}):Promise<number> {
   options = executionDefaults('codex', options)
   if (options.codexSandbox !== undefined && options.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
+  const provider = options.codexProvider ? validateCodexProvider(options.codexProvider) : undefined
   const child=io.launch?.() ?? spawn('codex',['app-server','--stdio','--disable','memories','--enable','skip_host_skill_discovery'],{cwd:options.workspace,env:process.env,stdio:['pipe','pipe','pipe']})
   const emit=io.emit ?? (line=>process.stdout.write(line+'\n'))
   let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=false
@@ -73,7 +74,8 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     const result=await request('thread/start',{
       cwd:options.workspace,approvalPolicy:'never',sandbox:options.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write',model:options.model,
       config:{project_root_markers:['AGENTS.md','.git'],'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[]),...(options.sharedWorkspace?[options.sharedWorkspace]:[]),...(options.additionalWorkspaces ?? [])],
-        'sandbox_workspace_write.network_access':Boolean(options.toolsHome),...(options.effort?{model_reasoning_effort:options.effort}:{})},
+        'sandbox_workspace_write.network_access':Boolean(options.toolsHome),...(options.effort?{model_reasoning_effort:options.effort}:{}),
+        ...(provider?{model_provider:provider.id,[`model_providers.${provider.id}`]:{name:provider.name,base_url:provider.baseUrl,env_key:provider.envKey,wire_api:'responses',supports_websockets:false}}:{})},
     })
     threadId=result.thread?.id
     if(!threadId)throw new Error('Codex did not return a native thread ID')
