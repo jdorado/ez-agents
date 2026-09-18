@@ -278,7 +278,11 @@ export const startExecutorJob = async (
 
   const adapter = resolveExecutor(options.cli)
   const command = adapter.command
-  const args = host || nativeSession || key === 'codex-gui' ? [] : adapter.buildArgs(options, promptFile, promptText)
+  const denies = process.platform === 'darwin' && !host && !gui && options.codexSandbox !== 'external'
+    ? workspaceSiblingDenies(options.workspace) : []
+  // Codex must not apply a nested Seatbelt; this process is already confined.
+  const launchOptions = denies.length && command === 'codex' ? { ...options, codexSandbox: 'external' as const } : options
+  const args = host || nativeSession || key === 'codex-gui' ? [] : adapter.buildArgs(launchOptions, promptFile, promptText)
   let invocation = host
     ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./host-executor-client.ts', import.meta.url)), options.controlDir, options.runId])
     : nativeSession
@@ -309,15 +313,12 @@ export const startExecutorJob = async (
     }
     environment.CODEX_HOME = home
   }
-  if (process.platform === 'darwin' && !host && !gui && options.codexSandbox !== 'external') {
-    const denies = workspaceSiblingDenies(options.workspace)
-    if (denies.length) {
-      const profile = path.join(outputDirectory, 'workspace.sb')
-      await writeFile(profile, macosWorkspaceProfile(denies, [
-        options.controlDir, options.binDir, options.toolsHome, outputDirectory,
-      ].filter((value): value is string => Boolean(value))), { mode: 0o600 })
-      invocation = { command: 'sandbox-exec', args: ['-f', profile, invocation.command, ...invocation.args] }
-    }
+  if (denies.length) {
+    const profile = path.join(outputDirectory, 'workspace.sb')
+    await writeFile(profile, macosWorkspaceProfile(denies, [
+      options.controlDir, options.binDir, options.toolsHome, outputDirectory,
+    ].filter((value): value is string => Boolean(value))), { mode: 0o600 })
+    invocation = { command: 'sandbox-exec', args: ['-f', profile, invocation.command, ...invocation.args] }
   }
   const child = spawn(invocation.command, invocation.args, {
     cwd: options.workspace,
@@ -334,7 +335,7 @@ export const startExecutorJob = async (
   })
   child.stdin?.end(host
     ? JSON.stringify({texts,options:{...options,onSession:undefined,codexSandbox:undefined}})
-    : nativeSession ? JSON.stringify({...options,onSession:undefined,prompt:promptText})
+    : nativeSession ? JSON.stringify({...launchOptions,onSession:undefined,prompt:promptText})
     : gui ? JSON.stringify({prompt:promptText,options:{...options,onSession:undefined}})
     : ['codex', 'claude'].includes(key) ? promptText : undefined)
   const timeout = options.timeoutMs > 0 ? setTimeout(() => terminateJob(child), options.timeoutMs) : undefined

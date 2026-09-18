@@ -44,7 +44,10 @@ if(args[0]==='app-server'){
    const captured=JSON.parse(await readFile(path.join(workspace,'capture.json'),'utf8'))
    assert.equal(captured.prompt,text)
    assert.deepEqual(captured.env,{run:runId,control:controlDir,repair:'false'})
-   if(cli==='codex')assert.equal(captured.args.at(-1),'-')
+   if(cli==='codex'){
+    assert.equal(captured.args.at(-1),'-')
+    if(process.platform==='darwin')assert.equal(captured.args[captured.args.indexOf('--sandbox')+1],'danger-full-access')
+   }
    if(['codex','claude'].includes(cli))assert.ok(!captured.args.includes('--help'))
    if(cli==='opencode')assert.equal(captured.args.at(-2),'--')
    if(cli==='agy')assert.ok(captured.args.includes('--print='+text))

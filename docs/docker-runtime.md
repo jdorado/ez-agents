@@ -157,6 +157,7 @@ native conversation; disabling injection does not remove prior turn content.
 This prevents automatic context sharing, not adversarial access by the host user.
 On macOS host jobs, Seatbelt also denies sibling directories of the bound
 workspace (a tenant farm), while leaving `$HOME` readable for the host CLI.
+Codex then uses `danger-full-access` so it does not apply a nested Seatbelt.
 
 ## Chat latency
 
