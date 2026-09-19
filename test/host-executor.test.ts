@@ -85,9 +85,18 @@ test('host execution resolves a declared provider from the bound agent, not a la
   const abort = new AbortController()
   let server: Promise<void> | undefined
   let captured: any
+  const previousPath = process.env.PATH
   try {
     await mkdir(workspace, {recursive: true})
     await mkdir(directory, {recursive: true})
+    const fakeBin = path.join(root, 'bin')
+    await mkdir(fakeBin, {recursive: true})
+    await mkdir(path.join(controlDir, 'cli', 'codex'), {recursive: true})
+    await writeFile(path.join(fakeBin, 'codex'), '#!/bin/sh\nexit 0\n', {mode: 0o700})
+    await writeFile(path.join(controlDir, 'cli', 'codex', 'models_cache.json'), JSON.stringify({models: [
+      {slug: provider.models[0], visibility: 'list', display_name: 'DeepSeek V4.1 Flash', supported_reasoning_levels: [{effort: 'max'}]},
+    ]}))
+    process.env.PATH = `${fakeBin}${path.delimiter}${previousPath ?? ''}`
     await ownerRun(controlDir, 'r_provider')
     server = serveHostExecutor(installation, abort.signal, async (_texts, options) => {
       captured = options
@@ -110,12 +119,19 @@ test('host execution resolves a declared provider from the bound agent, not a la
       await new Promise(resolve => setTimeout(resolve, 20))
     }
     assert.match(events, /"stream":"exit","code":0/)
+    const catalog = JSON.parse(await readFile(path.join(directory, 'models.json'), 'utf8'))
+    assert.deepEqual(catalog.filter((model: any) => model.model === provider.models[0]), [{
+      cli: 'codex', provider: 'openrouter', model: provider.models[0],
+      name: `OpenRouter · ${provider.models[0]}`, efforts: ['max'],
+    }])
     assert.equal(captured.provider, 'openrouter')
     assert.deepEqual(captured.codexProvider, provider)
     assert.equal(captured.model, provider.models[0])
   } finally {
     abort.abort()
     await server
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
     await rm(root, {recursive: true, force: true})
   }
 })

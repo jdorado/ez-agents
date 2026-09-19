@@ -37,8 +37,14 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const catalog = async (agent: HostBinding) => {
     const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
     const providers = (agent.codexProviders ?? []).map(validateCodexProvider)
-    const declared = providers.flatMap(provider => provider.models.map(model => ({cli:'codex',provider:provider.id,model,name:`${provider.name} · ${model}`.slice(0,80),efforts:[]})))
-    return [...discovered, ...declared]
+    const declared = providers.flatMap(provider => provider.models.map(model => {
+      const native = discovered.find(candidate => candidate.cli === 'codex' && !candidate.provider && candidate.model === model)
+      return {cli:'codex',provider:provider.id,model,name:`${provider.name} · ${model}`.slice(0,80),efforts:native?.efforts ?? []}
+    }))
+    const declaredModels = new Set(declared.map(model => model.model))
+    const isReplacedByProvider = (model: {cli:string; model?:string}) =>
+      model.model !== undefined && declaredModels.has(model.model) && (model.cli === 'codex' || model.cli === 'codex-gui')
+    return [...discovered.filter(model => !isReplacedByProvider(model)), ...declared]
   }
   try {
     for (const agent of installation.agents) {
