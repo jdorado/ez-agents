@@ -170,18 +170,36 @@ Backups contain credentials and must stay private. Main backups cover the
 canonical mind/control and deployment files. Plugins back up existing named
 volumes while their services are stopped, using the previous image's `tar` and
 read-only volume mounts; archive output is written by the host with mode 0600.
-No backup deletes live data or revokes credentials. Retain old package roots and
-images until QA and any recovery window are complete; there is no automatic GC.
+No backup deletes live data or revokes credentials. After a successful update, the
+supervisor retains the newest completed backup per target and removes backup
+directories from older terminal receipts (`completed`, `failed` or
+`rolled-back`). Queued, applying and recovery-required jobs are never pruned. Old
+package roots and images remain available until they are no longer needed for the
+active or immediate rollback path; backup cleanup does not remove them. A cleanup
+failure is recorded on the completed receipt and does not turn a successful
+update into a rollback. The supervisor repeats this reconciliation at startup so
+a release restart also cleans backups left by a crash window or by the release
+that installed the policy.
 
 The updater accepts only matching state-schema and protocol contracts and an
-unchanged deployment layout. Plugins may add command routes to existing services;
-existing routes and all services, privileges, volumes and other deployment
-configuration must remain unchanged. Incompatible changes fail before replacement,
-even for an explicit candidate, and need a separately reviewed migration rather
-than an override flag. Release authors must truthfully declare schema compatibility.
-Code rollback **does not rewind private
-state**, provider cursors or operation receipts; uncertain actions are never
-replayed. Docker health is not proof of live provider identity or delivery.
+unchanged effective deployment layout. The reviewed beta.34 runtime migration
+allows the optional empty `EZ_ISOLATION` passthrough and a changed purpose-file
+fallback when the deployment already binds `EZ_AGENT_PURPOSE_FILE`; the job
+receipt records that migration. Plugins may add command routes to existing
+services; existing routes and all services, privileges, volumes and other
+deployment configuration must remain unchanged. Incompatible changes fail
+before replacement, even for an explicit candidate, and need a separately
+reviewed migration rather than an override flag. Release authors must truthfully
+declare schema compatibility. Code rollback **does not rewind private state**,
+provider cursors or operation receipts; uncertain actions are never replayed.
+Docker health is not proof of live provider identity or delivery.
+
+The updater also records the exact Library beta14 command migration: it removes
+the retired `library-document` route and changes `library-query` from
+`query-context` to `search`, while requiring every other manifest and deployment
+field to remain unchanged. A completed main upgrade exits the active supervisor
+after publishing its receipt; the retained bootstrap is then restarted by the
+host service and loads the new package root.
 
 ## Contributor acceptance
 

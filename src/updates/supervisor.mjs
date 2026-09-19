@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { atomic, locked } from '../plugins/manager.mjs';
-import { state, read, jobs, jobPath, check, missing } from './control.mjs';
+import { state, read, jobs, jobPath, check, missing, cleanupStaleBackups } from './control.mjs';
 import { perform, environment } from './runtime.mjs';
 import { digest } from './artifact.mjs';
 
@@ -66,6 +66,8 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   const beat=setInterval(()=>{void atomic(path.join(directory,'supervisor.json'),{pid:process.pid,at:Date.now()}).catch(()=>{});},1000);
   try {
     await atomic(path.join(directory,'supervisor.json'),{pid:process.pid,at:Date.now()});
+    try { await cleanupStaleBackups(home); }
+    catch(error) { console.error(`Update backup cleanup failed; host remains running: ${error.message}`); }
     // Reclaim only a lock left by this deployment's dead supervisor, including
     // a crash between queue claim and the first transaction journal write.
     const registryLock=path.join(home,'registry.lock'),owner=await read(registryLock).catch(missing);
@@ -74,7 +76,9 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     await sleep(1200);
     const interrupted=(await jobs(home)).find(j=>j.status==='applying');
     if(interrupted){
-      await atomic(pause,{id:interrupted.id});await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));await fs.rm(pause,{force:true});await notice(agent.controlDir,interrupted.id);}
+      await atomic(pause,{id:interrupted.id});const result=await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));await fs.rm(pause,{force:true});await notice(agent.controlDir,interrupted.id);
+      if(result.status==='completed'&&interrupted.target==='main')return;
+    }
     const isolated=host.isolation==='isolated'
     if(!isolated && !child)await startHost((await state(home)).config.packageRoot);
     let nextCheck=0;
@@ -87,14 +91,16 @@ export async function supervise(deployment,signal,{discover=check}={}) {
         let quiet=0;
         while(!signal.aborted&&quiet<3){quiet=await idle(agent.controlDir)?quiet+1:0;await sleep(500);}
         if(signal.aborted)break;
+        let result;
         try {
-          await locked(home,async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));await perform(home,latest,{stopHost,startHost});});
+          result=await locked(home,async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));return perform(home,latest,{stopHost,startHost});});
         } catch(error) {
           // A pre-switch rejection is terminal. Applying jobs keep their journal for recovery.
           const latest=await read(path.join(jobPath(home,pending.id),'job.json'));
           if(latest.status==='queued'){latest.status='failed';latest.error=error.message;await atomic(path.join(jobPath(home,pending.id),'job.json'),latest);}else throw error;
         } finally {await fs.rm(pause,{force:true});}
         await notice(agent.controlDir,pending.id);
+        if(result?.status==='completed'&&pending.target==='main')return;
       }
       if(Date.now()>=nextCheck) {
         nextCheck=Date.now()+6*60*60*1000;

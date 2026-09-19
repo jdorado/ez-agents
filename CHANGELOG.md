@@ -5,6 +5,18 @@
 - Correct setup guidance for host-capable custom Codex providers and replace
   stale pinned-beta installation guidance with current release records.
 
+- Retain only the newest completed updater backup per target and reconcile older
+  terminal backups after updates and supervisor restarts, without touching
+  active, queued or rollback state.
+
+- Let existing agents self-upgrade across the beta.34 runtime compatibility
+  migration while retaining fail-closed rejection of structural deployment
+  changes.
+
+- Record the reviewed Library beta14 command-contract migration and hand a
+  completed main upgrade back to the retained bootstrap so the new updater code
+  is loaded without a manual supervisor restart.
+
 - Record an isolation class at agent creation. The default is `isolated`: the
   native CLI runs in the relay (`EZ_EXECUTOR_TRANSPORT=local`). Pass
   `--isolation host-capable` to reuse the installer UID and host CLI login.
