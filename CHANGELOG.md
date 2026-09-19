@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-beta.35
+
+- Harden the beta.34 compatibility upgrade path, including supervisor handoff
+  after a completed main upgrade and cleanup of obsolete terminal backups while
+  retaining active, queued and rollback state.
+
+- Publish one plugin author standard for local-only installation, exact public
+  releases, catalog registration, package boundaries, and executor verification.
+
 ## 0.1.0-beta.34
 
 - Correct setup guidance for host-capable custom Codex providers and replace
