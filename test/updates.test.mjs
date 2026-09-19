@@ -7,7 +7,7 @@ import { gzipSync } from 'node:zlib';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
-import { prepare, submit, command, read, jobPath, eligibility, jobs } from '../src/updates/control.mjs';
+import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
 import { perform, environment, packageManager } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
@@ -154,6 +154,41 @@ test('identity, state migration, deployment changes and stale candidates fail be
  await mutate({ezRelease:contract('main'),version:'0.0.1'});await assert.rejects(prepare(f.home,'main',{file:await f.pack()}),/newer/);
  await mutate({version:'0.1.1'});await fs.writeFile(path.join(f.source,'compose.yaml'),'privileged: true');await assert.rejects(prepare(f.home,'main',{file:await f.pack()}),/deployment/);
 });
+test('legacy runtime deployment migration compares effective Compose and preserves explicit bindings',async t=>{
+ const f=await fixture(t),oldCompose=`services:
+  relay:
+    environment:
+      EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md
+      EZ_EXECUTOR_TRANSPORT: \${EZ_EXECUTOR_TRANSPORT:-host}
+configs:
+  agent_purpose:
+    file: \${EZ_AGENT_PURPOSE_FILE:-./templates/agent/SOUL.md}
+`,nextCompose=oldCompose.replace('      EZ_EXECUTOR_TRANSPORT:', '      EZ_ISOLATION: ${EZ_ISOLATION:-}\n      EZ_EXECUTOR_TRANSPORT:').replace('./templates/agent/SOUL.md','./templates/agent-purpose.md');
+ await fs.writeFile(path.join(f.old,'compose.yaml'),oldCompose);await fs.writeFile(path.join(f.source,'compose.yaml'),nextCompose);
+ await fs.writeFile(path.join(f.config.deploymentDir,'docker.env'),`COMPOSE_FILE='${f.old}/compose.yaml'
+COMPOSE_PROJECT_NAME='ez-agent-fixture'
+EZ_AGENT_PURPOSE_FILE='${path.join(f.config.deploymentDir,'purpose.md')}'
+EZ_EXECUTOR_TRANSPORT='host'
+`);
+ const job=await prepare(f.home,'main',{file:await f.pack()});assert.equal(job.deploymentMigration.id,'legacy-runtime-v1');
+ await fs.writeFile(path.join(f.config.deploymentDir,'docker.env'),`COMPOSE_FILE='${f.old}/compose.yaml'
+COMPOSE_PROJECT_NAME='ez-agent-fixture'
+EZ_EXECUTOR_TRANSPORT='host'
+`);await assert.rejects(eligibility(f.home,'main',f.source,false),/deployment/);
+});
+test('compatibility bridge hands off to the published beta.34 release',async t=>{
+ const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),candidate=await read(path.join(f.source,'package.json'));
+ await atomic(path.join(f.old,'package.json'),{...prior,version:'0.1.0-beta.34.compat.1'});
+ await atomic(path.join(f.source,'package.json'),{...candidate,version:'0.1.0-beta.34'});
+ await assert.doesNotReject(eligibility(f.home,'main',f.source,false));
+});
+test('reviewed Library beta14 command migration is exact and fail-closed',()=>{
+ const manifest=(version,document)=>({schemaVersion:1,id:'library',version,description:'library',commands:{library:{executable:'bin/ez-library.mjs',args:[]},'library-query':{executable:'bin/ez-library.mjs',args:[],channelQuery:true},...(document?{'library-document':{executable:'bin/ez-library.mjs',args:[],channelQuery:true}}:{})},skills:['skills/library/SKILL.md']});
+ const deployment=(query,document)=>({schemaVersion:3,services:{library:{buildTarget:'runtime',volumes:{data:'/state'},healthcheck:['node','/app/bin/ez-library.mjs','--version'],memoryMiB:4096,cpus:2}},commands:{'library-query':{service:'library',argv:['node','/app/bin/ez-library.mjs',query]},...(document?{'library-document':{service:'library',argv:['node','/app/bin/ez-library.mjs','document']}}:{})},sharedServices:{}});
+ const old={manifest:manifest('0.1.0-beta.13.qa.4',true),deployment:deployment('query-context',true)},next={manifest:manifest('0.1.0-beta.14',false),deployment:deployment('search',false)};
+ assert.equal(reviewedPluginDeploymentMigration('library',old,next).id,'library-query-contract-v1');
+ const unsafe=structuredClone(next);unsafe.deployment.services.library.cpus=4;assert.equal(reviewedPluginDeploymentMigration('library',old,unsafe),undefined);
+});
 test('main transaction stages before stopping, pins rollback image, preserves state and rebinds root',async t=>{
  const f=await fixture(t),job=await queued(f),r=runtime(f);
  await fs.writeFile(path.join(f.agent.workspace,'memory.md'),'retain me');
@@ -166,6 +201,13 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  assert(r.calls.findIndex(c=>c.includes('build'))<r.calls.findIndex(c=>c[0]==='stopHost'));
  const status=await command(f.home,['status']);assert(!JSON.stringify(status).includes('private-test-token'));assert(!('rollback'in status.jobs[0]));
  assert.equal((await fs.stat(path.join(jobPath(f.home,job.id),'job.json'))).mode&0o777,0o600);
+});
+test('update cleanup keeps the newest backup per target and ignores unfinished jobs',async t=>{
+ const f=await fixture(t),older='11111111-1111-1111-1111-111111111111',latest='22222222-2222-2222-2222-222222222222',queued='33333333-3333-3333-3333-333333333333',rolledBack='44444444-4444-4444-4444-444444444444';
+ const seed=async(id,target,status,endedAt)=>{const dir=jobPath(f.home,id);await fs.mkdir(path.join(dir,'backup'),{recursive:true});await fs.writeFile(path.join(dir,'backup','marker'),'private');await atomic(path.join(dir,'job.json'),{id,target,status,createdAt:endedAt,endedAt});};
+ await seed(older,'main','completed','2026-01-01T00:00:00.000Z');await seed(latest,'main','completed','2026-01-02T00:00:00.000Z');await seed(queued,'sample','queued','2026-01-03T00:00:00.000Z');await seed(rolledBack,'main','rolled-back','2026-01-03T00:00:00.000Z');
+ const result=await cleanupStaleBackups(f.home);assert.deepEqual(result.kept,[latest]);assert.deepEqual(result.removed.sort(),[older,rolledBack].sort());
+ await assert.rejects(fs.access(path.join(jobPath(f.home,older),'backup')));await fs.access(path.join(jobPath(f.home,latest),'backup'));await fs.access(path.join(jobPath(f.home,queued),'backup'));await assert.rejects(fs.access(path.join(jobPath(f.home,rolledBack),'backup')));
 });
 test('failed preparation never stops runtime; failed activation rolls back code without rewinding state',async t=>{
  for(const stage of ['build','health']) {
@@ -303,7 +345,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await fs.writeFile(wrapper,`import {supervise} from ${JSON.stringify(module)};const a=new AbortController();process.on('SIGTERM',()=>a.abort());await supervise(${JSON.stringify(f.config.deploymentDir)},a.signal,{discover:async()=>{${provider==='pnpm' ? "throw Error('Synthetic discovery failure')" : 'return []'}}});`);
  const start=()=>{const p=spawn(process.execPath,[wrapper],{env:{...process.env,PATH:fake},stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);return {p,output:()=>output};};
  const wait=async fn=>{for(let i=0;i<150;i++){const result=await fn();if(result)return result;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out');};
- const first=start();t.after(()=>{first.p.kill('SIGTERM');});
+ const first=start(),firstClosed=new Promise(resolve=>first.p.once('close',resolve));t.after(()=>{first.p.kill('SIGTERM');});
  const heartbeat=()=>read(path.join(f.agent.controlDir,'host-executor/heartbeat.json')).catch(()=>null);
  const oldBeat=await wait(heartbeat);
  const running=path.join(f.agent.controlDir,'host-executor/r_request.running.json');await fs.writeFile(running,'{}');
@@ -313,14 +355,13 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await new Promise(r=>setTimeout(r,1800));assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).status,'queued');
  await fs.rm(running);
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));if(j.status==='failed'||j.status==='rolled-back')throw Error(JSON.stringify(j)+first.output());return j.status==='completed';});
- const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);assert(first.p.exitCode===null);
+ const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);assert.equal(await firstClosed,0,first.output());
  if(provider==='pnpm'){assert.match(first.output(),/Update discovery failed; host remains running/);assert.doesNotMatch(first.output(),/Synthetic discovery failure/);}
  // Completion is persisted before the supervisor publishes its attention receipt.
  await wait(async()=>{
   try{return (await read(path.join(f.agent.controlDir,'update-attention.json'))).id===digest(job.id);}
   catch(error){if(error.code==='ENOENT')return false;throw error;}
  });
- const closed=new Promise(r=>first.p.once('close',r));first.p.kill('SIGTERM');await closed;
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).packageManager.command,provider);
  const second=start();t.after(()=>second.p.kill('SIGTERM'));

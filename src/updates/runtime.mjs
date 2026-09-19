@@ -4,7 +4,7 @@ import { createWriteStream } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { atomic, compose, snapshot, checkFolders } from '../plugins/manager.mjs';
-import { read, state, eligibility, jobPath } from './control.mjs';
+import { read, state, eligibility, jobPath, cleanupStaleBackups } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
 import { extract, digest } from './artifact.mjs';
 
@@ -127,7 +127,10 @@ export async function perform(home,job,hooks) {
       await atomic(path.join(home,'registry.json'),r);
       job.runtimeVerified=running;
     }
-    job.status='completed';job.endedAt=new Date().toISOString();await save();return job;
+    job.status='completed';job.endedAt=new Date().toISOString();await save();
+    try { job.cleanup=await cleanupStaleBackups(home);await save(); }
+    catch(error) { job.cleanupError=error.message;await save().catch(()=>{}); }
+    return job;
   }catch(error){
     let message=error.message;
     if(job.target==='main'&&job.rollback&&/is unhealthy/.test(message))message+=await healthEvidence(config,run).catch(()=> '');
