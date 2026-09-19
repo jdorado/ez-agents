@@ -140,7 +140,8 @@ here:
 
 - **Install for a user:** [setup and verified onboarding](docs/setup.md), then the installer instructions below.
 - **Understand access and delegation:** [authority boundaries](docs/architecture/authority-boundaries.md) and [security scope](SECURITY.md).
-- **Discover or add capabilities:** [plugin contract](docs/plugins.md). Check the actual executor's native tools before adding an integration.
+- **Build or share a plugin:** [plugin guide](docs/plugin-guide.md). It covers local unpublished installs, public releases, and catalog registration.
+- **Discover or add capabilities:** [plugin manager contract](docs/plugins.md). Check the actual executor's native tools before adding an integration.
 - **Contribute:** [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Repository discovery is not an instruction to install or contact anyone. Act on
@@ -319,6 +320,7 @@ without authorization. Local registry rehearsal uses `pnpm publish:local`.
 - [Security scope](SECURITY.md)
 
 - [Contributing](CONTRIBUTING.md) and [releasing](docs/releasing.md)
+- [Plugin author guide](docs/plugin-guide.md)
 - [First plugin and extension contract](docs/plugins.md)
 - [License and dependency notices](THIRD_PARTY_NOTICES.md)
 
