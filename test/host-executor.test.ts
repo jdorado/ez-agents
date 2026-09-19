@@ -69,6 +69,57 @@ test('host restart clears dead native lease only after proving previous CLI stop
   }finally{abort.abort();await server;await rm(root,{recursive:true,force:true});}
 });
 
+test('host execution resolves a declared provider from the bound agent, not a launcher wrapper', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-host-provider-'))
+  const workspace = path.join(root, 'mind')
+  const controlDir = path.join(root, 'control')
+  const directory = path.join(controlDir, 'host-executor')
+  const provider = {
+    id: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1',
+    envKey: 'OPENROUTER_API_KEY', models: ['deepseek/deepseek-v4.1-flash'],
+  }
+  const installation = {
+    cli: 'codex' as const,
+    agents: [{name: 'test', workspace, controlDir, binDir: path.join(root, 'bin'), codexProviders: [provider]}],
+  }
+  const abort = new AbortController()
+  let server: Promise<void> | undefined
+  let captured: any
+  try {
+    await mkdir(workspace, {recursive: true})
+    await mkdir(directory, {recursive: true})
+    await ownerRun(controlDir, 'r_provider')
+    server = serveHostExecutor(installation, abort.signal, async (_texts, options) => {
+      captured = options
+      const child = spawn(process.execPath, ['-e', 'process.exit(0)'])
+      return {child, cleanup: async () => {}, stdout: ''}
+    })
+    for (let n = 0; n < 100; n++) {
+      try { await readFile(path.join(directory, 'heartbeat.json')); break }
+      catch { await new Promise(resolve => setTimeout(resolve, 20)) }
+    }
+    await writeFile(path.join(directory, 'r_provider.request.json'), JSON.stringify({
+      texts: ['hello'], options: {cli: 'codex', provider: 'openrouter', model: provider.models[0], effort: 'max'},
+    }))
+    let events = ''
+    for (let n = 0; n < 100; n++) {
+      try {
+        events = await readFile(path.join(directory, 'r_provider.events'), 'utf8')
+        if (events.includes('"stream":"exit"')) break
+      } catch {}
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    assert.match(events, /"stream":"exit","code":0/)
+    assert.equal(captured.provider, 'openrouter')
+    assert.deepEqual(captured.codexProvider, provider)
+    assert.equal(captured.model, provider.models[0])
+  } finally {
+    abort.abort()
+    await server
+    await rm(root, {recursive: true, force: true})
+  }
+})
+
 test('one installed CLI executes two agent bindings with separate minds and sanitized environment', async () => {
   const root=await mkdtemp(path.join(tmpdir(),'ez-host-'))
   const abort=new AbortController()
