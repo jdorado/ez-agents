@@ -56,3 +56,17 @@ test('owner CLI treats pnpm -- as a separator, not a command', () => {
   assert.deepEqual(parseOwnerArgs(['--', 'approve', '101']), { command: 'approve', value: '101' })
   assert.deepEqual(parseOwnerArgs(['revoke']), { command: 'revoke', value: undefined })
 })
+
+test('provider catalog upgrades a persisted providerless Codex selection', async () => fixture(async (store) => {
+  const model = 'deepseek/deepseek-v4.1-flash'
+  await store.captureChoice({ id: 'deepseek', name: `${model} · max`, cli: 'codex', model, effort: 'max' })
+  const catalog = [{ cli: 'codex', provider: 'openrouter', model, name: `OpenRouter · ${model}`, efforts: ['max'] }]
+
+  assert.equal(await store.normalizeProviderBindings(catalog), true)
+  const state = await store.status()
+  const preset = state.ai!.presets.find((item) => item.id === state.ai!.selectedId)!
+  assert.equal(preset.provider, 'openrouter')
+  assert.match(preset.name, /^OpenRouter/)
+  assert.equal(state.activeSession?.preset?.provider, 'openrouter')
+  assert.equal(await store.normalizeProviderBindings(catalog), false)
+}))

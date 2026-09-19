@@ -2,6 +2,7 @@ import { installAgentGuidance } from './agent-guidance.js'
 import { redactFailure } from './failure.js'
 import { RunStore } from './runs.js'
 import { Tasks } from './tasks.js'
+import { ControlStore } from './control-state.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
@@ -78,7 +79,9 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid)}),{mode:0o600,flag:'wx'})
       locks.push(lock)
       await installAgentGuidance(agent.workspace)
-      await writeFile(path.join(directory,'models.json'),JSON.stringify(await catalog(agent)),{mode:0o600})
+      const models = await catalog(agent)
+      await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
+      await writeFile(path.join(directory,'models.json'),JSON.stringify(models),{mode:0o600})
       // A host crash is terminal for a claimed job. Never replay an action.
       for (const file of await readdir(directory)) if (file.endsWith('.running.json')) {
         const base=path.join(directory,file.slice(0,-13))
@@ -99,7 +102,9 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       if(parent) { try { process.kill(parent,0) } catch { break } }
       if(Date.now()-catalogAt>30000){
         for(const agent of installation.agents){
-          const models=JSON.stringify(await catalog(agent))
+          const catalogModels = await catalog(agent)
+          await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
+          const models=JSON.stringify(catalogModels)
           const file=path.join(agent.controlDir,'host-executor/models.json')
           await writeFile(file+'.tmp',models,{mode:0o600});await rename(file+'.tmp',file)
         }
