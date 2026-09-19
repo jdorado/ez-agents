@@ -10,6 +10,7 @@ import { EXECUTOR_REGISTRY } from '../src/executor.js'
 import { RunStore } from '../src/runs.js'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let n=0;n<250;n++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Host probe timed out')}
+const stdout=(events:string) => events.trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)).filter(event=>event.stream==='stdout').map(event=>event.text).join('')
 test('host transport reserves separate task and main lanes, pins directories, and cancels only its target',async()=>{
  const root=await mkdtemp(join(tmpdir(),'ez-scheduler-host-')),workspace=join(root,'agent'),controlDir=join(root,'control')
  await mkdir(workspace);await mkdir(controlDir)
@@ -32,8 +33,8 @@ test('host transport reserves separate task and main lanes, pins directories, an
   await submit('tg_1')
   await until(async()=>(await exists('tg_1.events')).includes('"stream":"exit","code":0'))
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
-  const scheduled=JSON.parse(JSON.parse((await exists(id+'.events')).trim().split('\n')[0]).text)
-  const main=JSON.parse(JSON.parse((await exists('tg_1.events')).trim().split('\n')[0]).text)
+  const scheduled=JSON.parse(stdout(await exists(id+'.events')))
+  const main=JSON.parse(stdout(await exists('tg_1.events')))
   assert.equal(scheduled.cwd,await realpath(join(workspace,'work/tasks',id)));assert.equal(main.cwd,await realpath(workspace))
   assert.equal(scheduled.token,undefined);assert.equal(main.token,undefined)
   // A malformed scheduled request must not unwind the shared host service.
