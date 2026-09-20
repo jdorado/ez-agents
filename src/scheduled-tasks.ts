@@ -16,17 +16,57 @@ const displayedPreset = (schedule: Schedule) => {
   catch { return schedule.execution.preset }
 }
 
-export const scheduledTasksText = (schedules: ActiveSchedule[], owner: Owner) => {
-  const owned = schedules.filter((schedule) => ownsSchedule(owner, schedule))
+const weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+const time = (value: number | string) => {
+  const date = new Date(value)
+  return `${weekdays[date.getUTCDay()]}, ${months[date.getUTCMonth()]} ${date.getUTCDate()} · ${String(date.getUTCHours()).padStart(2,'0')}:${String(date.getUTCMinutes()).padStart(2,'0')} UTC`
+}
+
+const preview = (schedule: Schedule) => {
+  const sentence = schedule.text.trim().replace(/\s+/gu,' ').split(/(?<=[.!?])\s/u)[0]
+  const chars = Array.from(sentence)
+  return chars.length > 140 ? chars.slice(0,139).join('')+'…' : sentence
+}
+
+const currentState = (schedule: ActiveSchedule) =>
+  schedule.runState === 'running' ? '▶ Running' : schedule.runState === 'queued' ? '◌ Queued' : '● Active'
+
+const lastRun = (schedule: ActiveSchedule) => {
+  if (!schedule.lastRun) return '— Not run yet'
+  const status = schedule.lastRun.status === 'completed' ? '✓ Completed' : schedule.lastRun.status === 'failed' ? '✕ Failed' : '⊘ Cancelled'
+  return `${status} · ${time(schedule.lastRun.at)}${schedule.lastRun.currentRevision ? '' : ' · previous version'}`
+}
+
+export const ownedScheduledTasks = (schedules: ActiveSchedule[], owner: Owner) =>
+  schedules.filter((schedule) => ownsSchedule(owner, schedule))
     .sort((a, b) => a.name.localeCompare(b.name))
-  if (!owned.length) return 'Active scheduled tasks\n\nNo active scheduled tasks for this owner.'
-  return ['Active scheduled tasks', ...owned.map((schedule) => {
+
+export const scheduledTasksText = (schedules: ActiveSchedule[], owner: Owner) => {
+  const owned = ownedScheduledTasks(schedules, owner)
+  if (!owned.length) return '📅 Scheduled tasks\n\nNo active scheduled tasks.'
+  return [`📅 Scheduled tasks · ${owned.length} active`, 'All times UTC. Use /tasks 2 for task details.', ...owned.map((schedule, index) => {
     const preset = displayedPreset(schedule)
-    const sentence = schedule.text.trim().replace(/\s+/gu,' ').split(/(?<=[.!?])\s/u)[0]
-    const chars = Array.from(sentence)
-    const preview = chars.length > 140 ? chars.slice(0,139).join('')+'…' : sentence
-    const next = schedule.nextAt === null ? '' : `Next: ${new Date(schedule.nextAt).toISOString().replace('T',' ').replace('.000Z',' UTC')}`
-    const timing = [schedule.runState === 'running' ? 'Running' : schedule.runState === 'queued' ? 'Queued' : '',next].filter(Boolean).join(' · ')
-    return `• ${schedule.name}\n  ${presetLabel(preset)}\n  ${timing}\n  ${preview}`
+    return `${index + 1} · ${schedule.name}\n  ${currentState(schedule)}\n  Next · ${schedule.nextAt === null ? '—' : time(schedule.nextAt)}\n  Last · ${lastRun(schedule)}\n  ${presetLabel(preset)}\n  ${preview(schedule)}`
   })].join('\n\n')
+}
+
+export const scheduledTaskDetailText = (schedule: ActiveSchedule, number: number) => {
+  const preset = displayedPreset(schedule)
+  return [
+    `📅 ${number} · ${schedule.name}`,
+    currentState(schedule),
+    '',
+    'Next run',
+    schedule.nextAt === null ? '—' : time(schedule.nextAt),
+    '',
+    'Last run',
+    lastRun(schedule),
+    '',
+    'Engine',
+    presetLabel(preset),
+    '',
+    'Instructions',
+    schedule.text.trim(),
+  ].join('\n')
 }

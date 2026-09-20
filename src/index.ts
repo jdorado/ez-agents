@@ -9,7 +9,7 @@ import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
-import { scheduledTasksText } from './scheduled-tasks.js'
+import { ownedScheduledTasks, scheduledTaskDetailText, scheduledTasksText } from './scheduled-tasks.js'
 import { taskWorkspace } from './task-workspace.js'
 import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
@@ -675,18 +675,27 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const commands = [...mainCommands, ...(launcher ? [{ command: launcher.command, description: launcher.label }] : [])]
   const controlCommand = (text?: string) => /^\/rename(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text?.trim() ?? '')
     ? '/rename' : text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
+  const tasksCommand = (text?: string): number | undefined | null => {
+    const match = text?.trim().match(/^\/tasks(?:@[a-zA-Z0-9_]+)?(?:\s+([1-9]\d*))?$/)
+    return match ? (match[1] ? Number(match[1]) : undefined) : null
+  }
   const statusKeyboard = () => new InlineKeyboard()
     .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
-    .text('Retry failed incoming message', 'menu:retry').row()
-    .text('Scheduled tasks', 'menu:scheduled-tasks')
+    .text('Retry failed incoming message', 'menu:retry')
   const scheduledTasks = async () => {
     const owner = (await control.status()).owner
     if (!owner) return 'Scheduled tasks\n\nNo paired owner.'
     // This intentionally uses the reader that does not create a schedules directory.
-    return scheduledTasksText(await scheduler.listActiveReadOnly(await runs.list()), owner)
+    const active = await scheduler.listActiveReadOnly(await runs.list())
+    return { owner, active, text: scheduledTasksText(active, owner) }
   }
-  const replyScheduledTasks = async (ctx: Context) => {
-    for (const part of splitTelegramText(await scheduledTasks())) await ctx.reply(part)
+  const replyScheduledTasks = async (ctx: Context, number?: number) => {
+    const result = await scheduledTasks()
+    const text = typeof result === 'string' ? result : number === undefined ? result.text : (() => {
+      const schedule = ownedScheduledTasks(result.active, result.owner)[number - 1]
+      return schedule ? scheduledTaskDetailText(schedule, number) : `Scheduled task ${number} was not found. Use /tasks to list active tasks.`
+    })()
+    for (const part of splitTelegramText(text)) await ctx.reply(part)
   }
   const statusText = async () => {
     const running = await runs.running(false)
@@ -792,7 +801,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     const message = ctx.message
     const command = controlCommand(message?.text)
-    if (command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu', ...retiredCommands).includes(command)) return next()
+    if ((command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu', ...retiredCommands).includes(command)) || tasksCommand(message?.text) !== null) return next()
     const ordinary = message && (message.text || message.photo || message.document || message.voice)
     const approval = ctx.callbackQuery?.data?.startsWith('approval:')
     if (!ordinary && !approval) return next()
@@ -833,6 +842,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     if (text === '/settings') {
       await ctx.reply('Settings was removed. Use /ai to choose the client, model, and reasoning level.')
+      return
+    }
+
+    const taskNumber = tasksCommand(ctx.message.text)
+    if (taskNumber !== null) {
+      await replyScheduledTasks(ctx, taskNumber)
       return
     }
 
