@@ -4,7 +4,7 @@ import { loadConfig } from '../src/config.js'
 import { executorJobEnv } from '../src/executor.js'
 
 test('repair preference is bound in the environment, never rewritten into the request', () => {
- const config = (value?:string) => loadConfig({TELEGRAM_BOT_TOKEN:'fixture', ...(value===undefined ? {} : {EZ_REPAIR_ENABLED:value})})
+ const config = (value?:string) => loadConfig({TELEGRAM_BOT_TOKEN:'110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY', ...(value===undefined ? {} : {EZ_REPAIR_ENABLED:value})})
  assert.equal(config().repairEnabled,true)
  assert.equal(config('false').repairEnabled,false)
  assert.throws(()=>config('disabled'),/EZ_REPAIR_ENABLED/)

@@ -112,7 +112,7 @@ export async function connect(home,alias,args,{input=process.stdin,output=proces
     },
     listNative:()=>nativeCommands().map(item=>({...item,available:!!nativeBinding&&(item.command!=='message'||!!deliveryContext)})),
     executeNative:(args,options)=>nativeTasks(home,args,{...options,deliveryContext}),
-    execute:async(a,argv,options)=>{const release=options.invocation?await invokeLease(home):undefined;try {const c=await prepareCommand(home,a,argv,{revision:options.revision,exclude:command.plugin});if(options.signal.aborted)throw Error('Request cancelled');const execute=overrides=>run(c.argv,{...options,...overrides,container:c.container,capture:true,timeoutMs:30000,maxBytes:262144});return options.output===undefined?await execute({}):await commandArtifact(config.workspace,options.output,execute,{signal:options.signal});}finally{await release?.();}},
+    execute:async(a,argv,options)=>{const release=options.invocation?await invokeLease(home):undefined;try {const c=await prepareCommand(home,a,argv,{revision:options.revision,exclude:command.plugin});if(options.signal.aborted)throw Error('Request cancelled');const execute=overrides=>run(c.argv,{...options,...overrides,container:c.container,capture:true,timeoutMs:30000,maxBytes:262144});try {return options.output===undefined?await execute({}):await commandArtifact(config.workspace,options.output,execute,{signal:options.signal});}finally{if(c.contextFile)await fs.rm(c.contextFile,{force:true}).catch(()=>{});}}finally{await release?.();}},
     sendClient:frame=>send(output,frame),sendPlugin:frame=>send(child?.stdin,frame)});
   const onInput=jsonLines(frame=>protocol.client(frame),fail),onEnd=()=>{protocol.close();abort.abort();};
   const onSignal=()=>{protocol.close();abort.abort();};
@@ -120,5 +120,5 @@ export async function connect(home,alias,args,{input=process.stdin,output=proces
   try {
     const result=await run(command.argv,{container:command.container,capture:true,maxBytes:262144,signal:abort.signal,onStdout:jsonLines(frame=>protocol.plugin(frame),fail),onStart:c=>{child=c;if(!serve){input.on('data',onInput);input.once('end',onEnd);input.resume();}}});
     if(failure)throw failure;process.exitCode=result.code;
-  } finally {if(serve)for(const signal of ['SIGINT','SIGTERM'])process.off(signal,onSignal);input.off('data',onInput);input.off('end',onEnd);input.pause();protocol.close();}
+  } finally {if(serve)for(const signal of ['SIGINT','SIGTERM'])process.off(signal,onSignal);input.off('data',onInput);input.off('end',onEnd);input.pause();protocol.close();if(command.contextFile)await fs.rm(command.contextFile,{force:true}).catch(()=>{});}
 }

@@ -31,7 +31,7 @@ test('HTTP auth, idempotency, origin/context isolation, revocation and persisted
   const root=await mkdtemp(join(tmpdir(),'ez-app-channel-'))
   const owned=await owner(root), runs=new RunStore(root), control=new ControlStore(root,1000)
   let wakes=0
-  const channel=new ApplicationChannel({controlDir:root,initial:initialPreset('codex'),wake:()=>{wakes++},cancel:async id=>{await runs.patch(id,{status:'cancelled'})}})
+  const channel=new ApplicationChannel({controlDir:root,initial:initialPreset('codex'),wake:()=>{wakes++},cancel:async id=>{await runs.patch(id,{status:'cancelled'})},createTelegramPairing:async()=>{throw new Error('unavailable')},telegramAvailable:()=>false})
   t.after(async()=>{await channel.stop();await rm(root,{recursive:true,force:true})})
   const firstToken=token(), secondToken=token()
   const first=(await channel.bindings.register('first',firstToken,owned))!

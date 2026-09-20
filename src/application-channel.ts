@@ -2,7 +2,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, open, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ControlStore, sessionTitle, type ControlGuard, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
+import { ControlStore, sessionTitle, telegramOwner, type ControlGuard, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
 import { ownsRun } from './identity.js'
 import { applicationId, validApplicationOrigin } from './application-origin.js'
@@ -74,6 +74,8 @@ export class ApplicationChannel {
     controlDir: string; workspace?: string; initial: AiPreset
     wake: () => void
     cancel: (id: string) => Promise<void>
+    createTelegramPairing?: (bindingId: string, owner: Owner) => Promise<{ connected: true } | { connected: false; url: string; expiresAt: string }>
+    telegramAvailable?: () => boolean
     aiControls?: {
       catalog: () => Promise<ModelChoice[]>
       select: (preset: AiPreset, expectedSession: string | null, guard?: ControlGuard) => Promise<unknown>
@@ -87,6 +89,29 @@ export class ApplicationChannel {
     const state = await new ControlStore(this.options.controlDir, 900000).status()
     if (!binding || (shared && !binding.shareTelegram) || !sameOwner(binding.owner, state.owner)) throw new Error('Application authority does not permit controls')
     return binding.owner
+  }
+  private async telegramConnection(bindingId: string) {
+    await this.sharedBinding(bindingId)
+    const owner = (await new ControlStore(this.options.controlDir, 900000).status()).owner
+    const connected = Boolean(telegramOwner(owner))
+    return this.options.telegramAvailable
+      ? { connected, ready: this.options.telegramAvailable() }
+      : { connected }
+  }
+  private async createTelegramConnection(bindingId: string) {
+    const owner = await this.sharedBinding(bindingId)
+    const current = (await new ControlStore(this.options.controlDir, 900000).status()).owner
+    if (telegramOwner(current)) return { connected: true } as const
+    if (!this.options.createTelegramPairing) throw new Error('Telegram connection is unavailable')
+    return this.options.createTelegramPairing(bindingId, owner)
+  }
+  async claimTelegramConnection(token: string, telegramUserId: number, telegramChatId: number): Promise<boolean> {
+    const control = new ControlStore(this.options.controlDir, 900000)
+    const owner = await control.claimApplicationTelegramPairing(token, telegramUserId, telegramChatId, async (bindingId, expectedOwner) => {
+      const binding = (await this.bindings.list()).find(item => item.bindingId === bindingId)
+      return Boolean(binding?.shareTelegram && sameOwner(binding.owner, expectedOwner))
+    })
+    return Boolean(owner)
   }
   async controls(bindingId: string) {
     await this.sharedBinding(bindingId)
@@ -269,6 +294,18 @@ export class ApplicationChannel {
       const url = new URL(request.url ?? '/', 'http://localhost'), path = url.pathname
       if (request.method === 'GET' && path === '/v1/registration') {
         send(200, {ownerId: ownerId(binding.owner), bindingId: binding.bindingId, channel: binding.id}); return
+      }
+      if (path === '/v1/telegram' && request.method === 'GET') {
+        if ([...url.searchParams.keys()].length) throw new Error('Invalid application Telegram request')
+        if (!binding.shareTelegram) { send(403, { error: 'Application authority does not permit Telegram connection' }); return }
+        send(200, await this.telegramConnection(binding.bindingId)); return
+      }
+      if (path === '/v1/telegram/link' && request.method === 'POST') {
+        const chunks: Buffer[] = []; let size = 0
+        for await (const chunk of request) { size += chunk.length; if (size > 1024) throw new Error('Invalid application Telegram request'); chunks.push(chunk) }
+        if (Buffer.concat(chunks).toString('utf8').trim()) throw new Error('Invalid application Telegram request')
+        if (!binding.shareTelegram) { send(403, { error: 'Application authority does not permit Telegram connection' }); return }
+        send(200, await this.createTelegramConnection(binding.bindingId)); return
       }
       if (request.method === 'GET' && path === '/v1/runs') {
         const all = (await this.runs.list()).filter(run => (run.application ?? run.delivery)?.bindingId === binding.bindingId)

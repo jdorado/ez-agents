@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +9,7 @@ import { once } from 'node:events'
 import type { Update } from 'grammy/types'
 import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
+import { ApplicationBindings } from '../src/application-channel.js'
 import { RunStore } from '../src/runs.js'
 import { InboxStore } from '../src/inbox.js'
 import { ApprovalStore } from '../src/approval.js'
@@ -113,7 +115,9 @@ test('approved owner group accepts different members, controls and group deliver
     await control.revokeOwner()
     await f.relay.bot.handleUpdate(group(1))
     assert.equal(f.launched.length, 0)
-    assert.equal((await control.status()).pending[0].title, 'Team')
+    const request = (await control.status()).pending[0]
+    if (!request || !('title' in request)) throw new Error('Group pairing request missing')
+    assert.equal(request.title, 'Team')
     await control.approveOwner(-101, true)
     await f.relay.bot.handleUpdate(group(2, 303))
     await f.relay.bot.handleUpdate(group(3, 404))
@@ -263,7 +267,7 @@ test('conversation menu is owner-only and removes the retired settings control',
   try {
     await f.relay.bot.handleUpdate(message(1, '/menu'))
     assert.deepEqual(f.keyboards.at(-1)!.flat().map((b) => b.text),
-      ['New conversation', 'Conversations', 'Choose AI', 'Work status'])
+      ['New conversation', 'Conversations', 'Choose AI', 'Work status', 'Scheduled tasks'])
     await f.relay.bot.handleUpdate(message(2, '/settings'))
     assert.match(f.replies.at(-1)!, /Settings was removed.*Use \/ai/)
     await f.relay.bot.handleUpdate(message(3, '/ai'))
@@ -284,9 +288,11 @@ test('conversation menu is owner-only and removes the retired settings control',
     assert.match(f.replies.at(-1)!, /Menu expired/)
     assert.deepEqual(await store.status(), refreshed)
     await f.relay.bot.handleUpdate(message(8, '/status'))
-    assert.ok(f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
-    await f.relay.bot.handleUpdate(callback(9, 'menu:scheduled-tasks'))
-    assert.match(f.replies.at(-1)!, /No active scheduled tasks for this owner/)
+    assert.ok(!f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
+    await f.relay.bot.handleUpdate(message(9, '/tasks'))
+    assert.match(f.replies.at(-1)!, /📅 Scheduled tasks[\s\S]*No active scheduled tasks/)
+    await f.relay.bot.handleUpdate(message(10, '/tasks 2'))
+    assert.match(f.replies.at(-1)!, /Scheduled task 2 was not found/)
     assert.equal(f.launched.length, 0)
   } finally { await f.close() }
 })
@@ -699,9 +705,49 @@ test('web launcher is private-owner-only and bypasses native intake without repl
     await f.relay.bot.handleUpdate(message(2,'/voice'))
     assert.deepEqual(f.keyboards.at(-1),[[{text:'Voice',web_app:{url:'https://voice.example/'}}]])
     await f.relay.bot.handleUpdate(message(3,'/menu'))
-    assert.deepEqual(f.keyboards.at(-1)!.flat().map(b=>b.text),['New conversation','Conversations','Choose AI','Work status','Voice'])
+    assert.deepEqual(f.keyboards.at(-1)!.flat().map(b=>b.text),['New conversation','Conversations','Choose AI','Work status','Scheduled tasks','Voice'])
     await f.relay.drainInbox(true);assert.equal(f.launched.length,0)
     await new ControlStore(f.dir,1000).revokeOwner()
     const before=f.keyboards.length;await f.relay.bot.handleUpdate(message(4,'/voice'));assert.equal(f.keyboards.length,before)
   } finally {await f.close()}
+})
+
+test('application Telegram link connects without launching work; bad link replies expired', async () => {
+  const f=await fixture()
+  try {
+    const control=new ControlStore(f.dir,1000)
+    await control.revokeOwner()
+    const owner=await control.registerOwner('account:web')
+    const binding=await new ApplicationBindings(f.dir).register('webapp',randomBytes(32).toString('base64url'),owner,true)
+    assert.ok(binding)
+    const pairing=await control.createApplicationTelegramPairing(binding.bindingId,owner)
+    assert.ok(pairing)
+    await f.relay.bot.handleUpdate(message(1,`/start ${'A'.repeat(43)}`))
+    assert.match(f.replies.at(-1)!,/expired|no longer valid/)
+    assert.equal(f.launched.length,0)
+    await f.relay.bot.handleUpdate(message(2,`/start ${pairing.token}`))
+    assert.match(f.replies.at(-1)! ,/connected/)
+    assert.equal(f.launched.length,0)
+    assert.equal((await control.status()).owner?.telegramUserId,101)
+  } finally {await f.close()}
+})
+
+test('tasks command never reaches the executor on invalid input or foreign senders', async () => {
+  const f = await fixture()
+  try {
+    const stranger = message(1, '/tasks');stranger.message!.from!.id = 202
+    await f.relay.bot.handleUpdate(stranger)
+    assert.equal(f.launched.length, 0)
+    assert.ok(!f.replies.join('\n').includes('Scheduled tasks'))
+    const strangerDetail = message(2, '/tasks 1');strangerDetail.message!.from!.id = 202
+    await f.relay.bot.handleUpdate(strangerDetail)
+    assert.equal(f.launched.length, 0)
+    assert.ok(!f.replies.join('\n').includes('Scheduled tasks'))
+    for (const [id, text] of [[3, '/tasks 0'], [4, '/tasks abc'], [5, '/tasks 1.5'], [6, '/tasks 2 extra']] as const) {
+      await f.relay.bot.handleUpdate(message(id, text))
+      assert.match(f.replies.at(-1)!, /Usage: \/tasks \[number\]/)
+    }
+    await f.relay.drainInbox(true)
+    assert.equal(f.launched.length, 0)
+  } finally { await f.close() }
 })

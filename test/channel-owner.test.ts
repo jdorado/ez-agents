@@ -87,7 +87,7 @@ test('web owner uses the standard schedule CLI, executor and outbox with Telegra
     if(!scheduled){const r=spawnSync(process.execPath,[${JSON.stringify(scheduleCli)},'create','followup','--now','--name','Followup','--text','Finish the requested work'],{env:process.env,encoding:'utf8'});if(r.status)throw Error(r.stderr)}
     const r=spawnSync(process.execPath,[${JSON.stringify(messageCli)},'--text',scheduled?'Scheduled reply':'Chat reply'],{env:process.env,encoding:'utf8'});if(r.status)throw Error(r.stderr);`)
   EXECUTOR_REGISTRY.grok={...original,command:process.execPath,buildArgs:()=>['--import',require.resolve('tsx'),fixture]}
-  const config=loadConfig({EZ_TELEGRAM_ENABLED:'false',EZ_APPLICATION_PORT:'8787',EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'grok'})
+  const config=loadConfig({EZ_APPLICATION_PORT:'8787',EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'grok'})
   const relay=createRelay(config), control=new ControlStore(root,60000), runs=new RunStore(root)
   const owner=await control.registerOwner('web-owner'),token=secret()
   const binding=(await relay.applicationChannel.bindings.register('web',token,owner))!
@@ -141,7 +141,7 @@ for (const mode of ['owner','web','telegram']) test(`${mode} revocation stops it
   const control=new ControlStore(root,60000),runs=new RunStore(root),scheduler=new Scheduler(root)
   await control.requestPairing(42,42)
   const owner=await control.approveOwner(42)
-  const relay=createRelay(loadConfig({TELEGRAM_BOT_TOKEN:'synthetic',EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'grok'}),async()=>({child:spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'pipe'}),stdout:'',cleanup:async()=>{}}))
+  const relay=createRelay(loadConfig({TELEGRAM_BOT_TOKEN:'110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY',EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'grok'}),async()=>({child:spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'pipe'}),stdout:'',cleanup:async()=>{}}))
   relay.bot.api.config.use(async()=>({ok:true,result:true}) as never)
   t.after(async()=>{await relay.stop();await rm(root,{recursive:true,force:true})})
   if (mode==='telegram') {
