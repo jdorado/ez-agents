@@ -11,7 +11,7 @@ export const runTelegramProvisioningCli = async (args = process.argv.slice(2), i
   let token = ''
   for await (const chunk of input) {
     token += chunk.toString()
-    if (token.length > 512) throw new Error('Token input is too long.')
+    if (token.length > 512) { (input as NodeJS.ReadStream).destroy?.(); throw new Error('Token input is too long.') }
   }
   await provisionTelegramBot(args[1], token.trim())
   console.log(JSON.stringify({ configured: true }))
