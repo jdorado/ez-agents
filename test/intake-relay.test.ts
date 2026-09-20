@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { randomBytes } from 'node:crypto'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +9,7 @@ import { once } from 'node:events'
 import type { Update } from 'grammy/types'
 import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
+import { ApplicationBindings } from '../src/application-channel.js'
 import { RunStore } from '../src/runs.js'
 import { InboxStore } from '../src/inbox.js'
 import { ApprovalStore } from '../src/approval.js'
@@ -705,5 +707,25 @@ test('web launcher is private-owner-only and bypasses native intake without repl
     await f.relay.drainInbox(true);assert.equal(f.launched.length,0)
     await new ControlStore(f.dir,1000).revokeOwner()
     const before=f.keyboards.length;await f.relay.bot.handleUpdate(message(4,'/voice'));assert.equal(f.keyboards.length,before)
+  } finally {await f.close()}
+})
+
+test('application Telegram link connects without launching work; bad link replies expired', async () => {
+  const f=await fixture()
+  try {
+    const control=new ControlStore(f.dir,1000)
+    await control.revokeOwner()
+    const owner=await control.registerOwner('account:web')
+    const binding=await new ApplicationBindings(f.dir).register('webapp',randomBytes(32).toString('base64url'),owner,true)
+    assert.ok(binding)
+    const pairing=await control.createApplicationTelegramPairing(binding.bindingId,owner)
+    assert.ok(pairing)
+    await f.relay.bot.handleUpdate(message(1,`/start ${'A'.repeat(43)}`))
+    assert.match(f.replies.at(-1)!,/expired|no longer valid/)
+    assert.equal(f.launched.length,0)
+    await f.relay.bot.handleUpdate(message(2,`/start ${pairing.token}`))
+    assert.match(f.replies.at(-1)! ,/connected/)
+    assert.equal(f.launched.length,0)
+    assert.equal((await control.status()).owner?.telegramUserId,101)
   } finally {await f.close()}
 })

@@ -100,7 +100,8 @@ export class ApplicationChannel {
   }
   private async createTelegramConnection(bindingId: string) {
     const owner = await this.sharedBinding(bindingId)
-    if (telegramOwner(owner)) return { connected: true } as const
+    const current = (await new ControlStore(this.options.controlDir, 900000).status()).owner
+    if (telegramOwner(current)) return { connected: true } as const
     if (!this.options.createTelegramPairing) throw new Error('Telegram connection is unavailable')
     return this.options.createTelegramPairing(bindingId, owner)
   }

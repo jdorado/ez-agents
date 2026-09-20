@@ -1,5 +1,5 @@
 import { assertEffort } from './model-policy.js'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isPreset, persistedPreset, type AiPreset, type ExecutionChoice } from './ai.js'
@@ -355,8 +355,10 @@ export class ControlStore {
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
       const request = state.pending.find((candidate): candidate is ApplicationPairingRequest =>
-        applicationPairing(candidate) && candidate.application.tokenHash === pairingDigest(token))
+        applicationPairing(candidate) && /^[a-f0-9]{64}$/.test(candidate.application.tokenHash) &&
+        timingSafeEqual(Buffer.from(candidate.application.tokenHash, 'hex'), Buffer.from(pairingDigest(token), 'hex')))
       if (!request || telegramOwner(state.owner) || !sameOwner(request.application.owner, state.owner)) {
+        if (request) state.pending = state.pending.filter((candidate) => candidate !== request)
         await this.writeState(state)
         return null
       }

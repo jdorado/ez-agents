@@ -59,7 +59,8 @@ test('application-owned Telegram link is hashed, one-time, and bound to the curr
   const pairing = await store.createApplicationTelegramPairing(bindingId, owner)
   assert.ok(pairing)
   assert.doesNotMatch(await readFile(path.join(directory, 'control-state.json'), 'utf8'), new RegExp(pairing.token))
-  assert.equal(await store.claimApplicationTelegramPairing(`${pairing.token}x`, 101, 101, async () => true), null)
+  const flipped = pairing.token.slice(0, -1) + (pairing.token.endsWith('A') ? 'B' : 'A')
+  assert.equal(await store.claimApplicationTelegramPairing(flipped, 101, 101, async () => true), null)
   assert.equal(await store.claimApplicationTelegramPairing(pairing.token, 101, 101, async () => false), null)
   assert.equal((await store.status()).owner?.telegramUserId, undefined)
 
@@ -77,6 +78,11 @@ test('application-owned Telegram link is hashed, one-time, and bound to the curr
   assert.equal(linked?.telegramChatId, 101)
   assert.ok(linked?.telegramLinkedAt)
   assert.equal(await store.claimApplicationTelegramPairing(active.token, 101, 101, async () => true), null)
+  assert.equal(await store.createApplicationTelegramPairing(bindingId, linked!), null)
+  await store.unlinkTelegram()
+  const relink = await store.createApplicationTelegramPairing(bindingId, (await store.status()).owner!)
+  assert.ok(relink)
+  assert.equal(await store.claimApplicationTelegramPairing(relink.token, 101, 101, async () => false), null)
 }))
 
 test('owner CLI treats pnpm -- as a separator, not a command', () => {
