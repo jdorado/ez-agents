@@ -9,7 +9,11 @@ export const read = async file => JSON.parse(await fs.readFile(file,'utf8'));
 export const missing = error => {if(error.code!=='ENOENT')throw error;return null;};
 export const targetId = value => {if(value!=='main'&&!/^[a-z][a-z0-9-]{0,39}$/.test(value))throw Error('Invalid update target');return value;};
 const jobId=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-const upgradeable=(candidate,installed)=>newer(candidate,installed)||(candidate==='0.1.0-beta.34'&&/^0\.1\.0-beta\.34\.compat\.\d+$/.test(installed));
+const compatibilityBuild=/^(.+)\.compat\.\d+$/;
+const upgradeable=(candidate,installed)=>{
+  const match=compatibilityBuild.exec(installed);
+  return newer(candidate,installed)||Boolean(match&&match[1]===candidate);
+};
 export const updateHome = home => path.join(home,'updates');
 export async function state(home) {
   const config=await read(path.join(home,'config.json'));
