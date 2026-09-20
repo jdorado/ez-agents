@@ -1,4 +1,5 @@
 import { assertEffort } from './model-policy.js'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isPreset, persistedPreset, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
@@ -32,7 +33,7 @@ export const validOwner = (owner: unknown): owner is Owner => {
       Number.isSafeInteger(p.telegramChatId) && (p.kind === 'group' ? p.telegramChatId! < 0 : p.kind === undefined && p.telegramChatId! > 0))
 }
 
-export type PairingRequest = {
+type TelegramPairingRequest = {
   kind?: 'group'
   title?: string
   telegramUserId: number
@@ -40,6 +41,18 @@ export type PairingRequest = {
   requestedAt: string
   expiresAt: string
 }
+
+type ApplicationPairingRequest = {
+  application: {
+    bindingId: string
+    tokenHash: string
+    owner: Owner
+  }
+  requestedAt: string
+  expiresAt: string
+}
+
+export type PairingRequest = TelegramPairingRequest | ApplicationPairingRequest
 
 export type SessionState = {
   sessionId: string
@@ -71,6 +84,20 @@ const emptyState = (): ControlState => ({ version: 1, owner: null, pending: [] }
 const isPositiveId = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 
+const applicationPairing = (request: PairingRequest): request is ApplicationPairingRequest =>
+  'application' in request
+
+const telegramPairing = (request: PairingRequest): request is TelegramPairingRequest =>
+  !applicationPairing(request)
+
+const applicationBindingId = (value: unknown): value is string =>
+  typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value)
+
+const pairingToken = (value: unknown): value is string =>
+  typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value)
+
+const pairingDigest = (value: string): string => createHash('sha256').update(value).digest('hex')
+
 const isRecentIds = (value: unknown): value is string[] =>
   Array.isArray(value) && value.length <= 3 && new Set(value).size === value.length &&
   value.every((id) => typeof id === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(id))
@@ -78,12 +105,24 @@ const isRecentIds = (value: unknown): value is string[] =>
 const isState = (value: unknown): value is ControlState => {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<ControlState>
-  const identity = (person: unknown): boolean => {
+  const telegramIdentity = (person: unknown): boolean => {
     if (!person || typeof person !== 'object') return false
     const p = person as Owner
     return isPositiveId(p.telegramUserId) && (p.kind === 'group'
       ? Number.isSafeInteger(p.telegramChatId) && p.telegramChatId! < 0
       : p.kind === undefined && isPositiveId(p.telegramChatId))
+  }
+  const pairing = (request: unknown): request is PairingRequest => {
+    if (!request || typeof request !== 'object') return false
+    const value = request as Partial<ApplicationPairingRequest & TelegramPairingRequest>
+    if (!Number.isFinite(Date.parse(value.expiresAt ?? '')) || !Number.isFinite(Date.parse(value.requestedAt ?? '')))
+      return false
+    if (value.application !== undefined) {
+      const application = value.application
+      return Object.keys(value).every((key) => ['application', 'requestedAt', 'expiresAt'].includes(key)) &&
+        !!application && applicationBindingId(application.bindingId) && /^[a-f0-9]{64}$/.test(application.tokenHash) && validOwner(application.owner)
+    }
+    return telegramIdentity(value)
   }
   const session = (s: SessionState) => s && /^[0-9a-f-]{36}$/i.test(s.sessionId) && typeof s.hasStarted === 'boolean' &&
     (s.title === undefined || (typeof s.title === 'string' && s.title.length <= 80)) &&
@@ -94,7 +133,7 @@ const isState = (value: unknown): value is ControlState => {
   return (
     candidate.version === 1 &&
     Array.isArray(candidate.pending) &&
-    candidate.pending.every((p) => identity(p) && Number.isFinite(Date.parse(p.expiresAt))) &&
+    candidate.pending.every(pairing) &&
     (candidate.owner === null || validOwner(candidate.owner)) &&
     (candidate.ai === undefined || (Array.isArray(candidate.ai.presets) &&
       candidate.ai.presets.every(isPreset) &&
@@ -221,7 +260,7 @@ export class ControlStore {
       if (telegramOwner(state.owner)) return 'owner-exists'
       if (
         state.pending.some(
-          (request) => request.telegramUserId === telegramUserId && request.telegramChatId === telegramChatId,
+          (request) => telegramPairing(request) && request.telegramUserId === telegramUserId && request.telegramChatId === telegramChatId,
         )
       ) {
         await this.writeState(state)
@@ -282,14 +321,75 @@ export class ControlStore {
     })
   }
 
+  async createApplicationTelegramPairing(bindingId: string, expectedOwner: Owner): Promise<{ token: string; expiresAt: string } | null> {
+    if (!applicationBindingId(bindingId) || !validOwner(expectedOwner)) throw new Error('Invalid application Telegram pairing request')
+    return this.withLock(async () => {
+      const state = this.prune(await this.readState())
+      if (!sameOwner(expectedOwner, state.owner)) throw new Error('Application authority revoked')
+      if (telegramOwner(state.owner)) {
+        await this.writeState(state)
+        return null
+      }
+      const retained = state.pending.filter((request) => !applicationPairing(request) || request.application.bindingId !== bindingId)
+      if (retained.length >= 3) throw new Error('Telegram pairing capacity reached')
+      const token = randomBytes(32).toString('base64url')
+      const now = this.clock()
+      const expiresAt = new Date(now + this.pairingTtlMs).toISOString()
+      state.pending = [...retained, {
+        application: { bindingId, tokenHash: pairingDigest(token), owner: expectedOwner },
+        requestedAt: new Date(now).toISOString(),
+        expiresAt,
+      }]
+      await this.writeState(state)
+      return { token, expiresAt }
+    })
+  }
+
+  async claimApplicationTelegramPairing(
+    token: string,
+    telegramUserId: number,
+    telegramChatId: number,
+    authorize: (bindingId: string, owner: Owner) => Promise<boolean>,
+  ): Promise<Owner | null> {
+    if (!pairingToken(token) || !isPositiveId(telegramUserId) || !isPositiveId(telegramChatId)) return null
+    return this.withLock(async () => {
+      const state = this.prune(await this.readState())
+      const request = state.pending.find((candidate): candidate is ApplicationPairingRequest =>
+        applicationPairing(candidate) && /^[a-f0-9]{64}$/.test(candidate.application.tokenHash) &&
+        timingSafeEqual(Buffer.from(candidate.application.tokenHash, 'hex'), Buffer.from(pairingDigest(token), 'hex')))
+      if (!request || telegramOwner(state.owner) || !sameOwner(request.application.owner, state.owner)) {
+        if (request) state.pending = state.pending.filter((candidate) => candidate !== request)
+        await this.writeState(state)
+        return null
+      }
+      if (!await authorize(request.application.bindingId, request.application.owner)) {
+        state.pending = state.pending.filter((candidate) => candidate !== request)
+        await this.writeState(state)
+        return null
+      }
+      const owner: Owner = {
+        id: ownerId(state.owner!),
+        generation: state.owner!.generation,
+        telegramUserId,
+        telegramChatId,
+        telegramLinkedAt: crypto.randomUUID(),
+        pairedAt: state.owner!.pairedAt,
+      }
+      state.owner = owner
+      state.pending = []
+      await this.writeState(state)
+      return owner
+    })
+  }
+
   async approveOwner(telegramUserId: number, group = false): Promise<Owner> {
     if (!(group ? Number.isSafeInteger(telegramUserId) && telegramUserId < 0 : isPositiveId(telegramUserId))) throw new Error('Supply a positive user ID or negative group ID')
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
       if (telegramOwner(state.owner)) throw new Error('An owner is already paired; unlink locally before replacing its Telegram channel')
-      const request = state.pending.find((candidate) => group
+      const request = state.pending.find((candidate): candidate is TelegramPairingRequest => telegramPairing(candidate) && (group
         ? candidate.kind === 'group' && candidate.telegramChatId === telegramUserId
-        : candidate.kind === undefined && candidate.telegramUserId === telegramUserId)
+        : candidate.kind === undefined && candidate.telegramUserId === telegramUserId))
       if (!request) throw new Error('No active pairing request exists for that Telegram user ID')
       const owner: Owner = {
         generation: state.owner ? state.owner.generation : crypto.randomUUID(),
