@@ -10,7 +10,7 @@ export const installedPluginVersions = async (toolsHome?: string) => {
   } catch { return null }
 }
 
-export const softwareStatus = async (controlDir: string): Promise<string[]> => {
+export const softwareStatus = async (controlDir: string, isolation?: string): Promise<string[]> => {
   const lines = [`Relay: running · v${packageVersion}`]
   try {
     const h = JSON.parse(await readFile(path.join(controlDir, 'host-executor/heartbeat.json'), 'utf8'))
@@ -18,6 +18,9 @@ export const softwareStatus = async (controlDir: string): Promise<string[]> => {
     lines.push(`Host transport: running · ${typeof h.version === 'string' ? `v${h.version}` : 'version unknown'}`)
     if (!Array.isArray(h.plugins)) lines.push('Plugins: unknown')
     else lines.push(`Plugins: ${h.plugins.length ? h.plugins.map((p: {id: string; version: string}) => `${p.id} ${p.version}`).join(', ') : 'none installed'}`)
-  } catch { lines.push('Host transport: unavailable', 'Plugins: unknown') }
+  } catch {
+    if (isolation === 'isolated') lines.push('Host transport: n/a · isolated execution', 'Plugins: isolated broker · versions via `ez tools list`')
+    else lines.push('Host transport: unavailable', 'Plugins: unknown')
+  }
   return lines
 }
