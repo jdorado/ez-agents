@@ -466,6 +466,15 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
     await atomic(record.compose,await compose(config,record,secrets,home));
     const container=`${record.project}-call-${randomUUID()}`;
+    const context=await applicationPluginContext(record.manifest.id,environment);
+    let contextFile;
+    if(context!==undefined){
+      await privateDir(path.join(home,'plugin-context'));
+      contextFile=path.join(home,'plugin-context',`${randomUUID()}.env`);
+      await fs.writeFile(contextFile,`EZ_PLUGIN_CONTEXT=${context}\n`,{mode:0o600,flag:'wx'});
+    }
+    const invocationRelease=invocation?await invocationLease(home,container):undefined;
+    const release=(invocationRelease||contextFile)?(async()=>{try{if(contextFile)await fs.rm(contextFile,{force:true});}finally{await invocationRelease?.();}}):undefined;
     return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),...(contextFile?['--env-file',contextFile]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
   },{allowInvocations:true});
 }

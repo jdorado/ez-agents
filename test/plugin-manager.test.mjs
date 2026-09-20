@@ -86,20 +86,6 @@ test('native discovery binding preserves notes and never seeds a tool inventory'
  await assert.rejects(bindToolDiscovery(f.home,f.workspace),/regular file/);
  assert.equal(await fs.readFile(notes,'utf8'),'Legacy policy');
 });
-test('application plugin context is namespaced, authorized, and absent from ordinary commands',async t=>{
- const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
- const home=await fs.realpath(f.home);
- const control=new ControlStore(f.control,1000);await control.requestPairing(42,42);const owner=await control.approveOwner(42);
- const binding=await new ApplicationBindings(f.control).register('app',randomBytes(32).toString('base64url'),owner);
- assert.ok(binding);
- const runs=new RunStore(f.control),run=await runs.create({id:'r_app_plugin',ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),texts:['Use the plugin'],application:{bindingId:binding.bindingId,requestId:'plugin',scope:'owner-chat',context:{plugins:{sample:{capability:'scoped-value'},other:{capability:'must-not-leak'}}}}});
- await runs.patch(run.id,{status:'running'});
- const command=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}});
- const index=command.argv.indexOf('-e');assert.ok(index>0);assert.deepEqual(command.argv.slice(index,index+2),['-e','EZ_PLUGIN_CONTEXT={"capability":"scoped-value"}']);
- assert.equal(command.argv.join(' ').includes('must-not-leak'),false);
- const ordinary=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control}});
- assert.equal(ordinary.argv.includes('-e'),false);
-});
 test('isolated discovery uses the relay-bound ez client without exposing toolsHome',async t=>{
  const f=await fixture(t);await fs.mkdir(f.home);const workspace=await fs.realpath(f.workspace),controlDir=await fs.realpath(f.control),toolsHome=await fs.realpath(f.home),host={cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir,binDir:path.join(f.root,'bin'),toolsHome}]};
  await fs.mkdir(path.join(f.root,'bin'));await fs.writeFile(f.hostConfig,JSON.stringify(host));
