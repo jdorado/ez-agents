@@ -250,7 +250,7 @@ export const validateCodexProvider = (value: CodexProviderBinding): CodexProvide
 export const validateCodexProviderEnvironmentKey = (value: unknown): string => {
   const envKey = providerToken(value, 'environment key', /^[A-Z][A-Z0-9_]{1,63}$/, 64)
   if (allowedEnvironmentKeys.includes(envKey as typeof allowedEnvironmentKeys[number]) || envKey === 'CODEX_HOME' || envKey === 'NODE_OPTIONS' ||
-      envKey.startsWith('EZ_') || envKey.startsWith('TELEGRAM_') || envKey.startsWith('PAGERDUTY_'))
+      envKey.startsWith('EZ_') || envKey.startsWith('TELEGRAM_'))
     throw new Error('Reserved Codex provider environment key')
   return envKey
 }

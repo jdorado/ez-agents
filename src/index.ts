@@ -39,12 +39,11 @@ import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset }
 import { discoverDefaults } from './client-defaults.js'
 import { initializeWorkspace } from './workspace.js'
 import { softwareStatus } from './software-status.js'
-import { PagerDutyStocksMonitor } from './pagerduty.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
     let message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unknown error'
-    for (const secret of [config.channelBackendToken, config.telegramBotToken, config.geminiApiKey, config.openaiApiKey, config.pagerDutyRoutingKey]) {
+    for (const secret of [config.channelBackendToken, config.telegramBotToken, config.geminiApiKey, config.openaiApiKey]) {
       if (secret) message = message.replaceAll(secret, '[redacted]')
     }
     return message
@@ -74,15 +73,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
   const durableWorkerChoice = () => control.captureChoice(aiMenu.initial)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
-  const pagerDuty = config.pagerDutyRoutingKey && config.pagerDutyStocksHealthUrl
-    ? new PagerDutyStocksMonitor({
-      routingKey: config.pagerDutyRoutingKey,
-      healthUrl: config.pagerDutyStocksHealthUrl,
-      pollMs: config.pagerDutyPollMs!,
-      failureThreshold: config.pagerDutyFailureThreshold!,
-      onError: (error) => console.error('PagerDuty Stocks health check failed', safeError(error)),
-    })
-    : undefined
 
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
   let activeBackend = false
@@ -1161,7 +1151,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     })
     await Promise.all(completions)
     await Promise.all([taskWork, outboxWork].map(work => work?.catch(() => {})))
-    pagerDuty?.stop()
     try {
       if (bot?.isRunning()) await bot.stop()
     } finally {
@@ -1175,7 +1164,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       await initializeWorkspace(config.workspace)
       if (config.applicationPort) await applicationChannel.listen(config.applicationPort, config.applicationHost)
       runtimeStarted = true
-      pagerDuty?.start()
       const owner = (await control.status()).owner
       if (telegramEnabled && telegramOwner(owner) && !config.channelBackendUrl) await telegramSource!.start(owner!)
       await scheduler.recover(runs)

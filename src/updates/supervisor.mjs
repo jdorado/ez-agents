@@ -10,7 +10,7 @@ import { digest } from './artifact.mjs';
 const reservedProviderKeys=new Set(['HOME','LANG','LC_ALL','LOGNAME','PATH','SHELL','TERM','TMPDIR','USER','CODEX_HOME','NODE_OPTIONS']);
 const providerEnvironmentKey=value=>{
   if(typeof value!=='string'||value.length>64||!/^[A-Z][A-Z0-9_]{1,63}$/.test(value))throw Error('Invalid Codex provider environment key');
-  if(reservedProviderKeys.has(value)||value.startsWith('EZ_')||value.startsWith('TELEGRAM_')||value.startsWith('PAGERDUTY_'))throw Error('Reserved Codex provider environment key');
+  if(reservedProviderKeys.has(value)||value.startsWith('EZ_')||value.startsWith('TELEGRAM_'))throw Error('Reserved Codex provider environment key');
   return value;
 };
 

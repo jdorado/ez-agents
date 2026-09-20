@@ -21,7 +21,6 @@
     "ezenciel-agents-host": "bin/ezenciel-agents-host",
     "ezenciel-agents-tools": "bin/ezenciel-agents-tools.mjs",
     "ezenciel-agents-ai": "bin/ezenciel-agents-ai.mjs",
-    "ezenciel-agents-watch": "bin/ezenciel-agents-watch.mjs",
     "ezenciel-agents-application": "bin/ezenciel-agents-application.mjs",
     "ezenciel-agents-provision-telegram": "bin/ezenciel-agents-provision-telegram.mjs",
     "ezenciel-agents-plugin-broker": "bin/ezenciel-agents-plugin-broker.mjs"
@@ -39,7 +38,6 @@
     "CONTRIBUTING.md",
     "Dockerfile",
     "compose.yaml",
-    "compose.workforce-watch.yaml",
     "docker",
     "compose.whatsapp.yaml",
     "scripts/smoke.ts",

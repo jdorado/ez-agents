@@ -38,27 +38,6 @@ test('Codex context limit is configurable and rejects invalid values', () => {
     assert.throws(()=>loadConfig({TELEGRAM_BOT_TOKEN:'110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY',EZ_CODEX_AUTO_COMPACT_TOKENS:value}),/positive integer/)
 })
 
-test('PagerDuty Stocks monitoring requires a routing key and validates its target', () => {
-  assert.throws(
-    () => loadConfig({ TELEGRAM_BOT_TOKEN: '110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY', EZ_PAGERDUTY_STOCKS_HEALTH_URL: 'http://stocks.test/health/critical' }),
-    /PAGERDUTY_ROUTING_KEY is required/,
-  )
-  assert.throws(
-    () => loadConfig({ TELEGRAM_BOT_TOKEN: '110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY', PAGERDUTY_ROUTING_KEY: 'key', EZ_PAGERDUTY_STOCKS_HEALTH_URL: 'file:///private/health' }),
-    /absolute HTTP\(S\) URL/,
-  )
-  const config = loadConfig({
-    TELEGRAM_BOT_TOKEN: '110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY',
-    PAGERDUTY_ROUTING_KEY: 'pagerduty-key',
-    EZ_PAGERDUTY_STOCKS_HEALTH_URL: 'http://stocks.test/health/critical',
-    EZ_PAGERDUTY_POLL_SECONDS: '45',
-    EZ_PAGERDUTY_FAILURE_THRESHOLD: '4',
-  })
-  assert.equal(config.pagerDutyRoutingKey, 'pagerduty-key')
-  assert.equal(config.pagerDutyStocksHealthUrl, 'http://stocks.test/health/critical')
-  assert.equal(config.pagerDutyPollMs, 45_000)
-  assert.equal(config.pagerDutyFailureThreshold, 4)
-})
 
 test('external Codex isolation requires explicit native local deployment', () => {
   const env = {EZ_APPLICATION_PORT:'8110', EZ_EXECUTOR_TRANSPORT:'local', EZ_CODEX_SANDBOX:'external'}
