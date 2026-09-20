@@ -284,6 +284,22 @@ owner, application bindings or native sessions. Relinking does not authorize old
 Telegram deliveries. Linking other providers requires an authenticated adapter;
 registering the label `phone` does not install a phone service.
 
+### Application-initiated Telegram handoff
+
+An already-authorized `--share-owner` application binding can make the ordinary
+Telegram link easy without becoming a Telegram backend. `GET /v1/telegram`
+returns the current `connected` state. `POST /v1/telegram/link` either returns
+`{connected:true}` or a single-use, short-lived `https://t.me/BOT?start=TOKEN`
+link. The bot accepts that token only from the matching application's current
+owner, then persists the normal Telegram owner/channel record and consumes the
+ticket. The raw token is never stored in control state.
+
+This is a launch handoff, not a UI-owned connection: the application does not
+store Telegram identity, bot credentials, or the ticket, and the Ez agent keeps
+working when that application is unavailable. There is deliberately no
+application disconnect endpoint. Administrative unlink remains the explicit
+owner control above.
+
 The legacy `--share-telegram`, `--share-active` and `followTelegram:true` spellings remain supported.
 
 ### Existing scoped Telegram sharing
