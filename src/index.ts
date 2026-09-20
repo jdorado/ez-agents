@@ -112,6 +112,19 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     controlDir: config.controlDir, workspace: config.workspace, initial: aiMenu.initial,
     aiControls: aiMenu,
     wake: () => { void drainSources().catch(error => console.error('Application queue unavailable', safeError(error))) },
+    createTelegramPairing: async (bindingId, owner) => {
+      const username = bot?.botInfo?.username
+      if (!username || !/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(username))
+        throw new Error('Telegram connection is unavailable')
+      const pairing = await control.createApplicationTelegramPairing(bindingId, owner)
+      if (!pairing) return { connected: true } as const
+      return {
+        connected: false as const,
+        url: `https://t.me/${username}?start=${pairing.token}`,
+        expiresAt: pairing.expiresAt,
+      }
+    },
+    telegramAvailable: () => Boolean(bot?.botInfo?.username),
     cancel: id => withStartLock(async () => {
       const run = await runs.get(id)
       if (run?.status === 'queued') await runs.patch(id, {status:'cancelled',endedAt:new Date().toISOString()})
@@ -628,6 +641,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const state = await control.status()
     if (!telegramOwner(state.owner)) {
       if (ctx.chat?.type !== 'private') return false
+      const applicationToken = ctx.message?.text?.trim().match(/^\/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{43})$/)?.[1]
+      if (applicationToken) {
+        const linked = await applicationChannel.claimTelegramConnection(applicationToken, ctx.from.id, ctx.chat.id)
+        await ctx.reply(linked
+          ? 'Telegram is connected to your Ez agent. You can keep chatting here.'
+          : 'This Telegram connection link expired or is no longer valid. Create a new one in the connected application.')
+        return false
+      }
       const result = await control.requestPairing(ctx.from.id, ctx.chat.id)
       if (result === 'requested')
         await ctx.reply('Owner approval is pending. Confirm this request through the local setup assistant.')

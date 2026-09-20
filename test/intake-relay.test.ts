@@ -113,7 +113,9 @@ test('approved owner group accepts different members, controls and group deliver
     await control.revokeOwner()
     await f.relay.bot.handleUpdate(group(1))
     assert.equal(f.launched.length, 0)
-    assert.equal((await control.status()).pending[0].title, 'Team')
+    const request = (await control.status()).pending[0]
+    if (!request || !('title' in request)) throw new Error('Group pairing request missing')
+    assert.equal(request.title, 'Team')
     await control.approveOwner(-101, true)
     await f.relay.bot.handleUpdate(group(2, 303))
     await f.relay.bot.handleUpdate(group(3, 404))
