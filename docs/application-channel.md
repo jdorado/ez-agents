@@ -332,6 +332,11 @@ application queue and application outbox without creating a Telegram client,
 starting Telegram sources/polling, or registering bot commands. Telegram becomes
 active as soon as the agent receives its private bot token.
 
+Upgrade note: the removed `EZ_TELEGRAM_ENABLED` flag is no longer read. A stale
+flag that contradicts the token (disabled flag with a token present, or enabled
+flag with no token) refuses to start — unset the flag, and remove any stale
+`TELEGRAM_BOT_TOKEN` to stay application-only.
+
 The installing administrator can initialize empty control authority and register
 an application in one local command:
 

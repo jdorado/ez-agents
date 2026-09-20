@@ -28,11 +28,12 @@ const [command = 'start', ...args] = process.argv.slice(2)
 process.argv = [process.argv[0], '', ...args]
 if (['start', 'smoke'].includes(command)) await recoverInterruptedRuns(loadConfig().controlDir, Boolean(loadConfig().channelBackendUrl))
 if (command === 'start') {
-  const relay = createRelay(loadConfig())
+  const config = loadConfig()
+  const relay = createRelay(config)
   const heartbeat = '/state/control/heartbeat.json'
   await rm(heartbeat, { force: true })
   const timer = setInterval(() => {
-    if (relay.isRunning()) void writeFile(heartbeat, JSON.stringify({ at: Date.now(), polling: Boolean(relay.bot?.isRunning()), applicationOnly: !relay.bot, version: packageVersion }), { mode: 0o600 })
+    if (relay.isRunning()) void writeFile(heartbeat, JSON.stringify({ at: Date.now(), polling: Boolean(relay.bot?.isRunning()), applicationOnly: !relay.telegramEnabled, telegramConfigured: config.telegramBotToken !== '', version: packageVersion }), { mode: 0o600 })
   }, 5000)
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { clearInterval(timer); void relay.stop() })
   try { await relay.start() } finally { clearInterval(timer); await rm(heartbeat, { force: true }) }

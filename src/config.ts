@@ -49,9 +49,19 @@ export const loadControlConfig = (env: NodeJS.ProcessEnv = process.env): Control
   }
 }
 
+export const telegramToken = (env: NodeJS.ProcessEnv = process.env): string => {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim() || ''
+  if (token && !/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(token)) throw new Error('TELEGRAM_BOT_TOKEN is malformed; refusing to start Telegram transport')
+  return token
+}
+
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
-  const telegramBotToken = env.TELEGRAM_BOT_TOKEN?.trim() || ''
+  const legacy = env.EZ_TELEGRAM_ENABLED
+  if (legacy !== undefined && legacy !== 'true' && legacy !== 'false') throw new Error('EZ_TELEGRAM_ENABLED must be true or false')
+  const telegramBotToken = telegramToken(env)
   const telegramEnabled = Boolean(telegramBotToken)
+  if (legacy !== undefined && (legacy === 'false') === telegramEnabled)
+    throw new Error('EZ_TELEGRAM_ENABLED was removed; it contradicts the inferred Telegram transport (a token means enabled). Unset EZ_TELEGRAM_ENABLED, and remove any stale TELEGRAM_BOT_TOKEN to stay application-only.')
   if (!telegramEnabled && !env.EZ_APPLICATION_PORT) throw new Error('Application-only execution requires EZ_APPLICATION_PORT')
 
   if (env.EZ_CHANNEL_BACKEND_URL && !env.EZ_CHANNEL_BACKEND_TOKEN?.trim()) throw new Error('EZ_CHANNEL_BACKEND_TOKEN is required')

@@ -4,7 +4,7 @@ const fail = code => { process.stderr.write(`EZ_HEALTH_${code}\n`); process.exit
 let value;
 try { value = JSON.parse(readFileSync(relayControl + '/heartbeat.json', 'utf8')); }
 catch { fail('RELAY_UNREADABLE'); }
-if (!value.polling && value.applicationOnly !== true) fail('RELAY_NOT_POLLING');
+if (!value.polling && (value.applicationOnly !== true || value.telegramConfigured !== false)) fail('RELAY_NOT_POLLING');
 if (!Number.isFinite(value.at) || Date.now() - value.at > 20000) fail('RELAY_STALE');
 
 if (process.env.EZ_EXECUTOR_TRANSPORT === 'host') {

@@ -92,10 +92,12 @@ test('botless daemon executes application turn and rejects Telegram-origin work/
 test('Docker health accepts application readiness when the agent has no bot', async t => {
   const root=await mkdtemp(join(tmpdir(),'ez-app-only-health-'))
   t.after(()=>rm(root,{recursive:true,force:true}))
-  await writeFile(join(root,'heartbeat.json'),JSON.stringify({at:Date.now(),polling:false,applicationOnly:true}))
+  await writeFile(join(root,'heartbeat.json'),JSON.stringify({at:Date.now(),polling:false,applicationOnly:true,telegramConfigured:false}))
   const command=fileURLToPath(new URL('../docker/healthcheck.mjs',import.meta.url))
   const env={...process.env,EZ_HEALTH_RELAY_CONTROL_DIR:root,EZ_EXECUTOR_TRANSPORT:'local'}
   assert.equal(spawnSync(process.execPath,[command],{env}).status,0)
-  await writeFile(join(root,'heartbeat.json'),JSON.stringify({at:Date.now(),polling:false,applicationOnly:false}))
+  await writeFile(join(root,'heartbeat.json'),JSON.stringify({at:Date.now(),polling:false,applicationOnly:false,telegramConfigured:false}))
+  assert.notEqual(spawnSync(process.execPath,[command],{env}).status,0)
+  await writeFile(join(root,'heartbeat.json'),JSON.stringify({at:Date.now(),polling:false,applicationOnly:true,telegramConfigured:true}))
   assert.notEqual(spawnSync(process.execPath,[command],{env}).status,0)
 })
