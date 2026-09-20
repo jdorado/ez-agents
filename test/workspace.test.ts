@@ -45,6 +45,8 @@ test('fresh mind is private; repeat initialization preserves customization and o
     assert.ok(!(await readdir(workspace)).includes('SOUL.md'))
     assert.ok(!(await readdir(workspace)).includes('USER.md'))
     assert.ok(!(await readdir(workspace)).includes('MEMORY.md'))
+    assert.ok(!(await readdir(workspace)).includes('inbox'))
+    assert.ok(!(await readdir(workspace)).includes('work'))
     await writeFile(path.join(workspace, 'AGENTS.md'), 'A customized research partner')
     await writeFile(path.join(workspace, 'MEMORY.md'), 'Existing knowledge')
     await writeFile(path.join(workspace, 'AGENT.md'), 'Legacy custom guidance')
@@ -53,7 +55,7 @@ test('fresh mind is private; repeat initialization preserves customization and o
     assert.equal(await readFile(path.join(workspace, 'MEMORY.md'), 'utf8'), 'Existing knowledge')
     assert.equal(await readFile(path.join(workspace, 'AGENT.md'), 'utf8'), 'Legacy custom guidance')
     assert.ok(!(await readdir(workspace)).some(name => name.endsWith('.tmp')))
-    assert.match(await readFile(path.join(workspace, 'AGENTS.md'), 'utf8'), /ez shared guidance: begin/)
+    assert.doesNotMatch(await readFile(path.join(workspace, 'AGENTS.md'), 'utf8'), /ez shared guidance/)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
@@ -83,6 +85,7 @@ test('new agents seed a purpose-scoped AGENTS.md once and preserve subsequent ed
     await writeFile(purpose, 'You are the shopping assistant for this family.\n\n### Responsibilities\n\nOrganize confirmed household shopping requests.\n')
     await initializeWorkspace(workspace, purpose)
     const agents = await readFile(path.join(workspace, 'AGENTS.md'), 'utf8')
+    assert.doesNotMatch(agents, /inbox\/|work\/|ezenciel-agents-message/)
     assert.match(agents, /## Purpose\n\nYou are the shopping assistant for this family\./)
     assert.match(agents, /### Responsibilities\n\nOrganize confirmed household shopping requests\./)
     await writeFile(path.join(workspace, 'AGENTS.md'), 'My evolving purpose\n')

@@ -2,7 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { loadConfig } from '../src/config.js'
 import { executorJobEnv } from '../src/executor.js'
-import { agentGuidance } from '../src/agent-guidance.js'
 
 test('repair preference is bound in the environment, never rewritten into the request', () => {
  const config = (value?:string) => loadConfig({TELEGRAM_BOT_TOKEN:'fixture', ...(value===undefined ? {} : {EZ_REPAIR_ENABLED:value})})
@@ -14,6 +13,4 @@ test('repair preference is bound in the environment, never rewritten into the re
   assert.equal(env.EZ_REPAIR_ENABLED,String(enabled))
   assert.equal(env.TELEGRAM_BOT_TOKEN,undefined)
  }
- assert.match(agentGuidance(),/EZ_REPAIR_ENABLED/)
- assert.match(agentGuidance(),/explicit owner request or saved maintenance mandate/)
 })

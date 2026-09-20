@@ -34,7 +34,8 @@ export async function bindToolDiscovery(home,workspace) {
     const prior=stat?await fs.readFile(file,'utf8'):'';
     const from=prior.indexOf(start),to=prior.indexOf(end);
     if((from<0)!==(to<0)||(from>=0&&(to<from||prior.indexOf(start,from+start.length)>=0||prior.indexOf(end,to+end.length)>=0)))throw Error('Malformed tool discovery block');
-    const block=start+'\nInstalled plugin snippets and skills: `'+path.join(home,'bin','ez')+' tools list --details`. Use this bound launcher for plugin commands; read the relevant skill when needed.\n'+end;
+    const launcher=path.join(home,'bin','ez');
+    const block=start+'\nInstalled capabilities: `'+launcher+' --help` and `'+launcher+' tools list --details`. Use this bound launcher; read the matching skill when needed.\n'+end;
     const next=from<0?prior+'\n'+block+'\n':prior.slice(0,from)+block+prior.slice(to+end.length);
     if(next===prior)continue;
     const tmp=file+'.'+randomUUID()+'.tmp';

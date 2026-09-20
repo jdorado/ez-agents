@@ -343,8 +343,9 @@ on the next read, without hooks, LLM calls or a cached inventory file.
 
 `ez tools list` retains its alias mapping for existing clients. Native AGENTS.md
 contains only the agent-bound discovery shortcut. New workspaces do not seed
-TOOLS.md; upgrades preserve legacy notes without rewriting them. Keep owner/account
-policies in agent instructions or linked policy files, separate from plugin metadata.
+TOOLS.md, SOUL.md, USER.md, or an `inbox/`/`work/` layout; upgrades preserve
+legacy notes without rewriting them. Keep owner/account policies in agent
+instructions or linked policy files, separate from plugin metadata.
 
 Folder bindings default to read-only. For an explicitly authorized plugin that
 updates the existing source, add `--writable` to `folder-bind` while the plugin

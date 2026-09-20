@@ -266,10 +266,11 @@ restart and shutdown. Host-capable agents register the small host CLI transport 
 
 The selected host CLI runs in this agent's persistent workspace and owns its
 Markdown/work files. New conversations and AI changes preserve those files.
-One compact, purpose-scoped `AGENTS.md` is seeded; `MEMORY.md` is optional.
-The installing LLM authors the initial brief from the owner's request and known
-application context; Ez stores it without trying to infer the product itself.
-Installed plugin snippets and skill paths come from `ez tools list --details`; no tool inventory file needs maintenance. Received files go in `inbox/`, tasks and deliverables in `work/`.
+One compact `AGENTS.md` is seeded with the installer purpose; `MEMORY.md` is
+optional. The installing LLM authors the initial brief from the owner's request
+and known application context; Ez stores it without trying to infer the product
+itself. Installed plugin snippets and skill paths come from the bound
+`ez tools list --details` locator; no tool inventory file needs maintenance.
 Credentials and control state stay outside the mind. Isolated agents use relay
 mounts as the filesystem boundary. Host-capable file separation is not OS
 isolation against a process running as the same user.
