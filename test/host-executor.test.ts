@@ -120,10 +120,17 @@ test('host execution resolves a declared provider from the bound agent, not a la
     }
     assert.match(events, /"stream":"exit","code":0/)
     const catalog = JSON.parse(await readFile(path.join(directory, 'models.json'), 'utf8'))
-    assert.deepEqual(catalog.filter((model: any) => model.model === provider.models[0]), [{
-      cli: 'codex', provider: 'openrouter', model: provider.models[0],
-      name: `OpenRouter · ${provider.models[0]}`, efforts: ['max'],
-    }])
+    assert.deepEqual(catalog.filter((model: any) => model.model === provider.models[0]), [
+      {
+        cli: 'codex-gui', model: provider.models[0],
+        name: 'codex-gui · DeepSeek V4.1 Flash', efforts: ['max'],
+      },
+      {
+        cli: 'codex', provider: 'openrouter', model: provider.models[0],
+        name: `OpenRouter · ${provider.models[0]}`, efforts: ['max'],
+      },
+    ])
+    assert.deepEqual(catalog.filter((model: any) => model.cli === 'codex' && !model.provider), [])
     assert.equal(captured.provider, 'openrouter')
     assert.deepEqual(captured.codexProvider, provider)
     assert.equal(captured.model, provider.models[0])

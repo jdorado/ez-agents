@@ -393,13 +393,18 @@ const authorizedApplicationRun = async (controlDir,runId) => {
   return application;
 };
 export async function applicationPluginContext(pluginId, environment=process.env) {
-  const controlDir=environment.EZ_CONTROL_DIR?.trim(),runId=environment.EZ_RUN_ID?.trim();
-  if(!controlDir||!runId)return undefined;
+  const rawDir=environment.EZ_CONTROL_DIR?.trim(),runId=environment.EZ_RUN_ID?.trim();
+  if(!rawDir||!runId)return undefined;
+  if(!path.isAbsolute(rawDir))throw Error('Plugin context requires a bound active run');
+  const controlDir=await fs.realpath(rawDir).catch(()=>undefined);
+  if(!controlDir)return undefined;
   const application=await authorizedApplicationRun(controlDir,runId);
   const contexts=application?.context?.plugins;
   if(!contexts||typeof contexts!=='object'||Array.isArray(contexts)||!Object.hasOwn(contexts,pluginId))return undefined;
   const context=contexts[pluginId];
   if(!context||typeof context!=='object'||Array.isArray(context))throw Error('Plugin application context must be an object');
+  const checkDepth=(value,level=0)=>{if(level>10)throw Error('Plugin application context is too deeply nested');if(value&&typeof value==='object')for(const entry of Object.values(value))checkDepth(entry,level+1);};
+  checkDepth(context);
   const encoded=JSON.stringify(context);
   if(Buffer.byteLength(encoded)>16*1024)throw Error('Plugin application context is too large');
   return encoded;
@@ -425,9 +430,16 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
     await atomic(record.compose,await compose(config,record,secrets,home));
     const container=`${record.project}-call-${randomUUID()}`;
-    const release=invocation?await invocationLease(home,container):undefined;
     const context=await applicationPluginContext(record.manifest.id,environment);
-    return {container,plugin:record.manifest.id,revision:record.revision,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),...(context?['--env',`EZ_PLUGIN_CONTEXT=${context}`]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
+    let contextFile;
+    if(context!==undefined){
+      await privateDir(path.join(home,'plugin-context'));
+      contextFile=path.join(home,'plugin-context',`${randomUUID()}.env`);
+      await fs.writeFile(contextFile,`EZ_PLUGIN_CONTEXT=${context}\n`,{mode:0o600,flag:'wx'});
+    }
+    const invocationRelease=invocation?await invocationLease(home,container):undefined;
+    const release=(invocationRelease||contextFile)?(async()=>{try{if(contextFile)await fs.rm(contextFile,{force:true});}finally{await invocationRelease?.();}}):undefined;
+    return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),...(contextFile?['--env-file',contextFile]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
   },{allowInvocations:true});
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {

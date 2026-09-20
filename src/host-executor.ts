@@ -44,7 +44,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     }))
     const declaredModels = new Set(declared.map(model => model.model))
     const isReplacedByProvider = (model: {cli:string; model?:string}) =>
-      model.model !== undefined && declaredModels.has(model.model) && (model.cli === 'codex' || model.cli === 'codex-gui')
+      model.model !== undefined && declaredModels.has(model.model) && model.cli === 'codex'
     return [...discovered.filter(model => !isReplacedByProvider(model)), ...declared]
   }
   try {
@@ -81,7 +81,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       await installAgentGuidance(agent.workspace)
       const models = await catalog(agent)
       await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
-      await writeFile(path.join(directory,'models.json'),JSON.stringify(models),{mode:0o600})
+      const modelsFile=path.join(directory,'models.json')
+      await writeFile(modelsFile+'.tmp',JSON.stringify(models),{mode:0o600});await rename(modelsFile+'.tmp',modelsFile)
       // A host crash is terminal for a claimed job. Never replay an action.
       for (const file of await readdir(directory)) if (file.endsWith('.running.json')) {
         const base=path.join(directory,file.slice(0,-13))
@@ -97,16 +98,19 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       if (agent.toolsHome) await (await import('./plugins/workspace-lease.mjs')).recoverNativeLease(agent.toolsHome)
     }
     let catalogAt=Date.now()
+    const catalogSeen=new Map<HostBinding,string>()
     while (!signal.aborted) {
       const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
       if(parent) { try { process.kill(parent,0) } catch { break } }
       if(Date.now()-catalogAt>30000){
         for(const agent of installation.agents){
           const catalogModels = await catalog(agent)
-          await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
           const models=JSON.stringify(catalogModels)
+          if(catalogSeen.get(agent)===models)continue
+          await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
           const file=path.join(agent.controlDir,'host-executor/models.json')
           await writeFile(file+'.tmp',models,{mode:0o600});await rename(file+'.tmp',file)
+          catalogSeen.set(agent,models)
         }
         catalogAt=Date.now()
       }

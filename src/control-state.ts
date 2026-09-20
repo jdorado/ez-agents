@@ -473,7 +473,6 @@ export class ControlStore {
       return persistedPreset({
         ...preset,
         provider: model.provider,
-        name: `${model.name}${preset.effort ? ` · ${preset.effort}` : ''}`.slice(0, 80),
       })
     }
     return this.withLock(async () => {
