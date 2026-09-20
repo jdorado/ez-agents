@@ -56,3 +56,31 @@ test('owner CLI treats pnpm -- as a separator, not a command', () => {
   assert.deepEqual(parseOwnerArgs(['--', 'approve', '101']), { command: 'approve', value: '101' })
   assert.deepEqual(parseOwnerArgs(['revoke']), { command: 'revoke', value: undefined })
 })
+
+test('provider catalog upgrades a persisted providerless Codex selection', async () => fixture(async (store) => {
+  const model = 'deepseek/deepseek-v4.1-flash'
+  await store.captureChoice({ id: 'deepseek', name: `${model} · max`, cli: 'codex', model, effort: 'max' })
+  const catalog = [{ cli: 'codex', provider: 'openrouter', model, name: `OpenRouter · ${model}`, efforts: ['max'] }]
+
+  assert.equal(await store.normalizeProviderBindings(catalog), true)
+  const state = await store.status()
+  const preset = state.ai!.presets.find((item) => item.id === state.ai!.selectedId)!
+  assert.equal(preset.provider, 'openrouter')
+  assert.equal(preset.name, `${model} · max`)
+  assert.equal(state.activeSession?.preset?.provider, 'openrouter')
+  assert.equal(await store.normalizeProviderBindings(catalog), false)
+}))
+
+test('provider catalog leaves ambiguous and effort-mismatched selections untouched', async () => fixture(async (store) => {
+  const model = 'deepseek/deepseek-v4.1-flash'
+  await store.captureChoice({ id: 'deepseek', name: 'My deepseek', cli: 'codex', model, effort: 'max' })
+  const ambiguous = [
+    { cli: 'codex', provider: 'openrouter', model, name: `OpenRouter · ${model}`, efforts: ['max'] },
+    { cli: 'codex', provider: 'direct', model, name: `Direct · ${model}`, efforts: ['max'] },
+  ]
+  assert.equal(await store.normalizeProviderBindings(ambiguous), false)
+  assert.equal((await store.status()).ai!.presets.find((item) => item.id === 'deepseek')!.provider, undefined)
+  const mismatch = [{ cli: 'codex', provider: 'openrouter', model, name: `OpenRouter · ${model}`, efforts: ['low'] }]
+  assert.equal(await store.normalizeProviderBindings(mismatch), false)
+  assert.equal((await store.status()).ai!.presets.find((item) => item.id === 'deepseek')!.provider, undefined)
+}))

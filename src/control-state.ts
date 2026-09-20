@@ -1,7 +1,7 @@
 import { assertEffort } from './model-policy.js'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { isPreset, persistedPreset, type AiPreset, type ExecutionChoice } from './ai.js'
+import { isPreset, persistedPreset, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
 
 export type Owner = {
   id?: string
@@ -460,6 +460,39 @@ export class ControlStore {
       ai.recentIds = (ai.recentIds ?? []).filter((id) => ai.presets.some((preset) => preset.id === id)).slice(0, 3)
       if (initial.id === 'chat-default' && !ai.presets.some(p => p.id === initial.id)) ai.presets.push(persistedPreset(initial))
       await this.writeState(state)
+    })
+  }
+
+  async normalizeProviderBindings(catalog: ModelChoice[]): Promise<boolean> {
+    const providerFor = (preset: AiPreset): AiPreset => {
+      if (preset.provider || preset.cli !== 'codex' || !preset.model) return preset
+      const matches = catalog.filter((model) => model.cli === preset.cli && model.model === preset.model && model.provider &&
+        (preset.effort === undefined || model.efforts.includes(preset.effort)))
+      if (matches.length !== 1) return preset
+      const model = matches[0]
+      return persistedPreset({
+        ...preset,
+        provider: model.provider,
+      })
+    }
+    return this.withLock(async () => {
+      const state = await this.readState()
+      if (!state.ai) return false
+      let changed = false
+      const normalize = (preset: AiPreset | undefined): AiPreset | undefined => {
+        if (!preset) return undefined
+        const next = providerFor(preset)
+        if (next !== preset) changed = true
+        return next
+      }
+      state.ai.presets = state.ai.presets.map((preset) => normalize(preset)!)
+      if (state.activeSession?.preset) state.activeSession.preset = normalize(state.activeSession.preset)
+      state.sessions = state.sessions?.map((session) => ({
+        ...session,
+        ...(session.preset ? { preset: normalize(session.preset) } : {}),
+      }))
+      if (changed) await this.writeState(state)
+      return changed
     })
   }
 
