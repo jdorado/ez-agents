@@ -76,12 +76,20 @@ export function reviewedPluginDeploymentMigration(target,old,next) {
   return {id:'library-query-contract-v1',files:['ez-plugin.json','ez-deployment.json'],changes:['remove library-document','route library-query through search']};
 }
 // Beta.34 added an optional isolation variable and moved a Compose fallback
-// behind the already-bound purpose-file variable. Existing deployments must
-// retain their effective runtime, while future service/volume/privilege changes
-// remain a separately reviewed migration.
+// behind the already-bound purpose-file variable. The status work adds a
+// build-time-only image-identity block (BUILD_TAG/BUILD_SHA) so /status can
+// show the running RC. Build args never enter the running container, so the
+// exact reviewed block does not change the effective runtime. Existing
+// deployments must retain their effective runtime, while future
+// service/volume/privilege changes remain a separately reviewed migration.
 const compatibleRuntimeMigration='legacy-runtime-v1';
+const buildIdentityBlock=`      args:
+        BUILD_TAG: \${BUILD_TAG:-}
+        BUILD_SHA: \${BUILD_SHA:-}
+`;
+const withoutBuildIdentity=text=>text.split(buildIdentityBlock).join('');
 function effectiveCompose(text,env) {
-  const lines=text.split(/\r?\n/);
+  const lines=withoutBuildIdentity(text).split(/\r?\n/);
   return lines.filter((line,index)=>{
     const match=/^(\s+)EZ_ISOLATION: \$\{EZ_ISOLATION:-\}\s*$/.exec(line);
     return !(match&&!env.EZ_ISOLATION?.trim()&&lines[index-1]?.trim()==='EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md');

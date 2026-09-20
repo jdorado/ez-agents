@@ -195,8 +195,28 @@ COMPOSE_PROJECT_NAME='ez-agent-fixture'
 EZ_EXECUTOR_TRANSPORT='host'
 `);await assert.rejects(eligibility(f.home,'main',f.source,false),/deployment/);
 });
+test('legacy runtime migration ignores the reviewed build-identity args block only',async t=>{
+  const f=await fixture(t),oldCompose=`services:
+  relay:
+    build:
+      context: .
+      target: runtime
+`,nextCompose=`services:
+  relay:
+    build:
+      context: .
+      target: runtime
+      args:
+        BUILD_TAG: \${BUILD_TAG:-}
+        BUILD_SHA: \${BUILD_SHA:-}
+`;
+  await fs.writeFile(path.join(f.old,'compose.yaml'),oldCompose);await fs.writeFile(path.join(f.source,'compose.yaml'),nextCompose);
+  const job=await prepare(f.home,'main',{file:await f.pack()});assert.equal(job.deploymentMigration.id,'legacy-runtime-v1');
+  await fs.writeFile(path.join(f.source,'compose.yaml'),nextCompose.replace('        BUILD_SHA:','        CODEX_CLI_VERSION: 9.9.9\n        BUILD_SHA:'));
+  await assert.rejects(prepare(f.home,'main',{file:await f.pack()}),/deployment/);
+});
 test('legacy runtime migration admits homes without docker.env when purpose fallback is already bound',async t=>{
- const f=await fixture(t),oldCompose=`services:
+  const f=await fixture(t),oldCompose=`services:
   relay:
     environment:
       EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md
