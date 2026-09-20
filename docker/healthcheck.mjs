@@ -13,8 +13,7 @@ if (process.env.EZ_EXECUTOR_TRANSPORT === 'host') {
   catch { fail('HOST_UNREADABLE'); }
   if (!Number.isFinite(host.at) || Date.now() - host.at > 15000) fail('HOST_STALE');
 }
-if (process.env.EZ_EXECUTOR_TRANSPORT === 'local' &&
-    (process.env.EZ_PLUGIN_BROKER_SOCKET?.trim() || process.env.EZ_TELEGRAM_ENABLED !== 'false')) {
+if (process.env.EZ_PLUGIN_BROKER_SOCKET?.trim()) {
   try { if (!statSync(process.env.EZ_PLUGIN_BROKER_SOCKET).isSocket()) fail('PLUGIN_BROKER_UNREADABLE'); }
   catch { fail('PLUGIN_BROKER_UNREADABLE'); }
 }

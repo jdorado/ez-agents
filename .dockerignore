@@ -23,6 +23,7 @@
 !scripts/release-check.mjs
 !scripts/stage-qa.mjs
 !default-plugins.json
+!compose.yaml
 !scripts/trusted-beta.mjs
 !scripts/generate-publish-caller.mjs
 !scripts/smoke-busy-reply.ts
