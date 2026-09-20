@@ -32,7 +32,7 @@ if (command === 'start') {
   const heartbeat = '/state/control/heartbeat.json'
   await rm(heartbeat, { force: true })
   const timer = setInterval(() => {
-    if (relay.isRunning()) void writeFile(heartbeat, JSON.stringify({ at: Date.now(), polling: Boolean(relay.bot?.isRunning()), applicationOnly: process.env.EZ_TELEGRAM_ENABLED === 'false', version: packageVersion }), { mode: 0o600 })
+    if (relay.isRunning()) void writeFile(heartbeat, JSON.stringify({ at: Date.now(), polling: Boolean(relay.bot?.isRunning()), applicationOnly: !relay.bot, version: packageVersion }), { mode: 0o600 })
   }, 5000)
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { clearInterval(timer); void relay.stop() })
   try { await relay.start() } finally { clearInterval(timer); await rm(heartbeat, { force: true }) }

@@ -17,7 +17,7 @@ async function main() {
   const config = loadControlConfig(), control = new ControlStore(config.controlDir, config.pairingTtlMs)
   if (values.owner && values['owner-id']) throw new Error('Choose one owner registration form')
   if (values['owner-id'] && (!values.id || !values['token-file'] || values.revoke || values.list || values['import-scope'])) throw new Error('--owner-id requires channel registration')
-  if (values.owner && (process.env.EZ_TELEGRAM_ENABLED !== 'false' || !values.id || !values['token-file'] || values.revoke || values.list || values['import-scope'])) throw new Error('--owner bootstrap requires explicit application-only registration')
+  if (values.owner && (process.env.TELEGRAM_BOT_TOKEN?.trim() || !values.id || !values['token-file'] || values.revoke || values.list || values['import-scope'])) throw new Error('--owner bootstrap requires an agent without a Telegram bot')
   const registrationToken = values['token-file'] ? (await readFile(values['token-file'], 'utf8')).trim() : null
   if (values.owner || values['owner-id']) validateApplicationRegistration(values.id!, registrationToken)
   const owner = values['owner-id'] ? await control.registerOwner(values['owner-id']) : values.owner ? await control.bootstrapApplicationOwner(Number(values.owner)) : (await control.status()).owner

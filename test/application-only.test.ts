@@ -20,12 +20,10 @@ const waitFor = async (condition: () => Promise<boolean>) => {
   throw new Error('Timed out')
 }
 
-test('application-only mode explicitly requires native listener and ignores bot credentials', () => {
-  assert.throws(()=>loadConfig({}), /TELEGRAM_BOT_TOKEN/)
-  assert.throws(()=>loadConfig({EZ_TELEGRAM_ENABLED:'false'}), /EZ_APPLICATION_PORT/)
-  assert.throws(()=>loadConfig({EZ_TELEGRAM_ENABLED:'no'}), /true or false/)
-  assert.throws(()=>loadConfig({EZ_TELEGRAM_ENABLED:'false',EZ_APPLICATION_PORT:'8110',EZ_CHANNEL_BACKEND_URL:'http://backend',EZ_CHANNEL_BACKEND_TOKEN:'secret'}), /native Ez executor/)
-  const config=loadConfig({EZ_TELEGRAM_ENABLED:'false',EZ_APPLICATION_PORT:'8110',TELEGRAM_BOT_TOKEN:'unused-secret'})
+test('application-only mode is inferred from the absence of a bot token and requires a native listener', () => {
+  assert.throws(()=>loadConfig({}), /EZ_APPLICATION_PORT/)
+  assert.throws(()=>loadConfig({EZ_APPLICATION_PORT:'8110',EZ_CHANNEL_BACKEND_URL:'http://backend',EZ_CHANNEL_BACKEND_TOKEN:'secret'}), /native Ez executor/)
+  const config=loadConfig({EZ_APPLICATION_PORT:'8110'})
   assert.equal(config.telegramBotToken,'')
   assert.equal(config.telegramEnabled,false)
 })
@@ -36,8 +34,8 @@ test('administrator bootstrap is explicit, local-only and cannot replace identit
   const token=join(root,'token'); await writeFile(token,'x'.repeat(48),{mode:0o600})
   const cli=fileURLToPath(new URL('../bin/ezenciel-agents-application.mjs',import.meta.url))
   const args=[cli,'--id','app','--token-file',token,'--owner','42']
-  const env={...process.env,EZ_CONTROL_DIR:root,EZ_RUN_ID:'',EZ_TELEGRAM_ENABLED:'false'}
-  assert.notEqual(spawnSync(process.execPath,args,{env:{...env,EZ_TELEGRAM_ENABLED:'true'}}).status,0)
+  const env={...process.env,EZ_CONTROL_DIR:root,EZ_RUN_ID:'',TELEGRAM_BOT_TOKEN:''}
+  assert.notEqual(spawnSync(process.execPath,args,{env:{...env,TELEGRAM_BOT_TOKEN:'fixture'}}).status,0)
   assert.notEqual(spawnSync(process.execPath,args,{env:{...env,EZ_RUN_ID:'r_agent'}}).status,0)
   assert.equal((await new ControlStore(root,1000).status()).owner,null)
   const invalidToken=join(root,'invalid-token');await writeFile(invalidToken,'short')
@@ -64,7 +62,7 @@ test('botless daemon executes application turn and rejects Telegram-origin work/
   const purpose=join(root,'purpose.md');await writeFile(purpose,'Fixture application agent\n');await initializeWorkspace(root,purpose)
   const portServer=createServer();await new Promise<void>(r=>portServer.listen(0,'127.0.0.1',r))
   const port=(portServer.address() as {port:number}).port;await new Promise<void>(r=>portServer.close(()=>r()))
-  const config=loadConfig({EZ_TELEGRAM_ENABLED:'false',EZ_APPLICATION_PORT:String(port),EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'codex'})
+  const config=loadConfig({EZ_APPLICATION_PORT:String(port),EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'codex'})
   const native='11111111-1111-1111-1111-111111111111', fixture=join(root,'engine.mjs')
   await writeFile(fixture,`import {spawnSync} from 'node:child_process';if(process.env.TELEGRAM_BOT_TOKEN)throw Error('secret leak');console.log(JSON.stringify({type:'thread.started',thread_id:${JSON.stringify(native)}}));const r=spawnSync(process.execPath,[${JSON.stringify(fileURLToPath(new URL('../bin/ezenciel-agents-message.mjs',import.meta.url)))},'--text','Application reply'],{env:process.env});process.exit(r.status);`)
   const original=EXECUTOR_REGISTRY.codex,require=createRequire(import.meta.url)
@@ -91,12 +89,13 @@ test('botless daemon executes application turn and rejects Telegram-origin work/
   assert.equal((await runs.get(legacy.id))?.status,'queued')
 })
 
-test('Docker health accepts application readiness only with explicit botless configuration', async t => {
+test('Docker health accepts application readiness when the agent has no bot', async t => {
   const root=await mkdtemp(join(tmpdir(),'ez-app-only-health-'))
   t.after(()=>rm(root,{recursive:true,force:true}))
   await writeFile(join(root,'heartbeat.json'),JSON.stringify({at:Date.now(),polling:false,applicationOnly:true}))
   const command=fileURLToPath(new URL('../docker/healthcheck.mjs',import.meta.url))
   const env={...process.env,EZ_HEALTH_RELAY_CONTROL_DIR:root,EZ_EXECUTOR_TRANSPORT:'local'}
-  assert.equal(spawnSync(process.execPath,[command],{env:{...env,EZ_TELEGRAM_ENABLED:'false'}}).status,0)
-  assert.notEqual(spawnSync(process.execPath,[command],{env:{...env,EZ_TELEGRAM_ENABLED:'true'}}).status,0)
+  assert.equal(spawnSync(process.execPath,[command],{env}).status,0)
+  await writeFile(join(root,'heartbeat.json'),JSON.stringify({at:Date.now(),polling:false,applicationOnly:false}))
+  assert.notEqual(spawnSync(process.execPath,[command],{env}).status,0)
 })

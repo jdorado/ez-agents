@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { loadConfig } from '../src/config.js'
 
-test('requires a Telegram token', () => {
-  assert.throws(() => loadConfig({}), /TELEGRAM_BOT_TOKEN is required/)
+test('requires an application listener when no Telegram bot token is present', () => {
+  assert.throws(() => loadConfig({}), /EZ_APPLICATION_PORT/)
 })
 
 test('uses a relative agent workspace and protected control state defaults', () => {
@@ -61,9 +61,9 @@ test('PagerDuty Stocks monitoring requires a routing key and validates its targe
 })
 
 test('external Codex isolation requires explicit native local deployment', () => {
-  const env = {EZ_TELEGRAM_ENABLED:'false', EZ_APPLICATION_PORT:'8110', EZ_EXECUTOR_TRANSPORT:'local', EZ_CODEX_SANDBOX:'external'}
+  const env = {EZ_APPLICATION_PORT:'8110', EZ_EXECUTOR_TRANSPORT:'local', EZ_CODEX_SANDBOX:'external'}
   assert.equal(loadConfig(env).codexSandbox, 'external')
-  assert.equal(loadConfig({...env,EZ_TELEGRAM_ENABLED:'true',TELEGRAM_BOT_TOKEN:'test'}).codexSandbox, 'external')
+  assert.equal(loadConfig({...env,TELEGRAM_BOT_TOKEN:'test'}).codexSandbox, 'external')
   assert.equal(loadConfig({TELEGRAM_BOT_TOKEN:'test'}).codexSandbox, undefined)
   assert.equal(loadConfig({...env,EZ_EXECUTOR_TRANSPORT:''}).isolation, 'isolated')
   assert.throws(() => loadConfig({...env,EZ_EXECUTOR_TRANSPORT:'host'}), /sandbox|SANDBOX|Isolation/)
