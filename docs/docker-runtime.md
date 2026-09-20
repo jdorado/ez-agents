@@ -34,6 +34,9 @@ EZ_AGENT_WORKSPACE=/absolute/private/agents/family/mind
 EZ_CONTROL_DIR=/absolute/private/agents/family/control
 EZ_RELAY_ENV_FILE=/absolute/private/agents/family/relay.env
 EZ_AGENT_PURPOSE_FILE=/absolute/private/agents/family/purpose.md
+EZ_TOOLS_HOME=/absolute/private/agents/family/tools
+EZ_PLUGIN_BROKER_SOCKET=/absolute/private/agents/family/control/plugin-broker.sock
+EZ_PLUGIN_BROKER_HOST_CONFIG=/absolute/private/agents/family/host-executor.json
 ```
 
 Host-capable agents run `ezenciel-agents-host` under the host's service manager
@@ -52,10 +55,14 @@ Only that agent's directories are mounted into its relay. Host-capable CLI reuse
 state home with linked authentication; global memory/configuration is excluded.
 Host-capable is not an OS security boundary between agents running as the same user.
 Isolated agents use the relay mounts; sibling host paths are not present.
-Plugin setup also binds `toolsHome` in the host configuration. Codex receives
-write access to that registry and network access for the Docker client; the host
-rejects registries belonging to a different workspace. Restart the host worker
-between jobs after adding a registry binding.
+Plugin setup also binds `toolsHome` in the host configuration. The isolated
+runtime uses a separate `plugin-broker` Compose service: the relay receives only
+the socket client and its normal mind/control mounts, while the broker receives
+that agent's exact tools/workspace/control paths and the Docker socket. The
+broker has no network, validates the host binding and registry owner, and is the
+only service allowed to launch plugin containers. The relay never receives the
+Docker socket or a tools registry mount. Host-capable agents keep the existing
+host executor path instead.
 
 ## Operate and verify
 
@@ -99,6 +106,12 @@ stdout is not replayed as a reply.
 Signal and fatal-error paths share one shutdown; a secondary cleanup error is
 reported without replacing the original startup/polling failure.
 
+For an isolated agent, `COMPOSE_PROFILES=isolated` starts both `relay` and
+`plugin-broker`; the `up` command above must not be narrowed to `relay`. The
+broker socket is private to the agent's control directory. Its per-run receipt
+is written under `control/plugin-receipts/<run-id>/`; a plugin's stdout remains
+the provider/API receipt and is not treated as a relay message.
+
 The separate `control-state.lock` serializes authority JSON updates across CLI
 processes. A forced kill or host crash can orphan this exclusive-create sentinel.
 It deliberately has no age/PID-based auto-reclamation: expiry cannot prove that a
@@ -125,6 +138,31 @@ and receipts. The agent-bound `ez` registry is the only plugin authority:
 and volume bindings. Never add standalone provider launchers or deployments.
 Read the installed skill from the registry before onboarding; do not re-pair
 an already connected account. Monitoring and sends require their own authority.
+
+### Isolated plugin commands
+
+The relay-side `ez` client sends only declared aliases, literal argument arrays,
+bounded stdin, and the active run ID to the broker. The broker re-reads owner
+authority and the registry before every call, pins the discovered revision, and
+passes only the installed plugin's `run.application.context.plugins[plugin-id]`
+object as `EZ_PLUGIN_CONTEXT`. Missing, revoked, cross-agent, expired, or reused
+admissions fail closed. Timeouts, cancellation and bounded output produce a
+failed broker receipt rather than a retry.
+
+Source-based `plugins inspect`, `catalog-add`, and `install` management calls are
+accepted only for an existing path inside that agent's mounted workspace, with a
+literal SHA-256 revision where the command requires one. The same management
+surface permits data-preserving `plugins uninstall` and local candidate
+`updates prepare/apply/recover`; candidate archives must also be inside the
+workspace. Public update discovery stays with the host supervisor because the
+broker has no network. The broker never turns an arbitrary host path into a
+plugin mount.
+
+Each agent has one registry and one broker binding. Registries, plugin source
+snapshots, shared workers and Library/embedding state are not implicitly shared
+between agents or organizations. A reviewed shared worker or an application
+backend must be attached through its own explicit per-agent binding; it does not
+grant the relay or Library containers Docker access.
 
 For event intake, mount only the registered plugin project's socket/client
 exports into the relay, read-only. The event source stores a cursor and policy

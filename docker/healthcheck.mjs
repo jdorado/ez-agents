@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 const relayControl = process.env.EZ_HEALTH_RELAY_CONTROL_DIR || '/state/control';
 const fail = code => { process.stderr.write(`EZ_HEALTH_${code}\n`); process.exit(1); };
 let value;
@@ -12,4 +12,9 @@ if (process.env.EZ_EXECUTOR_TRANSPORT === 'host') {
   try { host = JSON.parse(readFileSync(process.env.EZ_CONTROL_DIR + '/host-executor/heartbeat.json', 'utf8')); }
   catch { fail('HOST_UNREADABLE'); }
   if (!Number.isFinite(host.at) || Date.now() - host.at > 15000) fail('HOST_STALE');
+}
+if (process.env.EZ_EXECUTOR_TRANSPORT === 'local' &&
+    (process.env.EZ_PLUGIN_BROKER_SOCKET?.trim() || process.env.EZ_TELEGRAM_ENABLED !== 'false')) {
+  try { if (!statSync(process.env.EZ_PLUGIN_BROKER_SOCKET).isSocket()) fail('PLUGIN_BROKER_UNREADABLE'); }
+  catch { fail('PLUGIN_BROKER_UNREADABLE'); }
 }

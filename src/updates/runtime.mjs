@@ -9,11 +9,13 @@ import { bindUpdates } from './binding.mjs';
 import { extract, digest } from './artifact.mjs';
 
 export function environment() {
-  return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
+  return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG','EZ_DOCKER_COMPOSE'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
 }
 export function execute(command,args,options={}) {
   return new Promise((resolve,reject)=>{
-    const child=spawn(command,args,{cwd:options.cwd,env:environment(),stdio:['ignore','pipe','pipe']});let output='';
+    const invocation=process.env.EZ_DOCKER_COMPOSE==='standalone'&&command==='docker'&&args[0]==='compose'
+      ? {command:'docker-compose',args:args.slice(1)} : {command,args};
+    const child=spawn(invocation.command,invocation.args,{cwd:options.cwd,env:environment(),stdio:['ignore','pipe','pipe']});let output='';
     const timer=setTimeout(()=>child.kill('SIGKILL'),options.timeout||600000);
     const file=options.outputFile?createWriteStream(options.outputFile,{flags:'wx',mode:0o600}):null;
     const written=file?new Promise((resolve,reject)=>{file.once('finish',resolve);file.once('error',reject);}):Promise.resolve();
@@ -21,7 +23,7 @@ export function execute(command,args,options={}) {
     child.stderr.on('data',b=>{output=(output+b).slice(-16000);});
     void written.catch(()=>child.kill('SIGKILL'));
     child.once('error',error=>{clearTimeout(timer);reject(error);});
-    child.once('close',async code=>{clearTimeout(timer);try{await written;if(code!==0)throw Error(`${command} failed (${code}): ${output}`);resolve(output);}catch(error){reject(error);}});
+    child.once('close',async code=>{clearTimeout(timer);try{await written;if(code!==0)throw Error(`${invocation.command} failed (${code}): ${output}`);resolve(output);}catch(error){reject(error);}});
   });
 }
 export async function textAtomic(file,text) {
@@ -43,7 +45,12 @@ export async function packageManager(root,run=execute) {
   throw Error(`Upgrade prerequisite unavailable: ${required}. ${failures.join('; ')}. Check the host supervisor service PATH (shell aliases do not count). Reuse its installed pnpm or Corepack; expose the launcher directory to that service and restart it after the current turn. If neither exists, provision the pinned manager first. Do not substitute npm install or reinstall the agent. After repair, prepare/apply a new job when status is failed; recover is only for recovery-required.`);
 }
 export const relayArgs = config => ['compose','--env-file',path.join(config.deploymentDir,'docker.env')];
-const healthCodes = new Set(['RELAY_UNREADABLE','RELAY_NOT_POLLING','RELAY_STALE','HOST_UNREADABLE','HOST_STALE']);
+export async function relayServices(config) {
+  const env = await fs.readFile(path.join(config.deploymentDir,'docker.env'),'utf8').catch(() => '');
+  return /^(?:EZ_EXECUTOR_TRANSPORT='local'|EZ_EXECUTOR_TRANSPORT="local"|EZ_EXECUTOR_TRANSPORT=local)\s*$/m.test(env)
+    ? ['relay','plugin-broker'] : ['relay'];
+}
+const healthCodes = new Set(['RELAY_UNREADABLE','RELAY_NOT_POLLING','RELAY_STALE','HOST_UNREADABLE','HOST_STALE','PLUGIN_BROKER_UNREADABLE']);
 async function healthEvidence(config,run) {
   const id=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
   if(!/^[a-f0-9]{12,64}$/i.test(id))return '';
@@ -105,7 +112,7 @@ export async function perform(home,job,hooks) {
       await textAtomic(envFile,env);
       await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),root);
       await hooks.startHost(root);
-      await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build','relay']);
+      await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build',...(await relayServices(config))]);
     } else {
       const old=next.old.record,r=await read(path.join(home,'registry.json'));
       const secrets=await read(path.join(home,'packages',job.target,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
@@ -146,7 +153,7 @@ export async function recover(home,job,hooks) {
         await textAtomic(path.join(config.deploymentDir,'docker.env'),job.rollback.env);
         await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),job.rollback.packageRoot);
         await hooks.startHost(job.rollback.packageRoot);
-        await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build','relay']);
+        await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build',...(await relayServices(config))]);
       } else {
         const b=job.rollback;
         await run('docker',[...pluginArgs(b.record),'stop']);

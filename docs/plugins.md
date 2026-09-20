@@ -48,6 +48,31 @@ Job requests cannot override this host binding. Filesystem access remains
 `workspace-write`; other agents' directories are not added. Docker access is
 host administration under the existing trusted-host model, not OS isolation.
 
+For an isolated Codex agent, this binding is consumed by the per-agent
+`plugin-broker` service, not by a host executor. Start the deployment only after
+initialization with `COMPOSE_PROFILES=isolated`; Compose then starts the relay
+and broker together. The relay-side `ez` command has no tools-home or Docker
+socket mount. It sends a declared alias, literal arguments, bounded stdin and
+the active run ID over the private control-directory Unix socket. The broker
+revalidates the exact registry/host/workspace ownership, pinned revision and
+owner-authorized run before launching the plugin container.
+
+The broker writes bounded invocation metadata to
+`control/plugin-receipts/<run-id>/`. Plugin stdout/stderr and exit status remain
+available to the native command, including provider/API receipts. Application
+context is narrowed to the installed plugin ID and forwarded as opaque
+`EZ_PLUGIN_CONTEXT`; it is absent from ordinary native commands. No registry,
+plugin container, shared worker, Library index or embedding store is shared
+across agents unless an operator adds an explicit reviewed binding.
+
+The same broker accepts source-based `plugins inspect`, `catalog-add`, and
+`install` only when the source is an existing path under the bound workspace and
+the revision is literal and pinned. It also exposes data-preserving
+`plugins uninstall` and the local-file `updates prepare/apply/recover` lifecycle.
+Candidate archives must be staged inside the bound workspace; public registry
+discovery remains host-supervisor work because the broker has no network. Paths
+outside that workspace are rejected.
+
 ## Installation completion contract
 
 For initial Ez onboarding, plugin requests happen in the working Telegram
