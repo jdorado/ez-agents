@@ -646,7 +646,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const linked = await applicationChannel.claimTelegramConnection(applicationToken, ctx.from.id, ctx.chat.id)
         await ctx.reply(linked
           ? 'Telegram is connected to your Ez agent. You can keep chatting here.'
-          : 'This Telegram connection link expired or is no longer valid. Create a new one in the connected application.')
+          : 'This Telegram connection link expired or is no longer valid. Create a new one in the connected application.', { link_preview_options: { is_disabled: true } })
         return false
       }
       const result = await control.requestPairing(ctx.from.id, ctx.chat.id)
