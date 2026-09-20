@@ -170,13 +170,6 @@ services; the existing host CLI and login are shared through one generic
 transport, with separate agent workspaces and sessions. See
 [Docker setup, state and QA](docs/docker-runtime.md).
 
-For optional PagerDuty paging of a critical Stocks outage, see
-[PagerDuty critical-outage paging](docs/pagerduty.md).
-
-For independent agent check-ins and concise incident context, see
-[Workforce Watch](docs/workforce-watch.md). It runs separately from relays and
-does not receive their executor or provider credentials.
-
 Telegram `/status` shows the running relay and host versions plus installed
 plugin versions. Its read-only **Scheduled tasks** control lists the paired
 owner's active schedules in alphabetical order, with their engine/model/effort,

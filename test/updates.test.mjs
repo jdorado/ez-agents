@@ -19,7 +19,7 @@ test('supervisor forwards only provider keys declared by the agent installation'
  const host={agents:[{codexProviders:[{envKey:'OPENROUTER_API_KEY'}]}]};
  assert.deepEqual(providerEnvironment(host,{OPENROUTER_API_KEY:'provider-secret',TELEGRAM_BOT_TOKEN:'relay-secret'}),{OPENROUTER_API_KEY:'provider-secret'});
  assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey:'bad-key'}]}]},{}),/environment key/);
- for(const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN','PAGERDUTY_ROUTING_KEY'])
+ for(const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN'])
   assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey}]}]},{}),/Reserved Codex provider environment key/);
 });
 const contract=kind=>({protocol:1,kind,stateSchema:1,mainProtocol:1});

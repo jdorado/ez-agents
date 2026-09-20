@@ -60,10 +60,9 @@ test('native CLIs resolve from the host PATH, not a relative package name', () =
 })
 
 test('the executor receives a deliberately small environment', () => {
-  const environment = executorEnvironment({ PATH: '/bin', HOME: '/tmp/home', TELEGRAM_BOT_TOKEN: 'secret', PAGERDUTY_ROUTING_KEY: 'secret', AWS_SECRET_ACCESS_KEY: 'secret' })
+  const environment = executorEnvironment({ PATH: '/bin', HOME: '/tmp/home', TELEGRAM_BOT_TOKEN: 'secret', AWS_SECRET_ACCESS_KEY: 'secret' })
   assert.deepEqual(environment, { PATH: '/bin', HOME: '/tmp/home' })
   assert.ok(!('TELEGRAM_BOT_TOKEN' in environment))
-  assert.ok(!('PAGERDUTY_ROUTING_KEY' in environment))
 })
 
 test('the Grok job env binds the run and still strips the bot token', () => {
@@ -171,7 +170,7 @@ test('Codex custom providers use declared runtime state and an environment key r
   assert.ok(args.includes('google/gemini-3.8-flash'))
   assert.equal(JSON.stringify(args).includes('provider-secret'),false)
   assert.throws(()=>validateCodexProvider({...provider,envKey:'TELEGRAM-BOT'}),/environment key/)
-  for (const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN','PAGERDUTY_ROUTING_KEY'])
+  for (const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN'])
     assert.throws(()=>validateCodexProvider({...provider,envKey}),/Reserved/)
   assert.throws(()=>validateCodexProvider({...provider,models:[]}),/provider models/)
 })
