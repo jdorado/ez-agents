@@ -679,6 +679,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const match = text?.trim().match(/^\/tasks(?:@[a-zA-Z0-9_]+)?(?:\s+([1-9]\d*))?$/)
     return match ? (match[1] ? Number(match[1]) : undefined) : null
   }
+  const isTasksCommand = (text?: string): boolean => /^\/tasks(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text?.trim() ?? '')
   const statusKeyboard = () => new InlineKeyboard()
     .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
     .text('Retry failed incoming message', 'menu:retry')
@@ -692,8 +693,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const replyScheduledTasks = async (ctx: Context, number?: number) => {
     const result = await scheduledTasks()
     const text = typeof result === 'string' ? result : number === undefined ? result.text : (() => {
-      const schedule = ownedScheduledTasks(result.active, result.owner)[number - 1]
-      return schedule ? scheduledTaskDetailText(schedule, number) : `Scheduled task ${number} was not found. Use /tasks to list active tasks.`
+      const owned = ownedScheduledTasks(result.active, result.owner)
+      const schedule = owned[number - 1]
+      return schedule ? scheduledTaskDetailText(schedule, number, owned.length) : `Scheduled task ${number} was not found. Use /tasks to list active tasks.`
     })()
     for (const part of splitTelegramText(text)) await ctx.reply(part)
   }
@@ -801,7 +803,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     const message = ctx.message
     const command = controlCommand(message?.text)
-    if ((command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu', ...retiredCommands).includes(command)) || tasksCommand(message?.text) !== null) return next()
+    if ((command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu', ...retiredCommands).includes(command)) || tasksCommand(message?.text) !== null || isTasksCommand(message?.text)) return next()
     const ordinary = message && (message.text || message.photo || message.document || message.voice)
     const approval = ctx.callbackQuery?.data?.startsWith('approval:')
     if (!ordinary && !approval) return next()
@@ -848,6 +850,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const taskNumber = tasksCommand(ctx.message.text)
     if (taskNumber !== null) {
       await replyScheduledTasks(ctx, taskNumber)
+      return
+    }
+    if (isTasksCommand(ctx.message.text)) {
+      await ctx.reply('Usage: /tasks [number]. Use /tasks to list active tasks.')
       return
     }
 

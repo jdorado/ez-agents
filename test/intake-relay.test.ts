@@ -731,3 +731,23 @@ test('application Telegram link connects without launching work; bad link replie
     assert.equal((await control.status()).owner?.telegramUserId,101)
   } finally {await f.close()}
 })
+
+test('tasks command never reaches the executor on invalid input or foreign senders', async () => {
+  const f = await fixture()
+  try {
+    const stranger = message(1, '/tasks');stranger.message!.from!.id = 202
+    await f.relay.bot.handleUpdate(stranger)
+    assert.equal(f.launched.length, 0)
+    assert.ok(!f.replies.join('\n').includes('Scheduled tasks'))
+    const strangerDetail = message(2, '/tasks 1');strangerDetail.message!.from!.id = 202
+    await f.relay.bot.handleUpdate(strangerDetail)
+    assert.equal(f.launched.length, 0)
+    assert.ok(!f.replies.join('\n').includes('Scheduled tasks'))
+    for (const [id, text] of [[3, '/tasks 0'], [4, '/tasks abc'], [5, '/tasks 1.5'], [6, '/tasks 2 extra']] as const) {
+      await f.relay.bot.handleUpdate(message(id, text))
+      assert.match(f.replies.at(-1)!, /Usage: \/tasks \[number\]/)
+    }
+    await f.relay.drainInbox(true)
+    assert.equal(f.launched.length, 0)
+  } finally { await f.close() }
+})

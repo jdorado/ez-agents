@@ -20,6 +20,7 @@ const weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const time = (value: number | string) => {
   const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return '—'
   return `${weekdays[date.getUTCDay()]}, ${months[date.getUTCMonth()]} ${date.getUTCDate()} · ${String(date.getUTCHours()).padStart(2,'0')}:${String(date.getUTCMinutes()).padStart(2,'0')} UTC`
 }
 
@@ -45,16 +46,18 @@ export const ownedScheduledTasks = (schedules: ActiveSchedule[], owner: Owner) =
 export const scheduledTasksText = (schedules: ActiveSchedule[], owner: Owner) => {
   const owned = ownedScheduledTasks(schedules, owner)
   if (!owned.length) return '📅 Scheduled tasks\n\nNo active scheduled tasks.'
-  return [`📅 Scheduled tasks · ${owned.length} active`, 'All times UTC. Use /tasks 2 for task details.', ...owned.map((schedule, index) => {
+  return [`📅 Scheduled tasks · ${owned.length} active`, 'All times UTC. Use /tasks 1 for task details.', ...owned.map((schedule, index) => {
     const preset = displayedPreset(schedule)
     return `${index + 1} · ${schedule.name}\n  ${currentState(schedule)}\n  Next · ${schedule.nextAt === null ? '—' : time(schedule.nextAt)}\n  Last · ${lastRun(schedule)}\n  ${presetLabel(preset)}\n  ${preview(schedule)}`
   })].join('\n\n')
 }
 
-export const scheduledTaskDetailText = (schedule: ActiveSchedule, number: number) => {
+export const scheduledTaskDetailText = (schedule: ActiveSchedule, number: number, total?: number) => {
   const preset = displayedPreset(schedule)
+  const instructions = schedule.text.trim()
+  const capped = instructions.length > 2000 ? instructions.slice(0, 2000) + '… (truncated; full text lives in the workspace)' : instructions
   return [
-    `📅 ${number} · ${schedule.name}`,
+    `📅 ${number}${total === undefined ? '' : ` of ${total}`} · ${schedule.name}`,
     currentState(schedule),
     '',
     'Next run',
@@ -67,6 +70,6 @@ export const scheduledTaskDetailText = (schedule: ActiveSchedule, number: number
     presetLabel(preset),
     '',
     'Instructions',
-    schedule.text.trim(),
+    capped,
   ].join('\n')
 }

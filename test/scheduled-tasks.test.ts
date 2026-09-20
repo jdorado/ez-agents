@@ -40,7 +40,7 @@ test('scheduled task view is read-only, owner-bound, and shows active task promp
   const active = await scheduler.listActiveReadOnly(await runs.list())
   const text = scheduledTasksText(active, owner)
 
-  assert.equal(text, '📅 Scheduled tasks · 1 active\n\nAll times UTC. Use /tasks 2 for task details.\n\n1 · Daily report\n  ● Active\n  Next · Thu, Jan 1 · 05:00 UTC\n  Last · ✓ Completed · Thu, Jan 1 · 05:04 UTC\n  codex · client default · default effort\n  Read the ledger and send the owner a concise report.')
+  assert.equal(text, '📅 Scheduled tasks · 1 active\n\nAll times UTC. Use /tasks 1 for task details.\n\n1 · Daily report\n  ● Active\n  Next · Thu, Jan 1 · 05:00 UTC\n  Last · ✓ Completed · Thu, Jan 1 · 05:04 UTC\n  codex · client default · default effort\n  Read the ledger and send the owner a concise report.')
   assert.match(scheduledTaskDetailText(active.find(schedule => schedule.id === saved.id)!, 1), /Last run\n✓ Completed · Thu, Jan 1 · 05:04 UTC/)
   assert.doesNotMatch(text, /Other owner task|This must never be visible/)
   assert.equal(await readFile(join(scheduleDir, 'owner-task.json'), 'utf8'), before)
@@ -119,4 +119,19 @@ test('a legacy invalid selection does not prevent the active menu from rendering
 
   const active = await scheduler.listActiveReadOnly([])
   assert.match(scheduledTasksText(active,owner),/codex · gpt-5.6-terra · max/)
+})
+
+test('detail view truncates long instructions and tolerates invalid timestamps', async t => {
+  const dir = await mkdtemp(join(tmpdir(),'ez-schedule-detail-bounds-'))
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  const scheduler = new Scheduler(dir)
+  const saved = await scheduler.save({id:'long',name:'Long task',text:'/goal '+'x'.repeat(5000),owner,
+    execution,enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}})
+  const active = await scheduler.listActiveReadOnly([])
+  const detail = scheduledTaskDetailText(active.find(schedule => schedule.id === saved.id)!,1,1)
+  assert.match(detail,/📅 1 of 1 · Long task/)
+  assert.match(detail,/truncated; full text lives in the workspace/)
+  assert.ok(detail.length < 3000)
+  const broken = {...active.find(schedule => schedule.id === saved.id)!,nextAt:'not-a-date',lastRun:{status:'completed',at:'also-bad',currentRevision:true}} as never
+  assert.doesNotMatch(scheduledTaskDetailText(broken,1,1),/NaN/)
 })
