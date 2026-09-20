@@ -2,6 +2,7 @@ import { installAgentGuidance } from './agent-guidance.js'
 import { redactFailure } from './failure.js'
 import { RunStore } from './runs.js'
 import { Tasks } from './tasks.js'
+import { ControlStore } from './control-state.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
@@ -37,8 +38,14 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const catalog = async (agent: HostBinding) => {
     const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
     const providers = (agent.codexProviders ?? []).map(validateCodexProvider)
-    const declared = providers.flatMap(provider => provider.models.map(model => ({cli:'codex',provider:provider.id,model,name:`${provider.name} · ${model}`.slice(0,80),efforts:[]})))
-    return [...discovered, ...declared]
+    const declared = providers.flatMap(provider => provider.models.map(model => {
+      const native = discovered.find(candidate => candidate.cli === 'codex' && !candidate.provider && candidate.model === model)
+      return {cli:'codex',provider:provider.id,model,name:`${provider.name} · ${model}`.slice(0,80),efforts:native?.efforts ?? []}
+    }))
+    const declaredModels = new Set(declared.map(model => model.model))
+    const isReplacedByProvider = (model: {cli:string; model?:string}) =>
+      model.model !== undefined && declaredModels.has(model.model) && model.cli === 'codex'
+    return [...discovered.filter(model => !isReplacedByProvider(model)), ...declared]
   }
   try {
     for (const agent of installation.agents) {
@@ -72,7 +79,10 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid)}),{mode:0o600,flag:'wx'})
       locks.push(lock)
       await installAgentGuidance(agent.workspace)
-      await writeFile(path.join(directory,'models.json'),JSON.stringify(await catalog(agent)),{mode:0o600})
+      const models = await catalog(agent)
+      await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
+      const modelsFile=path.join(directory,'models.json')
+      await writeFile(modelsFile+'.tmp',JSON.stringify(models),{mode:0o600});await rename(modelsFile+'.tmp',modelsFile)
       // A host crash is terminal for a claimed job. Never replay an action.
       for (const file of await readdir(directory)) if (file.endsWith('.running.json')) {
         const base=path.join(directory,file.slice(0,-13))
@@ -88,14 +98,19 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       if (agent.toolsHome) await (await import('./plugins/workspace-lease.mjs')).recoverNativeLease(agent.toolsHome)
     }
     let catalogAt=Date.now()
+    const catalogSeen=new Map<HostBinding,string>()
     while (!signal.aborted) {
       const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
       if(parent) { try { process.kill(parent,0) } catch { break } }
       if(Date.now()-catalogAt>30000){
         for(const agent of installation.agents){
-          const models=JSON.stringify(await catalog(agent))
+          const catalogModels = await catalog(agent)
+          const models=JSON.stringify(catalogModels)
+          if(catalogSeen.get(agent)===models)continue
+          await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
           const file=path.join(agent.controlDir,'host-executor/models.json')
           await writeFile(file+'.tmp',models,{mode:0o600});await rename(file+'.tmp',file)
+          catalogSeen.set(agent,models)
         }
         catalogAt=Date.now()
       }
