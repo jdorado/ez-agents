@@ -176,6 +176,20 @@ COMPOSE_PROJECT_NAME='ez-agent-fixture'
 EZ_EXECUTOR_TRANSPORT='host'
 `);await assert.rejects(eligibility(f.home,'main',f.source,false),/deployment/);
 });
+test('legacy runtime migration admits homes without docker.env when purpose fallback is already bound',async t=>{
+ const f=await fixture(t),oldCompose=`services:
+  relay:
+    environment:
+      EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md
+      EZ_EXECUTOR_TRANSPORT: \${EZ_EXECUTOR_TRANSPORT:-host}
+configs:
+  agent_purpose:
+    file: \${EZ_AGENT_PURPOSE_FILE:-./templates/agent-purpose.md}
+`,nextCompose=oldCompose.replace('      EZ_EXECUTOR_TRANSPORT:', '      EZ_ISOLATION: \${EZ_ISOLATION:-}\n      EZ_EXECUTOR_TRANSPORT:');
+ await fs.writeFile(path.join(f.old,'compose.yaml'),oldCompose);await fs.writeFile(path.join(f.source,'compose.yaml'),nextCompose);
+ await fs.rm(path.join(f.config.deploymentDir,'docker.env'));
+ const job=await prepare(f.home,'main',{file:await f.pack()});assert.equal(job.deploymentMigration.id,'legacy-runtime-v1');
+});
 test('compatibility bridge hands off to the published beta.34 release',async t=>{
  const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),candidate=await read(path.join(f.source,'package.json'));
  await atomic(path.join(f.old,'package.json'),{...prior,version:'0.1.0-beta.34.compat.1'});

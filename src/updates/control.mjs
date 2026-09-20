@@ -88,7 +88,15 @@ async function mainDeployment(home,oldRoot,nextRoot) {
   const oldCompose=await fs.readFile(path.join(oldRoot,'compose.yaml'),'utf8'),nextCompose=await fs.readFile(path.join(nextRoot,'compose.yaml'),'utf8');
   const oldWhatsApp=await fs.readFile(path.join(oldRoot,'compose.whatsapp.yaml')),nextWhatsApp=await fs.readFile(path.join(nextRoot,'compose.whatsapp.yaml'));
   if(oldCompose===nextCompose&&oldWhatsApp.compare(nextWhatsApp)===0)return undefined;
-  const {config}=await state(home),env=parseEnv(await fs.readFile(path.join(config.deploymentDir,'docker.env'),'utf8'));
+  const {config}=await state(home);
+  // Legacy QA homes may predate docker.env. Treat that file as empty while
+  // keeping all other read failures fatal; explicit runtime bindings still
+  // come from the deployment environment when the file exists.
+  const envText=await fs.readFile(path.join(config.deploymentDir,'docker.env'),'utf8').catch(error=>{
+    if(error.code==='ENOENT')return '';
+    throw error;
+  });
+  const env=parseEnv(envText);
   if(oldWhatsApp.compare(nextWhatsApp)!==0||effectiveCompose(oldCompose,env)!==effectiveCompose(nextCompose,env))throw Error('Runtime deployment changed; a separately reviewed migration is required');
   return {id:compatibleRuntimeMigration,files:['compose.yaml']};
 }
