@@ -4,9 +4,6 @@ services:
     build:
       context: .
       target: runtime
-      args:
-        BUILD_TAG: ${BUILD_TAG:-}
-        BUILD_SHA: ${BUILD_SHA:-}
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
@@ -55,9 +52,6 @@ services:
     build:
       context: .
       target: runtime
-      args:
-        BUILD_TAG: ${BUILD_TAG:-}
-        BUILD_SHA: ${BUILD_SHA:-}
     init: true
     restart: unless-stopped
     stop_grace_period: 10s
