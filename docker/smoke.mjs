@@ -21,7 +21,7 @@ try {
     '--mount',`type=bind,src=${join(dir,'purpose.md')},dst=/run/agent-purpose.md,readonly`,'-e','EZ_AGENT_PURPOSE_FILE=/run/agent-purpose.md',
     '--tmpfs','/tmp:mode=1777','--tmpfs','/state/control:uid=20000,gid=20000,mode=700',
     '--tmpfs','/state/home:uid=20000,gid=20000,mode=700','--tmpfs','/workspace:uid=20000,gid=20000,mode=700',
-    '-e','EZ_TELEGRAM_ENABLED=false','-e','EZ_APPLICATION_PORT=8110','-e','EZ_ISOLATION=isolated','-e','EZ_EXECUTOR_TRANSPORT=local','-e','EZ_EXECUTOR_CLI=codex'];
+    '-e','EZ_APPLICATION_PORT=8110','-e','EZ_ISOLATION=isolated','-e','EZ_EXECUTOR_TRANSPORT=local','-e','EZ_EXECUTOR_CLI=codex'];
   const help = run(['run','--rm',...nonroot,image,'application','--help']);
   assert.equal(help.status,0,help.stderr);
   assert.match(help.stdout,/ezenciel-agents-application/);

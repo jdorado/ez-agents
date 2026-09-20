@@ -1252,7 +1252,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
     }
   }
-  return { bot: bot!, isRunning: () => telegramEnabled ? Boolean(bot?.isRunning()) : runtimeStarted, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests, applicationChannel }
+  return { bot: bot!, telegramEnabled, isRunning: () => telegramEnabled ? Boolean(bot?.isRunning()) : runtimeStarted, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests, applicationChannel }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

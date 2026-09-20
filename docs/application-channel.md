@@ -342,12 +342,17 @@ a generic HTTP error or revoked credential alone is not proof of termination.
 
 ## Application-only deployment (no Telegram bot)
 
-For a private per-user native runtime, set `EZ_TELEGRAM_ENABLED=false` and
+For a private per-user native runtime, omit `TELEGRAM_BOT_TOKEN` and set
 `EZ_APPLICATION_PORT` (plus `EZ_APPLICATION_HOST` when other containers connect).
-No bot token is required or used. This mode runs the existing native executor,
+This mode runs the existing native executor,
 application queue and application outbox without creating a Telegram client,
-starting Telegram sources/polling, or registering bot commands. Default deployments
-still enable Telegram and require its token.
+starting Telegram sources/polling, or registering bot commands. Telegram becomes
+active as soon as the agent receives its private bot token.
+
+Upgrade note: the removed `EZ_TELEGRAM_ENABLED` flag is no longer read. A stale
+flag that contradicts the token (disabled flag with a token present, or enabled
+flag with no token) refuses to start — unset the flag, and remove any stale
+`TELEGRAM_BOT_TOKEN` to stay application-only.
 
 The installing administrator can initialize empty control authority and register
 an application in one local command:
