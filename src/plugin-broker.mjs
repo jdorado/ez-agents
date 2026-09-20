@@ -158,6 +158,19 @@ const writeReceipt = async (binding, receipt) => {
   return file;
 };
 
+// Installed plugin versions for relay status. Rewritten on broker start and
+// after every management call; the relay reads it without Docker access.
+// Failures stay local so a status snapshot never breaks plugin operations.
+const refreshBrokerPlugins = async binding => {
+  const r = await registry(binding.home);
+  const plugins = Object.values(r.plugins).map(record => ({ id: record.manifest.id, version: record.manifest.version }));
+  const file = path.join(binding.controlDir, 'plugin-broker-plugins.json');
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify({ version: 1, at: new Date().toISOString(), plugins }) + '\n', { mode: 0o600, flag: 'wx' });
+  await fs.rename(temporary, file);
+  await stewardOwned(file);
+};
+
 const response = (socket, value) => {
   if (socket.destroyed || !socket.writable) return;
   const text = JSON.stringify(value) + '\n';
@@ -294,6 +307,7 @@ export async function servePluginBroker(binding, signal = new AbortController().
     if (!existing.isSocket()) throw Error('Plugin broker socket path is not a socket');
     await fs.rm(binding.socket);
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  await refreshBrokerPlugins(binding).catch(() => {});
   const admissions = new Map();
   const server = createServer({ allowHalfOpen: true }, socket => {
     let buffer = '', handled = false;
@@ -325,6 +339,7 @@ export async function servePluginBroker(binding, signal = new AbortController().
           if (request.operation === 'manager') {
             await authorize(binding, request.runId);
             const result = await managerCommand(binding, request.args, abort.signal, request.runId);
+            await refreshBrokerPlugins(binding).catch(() => {});
             response(socket, { version: 1, id: request.id, ok: true, ...result });
             return;
           }
