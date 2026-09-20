@@ -127,8 +127,8 @@ Native configuration reference: [Codex configuration](https://learn.chatgpt.com/
 Task notes live under protected `control/tasks/`, separate from the owner mind.
 Exact-contact task reports currently use the linked Telegram owner outbox and
 are visibly labelled; any-conversation runs have no report tool. Reports are not
-inserted as owner instructions or trusted memory. The owner mind
-keeps its existing `inbox/` and `work/` organization. No database or general memory
+inserted as owner instructions or trusted memory. The owner mind is the workspace `AGENTS.md` and files the agent creates.
+No prescribed `inbox/` or `work/` layout is required. No database or general memory
 index is introduced.
 
 ## Provider protocol

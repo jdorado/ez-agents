@@ -69,6 +69,7 @@ test('native discovery binding preserves notes and never seeds a tool inventory'
  await init(f.home,f.workspace);
  await assert.rejects(fs.access(notes),{code:'ENOENT'});
  const first=await fs.readFile(instructions,'utf8');assert(first.startsWith('Owner mandate\n'));assert(first.includes(f.home+'/bin/ez'));
+ assert.match(first,/tools list --details/);assert.match(first,/ --help/);assert.doesNotMatch(first,/ezenciel-agents-message|KISS/);
  await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(instructions,'utf8'),first);
  await fs.writeFile(notes,'Legacy policy');
  await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(notes,'utf8'),'Legacy policy');

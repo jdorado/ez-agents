@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Stop injecting a package-owned coding handbook into operating-agent
+  `AGENTS.md`. Upgrades strip the old `ez shared guidance` block. Seed only the
+  installer purpose. The managed `ez tools` locator binds the agent launcher
+  (`ez --help` and `ez tools list --details`); inventory is generated on read.
+  Do not create `inbox/`, `work/`, `SOUL.md`, or `USER.md`.
+
 ## 0.1.0-beta.35
 
 - Harden the beta.34 compatibility upgrade path, including supervisor handoff

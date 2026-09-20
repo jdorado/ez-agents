@@ -232,12 +232,16 @@ policy selects non-deprecated stable versions, even when latest is a prerelease.
 No eligible version is reported as available:null with newer:false. Older installed
 updaters need an exact-version core update to adopt this discovery behavior.
 
-## Shared agent guidance
+## Operating-agent instructions
 
-Setup and runtime startup install `templates/agent-guidance.md` into a marked
-section of the workspace's native `AGENTS.md` (and existing `AGENTS.override.md`).
-Upgrade refreshes only that section; personal content outside it is preserved
-byte-for-byte. New scheduled task workspaces receive the same shared guidance.
+Setup and runtime startup strip any obsolete `<!-- ez shared guidance -->`
+handbook from workspace `AGENTS.md` (and existing `AGENTS.override.md`).
+Personal text outside that block is preserved byte-for-byte. Do not reinsert
+coding, KISS, contribution or repair loops into operating minds.
+
+The package-owned locator is the managed `<!-- ez tools -->` block: the bound
+`ez` launcher, `ez --help`, and `ez tools list --details`. Inventory is
+generated on read. Plugin registry init and update binding refresh that locator.
 Malformed markers and symlinks fail visibly rather than overwriting personal work.
 
 Codex, agy, Grok and OpenCode discover workspace instructions natively. Claude
@@ -254,9 +258,9 @@ preserved. Restricted contact tasks retain their separate
 bounded instruction scopes. For delivered busy replies absent from the native
 conversation, the owner engine can call `ezenciel-agents-schedule context`.
 
-Keep general defaults in the shipped shared file and identity/preferences in
-workspace personal files. Instructions cannot grant permissions; explicit owner
-requests take precedence within existing execution authority.
+Keep identity and purpose in the agent's own `AGENTS.md`. Instructions cannot
+grant permissions; explicit owner requests take precedence within existing
+execution authority.
 
 Update discovery runs independently of active host work. A discovery failure is
 logged locally and retried at the next regular six-hour check; it does not stop
