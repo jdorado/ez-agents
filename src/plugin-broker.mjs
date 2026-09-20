@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { prepareCommand, registry, run as dockerRun } from './plugins/manager.mjs';
+import { prepareCommand, registry, run as dockerRun, stewardOwned } from './plugins/manager.mjs';
 
 const MAX_FRAME = 4 * 1024 * 1024;
 const MAX_ARGS = 100;
@@ -145,12 +145,16 @@ const authorize = async (binding, runId) => {
 };
 
 const writeReceipt = async (binding, receipt) => {
-  const directory = path.join(binding.controlDir, 'plugin-receipts', receipt.runId);
+  const receipts = path.join(binding.controlDir, 'plugin-receipts');
+  const directory = path.join(receipts, receipt.runId);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await stewardOwned(receipts);
+  await stewardOwned(directory);
   const file = path.join(directory, `${receipt.receiptId}.json`);
   const temporary = `${file}.${randomUUID()}.tmp`;
   await fs.writeFile(temporary, JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   await fs.rename(temporary, file);
+  await stewardOwned(file);
   return file;
 };
 
@@ -193,16 +197,18 @@ const managerCommand = async (binding, args, signal, runId) => new Promise((reso
   child.stderr.on('data', chunk => collect(chunk, true));
   const abort = () => { failure = Error('Plugin broker request cancelled'); terminate(child); };
   signal.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(() => { failure = Error('Plugin broker management timed out'); terminate(child); }, binding.timeoutMs);
   child.stdin.end();
-  child.once('error', error => { signal.removeEventListener('abort', abort); reject(error); });
+  child.once('error', error => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(error); });
   child.once('close', code => {
+    clearTimeout(timer);
     signal.removeEventListener('abort', abort);
     if (failure) return reject(failure);
     resolve({ code: code ?? 1, stdout, stderr });
   });
 });
 
-const invokePlugin = async (binding, request, signal, admission) => {
+const invokePlugin = async (binding, request, signal) => {
   const startedAt = new Date().toISOString();
   let plugin = request.alias;
   let revision = request.revision;
@@ -290,7 +296,7 @@ export async function servePluginBroker(binding, signal = new AbortController().
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const admissions = new Map();
   const server = createServer({ allowHalfOpen: true }, socket => {
-    let buffer = '', handled = false, active;
+    let buffer = '', handled = false;
     const abort = new AbortController();
     socket.on('error', () => abort.abort());
     socket.on('close', () => abort.abort());
@@ -303,13 +309,14 @@ export async function servePluginBroker(binding, signal = new AbortController().
       handled = true;
       let request;
       try { request = JSON.parse(buffer.slice(0, end)); } catch (error) { response(socket, { version: 1, ok: false, error: 'Invalid JSON request' }); return; }
-      active = (async () => {
+      (async () => {
         try {
           await validateBrokerRequest(request, binding.workspace);
           if (request.operation === 'resolve') {
             await authorize(binding, request.runId);
             const selected = recordForAlias(await registry(binding.home), request.alias);
             const capability = randomBytes(48).toString('base64url');
+            if (admissions.size >= 512) admissions.delete(admissions.keys().next().value);
             admissions.set(capability, { runId: request.runId, alias: request.alias, revision: selected.record.revision, expiresAt: Date.now() + ADMISSION_TTL_MS });
             setTimeout(() => admissions.delete(capability), ADMISSION_TTL_MS).unref();
             response(socket, { version: 1, id: request.id, ok: true, plugin: selected.plugin, alias: request.alias, revision: selected.record.revision, capability });
@@ -325,7 +332,7 @@ export async function servePluginBroker(binding, signal = new AbortController().
           admissions.delete(request.capability);
           if (!admission || admission.expiresAt < Date.now() || admission.runId !== request.runId || admission.alias !== request.alias || admission.revision !== request.revision)
             throw Error('Invalid or expired plugin broker capability');
-          const result = await invokePlugin(binding, request, abort.signal, admission);
+          const result = await invokePlugin(binding, request, abort.signal);
           response(socket, { version: 1, id: request.id, ...result });
         } catch (error) {
           response(socket, { version: 1, id: request.id, ok: false, error: error instanceof Error ? error.message : 'Plugin broker request failed' });
@@ -337,6 +344,9 @@ export async function servePluginBroker(binding, signal = new AbortController().
     server.once('error', reject);
     server.listen(binding.socket, () => { server.off('error', reject); resolve(); });
   });
+  // World-writable is deliberate: the root broker and the dropped-privilege
+  // relay share only this agent-private control directory (0700, never
+  // mounted elsewhere). Per-request capability auth still gates every call.
   await fs.chmod(binding.socket, 0o666);
   const stop = () => {
     for (const admission of admissions.keys()) admissions.delete(admission);

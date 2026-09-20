@@ -21,6 +21,14 @@ export async function atomic(file, value) {
   const tmp = `${file}.${randomUUID()}.tmp`;
   await fs.writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});
   await fs.rename(tmp,file);
+  await stewardOwned(file);
+}
+// Files the broker creates as root must stay usable by the agent owner:
+// adopt the owning uid/gid of the containing directory. Off root this is a no-op.
+export async function stewardOwned(file) {
+  if (process.geteuid?.() !== 0) return;
+  const parent = await fs.stat(path.dirname(file));
+  await fs.chown(file, parent.uid, parent.gid);
 }
 // Only a registry locator lives in native instructions. Inventory is generated on read.
 export async function bindToolDiscovery(home,workspace) {
@@ -65,6 +73,7 @@ async function activeInvocations(home) {
 async function invocationLease(home,container) {
   const directory=invocationDirectory(home);await privateDir(directory);
   const file=path.join(directory,randomUUID()+'.json');await fs.writeFile(file,JSON.stringify({pid:process.pid,container}),{mode:0o600,flag:'wx'});
+  await stewardOwned(file);
   return async()=>{await fs.rm(file,{force:true});};
 }
 export async function locked(home, fn, {allowInvocations=false}={}) {
@@ -333,7 +342,7 @@ export async function compose(config, record, secrets={}, home) {
   // Keep the persisted descriptor portable between the host supervisor's
   // Compose v2 and the isolated broker's bundled Compose v1. Project identity
   // is always supplied with --project-name, so a top-level name is unnecessary.
-  return attachShared({version:'3.9',services,volumes,...(Object.keys(networks).length?{networks}:{})}, record);
+  return attachShared({version:'3.8',services,volumes,...(Object.keys(networks).length?{networks}:{})}, record);
 }
 async function refreshRecordCompose(home, config, record) {
   await checkFolders(config, record, home);
@@ -623,7 +632,7 @@ export async function main(args) {
         await atomic(latest.compose, await compose(currentConfig, latest, secrets, home));
         // Persist the binding before recreating clients; start can recover an interrupted recreation.
         await atomic(path.join(home, 'registry.json'), current);
-        await checked([...composeArgs(latest), 'up', '-d', '--wait']);
+        await checked([...composeArgs(latest), 'up', '-d', ...(process.env.EZ_DOCKER_COMPOSE === 'standalone' ? [] : ['--wait'])]);
         return emit({ ok: true, plugin: name, shared: key, ...result });
       });
     }

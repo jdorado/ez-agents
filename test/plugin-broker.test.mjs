@@ -117,6 +117,8 @@ test('isolated broker authenticates an owned run, pins plugin revision, and writ
     assert.equal(loud.ok, false);
     assert.match(loud.error, /output limit/);
     assert.equal(loud.receipt.status, 'failed');
+    const generated = JSON.parse(await fs.readFile(f.home + '/packages/sample/compose.json', 'utf8'));
+    assert.equal(generated.version, '3.8');
   } finally {
     abort.abort();
     await serving;
@@ -147,4 +149,22 @@ test('broker rejects foreign agent bindings and unsafe management or request fie
   await assert.rejects(validateBrokerRequest({ version: 1, id: randomUUID(), operation: 'manager', runId: 'r_broker', args: ['updates', 'prepare', 'sample', '--version', '1.0.1'] }, f.workspace), /not allowed/);
   await assert.rejects(validateBrokerRequest({ version: 1, id: randomUUID(), operation: 'invoke', runId: 'r_broker', alias: 'sample', revision, capability: 'short', args: [] }), /capability/);
   await assert.rejects(validateBrokerRequest({ version: 1, id: randomUUID(), operation: 'invoke', runId: 'r_broker', alias: 'sample', revision, capability: 'a'.repeat(48), args: [], stdin: 'x'.repeat(1024 * 1024 + 1) }), /stdin/);
+});
+
+test('broker rejects resolve and invoke for a revoked run', async t => {
+  const f = await fixture(t);
+  const binding = await loadPluginBrokerBinding({ home: f.home, workspace: f.workspace, controlDir: f.controlDir, socket: f.socket, hostConfig: f.hostConfig, timeoutMs: 10_000 });
+  const abort = new AbortController();
+  const serving = servePluginBroker(binding, abort.signal);
+  try {
+    await waitForSocket(f.socket);
+    await new RunStore(f.controlDir).patch(f.runId, { status: 'cancelled' });
+    const resolved = await request(f.socket, { version: 1, id: randomUUID(), operation: 'resolve', runId: f.runId, alias: 'sample' });
+    assert.equal(resolved.ok, false);
+    const invoked = await request(f.socket, { version: 1, id: randomUUID(), operation: 'invoke', runId: f.runId, alias: 'sample', revision, capability: 'a'.repeat(64), args: [] });
+    assert.equal(invoked.ok, false);
+  } finally {
+    abort.abort();
+    await serving;
+  }
 });

@@ -164,6 +164,13 @@ between agents or organizations. A reviewed shared worker or an application
 backend must be attached through its own explicit per-agent binding; it does not
 grant the relay or Library containers Docker access.
 
+An isolated agent created before this change has no `tools/` directory, broker
+socket environment, or `COMPOSE_PROFILES` entry: recreate the agent (or backfill
+`tools/`, `EZ_TOOLS_HOME`, `EZ_PLUGIN_BROKER_SOCKET`,
+`EZ_PLUGIN_BROKER_HOST_CONFIG`, and the isolated profile) before its plugins
+will run. Until then the broker refuses to start and health reports
+`PLUGIN_BROKER_UNREADABLE` — fail-closed, never half-provisioned.
+
 For event intake, mount only the registered plugin project's socket/client
 exports into the relay, read-only. The event source stores a cursor and policy
 binding; it is not a second plugin installation. Provider credentials remain in

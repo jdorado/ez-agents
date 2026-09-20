@@ -14,12 +14,14 @@ const fail = message => {
 
 const request = (payload, signal = undefined) => new Promise((resolve, reject) => {
   if (!socketPath || !socketPath.startsWith('/') || socketPath.length > 100) return reject(Error('isolated plugin broker is not configured'));
+  const timeoutMs = Number(process.env.EZ_PLUGIN_BROKER_CLIENT_TIMEOUT_MS ?? 600000)
   const socket = createConnection(socketPath);
   let buffer = '';
   let settled = false;
   const finish = (error, value) => {
     if (settled) return;
     settled = true;
+    clearTimeout(timer);
     signal?.removeEventListener('abort', cancel);
     socket.destroy();
     if (error) reject(error); else resolve(value);
@@ -28,8 +30,13 @@ const request = (payload, signal = undefined) => new Promise((resolve, reject) =
     socket.destroy();
     finish(Error('plugin command cancelled'));
   };
+  const timer = setTimeout(() => {
+    socket.destroy();
+    finish(Error('plugin broker request timed out'));
+  }, Number.isSafeInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : 600000);
   signal?.addEventListener('abort', cancel, { once: true });
   socket.on('error', error => finish(error));
+  socket.on('close', () => finish(Error('plugin broker closed the connection')));
   socket.on('data', chunk => {
     buffer += chunk.toString();
     const end = buffer.indexOf('\n');

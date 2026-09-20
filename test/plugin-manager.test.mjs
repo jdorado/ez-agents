@@ -221,14 +221,14 @@ test('registry corruption, active writer lock and alias collision fail closed',a
 test('Compose resources are namespaced, private, and restricted to owning workspace',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);
  const c=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:p.deployment});
- assert.equal(c.version,'3.9');assert.equal(c.name,undefined);assert.equal(c.services.sample.ports,undefined);assert.equal(c.services.sample.privileged,undefined);assert.equal(c.services.sample.volumes[1].read_only,true);assert.deepEqual(c.services.sample.cap_drop,['ALL']);
+ assert.equal(c.version,'3.8');assert.equal(c.name,undefined);assert.equal(c.services.sample.ports,undefined);assert.equal(c.services.sample.privileged,undefined);assert.equal(c.services.sample.volumes[1].read_only,true);assert.deepEqual(c.services.sample.cap_drop,['ALL']);
 });
 test('standalone Compose fallback emits a v1-compatible document and keeps project identity in argv',async t=>{
  const f=await fixture(t),p=await snapshot(f.source),previous=process.env.EZ_DOCKER_COMPOSE;
  process.env.EZ_DOCKER_COMPOSE='standalone';
  try {
   const c=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:p.deployment});
-  assert.equal(c.version,'3.9');assert.equal(c.name,undefined);assert.ok(c.services.sample.build.target);
+  assert.equal(c.version,'3.8');assert.equal(c.name,undefined);assert.ok(c.services.sample.build.target);
  } finally {
   if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
  }
@@ -240,7 +240,7 @@ test('isolated broker host binding validates exact mounts without deployment sym
  process.env.EZ_DOCKER_COMPOSE='standalone';
  try {
   const c=await compose({workspace:await fs.realpath(workspace),hostConfig:await fs.realpath(hostConfig)},{source:p.source,project:'ezp-synthetic',revision:p.revision,manifest:p.manifest,deployment:p.deployment},{},f.home);
-  assert.equal(c.version,'3.9');assert.equal(c.services.sample.volumes[1].source,await fs.realpath(workspace));
+  assert.equal(c.version,'3.8');assert.equal(c.services.sample.volumes[1].source,await fs.realpath(workspace));
  } finally {
   if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
  }

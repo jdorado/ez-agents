@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { parseEnv } from 'node:util';
 import { atomic, compose, snapshot, checkFolders } from '../plugins/manager.mjs';
 import { read, state, eligibility, jobPath, cleanupStaleBackups } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
@@ -47,8 +48,7 @@ export async function packageManager(root,run=execute) {
 export const relayArgs = config => ['compose','--env-file',path.join(config.deploymentDir,'docker.env')];
 export async function relayServices(config) {
   const env = await fs.readFile(path.join(config.deploymentDir,'docker.env'),'utf8').catch(() => '');
-  return /^(?:EZ_EXECUTOR_TRANSPORT='local'|EZ_EXECUTOR_TRANSPORT="local"|EZ_EXECUTOR_TRANSPORT=local)\s*$/m.test(env)
-    ? ['relay','plugin-broker'] : ['relay'];
+  return parseEnv(env).EZ_EXECUTOR_TRANSPORT === 'local' ? ['relay','plugin-broker'] : ['relay'];
 }
 const healthCodes = new Set(['RELAY_UNREADABLE','RELAY_NOT_POLLING','RELAY_STALE','HOST_UNREADABLE','HOST_STALE','PLUGIN_BROKER_UNREADABLE']);
 async function healthEvidence(config,run) {
