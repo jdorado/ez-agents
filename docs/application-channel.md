@@ -277,8 +277,9 @@ This works without Telegram and requires no transcript replay or new runner.
 Scoped application conversations remain separate when the flag is omitted.
 Owner identity does not automatically merge histories or grant learner access.
 
-To link Telegram, enable its ordinary bot configuration, send a real DM, then
-approve the observed pending identity using `ezenciel-agents-owner approve ID`.
+To link Telegram, enable its ordinary bot configuration, then use the
+application-initiated handoff below or send a real DM and approve the observed
+pending identity using `ezenciel-agents-owner approve ID`.
 `ezenciel-agents-owner unlink-telegram` removes that channel without removing the
 owner, application bindings or native sessions. Relinking does not authorize old
 Telegram deliveries. Linking other providers requires an authenticated adapter;
