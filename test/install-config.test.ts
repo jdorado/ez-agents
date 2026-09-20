@@ -81,6 +81,7 @@ test('Docker startup uses explicit deployment binding and literal paths without 
   assert.equal(definition.command, 'docker')
   assert.ok(definition.args.includes('/tmp/my agent $literal/docker.env'))
   assert.deepEqual(definition.args.slice(-4), ['up', '-d', '--wait', 'relay'])
+  assert.deepEqual(serviceDefinition('/tmp/isolated', true).args.slice(-5), ['up', '-d', '--wait', 'relay', 'plugin-broker'])
   assert.doesNotMatch(JSON.stringify(definition), /TELEGRAM_BOT_TOKEN|launchctl|systemctl/)
   assert.throws(() => serviceDefinition('/tmp/\nbad'), /single-line/)
 })

@@ -270,8 +270,9 @@ the plugin skill through onboarding and verified use under that same request.
 Never silently reuse a global `ez` from the old sandbox runtime.
 
 4. Isolated agents skip host transport. Run `bin/ezenciel-agents-docker up -d --wait`
-   from the deployment directory. Do not register `ezenciel-agents-host` for them;
-   starting it fails closed.
+   from the deployment directory. This starts the local relay and its per-agent
+   isolated plugin broker; do not narrow the command to `relay`. Do not register
+   `ezenciel-agents-host` for them; starting it fails closed.
 
    Host-capable agents follow [host startup templates](host-service.md). Register
    `bin/ezenciel-agents-host` with the host's native service manager, binding

@@ -68,6 +68,10 @@ export const createAgent = async (options: {
       ...(isolation === 'isolated' && cli === 'codex' ? { EZ_CODEX_SANDBOX: 'external' } : {}),
       EZ_AGENT_WORKSPACE: join(deploymentDir, 'mind'),
       EZ_CONTROL_DIR: join(deploymentDir, 'control'),
+      EZ_TOOLS_HOME: join(deploymentDir, 'tools'),
+      EZ_PLUGIN_BROKER_SOCKET: join(deploymentDir, 'control', 'plugin-broker.sock'),
+      EZ_PLUGIN_BROKER_HOST_CONFIG: join(deploymentDir, 'host-executor.json'),
+      ...(isolation === 'isolated' ? { COMPOSE_PROFILES: 'isolated' } : {}),
       EZ_WHATSAPP_IPC_VOLUME: `${project}-whatsapp-ipc`,
       EZ_WHATSAPP_CLIENT_VOLUME: `${project}-whatsapp-client`,
     }
@@ -76,8 +80,9 @@ export const createAgent = async (options: {
     await writeFile(join(directory, 'purpose.md'), purpose.trim()+'\n', {mode:0o644, flag:'wx'})
     await mkdir(join(directory,'mind'),{mode:0o700})
     await mkdir(join(directory,'control'),{mode:0o700})
+    await mkdir(join(directory,'tools'),{mode:0o700})
     const agent = {name, project, deploymentDir, purpose:purpose.trim(), executor:cli, isolation}
-    const host = {cli,isolation,agents:[{name,workspace:join(deploymentDir,'mind'),controlDir:join(deploymentDir,'control'),binDir:join(dirname(composeFile),'bin'),...(codexProvider?{codexProviders:[codexProvider]}:{})}]}
+    const host = {cli,isolation,agents:[{name,workspace:join(deploymentDir,'mind'),controlDir:join(deploymentDir,'control'),binDir:join(dirname(composeFile),'bin'),...(isolation === 'isolated' ? {toolsHome:join(deploymentDir,'tools')} : {}),...(codexProvider?{codexProviders:[codexProvider]}:{})}]}
     await writeFile(join(directory,'host-executor.json'),JSON.stringify(host,null,2)+'\n',{mode:0o600,flag:'wx'})
     await writeFile(join(directory, 'agent.json'), JSON.stringify(agent,null,2)+'\n', {mode:0o600, flag:'wx'})
     return agent

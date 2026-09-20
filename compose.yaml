@@ -19,6 +19,7 @@ services:
       EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md
       EZ_ISOLATION: ${EZ_ISOLATION:-}
       EZ_EXECUTOR_TRANSPORT: ${EZ_EXECUTOR_TRANSPORT:-host}
+      EZ_PLUGIN_BROKER_SOCKET: ${EZ_PLUGIN_BROKER_SOCKET:-}
       EZ_CHANNEL_BACKEND_URL: ${EZ_CHANNEL_BACKEND_URL:-}
       EZ_TELEGRAM_WEB_APP: ${EZ_TELEGRAM_WEB_APP:-}
       EZ_APPLICATION_PORT: ${EZ_APPLICATION_PORT:-}
@@ -48,6 +49,45 @@ services:
       timeout: 5s
       start_period: 30s
       retries: 3
+  plugin-broker:
+    profiles: [isolated]
+    image: ${EZ_RELAY_IMAGE:-ezenciel-agents:local}
+    build:
+      context: .
+      target: runtime
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 10s
+    user: "0:0"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    environment:
+      # Defaults keep Compose interpolation valid for host-capable deployments;
+      # the broker itself rejects these placeholders if its isolated profile is enabled.
+      EZ_PLUGIN_BROKER_HOME: ${EZ_TOOLS_HOME:-/nonexistent/ez-tools}
+      EZ_PLUGIN_BROKER_WORKSPACE: ${EZ_AGENT_WORKSPACE:-/nonexistent/ez-workspace}
+      EZ_PLUGIN_BROKER_CONTROL_DIR: ${EZ_CONTROL_DIR:-/nonexistent/ez-control}
+      EZ_PLUGIN_BROKER_SOCKET: ${EZ_PLUGIN_BROKER_SOCKET:-/nonexistent/ez-control/plugin-broker.sock}
+      EZ_PLUGIN_BROKER_HOST_CONFIG: ${EZ_PLUGIN_BROKER_HOST_CONFIG:-/nonexistent/host-executor.json}
+      EZ_PLUGIN_BROKER_TIMEOUT_MS: ${EZ_PLUGIN_BROKER_TIMEOUT_MS:-300000}
+      EZ_DOCKER_COMPOSE: standalone
+      HOME: /tmp
+      DOCKER_CONFIG: /tmp/docker-config
+    volumes:
+      - ${EZ_TOOLS_HOME:-/nonexistent/ez-tools}:${EZ_TOOLS_HOME:-/nonexistent/ez-tools}
+      - ${EZ_AGENT_WORKSPACE:-/nonexistent/ez-workspace}:${EZ_AGENT_WORKSPACE:-/nonexistent/ez-workspace}:ro
+      - ${EZ_CONTROL_DIR:-/nonexistent/ez-control}:${EZ_CONTROL_DIR:-/nonexistent/ez-control}
+      - ${EZ_PLUGIN_BROKER_HOST_CONFIG:-/nonexistent/host-executor.json}:${EZ_PLUGIN_BROKER_HOST_CONFIG:-/nonexistent/host-executor.json}:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    tmpfs: [/tmp]
+    entrypoint: [node, --import, /app/node_modules/tsx/dist/loader.mjs, /app/src/plugin-broker.mjs]
+    healthcheck:
+      test: [CMD, node, -e, "const fs=require('node:fs'); try { process.exit(fs.statSync(process.env.EZ_PLUGIN_BROKER_SOCKET).isSocket() ? 0 : 1) } catch { process.exit(1) }"]
+      interval: 2s
+      timeout: 5s
+      start_period: 5s
+      retries: 30
 configs:
   agent_purpose:
     file: ${EZ_AGENT_PURPOSE_FILE:-./templates/agent-purpose.md}

@@ -22,7 +22,7 @@ if (forwarded.length && (forwarded.length !== 1 || forwarded[0] !== 'start')) {
   process.exit(1)
 }
 if (!existsSync('/.dockerenv') && process.env.EZ_DEVELOPMENT !== '1') {
-  const docker = spawn(join(here, 'ezenciel-agents-docker'), ['up', '-d', '--wait', 'relay'], { stdio: 'inherit' })
+  const docker = spawn(join(here, 'ezenciel-agents-docker'), ['up', '-d', '--wait'], { stdio: 'inherit' })
   docker.on('error', () => { console.error('Docker launcher could not start'); process.exitCode = 1 })
   docker.on('exit', code => { process.exitCode = code ?? 1 })
 } else {

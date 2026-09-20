@@ -1,0 +1,97 @@
+#!/usr/bin/env node
+import { createConnection } from 'node:net';
+import { randomUUID } from 'node:crypto';
+
+const MAX_STDIN_BYTES = 1024 * 1024;
+const RUN_ID = /^[A-Za-z0-9_-]{1,160}$/;
+const socketPath = process.env.EZ_PLUGIN_BROKER_SOCKET?.trim();
+const runId = process.env.EZ_RUN_ID?.trim();
+
+const fail = message => {
+  process.stderr.write(`ez plugin broker: ${message}\n`);
+  process.exitCode = 1;
+};
+
+const request = (payload, signal = undefined) => new Promise((resolve, reject) => {
+  if (!socketPath || !socketPath.startsWith('/') || socketPath.length > 100) return reject(Error('isolated plugin broker is not configured'));
+  const timeoutMs = Number(process.env.EZ_PLUGIN_BROKER_CLIENT_TIMEOUT_MS ?? 600000)
+  const socket = createConnection(socketPath);
+  let buffer = '';
+  let settled = false;
+  const finish = (error, value) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
+    socket.destroy();
+    if (error) reject(error); else resolve(value);
+  };
+  const cancel = () => {
+    socket.destroy();
+    finish(Error('plugin command cancelled'));
+  };
+  const timer = setTimeout(() => {
+    socket.destroy();
+    finish(Error('plugin broker request timed out'));
+  }, Number.isSafeInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : 600000);
+  signal?.addEventListener('abort', cancel, { once: true });
+  socket.on('error', error => finish(error));
+  socket.on('close', () => finish(Error('plugin broker closed the connection')));
+  socket.on('data', chunk => {
+    buffer += chunk.toString();
+    const end = buffer.indexOf('\n');
+    if (end < 0) return;
+    let value;
+    try { value = JSON.parse(buffer.slice(0, end)); } catch { return finish(Error('invalid plugin broker response')); }
+    finish(undefined, value);
+  });
+  socket.on('connect', () => socket.write(JSON.stringify(payload) + '\n'));
+});
+
+const readStdin = async () => {
+  if (process.stdin.isTTY) return '';
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of process.stdin) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bytes += value.length;
+    if (bytes > MAX_STDIN_BYTES) throw Error('plugin stdin exceeds the broker limit');
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+};
+
+const invoke = async (args, stdin) => {
+  if (!runId || !RUN_ID.test(runId)) throw Error('EZ_RUN_ID is required for an isolated plugin command');
+  const alias = args.shift();
+  if (!alias || !/^[a-z][a-z0-9-]{0,39}$/.test(alias) || ['plugins', 'tools', 'status', 'updates', 'message', 'owner', 'approval', 'react', 'setup', 'help', 'version'].includes(alias)) throw Error('Use a declared plugin alias');
+  const resolved = await request({ version: 1, id: randomUUID(), operation: 'resolve', runId, alias });
+  if (!resolved?.ok) throw Error(resolved?.error || 'Plugin alias resolution failed');
+  const result = await request({ version: 1, id: randomUUID(), operation: 'invoke', runId, alias, revision: resolved.revision, capability: resolved.capability, args, ...(stdin ? { stdin } : {}) });
+  if (!result?.ok) throw Error(result?.error || 'Plugin invocation failed');
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  process.exitCode = Number.isInteger(result.code) ? result.code : 1;
+};
+
+const manager = async args => {
+  if (!runId || !RUN_ID.test(runId)) throw Error('EZ_RUN_ID is required for isolated plugin management');
+  const result = await request({ version: 1, id: randomUUID(), operation: 'manager', runId, args });
+  if (!result?.ok) throw Error(result?.error || 'Plugin broker management failed');
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  process.exitCode = Number.isInteger(result.code) ? result.code : 0;
+};
+
+const main = async () => {
+  const args = process.argv.slice(2);
+  if (!args.length || args[0] === '--help' || args[0] === '-h') {
+    process.stdout.write('Use `ez tools list` to discover installed plugins, then `ez <alias> ...` for a declared command.\n');
+    return;
+  }
+  const stdin = ['plugins', 'tools', 'updates', 'status'].includes(args[0]) ? '' : await readStdin();
+  if (['plugins', 'tools', 'updates', 'status'].includes(args[0])) await manager(args);
+  else await invoke(args, stdin);
+};
+
+main().catch(error => fail(error instanceof Error ? error.message : 'Plugin broker client failed'));

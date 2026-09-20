@@ -55,6 +55,7 @@ const allowedEnvironmentKeys = [
   'TERM',
   'TMPDIR',
   'USER',
+  'EZ_PLUGIN_BROKER_SOCKET',
 ] as const
 
 export const executorEnvironment = (environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {

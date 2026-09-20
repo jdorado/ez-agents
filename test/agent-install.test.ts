@@ -19,6 +19,7 @@ test('new agents receive independent projects, secrets and plugin bindings; dupl
     assert.equal(host.cli,'grok')
     assert.equal(host.isolation,'host-capable')
     assert.equal(host.agents[0].workspace,'/private/agents/family/mind')
+    assert.equal(host.agents[0].toolsHome,undefined)
     const a=parseEnv(await readFile(join(root,'family/docker.env'),'utf8'))
     const b=parseEnv(await readFile(join(root,'work/docker.env'),'utf8'))
     assert.equal(a.EZ_ISOLATION,'host-capable')
@@ -63,6 +64,7 @@ test('package installer records its CLI before any agent exists; creation inheri
     assert.equal(env.EZ_ISOLATION,'isolated')
     assert.equal(env.EZ_EXECUTOR_TRANSPORT,'local')
     assert.equal(env.EZ_CODEX_SANDBOX,'external')
+    assert.equal(JSON.parse(await readFile(join(root,'shopper/host-executor.json'),'utf8')).agents[0].toolsHome,'/private/agents/shopper/tools')
     assert.equal(await installationCli(root),'codex')
     await assert.rejects(installationCli(root,'grok'),/already selected/)
   } finally { await rm(root,{recursive:true,force:true}) }

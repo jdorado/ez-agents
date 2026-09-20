@@ -13,8 +13,20 @@ async function heartbeat(file,maxAge,polling=false) {
 async function plugin(record,run) {
   const result={id:record.manifest.id,installedVersion:record.manifest.version,runningVersion:null,state:'unknown',services:[]};
   try {
-    const output=(await run('docker',[...pluginArgs(record),'ps','--all','--format','json'],{timeout:15000})).trim();
-    const rows=output?output.startsWith('[')?JSON.parse(output):output.split('\n').map(line=>JSON.parse(line)):[];
+    let rows;
+    if(process.env.EZ_DOCKER_COMPOSE==='standalone') {
+      const output=(await run('docker',[...pluginArgs(record),'ps','--all','-q'],{timeout:15000})).trim();
+      const ids=output?output.split('\n').filter(Boolean):[];
+      rows=await Promise.all(ids.map(async id=>{
+        if(!/^[a-f0-9]{12,64}$/i.test(id))throw Error('Invalid container identity');
+        const inspected=JSON.parse(await run('docker',['inspect',id],{timeout:15000}))[0];
+        const labels=inspected?.Config?.Labels||{},state=inspected?.State||{};
+        return {ID:id,Service:labels['com.docker.compose.service'],State:state.Status,Health:state.Health?.Status||null};
+      }));
+    } else {
+      const output=(await run('docker',[...pluginArgs(record),'ps','--all','--format','json'],{timeout:15000})).trim();
+      rows=output?output.startsWith('[')?JSON.parse(output):output.split('\n').map(line=>JSON.parse(line)):[];
+    }
     for(const [service,spec] of Object.entries(record.deployment.services)) {
       const containers=rows.filter(row=>row.Service===service);
       if(!containers.length){result.services.push({service,state:'not-created',health:null,imageMatches:false});continue;}

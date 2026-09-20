@@ -21,10 +21,24 @@ export async function atomic(file, value) {
   const tmp = `${file}.${randomUUID()}.tmp`;
   await fs.writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});
   await fs.rename(tmp,file);
+  await stewardOwned(file);
+}
+// Files the broker creates as root must stay usable by the agent owner:
+// adopt the owning uid/gid of the containing directory. Off root this is a no-op.
+export async function stewardOwned(file) {
+  if (process.geteuid?.() !== 0) return;
+  const parent = await fs.stat(path.dirname(file));
+  await fs.chown(file, parent.uid, parent.gid);
 }
 // Only a registry locator lives in native instructions. Inventory is generated on read.
 export async function bindToolDiscovery(home,workspace) {
   home=await fs.realpath(home);workspace=await fs.realpath(workspace);
+  let launcher=path.join(home,'bin','ez');
+  const config=await json(path.join(home,'config.json')).catch(error=>{if(error.code==='ENOENT')return undefined;throw error;});
+  if(config?.hostConfig) {
+    const host=await json(config.hostConfig);
+    if(host.isolation==='isolated') launcher='ez';
+  }
   const start='<!-- ez tools: begin -->',end='<!-- ez tools: end -->';
   for(const name of ['AGENTS.md','AGENTS.override.md']) {
     const file=path.join(workspace,name);
@@ -34,7 +48,6 @@ export async function bindToolDiscovery(home,workspace) {
     const prior=stat?await fs.readFile(file,'utf8'):'';
     const from=prior.indexOf(start),to=prior.indexOf(end);
     if((from<0)!==(to<0)||(from>=0&&(to<from||prior.indexOf(start,from+start.length)>=0||prior.indexOf(end,to+end.length)>=0)))throw Error('Malformed tool discovery block');
-    const launcher=path.join(home,'bin','ez');
     const block=start+'\nInstalled capabilities: `'+launcher+' --help` and `'+launcher+' tools list --details`. Use this bound launcher; read the matching skill when needed.\n'+end;
     const next=from<0?prior+'\n'+block+'\n':prior.slice(0,from)+block+prior.slice(to+end.length);
     if(next===prior)continue;
@@ -60,6 +73,7 @@ async function activeInvocations(home) {
 async function invocationLease(home,container) {
   const directory=invocationDirectory(home);await privateDir(directory);
   const file=path.join(directory,randomUUID()+'.json');await fs.writeFile(file,JSON.stringify({pid:process.pid,container}),{mode:0o600,flag:'wx'});
+  await stewardOwned(file);
   return async()=>{await fs.rm(file,{force:true});};
 }
 export async function locked(home, fn, {allowInvocations=false}={}) {
@@ -203,9 +217,15 @@ async function hostFolderRoots(config, record, home) {
   if (candidates.length !== 1) throw Error('Host folder binding does not belong to this registry');
   const agent = candidates[0], deployment = path.dirname(hostConfig);
   if (typeof agent.workspace !== 'string' || typeof agent.controlDir !== 'string' ||
-      realpathSync(agent.workspace) !== config.workspace || realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
-      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir) ||
+      realpathSync(agent.workspace) !== config.workspace ||
       childOf(hostConfig, config.workspace) || childOf(hostConfig, realpathSync(agent.controlDir)))
+    throw Error('Invalid host folder binding deployment');
+  // The isolated broker receives only the exact workspace, control directory,
+  // tools home, and host config mounts. It must not require the host
+  // deployment's convenience mind/control symlinks (or a deployment mount).
+  if (process.env.EZ_DOCKER_COMPOSE !== 'standalone' &&
+      (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
+       realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir)))
     throw Error('Invalid host folder binding deployment');
   const configured = agent.pluginFolderRoots;
   if (configured !== undefined && (!configured || typeof configured !== 'object' || Array.isArray(configured)))
@@ -251,13 +271,19 @@ export async function hostNetworkBindings(config, record, home) {
   if (candidates.length !== 1) throw Error('Host network binding does not belong to this registry');
   const agent = candidates[0], deployment = path.dirname(hostConfig);
   if (typeof agent.workspace !== 'string' || typeof agent.controlDir !== 'string' ||
-      realpathSync(agent.workspace) !== config.workspace || realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
-      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir) ||
+      realpathSync(agent.workspace) !== config.workspace ||
       childOf(hostConfig, config.workspace) || childOf(hostConfig, realpathSync(agent.controlDir)))
     throw Error('Invalid host network binding deployment');
   const configured = agent.pluginNetworkBindings;
   if (configured !== undefined && (!configured || typeof configured !== 'object' || Array.isArray(configured)))
     throw Error('Invalid host network bindings');
+  if (process.env.EZ_DOCKER_COMPOSE === 'standalone') {
+    if (configured && Object.keys(configured).length) throw Error('Isolated broker cannot use host network bindings');
+    return [];
+  }
+  if (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
+      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir))
+    throw Error('Invalid host network binding deployment');
   const route = configured?.[record.manifest?.id];
   if (route === undefined) return [];
   keys(route, ['revisions', 'bindings']);
@@ -313,14 +339,24 @@ export async function compose(config, record, secrets={}, home) {
         return [key,(value.prefix||'')+secrets[value.secret]+(value.suffix||'')];
       }))}:{}),...(s.command?{command:s.command}:{})};
   }
-  return attachShared({name:record.project,services,volumes,...(Object.keys(networks).length?{networks}:{})}, record);
+  // Keep the persisted descriptor portable between the host supervisor's
+  // Compose v2 and the isolated broker's bundled Compose v1. Project identity
+  // is always supplied with --project-name, so a top-level name is unnecessary.
+  return attachShared({version:'3.8',services,volumes,...(Object.keys(networks).length?{networks}:{})}, record);
+}
+async function refreshRecordCompose(home, config, record) {
+  await checkFolders(config, record, home);
+  const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(error=>{if(error.code==='ENOENT')return {};throw error;});
+  await atomic(record.compose, await compose(config, record, secrets, home));
 }
 function dockerEnv() {
-  return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
+  return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG','EZ_DOCKER_COMPOSE'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
 }
+const dockerInvocation = argv => process.env.EZ_DOCKER_COMPOSE === 'standalone' && argv[0] === 'compose'
+  ? {command:'docker-compose',args:argv.slice(1)} : {command:'docker',args:argv};
 export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,timeoutMs=0,maxBytes=Infinity}={}) {
   return new Promise((resolve,reject)=>{
-    const child=spawn('docker',argv,{env:dockerEnv(),stdio:capture?['pipe','pipe','pipe']:['inherit','inherit','inherit']});
+    const invocation=dockerInvocation(argv),child=spawn(invocation.command,invocation.args,{env:dockerEnv(),stdio:capture?['pipe','pipe','pipe']:['inherit','inherit','inherit']});
     let stdout='',stderr='',cancelled=false,killTimer,bytes=0,failure;
     if(capture) {
       const collect=(b,err)=>{bytes+=b.length;if(bytes>maxBytes){failure=Error('Command output limit exceeded');cancel('SIGTERM');return;}if(err)stderr+=b;else stdout+=b;};
@@ -605,7 +641,7 @@ export async function main(args) {
         await atomic(latest.compose, await compose(currentConfig, latest, secrets, home));
         // Persist the binding before recreating clients; start can recover an interrupted recreation.
         await atomic(path.join(home, 'registry.json'), current);
-        await checked([...composeArgs(latest), 'up', '-d', '--wait']);
+        await checked([...composeArgs(latest), 'up', '-d', ...(process.env.EZ_DOCKER_COMPOSE === 'standalone' ? [] : ['--wait'])]);
         return emit({ ok: true, plugin: name, shared: key, ...result });
       });
     }
@@ -619,18 +655,25 @@ export async function main(args) {
       return emit({ok:true,path:dest});
     }
     if(args.length)throw Error('Unknown lifecycle arguments');
-    if(action==='logs') return emit({plugin:name,logs:await checked([...composeArgs(record),'logs','--tail','100','--no-color'])});
-    if(action==='status') {const output=await checked([...composeArgs(record),'ps','--all','--format','json']);return emit({plugin:name,installedVersion:record.manifest.version,containers:output});}
+    if(action==='logs'||action==='status') return locked(home,async()=>{
+      const current=await registry(home),latest=current.plugins[name];
+      if(latest?.revision!==record.revision)throw Error('Plugin changed during lifecycle request');
+      const currentConfig=await json(path.join(home,'config.json'));
+      // A host-side Compose v2 operation may have rewritten this file with
+      // fields that the broker's bundled Compose v1 does not understand.
+      await refreshRecordCompose(home,currentConfig,latest);
+      if(action==='logs')return emit({plugin:name,logs:await checked([...composeArgs(latest),'logs','--tail','100','--no-color'])});
+      const ps = process.env.EZ_DOCKER_COMPOSE === 'standalone' ? ['ps', '--all'] : ['ps', '--all', '--format', 'json'];
+      const output=await checked([...composeArgs(latest),...ps]);
+      return emit({plugin:name,installedVersion:latest.manifest.version,containers:output});
+    });
     if(!['start','stop','uninstall'].includes(action))throw Error('Unknown lifecycle command');
     return locked(home,async()=>{
-      const current=await registry(home);if(current.plugins[name]?.revision!==record.revision)throw Error('Plugin changed during lifecycle request');
-      if(action==='start') {
-        const currentConfig=await json(path.join(home,'config.json'));
-        await checkFolders(currentConfig,current.plugins[name],home);
-        const secrets=await json(path.join(home,'packages',name,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
-        await atomic(record.compose,await compose(currentConfig,current.plugins[name],secrets,home));
-      }
-      await checked([...composeArgs(record),...(action==='start'?['up','-d','--wait']:action==='stop'?['stop']:['down'])]);
+      const current=await registry(home),latest=current.plugins[name];
+      if(latest?.revision!==record.revision)throw Error('Plugin changed during lifecycle request');
+      const currentConfig=await json(path.join(home,'config.json'));
+      await refreshRecordCompose(home,currentConfig,latest);
+      await checked([...composeArgs(latest),...(action==='start'?['up','-d',...(process.env.EZ_DOCKER_COMPOSE === 'standalone'?[]:['--wait'])]:action==='stop'?['stop']:['down'])]);
       if(action==='uninstall') {delete current.plugins[name];for(const [alias,owner] of Object.entries(current.commands))if(owner===name)delete current.commands[alias];await atomic(path.join(home,'registry.json'),current);}
       emit({ok:true,plugin:name,action,dataPreserved:true});
     });

@@ -23,7 +23,8 @@
     "ezenciel-agents-ai": "bin/ezenciel-agents-ai.mjs",
     "ezenciel-agents-watch": "bin/ezenciel-agents-watch.mjs",
     "ezenciel-agents-application": "bin/ezenciel-agents-application.mjs",
-    "ezenciel-agents-provision-telegram": "bin/ezenciel-agents-provision-telegram.mjs"
+    "ezenciel-agents-provision-telegram": "bin/ezenciel-agents-provision-telegram.mjs",
+    "ezenciel-agents-plugin-broker": "bin/ezenciel-agents-plugin-broker.mjs"
   },
   "files": [
     "default-plugins.json",
@@ -62,7 +63,7 @@
   "scripts": {
     "setup": "tsx --env-file-if-exists=.env src/setup.ts",
     "dev": "EZ_DEVELOPMENT=1 tsx watch --clear-screen=false --exclude 'agent/**' --exclude 'test/**' --env-file=.env src/index.ts",
-    "start": "./bin/ezenciel-agents-docker up -d --wait relay",
+    "start": "./bin/ezenciel-agents-docker up -d --wait",
     "owner": "tsx --env-file=.env src/owner.ts",
     "message": "tsx src/message.ts",
     "react": "tsx src/react.ts",

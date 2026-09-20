@@ -121,6 +121,25 @@ test('plugin status verifies images and reports stopped, mismatched and unreacha
   assert(!JSON.stringify(s).includes('synthetic secret'));assert(calls.every(c=>!c.includes('exec')&&!c.includes('start')&&!c.includes('up')));
  }
 });
+test('isolated plugin status uses bundled Compose v1 and inspect readback',async t=>{
+ const f=await fixture(t,'plugin'),id='a'.repeat(64),image='sha256:'+'b'.repeat(64),previous=process.env.EZ_DOCKER_COMPOSE;
+ process.env.EZ_DOCKER_COMPOSE='standalone';
+ try {
+  const calls=[],run=async(c,args)=>{
+   calls.push([c,...args]);assert.equal(c,'docker');
+   if(args.at(-1)==='-q')return id;
+   if(args[0]==='inspect'&&args.length===2)return JSON.stringify([{Config:{Labels:{'com.docker.compose.service':'sample'}},State:{Status:'running',Health:{Status:'healthy'}}}]);
+   if(args[0]==='inspect')return image;
+   if(args[0]==='image')return image;
+   throw Error('unexpected status command');
+  };
+  const p=(await runtimeStatus(f.home,run)).plugins[0];
+  assert.equal(p.state,'running');assert.equal(p.runningVersion,'0.1.0');
+  assert.deepEqual(calls[0].slice(-3),['ps','--all','-q']);
+ } finally {
+  if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
+ }
+});
 test('SemVer ordering and compatibility reject ranges, malformed values and downgrades',()=>{
  for(const s of ['latest','../1','1.0','01.0.0','1.0.0-01'])assert.throws(()=>version(s));
  assert(newer('0.1.0-beta.10','0.1.0-beta.2'));assert(newer('0.1.0','0.1.0-beta.10'));assert(!newer('0.1.0-beta.2','0.1.0'));assert(!newer('1.0.0','1.0.0'));

@@ -86,6 +86,12 @@ test('native discovery binding preserves notes and never seeds a tool inventory'
  await assert.rejects(bindToolDiscovery(f.home,f.workspace),/regular file/);
  assert.equal(await fs.readFile(notes,'utf8'),'Legacy policy');
 });
+test('isolated discovery uses the relay-bound ez client without exposing toolsHome',async t=>{
+ const f=await fixture(t);await fs.mkdir(f.home);const workspace=await fs.realpath(f.workspace),controlDir=await fs.realpath(f.control),toolsHome=await fs.realpath(f.home),host={cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir,binDir:path.join(f.root,'bin'),toolsHome}]};
+ await fs.mkdir(path.join(f.root,'bin'));await fs.writeFile(f.hostConfig,JSON.stringify(host));
+ await init(f.home,f.workspace,undefined,f.hostConfig);
+ const instructions=await fs.readFile(path.join(f.workspace,'AGENTS.md'),'utf8');assert.match(instructions,/`ez tools list --details`/);assert.doesNotMatch(instructions,new RegExp(f.home.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+});
 test('installed snippets follow install, upgrade and uninstall without files or Docker reads',async t=>{
  const f=await fixture(t);await init(f.home,f.workspace);
  const details=async()=>JSON.parse((await f.call('tools','list','--details')).stdout);
@@ -201,7 +207,29 @@ test('registry corruption, active writer lock and alias collision fail closed',a
 test('Compose resources are namespaced, private, and restricted to owning workspace',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);
  const c=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:p.deployment});
- assert.equal(c.name,'ezp-synthetic');assert.equal(c.services.sample.ports,undefined);assert.equal(c.services.sample.privileged,undefined);assert.equal(c.services.sample.volumes[1].read_only,true);assert.deepEqual(c.services.sample.cap_drop,['ALL']);
+ assert.equal(c.version,'3.8');assert.equal(c.name,undefined);assert.equal(c.services.sample.ports,undefined);assert.equal(c.services.sample.privileged,undefined);assert.equal(c.services.sample.volumes[1].read_only,true);assert.deepEqual(c.services.sample.cap_drop,['ALL']);
+});
+test('standalone Compose fallback emits a v1-compatible document and keeps project identity in argv',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source),previous=process.env.EZ_DOCKER_COMPOSE;
+ process.env.EZ_DOCKER_COMPOSE='standalone';
+ try {
+  const c=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:p.deployment});
+  assert.equal(c.version,'3.8');assert.equal(c.name,undefined);assert.ok(c.services.sample.build.target);
+ } finally {
+  if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
+ }
+});
+test('isolated broker host binding validates exact mounts without deployment symlinks',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source),isolated=path.join(f.root,'isolated'),workspace=path.join(isolated,'workspace'),control=path.join(isolated,'control'),hostConfig=path.join(isolated,'host-executor.json'),previous=process.env.EZ_DOCKER_COMPOSE;
+ await fs.mkdir(f.home,{recursive:true});await fs.mkdir(workspace,{recursive:true});await fs.mkdir(control,{recursive:true});
+ await fs.writeFile(hostConfig,JSON.stringify({cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir:control,binDir:path.join(f.root,'bin'),toolsHome:f.home}]}));
+ process.env.EZ_DOCKER_COMPOSE='standalone';
+ try {
+  const c=await compose({workspace:await fs.realpath(workspace),hostConfig:await fs.realpath(hostConfig)},{source:p.source,project:'ezp-synthetic',revision:p.revision,manifest:p.manifest,deployment:p.deployment},{},f.home);
+  assert.equal(c.version,'3.8');assert.equal(c.services.sample.volumes[1].source,await fs.realpath(workspace));
+ } finally {
+  if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
+ }
 });
 test('host-owned private networks survive registered-call Compose regeneration',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
