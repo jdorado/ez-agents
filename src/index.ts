@@ -716,7 +716,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       '🟢 Ez is online',
       '',
       'System',
-      ...await softwareStatus(config.controlDir),
+      ...await softwareStatus(config.controlDir, config.isolation),
       `AI: ${selected.name} (${presetLabel(displayedSelected)})`,
       '',
       'Work',
