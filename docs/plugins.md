@@ -255,6 +255,25 @@ never retries a provider operation. Service startup/restart is explicit; command
 never implicitly start a stopped provider service. Plugin data does not enter the
 relay. The manager sends only a whitelist of Docker client environment variables.
 
+### Application plugin context
+
+An authenticated application can attach opaque domain data under
+`context.plugins.<plugin-id>` when it submits a run. During that active,
+authorized application run, the matching plugin command container receives only
+that object as JSON in `EZ_PLUGIN_CONTEXT`. No other plugin context, core control
+state, owner identity, or application context is forwarded. Ordinary native runs
+and commands launched outside an application run receive no such environment
+variable. The manager authorizes the active run and application binding at command
+admission (prepare time) and rejects revoked authority there; revocation between
+admission and container start is a documented residual window. Transport is a
+`0o600` env file consumed via `--env-file`, never process arguments; the value
+remains visible in `docker inspect` while the container runs.
+
+Use this for a short-lived, domain-scoped capability or an application service
+address. It is not prompt text, a general secret channel, or an environment
+override. Plugin code must validate the object, avoid printing it, and send it
+only to its authoritative service over the reviewed transport.
+
 ## Verification
 
 `npm run verify` runs offline negative/contract tests. Explicit Docker integration:

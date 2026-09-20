@@ -9,7 +9,7 @@ import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
-import { scheduledTasksText } from './scheduled-tasks.js'
+import { ownedScheduledTasks, scheduledTaskDetailText, scheduledTasksText } from './scheduled-tasks.js'
 import { taskWorkspace } from './task-workspace.js'
 import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
@@ -112,6 +112,19 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     controlDir: config.controlDir, workspace: config.workspace, initial: aiMenu.initial,
     aiControls: aiMenu,
     wake: () => { void drainSources().catch(error => console.error('Application queue unavailable', safeError(error))) },
+    createTelegramPairing: async (bindingId, owner) => {
+      const username = bot?.botInfo?.username
+      if (!username || !/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(username))
+        throw new Error('Telegram connection is unavailable')
+      const pairing = await control.createApplicationTelegramPairing(bindingId, owner)
+      if (!pairing) return { connected: true } as const
+      return {
+        connected: false as const,
+        url: `https://t.me/${username}?start=${pairing.token}`,
+        expiresAt: pairing.expiresAt,
+      }
+    },
+    telegramAvailable: () => Boolean(bot?.botInfo?.username),
     cancel: id => withStartLock(async () => {
       const run = await runs.get(id)
       if (run?.status === 'queued') await runs.patch(id, {status:'cancelled',endedAt:new Date().toISOString()})
@@ -628,6 +641,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const state = await control.status()
     if (!telegramOwner(state.owner)) {
       if (ctx.chat?.type !== 'private') return false
+      const applicationToken = ctx.message?.text?.trim().match(/^\/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{43})$/)?.[1]
+      if (applicationToken) {
+        const linked = await applicationChannel.claimTelegramConnection(applicationToken, ctx.from.id, ctx.chat.id)
+        await ctx.reply(linked
+          ? 'Telegram is connected to your Ez agent. You can keep chatting here.'
+          : 'This Telegram connection link expired or is no longer valid. Create a new one in the connected application.', { link_preview_options: { is_disabled: true } })
+        return false
+      }
       const result = await control.requestPairing(ctx.from.id, ctx.chat.id)
       if (result === 'requested')
         await ctx.reply('Owner approval is pending. Confirm this request through the local setup assistant.')
@@ -654,18 +675,29 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const commands = [...mainCommands, ...(launcher ? [{ command: launcher.command, description: launcher.label }] : [])]
   const controlCommand = (text?: string) => /^\/rename(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text?.trim() ?? '')
     ? '/rename' : text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
+  const tasksCommand = (text?: string): number | undefined | null => {
+    const match = text?.trim().match(/^\/tasks(?:@[a-zA-Z0-9_]+)?(?:\s+([1-9]\d*))?$/)
+    return match ? (match[1] ? Number(match[1]) : undefined) : null
+  }
+  const isTasksCommand = (text?: string): boolean => /^\/tasks(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text?.trim() ?? '')
   const statusKeyboard = () => new InlineKeyboard()
     .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
-    .text('Retry failed incoming message', 'menu:retry').row()
-    .text('Scheduled tasks', 'menu:scheduled-tasks')
+    .text('Retry failed incoming message', 'menu:retry')
   const scheduledTasks = async () => {
     const owner = (await control.status()).owner
     if (!owner) return 'Scheduled tasks\n\nNo paired owner.'
     // This intentionally uses the reader that does not create a schedules directory.
-    return scheduledTasksText(await scheduler.listActiveReadOnly(await runs.list()), owner)
+    const active = await scheduler.listActiveReadOnly(await runs.list())
+    return { owner, active, text: scheduledTasksText(active, owner) }
   }
-  const replyScheduledTasks = async (ctx: Context) => {
-    for (const part of splitTelegramText(await scheduledTasks())) await ctx.reply(part)
+  const replyScheduledTasks = async (ctx: Context, number?: number) => {
+    const result = await scheduledTasks()
+    const text = typeof result === 'string' ? result : number === undefined ? result.text : (() => {
+      const owned = ownedScheduledTasks(result.active, result.owner)
+      const schedule = owned[number - 1]
+      return schedule ? scheduledTaskDetailText(schedule, number, owned.length) : `Scheduled task ${number} was not found. Use /tasks to list active tasks.`
+    })()
+    for (const part of splitTelegramText(text)) await ctx.reply(part)
   }
   const statusText = async () => {
     const running = await runs.running(false)
@@ -771,7 +803,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     const message = ctx.message
     const command = controlCommand(message?.text)
-    if (command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu', ...retiredCommands).includes(command)) return next()
+    if ((command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu', ...retiredCommands).includes(command)) || tasksCommand(message?.text) !== null || isTasksCommand(message?.text)) return next()
     const ordinary = message && (message.text || message.photo || message.document || message.voice)
     const approval = ctx.callbackQuery?.data?.startsWith('approval:')
     if (!ordinary && !approval) return next()
@@ -812,6 +844,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     if (text === '/settings') {
       await ctx.reply('Settings was removed. Use /ai to choose the client, model, and reasoning level.')
+      return
+    }
+
+    const taskNumber = tasksCommand(ctx.message.text)
+    if (taskNumber !== null) {
+      await replyScheduledTasks(ctx, taskNumber)
+      return
+    }
+    if (isTasksCommand(ctx.message.text)) {
+      await ctx.reply('Usage: /tasks [number]. Use /tasks to list active tasks.')
       return
     }
 
