@@ -18,7 +18,12 @@ export type Schedule = {
   owner: Owner; execution: ExecutionChoice
   delivery?: { bindingId: string; scope: string }
 }
-export type ActiveSchedule = Schedule & { nextAt: number | null; runState?: 'queued' | 'running' }
+export type ScheduledRunSummary = {
+  status: 'completed' | 'failed' | 'cancelled'
+  at: string
+  currentRevision: boolean
+}
+export type ActiveSchedule = Schedule & { nextAt: number | null; runState?: 'queued' | 'running'; lastRun?: ScheduledRunSummary }
 export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string; originRunId?: string }
 export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
   const s = v as ScheduledOrigin
@@ -85,11 +90,18 @@ export class Scheduler {
     for (const s of await this.listReadOnly()) {
       if (!s.enabled) continue
       const current = runs.filter(r => r.scheduled?.id === s.id && r.scheduled.revision === s.revision && ownsRun(s.owner,r))
+      const history = runs.filter(r => r.scheduled?.id === s.id && r.scheduled.pairedAt === s.owner.pairedAt && ownsRun(s.owner,r))
+        .filter((r): r is RunRecord & { status: ScheduledRunSummary['status'] } =>
+          r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled')
+        .sort((a,b) => (b.endedAt ?? b.startedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.startedAt ?? a.createdAt))
+      const last = history[0]
       const runState = current.some(r => r.status === 'running') ? 'running' : current.some(r => r.status === 'queued') ? 'queued' : undefined
       if (!runState && current.some(r => holdsSchedule(s,r))) continue
       try {
         const nextAt = await this.pendingOccurrence(s)
-        if (runState || nextAt !== null) active.push({...s,nextAt,runState})
+        if (runState || nextAt !== null) active.push({...s,nextAt,runState,...(last ? {
+          lastRun: {status:last.status,at:last.endedAt ?? last.startedAt ?? last.createdAt,currentRevision:last.scheduled!.revision===s.revision},
+        } : {})})
       }
       catch { console.error('Unreadable schedule cursor',s.id) }
     }
