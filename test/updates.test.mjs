@@ -356,6 +356,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  const first=start(),firstClosed=new Promise(resolve=>first.p.once('close',resolve));t.after(()=>{first.p.kill('SIGTERM');});
  const heartbeat=()=>read(path.join(f.agent.controlDir,'host-executor/heartbeat.json')).catch(()=>null);
  const oldBeat=await wait(heartbeat);
+ if(provider==='pnpm')await wait(()=>first.output().includes('Update discovery failed; host remains running.'));
  const running=path.join(f.agent.controlDir,'host-executor/r_request.running.json');await fs.writeFile(running,'{}');
  const job=await prepare(f.home,'main',{file:await f.pack()});
  const requester=await exec(process.execPath,['--input-type=module','-e',`import {submit} from ${JSON.stringify(new URL('../src/updates/control.mjs',import.meta.url).href)};console.log(JSON.stringify(await submit(${JSON.stringify(f.home)},${JSON.stringify(job.id)},false)));`]);
