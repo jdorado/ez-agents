@@ -290,6 +290,26 @@ export const executorInvocation = (command: string, args: string[]) => {
     : { command, args }
 }
 
+// Slim per-turn injection: transport reminder only. No coaching, no
+// tool/delegate/schedule advice, no workflow guidance.
+export const CHAT_SUFFIX = '\n\n[chat] Reply via ezenciel-agents-message --text "..."; stdout is not delivered.'
+
+export const applicationScopeSuffix = (run: { application?: { scope: string }; delivery?: { scope: string } } | undefined | null): string => {
+  const scope = run?.application?.scope ?? run?.delivery?.scope
+  return scope === undefined ? '' : '\n\n[application scope ' + JSON.stringify(scope) + ']'
+}
+
+export const buildPromptText = (
+  texts: string[],
+  run: { taskId?: string; messageId?: number; application?: { scope: string }; delivery?: { scope: string } } | undefined | null,
+  host = false,
+): string => {
+  const needsReply = !host && !run?.taskId && (run?.messageId !== undefined || run?.application !== undefined || run?.delivery !== undefined)
+  const chatSuffix = needsReply ? CHAT_SUFFIX : ''
+  const appSuffix = !host && !run?.taskId ? applicationScopeSuffix(run) : ''
+  return texts.join('\n\n') + chatSuffix + appSuffix
+}
+
 export const startExecutorJob = async (
   texts: string[],
   options: ExecutorOptions,
@@ -309,14 +329,7 @@ export const startExecutorJob = async (
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   const gui = !host && key === 'codex-gui'
   const nativeSession = !host && key === 'codex' && options.runId.startsWith('r_schedule_')
-  // Chat-mode experiment: only direct chat input at the engine boundary.
-  const applicationReminder = !host && (run?.application || run?.delivery)
-    ? '\n\n[Application channel] This is an owner-authorized application conversation. Send text replies using ezenciel-agents-message; stdout alone is not delivered. Outgoing file delivery, reactions and approval controls are unsupported here. Domain tools can retrieve private context from ezenciel-agents-schedule context under run.application.context; do not expose credentials from that data. The application scope is ' + JSON.stringify((run.application ?? run.delivery)!.scope) + '.'
-    : ''
-  const chatReminder = !host && !run?.taskId && run?.messageId !== undefined
-    ? '\n\n[Chat context] You are replying in chat. Send replies with ezenciel-agents-message --text "..."; your final answer alone is not delivered. Before lengthy tool or repository work, briefly acknowledge through that CLI. Keep chat responsive: use ezenciel-agents-schedule for long-running work and native subagents for useful independent parts. Decide when to delegate and what to send.'
-    : ''
-  const promptText = texts.join('\n\n') + applicationReminder + chatReminder
+  const promptText = buildPromptText(texts, run, host)
   const promptFile = path.join(outputDirectory, 'prompt.txt')
   await writeFile(promptFile, promptText, { encoding: 'utf8', mode: 0o600 })
 

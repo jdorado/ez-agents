@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider, buildPromptText, CHAT_SUFFIX, applicationScopeSuffix } from '../src/executor.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
 
@@ -268,5 +268,55 @@ test('external local owner chat preserves authorization and literal input', asyn
   } finally {
     if(prior.path===undefined)delete process.env.PATH;else process.env.PATH=prior.path
     if(prior.transport===undefined)delete process.env.EZ_EXECUTOR_TRANSPORT;else process.env.EZ_EXECUTOR_TRANSPORT=prior.transport
+  }
+})
+
+test('per-turn injection stays slim: raw texts plus transport reminder only', async t => {
+  // Byte-exact unit checks: prompt.txt content = raw texts + slim suffix.
+  assert.equal(buildPromptText(['hello'], { messageId: 7 }), 'hello' + CHAT_SUFFIX)
+  assert.equal(buildPromptText(['a', 'b'], { messageId: 7 }), 'a\n\nb' + CHAT_SUFFIX)
+  assert.equal(CHAT_SUFFIX, '\n\n[chat] Reply via ezenciel-agents-message --text "..."; stdout is not delivered.')
+  assert.equal(applicationScopeSuffix(undefined), '')
+  assert.equal(applicationScopeSuffix({ application: { scope: 'scope-1' } }), '\n\n[application scope "scope-1"]')
+  assert.equal(applicationScopeSuffix({ delivery: { scope: 'scope-2' } }), '\n\n[application scope "scope-2"]')
+  assert.equal(
+    buildPromptText(['hi'], { messageId: 7, application: { scope: 'scope-1' } }),
+    'hi' + CHAT_SUFFIX + '\n\n[application scope "scope-1"]',
+  )
+  // No injection for task runs, host transport, or non-chat runs.
+  assert.equal(buildPromptText(['hi'], { taskId: 'task_' + 'a'.repeat(32), messageId: 7 }), 'hi')
+  assert.equal(buildPromptText(['hi'], { messageId: 7 }, true), 'hi')
+  assert.equal(buildPromptText(['hi'], undefined), 'hi')
+  // No coaching, tool/delegate/schedule advice, or workflow guidance.
+  const forbidden = ['delegate', 'subagent', 'long-running', 'acknowledge', 'Domain tools', 'credentials', 'approval controls', 'responsive']
+  for (const prompt of [buildPromptText(['hi'], { messageId: 1 }), buildPromptText(['hi'], { messageId: 1, delivery: { scope: 's' } })])
+    for (const word of forbidden) assert.equal(prompt.includes(word), false, `slim prompt must not contain ${word}`)
+
+  // End-to-end: fake codex CLI observes stdin === raw texts + slim suffix byte-for-byte.
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-slim-prompt-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const prior = { path: process.env.PATH, transport: process.env.EZ_EXECUTOR_TRANSPORT }
+  const bin = path.join(root, 'bin')
+  await mkdir(bin)
+  await writeFile(path.join(bin, 'codex'), `#!/usr/bin/env node\nconst fs=require('fs');let text='';process.stdin.on('data',b=>text+=b);process.stdin.on('end',()=>fs.writeFileSync(${JSON.stringify(path.join(root, 'observed.json'))},JSON.stringify({text})));`, { mode: 0o755 })
+  await ownerRun(root, 'r_slim_chat')
+  const runs = new RunStore(root)
+  const run = await runs.get('r_slim_chat')
+  assert.ok(run)
+  // Promote the owner run to a chat run without re-entering ownership checks.
+  await writeFile(path.join(root, 'runs', 'r_slim_chat.json'), JSON.stringify({ ...run, messageId: 42 }), { mode: 0o600 })
+  try {
+    process.env.PATH = bin + path.delimiter + prior.path
+    process.env.EZ_EXECUTOR_TRANSPORT = 'local'
+    const job = await startExecutorJob(['hello'], { workspace: root, controlDir: root, binDir: bin, runId: 'r_slim_chat', timeoutMs: 0, cli: 'codex' })
+    assert.equal(await new Promise((resolve) => job.child.once('close', resolve)), 0)
+    await job.cleanup()
+    const observed = JSON.parse(await readFile(path.join(root, 'observed.json'), 'utf8'))
+    assert.equal(observed.text, 'hello' + CHAT_SUFFIX)
+  } finally {
+    if (prior.path === undefined) delete process.env.PATH
+    else process.env.PATH = prior.path
+    if (prior.transport === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT
+    else process.env.EZ_EXECUTOR_TRANSPORT = prior.transport
   }
 })

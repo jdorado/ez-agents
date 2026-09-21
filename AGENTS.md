@@ -50,7 +50,7 @@ This package will be published as an open-source, lightweight Telegram-to-CLI re
 - Keep `node_modules` minimal and installable in seconds.
 
 ## 2. The engine is the core; ez is an ultra-lean gate
-- The selected CLI/GUI engine owns intelligence, context, reasoning, planning, goals, delegation and continuation. ez mainly authorizes inputs, invokes engines/tools and transports results. Keep necessary queue ownership, cancellation, secret isolation and reliable delivery deterministic.
+- The selected CLI/GUI engine owns intelligence, context, reasoning, planning, goals, delegation and continuation. ez mainly authorizes inputs, invokes engines/tools and transports results. Keep necessary queue ownership, cancellation, secret isolation and reliable delivery deterministic. Per-turn prompt injection is transport context only (chat delivery reminder + application scope when present); no coaching, tool/delegate/schedule advice, or workflow guidance.
 - Plugins are ordinary CLI tools with explicit inputs, outputs and errors. Packaging a tool does not justify another LLM worker or business workflow owner.
 - **SUBTRACT is as valid as ADD.** Question the requirement; delete unnecessary behavior; simplify; shorten feedback; automate last. Name and try the subtraction option before proposing additions. Removing a wrapper or correcting existing engine instructions/tool contracts can be the complete fix.
 - Add code only for a demonstrated missing transport or tool capability. Prompts, agents, retries and lifecycle owners also count as machinery; do not replace deleted code with a scripted prompt workflow. Prefer existing engine, CLI and Docker capabilities.

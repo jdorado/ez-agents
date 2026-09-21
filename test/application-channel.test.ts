@@ -136,9 +136,11 @@ if(result.status!==0){console.error(result.stderr);process.exit(1)};
   await waitFor(async()=> (await new RunStore(root).get(second.id))?.status==='completed')
   assert.deepEqual(resumeIds,[undefined,nativeId])
   assert.equal(telegramCalls,0)
-  assert.ok(prompts[0].startsWith('Hello from the app'))
-  assert.ok(prompts[0].includes('[Application channel]'))
+  const expectedApp='Hello from the app\n\n[chat] Reply via ezenciel-agents-message --text "..."; stdout is not delivered.\n\n[application scope "program"]'
+  assert.equal(prompts[0],expectedApp)
+  assert.equal(Buffer.byteLength(prompts[0],'utf8'),Buffer.byteLength(expectedApp,'utf8'))
   assert.ok(!prompts[0].includes('must-stay-out-of-prompt'))
+  for (const banned of ['delegate','subagent','schedule','acknowledge','responsive','Domain tools','credentials','reactions','Outgoing','[Application channel]','[Chat context]']) assert.ok(!prompts[0].includes(banned),`app prompt must not contain ${banned}`)
   assert.equal((await relay.applicationChannel.snapshot(binding.bindingId,second.id)).messages[0].text,'Fixture engine reply')
 })
 

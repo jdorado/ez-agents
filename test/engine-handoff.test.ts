@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { startExecutorJob } from '../src/executor.js'
+import { startExecutorJob, CHAT_SUFFIX } from '../src/executor.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { initializeWorkspace } from '../src/workspace.js'
 import { RunStore } from '../src/runs.js'
@@ -65,12 +65,12 @@ if(args[0]==='app-server'){
    await new RunStore(controlDir).patch(runId,{status:'running'})
    const job=await startExecutorJob(['hi'],{workspace,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:5000,isResume,sessionId:'native-existing'})
    const code=await new Promise(resolve=>job.child.once('close',resolve));await job.cleanup();assert.equal(code,0)
-   const {prompt}=JSON.parse(await readFile(path.join(workspace,'capture.json'),'utf8'))
-   assert.ok(prompt.startsWith('hi\n\n[Chat context]'))
-   assert.equal(prompt.split('[Chat context]').length,2)
-   assert.match(prompt,/ezenciel-agents-message/)
-   assert.match(prompt,/ezenciel-agents-schedule/)
-   assert.match(prompt,/native subagents/)
+    const {prompt}=JSON.parse(await readFile(path.join(workspace,'capture.json'),'utf8'))
+    const expected='hi'+CHAT_SUFFIX
+    assert.equal(prompt,expected)
+    assert.equal(Buffer.byteLength(prompt,'utf8'),Buffer.byteLength(expected,'utf8'))
+    assert.match(prompt,/ezenciel-agents-message/)
+    for (const banned of ['delegate','subagent','schedule','acknowledge','responsive','[Chat context]','[Application channel]']) assert.ok(!prompt.includes(banned),`prompt must not contain ${banned}`)
   }
  }finally{for(const [key,value] of Object.entries(previous))if(value===undefined)delete process.env[key];else process.env[key]=value}
 })
