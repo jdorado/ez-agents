@@ -1,6 +1,5 @@
 import { loadControlConfig } from './config.js'
-import { ApprovalStore } from './approval.js'
-import { RunStore } from './runs.js'
+import { callDeliverySocket, socketPathFor } from './delivery-socket.js'
 
 const args = process.argv.slice(2).filter((arg) => arg !== '--')
 if (args.includes('--help') || args.includes('-h')) {
@@ -27,10 +26,12 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const config = loadControlConfig()
-const approvalStore = new ApprovalStore(config.controlDir)
+const socketPath = socketPathFor(config.controlDir)
 
 if (checkId) {
-  const record = await approvalStore.getDecision(checkId)
+  const record = await callDeliverySocket(socketPath, { op: 'approvalCheck', payload: { actionId: checkId } }) as {
+    actionId: string; decision: string; decidedAt?: string; decidedBy?: number
+  }
   console.log(JSON.stringify({
     ok: true,
     actionId: checkId,
@@ -53,7 +54,13 @@ if (!runId) {
   process.exit(1)
 }
 
-const runStore = new RunStore(config.controlDir)
-await approvalStore.requestApproval(actionId, prompt, runId)
-const item = await runStore.enqueueApproval(runId, prompt, actionId, { replyToMessageId: replyTo })
+// The relay records the approval request and delivers its card; the decision
+// arrives later through Telegram and is read back with --check.
+const item = await callDeliverySocket(socketPath, {
+  op: 'enqueue',
+  payload: {
+    kind: 'approval', runId, approvalPrompt: prompt, approvalActionId: actionId,
+    ...(replyTo !== undefined ? { replyToMessageId: replyTo } : {}),
+  },
+}) as { outbox_id: string; id: string }
 console.log(JSON.stringify({ ok: true, run: runId, actionId, outbox_id: item.id, status: 'requested' }))

@@ -4,6 +4,8 @@ import { TelegramSource } from './telegram-source.js'
 import { Tasks } from './tasks.js'
 import { taskRequests } from './task-rpc.js'
 import { executionBlockReason } from './execution-authority.js'
+import { serveDeliverySocket, createLedgerHandler, deliverySocketAlive, deliverySocketPath } from './delivery-socket.js'
+import { packageVersion } from './version.js'
 import {authorizeDeliveryContext} from './delivery-context.mjs'
 import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
@@ -234,7 +236,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           : await control.executionSession(started.execution!)
         const selected = run.taskId ? (started.execution?.preset.cli === 'codex' ? started.execution.preset : initialPreset('codex')) : started.execution!.preset
         const { child, cleanup } = await launch(texts, {
-          workspace: run.scheduled ? await taskWorkspace(config.workspace,run.id) : config.workspace,
+          workspace: run.scheduled ? await taskWorkspace(config.controlDir,run.id) : config.workspace,
           timeoutMs: config.executorTimeoutMs,
           repairEnabled: config.repairEnabled,
           runId: started.id,
@@ -452,10 +454,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if (message?.media_group_id) item.text = `[Telegram album: ${message.media_group_id}]\n${item.text}`
     if (message && (message.chat.type === 'group' || message.chat.type === 'supergroup'))
       item.text = `[Telegram sender ${message.from?.id}, name ${JSON.stringify(message.from?.first_name)}]\n${item.text}`
-    if (message && !message.text && message.reply_to_message) {
-      const quoted = message.reply_to_message
-      item.text = `[Quoted message ${quoted.message_id}]: ${quoted.text || quoted.caption || '[media]'}\n\n${item.text}`
-    }
     collected.push(item)
   }
   const scheduleIntake = () => {
@@ -568,7 +566,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             ])
             console.info('run reaction sent', { run_id: item.runId, emoji })
           } else if (item.type === 'document' && item.documentPath) {
-            const docPath = await workspaceFile(origin?.scheduled ? await taskWorkspace(config.workspace,origin.id) : config.workspace, item.documentPath)
+            const docPath = await workspaceFile(origin?.scheduled ? await taskWorkspace(config.controlDir,origin.id) : config.workspace, item.documentPath)
             await paceSend()
             await authorizeChannelDelivery()
             attemptedDelivery = true
@@ -625,6 +623,21 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
     })().finally(() => { outboxWork = undefined }))
   }
+
+  // Delivery socket: cross-process producers (engine children, plugin
+  // children, host executor, CLIs) enqueue and query the memory ledger
+  // through the shared handler in delivery-socket.ts. The pump below stays
+  // the single delivery executor; the socket only admits work into it.
+  let deliveryServer: { socketPath: string; stop: () => Promise<void> } | null = null
+  const handleDeliveryOp = createLedgerHandler(config.controlDir, {
+    wake: () => { void drainOutbox() },
+    status: () => ({
+      polling: Boolean(bot?.isRunning()),
+      applicationOnly: !telegramEnabled,
+      telegramConfigured: config.telegramBotToken !== '',
+      version: packageVersion,
+    }),
+  })
 
   const checkOwner = async (ctx: Context): Promise<boolean> => {
     if (!ctx.from || ctx.from.is_bot || ctx.message?.sender_chat) return false
@@ -913,19 +926,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
 
-    // Quoted reply context forwarding
-    let promptText = ctx.message.text
-    if (ctx.message.reply_to_message) {
-      const quoted = ctx.message.reply_to_message
-      const quotedText = ('text' in quoted && quoted.text) || ('caption' in quoted && quoted.caption) || ''
-      const quotedSender = quoted.from?.is_bot ? 'Agent' : 'Owner'
-      if (quotedText) {
-        promptText = `[Quoted message from ${quotedSender} (ID: ${quoted.message_id})]: "${quotedText}"\n\n${promptText}`
-      }
-    }
-
     collectItem({
-      text: promptText,
+      text: ctx.message.text,
       messageId: ctx.message.message_id,
       updateId: ctx.update.update_id,
       chatId: ctx.chat.id,
@@ -943,7 +945,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const fileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${fileInfo.file_path}`
       const buffer = await downloadTelegramFile(fileUrl)
       const fileName = sanitizeFileName(basename(fileInfo.file_path) || 'photo.jpg')
-      const staged = await stageChatAttachment(config.workspace, fileName, buffer, ctx.message.caption ?? '')
+      const staged = await stageChatAttachment(config.controlDir, fileName, buffer, ctx.message.caption ?? '')
       collectItem({
         text: staged.text,
         attachment: staged.attachment,
@@ -970,7 +972,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const fileUrl = `https://api.telegram.org/file/bot${config.telegramBotToken}/${fileInfo.file_path}`
       const buffer = await downloadTelegramFile(fileUrl)
       const fileName = sanitizeFileName(doc.file_name || basename(fileInfo.file_path) || 'document.bin')
-      const staged = await stageChatAttachment(config.workspace, fileName, buffer, ctx.message.caption ?? '')
+      const staged = await stageChatAttachment(config.controlDir, fileName, buffer, ctx.message.caption ?? '')
       collectItem({
         text: staged.text,
         attachment: staged.attachment,
@@ -1136,6 +1138,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     shuttingDown = true
     runtimeStarted = false
     pollingAbort.abort()
+    await deliveryServer?.stop().catch(() => {})
+    deliveryServer = null
     await applicationChannel.stop()
     wakePollRetry?.()
     if (intakeTimer) clearTimeout(intakeTimer)
@@ -1162,6 +1166,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     let failed = false
     try {
       await initializeWorkspace(config.workspace)
+      // The delivery socket is the cross-process ledger transport and the
+      // single-relay guard (replacing relay.lock): a live sibling answers the
+      // ping and this relay refuses to split-brain the agent.
+      if (await deliverySocketAlive(deliverySocketPath(config.controlDir)).catch(() => false))
+        throw new Error(`Another relay owns ${config.controlDir}; stop it before starting a second one`)
+      deliveryServer = await serveDeliverySocket(config.controlDir, handleDeliveryOp)
       if (config.applicationPort) await applicationChannel.listen(config.applicationPort, config.applicationHost)
       runtimeStarted = true
       const owner = (await control.status()).owner

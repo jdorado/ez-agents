@@ -18,7 +18,7 @@ const IDENTIFIER = /^[a-z][a-z0-9-]{0,39}$/;
 const REVISION = /^sha256:[a-f0-9]{64}$/;
 const REQUEST_ID = /^[a-f0-9-]{36}$/;
 
-const { requireOwnerExecution } = await import('./execution-authority.js');
+const { authorizeRun, deliverySocketPath } = await import('./delivery-socket.js');
 
 const childOf = (candidate, parent) => candidate === parent || candidate.startsWith(parent + path.sep);
 const json = async file => JSON.parse(await fs.readFile(file, 'utf8'));
@@ -38,9 +38,9 @@ const validateArgs = value => {
 const validateRevision = value => validId(value, REVISION, 'plugin revision');
 
 const safeEnvironment = (binding, runId) => {
-  const names = ['HOME', 'PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'BUILDX_CONFIG', 'EZ_DOCKER_COMPOSE'];
+  const names = ['HOME', 'PATH', 'LANG', 'LC_ALL', 'TMPDIR', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'BUILDX_CONFIG', 'EZ_DOCKER_COMPOSE', 'EZ_DELIVERY_SOCKET'];
   const environment = Object.fromEntries(names.flatMap(name => process.env[name] === undefined ? [] : [[name, process.env[name]]]));
-  return { ...environment, EZ_CONTROL_DIR: binding.controlDir, EZ_RUN_ID: runId, EZ_EXECUTOR_TRANSPORT: 'local' };
+  return { ...environment, EZ_CONTROL_DIR: binding.controlDir, EZ_RUN_ID: runId, EZ_EXECUTOR_TRANSPORT: 'local', EZ_DELIVERY_SOCKET: environment.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir) };
 };
 
 const recordForAlias = (r, alias) => {
@@ -141,7 +141,7 @@ export async function loadPluginBrokerBinding(input) {
 
 const authorize = async (binding, runId) => {
   validId(runId, RUN_ID, 'plugin run ID');
-  return requireOwnerExecution(binding.controlDir, runId);
+  return authorizeRun(binding.controlDir, runId);
 };
 
 const writeReceipt = async (binding, receipt) => {
@@ -237,7 +237,7 @@ const invokePlugin = async (binding, request, signal) => {
     const command = await prepareCommand(binding.home, request.alias, request.args, {
       revision: request.revision,
       invocation: true,
-      environment: { EZ_CONTROL_DIR: binding.controlDir, EZ_RUN_ID: request.runId },
+      environment: { EZ_CONTROL_DIR: binding.controlDir, EZ_RUN_ID: request.runId, EZ_DELIVERY_SOCKET: process.env.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir) },
     });
     try {
       result = await dockerRun(command.argv, {

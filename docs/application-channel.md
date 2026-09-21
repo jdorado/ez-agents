@@ -407,14 +407,14 @@ up to 10 MiB decoded; empty files and other types are rejected. Core detects fil
 content rather than trusting a client MIME label. This same limit and staging
 contract apply to Telegram photo/document input.
 
-Authentication precedes staging. Core stages the file privately in the ordinary
-workspace inbox and uses the same attachment metadata and literal comment as
-Telegram. The existing run queue, native executor, selected AI and native session
+Authentication precedes staging. Core stages the file privately under the
+deployment control directory and uses the same attachment metadata and literal
+comment as Telegram. The existing run queue, native executor, selected AI and native session
 remain authoritative; applications must not extract, summarize, convert or build
 attachment prompts. Use `followOwner:true` for the shared owner conversation.
 Retry the same request ID, filename, bytes and literal comment; conflicts return
 409 and successful retries do not stage another file. A failed admission removes
-its staged file; a process crash may leave an unused inbox file, never a runnable
+its staged file; a process crash may leave an unused staged file, never a runnable
 partial request. Separate owner runtimes must retain separate workspace mounts.
 
 This is inbound file support. Application replies currently deliver text only;

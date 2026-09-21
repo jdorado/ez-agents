@@ -93,16 +93,19 @@ bin/ezenciel-agents-docker up -d --wait
 
 The owner supplies a real DM; verify the pending numeric sender before pairing.
 Live smoke uses the same host CLI and requires an actual Telegram receipt.
-Restart preserves pairing and files. One kernel lock excludes relay/smoke
-writers; exit 73 means a writer is active. Do not delete its lock to bypass it.
+Restart preserves pairing and files. On boot the relay binds the live delivery
+socket as the single-relay guard: a second relay refuses to start while that
+address answers. Do not remove a live socket to bypass the guard.
 Health requires recent polling and host-transport heartbeats, not just a process.
 Relay replacement retains the existing 30-second startup grace and deployment
 layout, so compatible releases remain eligible for agent-owned upgrades.
-An interrupted Telegram poller keeps authorized work and in-flight outbox writes
-alive while it retries intake. A `409 Conflict` still requires the operator to
-stop the competing poller; it remains unhealthy after the startup grace. Pending
-and uncertain deliveries keep their existing outbox/receipt semantics; executor
-stdout is not replayed as a reply.
+An interrupted Telegram poller keeps authorized work and in-flight deliveries
+alive while it retries intake. Run and delivery records are relay memory: a
+relay process restart drops in-flight work by design, Telegram redelivery is the
+intake replay path, and uncertain sends report unknown instead of success.
+A `409 Conflict` still requires the operator to stop the competing poller; it
+remains unhealthy after the startup grace. Pending and uncertain deliveries keep
+their existing receipt semantics; executor stdout is not replayed as a reply.
 Signal and fatal-error paths share one shutdown; a secondary cleanup error is
 reported without replacing the original startup/polling failure.
 

@@ -8,11 +8,14 @@ import {ControlStore} from '../src/control-state.js'
 import {RunStore} from '../src/runs.js'
 import {authorizeDeliveryContext,captureDeliveryContext} from '../src/delivery-context.mjs'
 import {nativeTasks,nativeTaskBinding} from '../src/plugins/native-tasks.mjs'
+import {serveTestLedger} from './helpers/ledger.js'
 
 test('authenticated connection sends text and files through ordinary outbox receipts without a native run',async()=>{
   const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'ez-channel-delivery-'))),workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),home=path.join(root,'tools'),hostConfig=path.join(root,'host-executor.json')
   for(const dir of [workspace,controlDir,home])await fs.mkdir(dir)
   const relay=createRelay({controlDir,workspace,pairingTtlMs:1000,executorTimeoutMs:1000,executorCli:'grok',telegramBotToken:'fixture'},async()=>{throw Error('Must not launch native execution')})
+  // The message CLI child reaches the relay memory ledger through the delivery socket.
+  const ledger=await serveTestLedger(controlDir)
   const calls:string[]=[];relay.bot.api.config.use(async(_prev,method)=>{calls.push(method);return {ok:true,result:{message_id:42}} as never})
   try {
     await fs.writeFile(path.join(home,'config.json'),JSON.stringify({schemaVersion:1,workspace,hostConfig}))
@@ -38,7 +41,7 @@ test('authenticated connection sends text and files through ordinary outbox rece
     await relay.drainOutbox();assert.equal(calls.length,2);await assert.rejects(store.waitForDelivery(queued.id),/revoked/)
     await assert.rejects(nativeTasks(home,['--text','denied'],{command:'message',deliveryContext:context}),/revoked/)
     await assert.rejects(store.ownerDeliveryReceipt(context,queued.id),/revoked/)
-  } finally {await relay.stop();await fs.rm(root,{recursive:true,force:true})}
+  } finally {await relay.stop();await ledger.stop();await fs.rm(root,{recursive:true,force:true})}
 })
 test('delivery authority cannot revive after Telegram relink or same-time owner replacement',async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'ez-channel-delivery-epoch-'))

@@ -1,8 +1,7 @@
 import { executionDefaults } from './model-policy.js'
 import { Tasks } from './tasks.js'
-import { RunStore } from './runs.js'
 import { startTaskExecutor } from './task-executor.js'
-import { requireOwnerExecution } from './execution-authority.js'
+import { authorizeRun, deliverySocketPath, readRun } from './delivery-socket.js'
 import { mkdtemp, rm, writeFile, mkdir, symlink, readFile } from 'node:fs/promises'
 import { accessSync, constants as fsConstants } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
@@ -56,6 +55,7 @@ const allowedEnvironmentKeys = [
   'TMPDIR',
   'USER',
   'EZ_PLUGIN_BROKER_SOCKET',
+  'EZ_DELIVERY_SOCKET',
 ] as const
 
 export const executorEnvironment = (environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
@@ -77,6 +77,7 @@ export const executorJobEnv = (
     PATH: pathValue,
     EZ_RUN_ID: options.runId,
     EZ_CONTROL_DIR: options.controlDir,
+    EZ_DELIVERY_SOCKET: deliverySocketPath(options.controlDir),
     EZ_REPAIR_ENABLED: String(options.repairEnabled !== false),
     ...(options.toolsHome ? {BUILDX_CONFIG:path.join(options.toolsHome,'buildx')} : {}),
   }
@@ -296,13 +297,15 @@ export const startExecutorJob = async (
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
   options = executionDefaults(executorKey(options.cli), options)
   if(options.runId.startsWith('r_schedule_') && !/^[a-zA-Z0-9_-]+$/.test(options.runId))throw new Error('Invalid native task run ID')
-  const run = await new RunStore(options.controlDir).get(options.runId)
+  // Socket-first so host-side launches read the relay ledger; same-process
+  // launches fall back to direct memory and stay fail-closed when absent.
+  const run = await readRun(options.controlDir, options.runId)
   if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || !run || run.taskId || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an owner-authorized native local run')
   if (run?.taskId) {
     if (run.status !== 'running') throw new Error('No active task run')
     await new Tasks(options.controlDir).authorize(run, process.env.EZ_EXECUTOR_TRANSPORT === 'host')
     if (process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
-  } else await requireOwnerExecution(options.controlDir, options.runId)
+  } else await authorizeRun(options.controlDir, options.runId)
   if (!run?.taskId && options.eventSource !== undefined) throw new Error('Execution blocked: external-execution-unavailable')
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)

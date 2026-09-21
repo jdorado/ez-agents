@@ -21,7 +21,8 @@ The response is `{status,reply}`. `queued` or `running` yields and resubmits the
 same event after four seconds. `complete` or `failed` supplies a final string
 reply, queued once with a deterministic outbox ID. Backend completion and
 Telegram delivery are separate; an uncertain send never replays the operation.
-Restart resubmits interrupted backend runs using the original ID. Permanent
+A relay restart drops in-flight relay runs by design; the backend's resubmit of
+the same event is the recovery path. Permanent
 4xx responses leave a failed relay run for operator inspection; transient
 failures back off. No response body or credential is logged.
 

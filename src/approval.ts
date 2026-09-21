@@ -1,5 +1,3 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import path from 'node:path'
 import { assertId } from './identity.js'
 import { ownerEpoch, ownerId, type Owner } from './control-state.js'
 
@@ -34,28 +32,32 @@ const isApprovalRecord = (value: unknown): value is ApprovalRecord => {
   )
 }
 
+// Stateless pipe: approvals live in relay memory. Engine children request
+// decisions through the delivery socket (folded into the approval send);
+// callbacks and task arbitration record them in-relay. A restart drops
+// pending approvals by design.
+const approvalsByControl = new Map<string, Map<string, ApprovalRecord>>()
+
+const approvalsFor = (controlDir: string): Map<string, ApprovalRecord> => {
+  let map = approvalsByControl.get(controlDir)
+  if (!map) { map = new Map(); approvalsByControl.set(controlDir, map) }
+  return map
+}
+
 export class ApprovalStore {
-  private readonly approvalsDir: string
+  constructor(private readonly controlDir: string) {}
 
-  constructor(controlDir: string) {
-    this.approvalsDir = path.join(controlDir, 'approvals')
-  }
-
-  private async ensure(): Promise<void> {
-    await mkdir(this.approvalsDir, { recursive: true, mode: 0o700 })
-  }
-
-  private filePath(actionId: string): string {
+  private key(actionId: string): string {
     const safe = assertId(actionId)
     if (safe.length > 40) throw new Error('Approval identifier must be at most 40 characters')
-    return path.join(this.approvalsDir, `${safe}.json`)
+    return safe
   }
 
   async requestApproval(actionId: string, prompt: string, runId?: string): Promise<ApprovalRecord> {
     if (!prompt.trim()) throw new Error('Approval prompt is empty')
     if (runId) assertId(runId)
-    await this.ensure()
-    const existing = await this.getDecision(actionId)
+    const store = approvalsFor(this.controlDir)
+    const existing = store.get(this.key(actionId)) ?? null
     if (existing) {
       if (existing.runId !== runId || existing.prompt !== prompt)
         throw new Error('Approval ID already belongs to another request')
@@ -70,10 +72,7 @@ export class ApprovalStore {
       decision: 'pending',
       createdAt: new Date().toISOString(),
     }
-    const file = this.filePath(actionId)
-    const temporary = `${file}.${process.pid}.tmp`
-    await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
-    await rename(temporary, file)
+    store.set(this.key(actionId), record)
     return record
   }
 
@@ -83,8 +82,8 @@ export class ApprovalStore {
     decidedBy: number,
     decisionUpdateId?: number,
   ): Promise<ApprovalRecord> {
-    await this.ensure()
-    const existing = await this.getDecision(actionId)
+    const store = approvalsFor(this.controlDir)
+    const existing = store.get(this.key(actionId)) ?? null
     if (!existing) throw new Error('Unknown approval request')
     if (
       decisionUpdateId !== undefined &&
@@ -102,34 +101,25 @@ export class ApprovalStore {
       decidedBy,
       decisionUpdateId,
     }
-    const file = this.filePath(actionId)
-    const temporary = `${file}.${process.pid}.tmp`
-    await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
-    await rename(temporary, file)
+    store.set(this.key(actionId), record)
     return record
   }
 
   async recordOwnerDecision(actionId: string, decision: 'approved' | 'denied', owner: Owner): Promise<ApprovalRecord> {
-    await this.ensure()
-    const existing = await this.getDecision(actionId)
+    const store = approvalsFor(this.controlDir)
+    const existing = store.get(this.key(actionId)) ?? null
     if (!existing) throw new Error('Unknown approval request')
     if (existing.decision !== 'pending') throw new Error('Approval already decided')
     if (Date.now() - Date.parse(existing.createdAt) > 900_000) throw new Error('Approval expired')
     const record: ApprovalRecord = {...existing,version:2,decision,decidedAt:new Date().toISOString(),decidedOwnerId:ownerId(owner),decidedOwnerEpoch:ownerEpoch(owner)}
-    const file=this.filePath(actionId),temporary=`${file}.${process.pid}.tmp`
-    await writeFile(temporary,`${JSON.stringify(record,null,2)}\n`,{mode:0o600});await rename(temporary,file)
+    store.set(this.key(actionId), record)
     return record
   }
 
   async getDecision(actionId: string): Promise<ApprovalRecord | null> {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(this.filePath(actionId), 'utf8'))
-      if (!isApprovalRecord(parsed) || parsed.actionId !== actionId)
-        throw new Error('Invalid approval record shape')
-      return parsed
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
+    const record = approvalsFor(this.controlDir).get(this.key(actionId)) ?? null
+    if (record && (!isApprovalRecord(record) || record.actionId !== actionId))
+      throw new Error('Invalid approval record shape')
+    return record
   }
 }

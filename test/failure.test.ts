@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execFile, spawn } from 'node:child_process'
@@ -8,11 +8,12 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { once } from 'node:events'
 import { redactFailure, failureStamp, needsFailureReview } from '../src/failure.js'
-import { RunStore } from '../src/runs.js'
+import { RunStore, sentOutbox } from '../src/runs.js'
 import { ControlStore } from '../src/control-state.js'
 import { Scheduler } from '../src/scheduler.js'
 import { initialPreset } from '../src/ai.js'
 import { createRelay } from '../src/index.js'
+import { serveTestLedger } from './helpers/ledger.js'
 import { TelegramSource } from '../src/telegram-source.js'
 import { packageVersion } from '../src/version.js'
 import { initializeWorkspace } from '../src/workspace.js'
@@ -33,6 +34,8 @@ test('failure evidence is bounded and redacts configured credentials, headers, t
 
 test('failure review CLI is owner-bound, rejects stale reviews, and keeps failure evidence immutable',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-failure-cli-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ // The schedule CLI child reaches the relay memory ledger through the socket.
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
  const runs=new RunStore(dir),control=new ControlStore(dir,1000)
  const env={...process.env,EZ_CONTROL_DIR:dir,EZ_EXECUTOR_CLI:'grok',EZ_RUN_ID:''}
  const cli=(args:string[],overrides={})=>exec(process.execPath,[bin,...args],{env:{...env,...overrides}})
@@ -61,7 +64,7 @@ test('failure review CLI is owner-bound, rejects stale reviews, and keeps failur
   await runs.patch(id,{status:'running',...('replyOnly' in extra?{replyOnly:true}:{})})
   await assert.rejects(cli(review,{EZ_RUN_ID:id}),/owner-authorized/)
  }
- await writeFile(join(dir,'runs','r_bad.json'),'{broken')
+ await assert.rejects(stat(join(dir,'runs')),{code:'ENOENT'})
  assert.equal(JSON.parse((await cli(['failures'])).stdout).total,1)
 })
 
@@ -86,6 +89,8 @@ test('failure capture, diagnosis, verified recovery and conditional quiet next t
  })
  relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
  relay.bot.api.config.use(async(_p,method,payload)=>{if(method==='sendMessage')replies.push((payload as any).text);return {ok:true,result:{message_id:replies.length}} as any})
+ // The schedule CLI children reach the relay memory ledger through the socket.
+ const ledger=await serveTestLedger(dir)
  const originalPatch=RunStore.prototype.patch
  t.mock.method(RunStore.prototype,'patch',async function(this:RunStore,...args:Parameters<RunStore['patch']>){
   // Hold the PID write until the fast child has closed, reproducing slow disk
@@ -114,7 +119,7 @@ test('failure capture, diagnosis, verified recovery and conditional quiet next t
   await relay.bot.handleUpdate({...update,update_id:12,message:{...update.message!,message_id:12,text:'/stop'}})
   await until(async()=>(await runs.get('tg_11'))?.status==='cancelled')
   assert.equal(needsFailureReview((await runs.get('tg_11'))!),false)
- }finally{await relay.stop();for(const child of children)child.kill();await rm(dir,{recursive:true,force:true})}
+ }finally{await relay.stop();for(const child of children)child.kill();await ledger.stop();await rm(dir,{recursive:true,force:true})}
 })
 
 
@@ -220,7 +225,7 @@ for (const cleanupFails of [false,true]) test(`polling conflict preserves work u
   await stopped
   assert.equal(relay.stop(),stopping,'finished shutdown remains idempotent')
   assert.equal(sourceStops,1)
-  assert.deepEqual(JSON.parse(await readFile(join(dir,'outbox',`${item.id}.sent.json`),'utf8')).receipt.messageIds,[1])
+  assert.deepEqual((sentOutbox(dir).find(entry=>entry.id===item.id)?.receipt as {messageIds:number[]}).messageIds,[1])
   assert.equal(polls,1,'a conflict must not start another polling loop before the retry delay')
   assert.equal(relay.bot.isRunning(),false)
   assert.ok(child && (child.exitCode!==null || child.signalCode!==null))
@@ -268,6 +273,7 @@ for (const intake of [true,false]) test(`relay shutdown terminates an in-flight 
 
 test('group members can inspect failures and wake review without exposing other chats', async t => {
  const dir=await mkdtemp(join(tmpdir(),'ez-group-failure-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
  const runs=new RunStore(dir),control=new ControlStore(dir,900000),scheduler=new Scheduler(dir)
  await control.requestPairing(101,-123,'Fixture');const owner=await control.approveOwner(-123,true)
  const execution=await control.captureChoice(initialPreset('grok'))
@@ -334,6 +340,7 @@ test('shutdown aborts a pending bot initialization without starting polling',asy
 
 test('failed reviewer readback exposes its stop through show, list and resume until explicit edit',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-review-stop-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
  const control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
  await control.requestPairing(101,101);const owner=await control.approveOwner(101)
  const execution=await control.captureChoice(initialPreset('grok')),now=Date.now()+1000

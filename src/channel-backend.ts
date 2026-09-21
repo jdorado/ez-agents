@@ -1,7 +1,6 @@
-import { readFile } from 'node:fs/promises'
 import type { Config } from './config.js'
 import type { RunRecord } from './runs.js'
-import { workspaceFile } from './files.js'
+import { readStagedAttachment } from './files.js'
 
 // Application-owned jobs; no CLI state, provider credentials or business routing here.
 export async function dispatchChannel(config: Config, run: RunRecord): Promise<string | null> {
@@ -14,7 +13,7 @@ export async function dispatchChannel(config: Config, run: RunRecord): Promise<s
   for (const item of run.items ?? []) {
     let attachment
     if (item.attachment) {
-      const bytes = await readFile(await workspaceFile(config.workspace, item.attachment.path))
+      const bytes = await readStagedAttachment([config.controlDir, config.workspace], item.attachment.path)
       if (bytes.length > 12 * 1024 * 1024) throw new Error('Channel attachment exceeds 12 MB')
       attachment = { type: item.attachment.type, data: bytes.toString('base64') }
     }

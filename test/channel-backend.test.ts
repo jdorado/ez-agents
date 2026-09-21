@@ -43,7 +43,6 @@ test('structured photo transport and deterministic reply recovery', async () => 
 test('backend dispatch keeps owner/private gate and never starts a CLI', async () => {
   const { createRelay } = await import('../src/index.js')
   const { ControlStore } = await import('../src/control-state.js')
-  const { recoverInterruptedRuns } = await import('../docker/recovery.js')
   const root = await mkdtemp(join(tmpdir(), 'channel-gate-'))
   const originalFetch = globalThis.fetch
   let calls = 0
@@ -68,12 +67,10 @@ test('backend dispatch keeps owner/private gate and never starts a CLI', async (
     assert.equal(calls, 1)
     const store = new RunStore(root)
     assert.equal((await store.get('tg_3'))?.status, 'completed')
-    await store.patch('tg_3', { status: 'running' })
-    await recoverInterruptedRuns(root, true)
-    assert.equal((await store.get('tg_3'))?.status, 'queued')
+    await store.patch('tg_3', { status: 'running', backendSubmitted: true })
     const cancel = update(4, 42); cancel.message.text = '/cancel'
     await relay.bot.handleUpdate(cancel)
-    assert.equal((await store.get('tg_3'))?.status, 'queued', 'cancel must retain submitted operation polling')
+    assert.equal((await store.get('tg_3'))?.status, 'running', 'cancel must retain submitted operation polling')
   } finally { await relay.stop(); globalThis.fetch = originalFetch; await rm(root, { recursive: true, force: true }) }
 })
 

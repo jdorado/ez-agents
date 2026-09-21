@@ -20,7 +20,7 @@ export function executionBlockReason(run: RunRecord, owner: Owner | null): strin
 // control/ writes, fail-closed on missing/corrupt/revoked owner. Request
 // metadata and EZ_RUN_ID are not proof of owner identity. Local host
 // administrators remain trusted.
-const readOnlyOwner = async (controlDir: string): Promise<Owner | null> => {
+export const readOnlyOwner = async (controlDir: string): Promise<Owner | null> => {
   try {
     const parsed: unknown = JSON.parse(await readFile(path.join(controlDir, 'control-state.json'), 'utf8'))
     const owner = (parsed as { owner?: unknown }).owner ?? null

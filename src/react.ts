@@ -1,6 +1,6 @@
 import { loadControlConfig } from './config.js'
 import { normalizeReactionEmoji, TELEGRAM_REACTIONS } from './reaction.js'
-import { RunStore } from './runs.js'
+import { callDeliverySocket, socketPathFor } from './delivery-socket.js'
 
 const runId = process.env.EZ_RUN_ID?.trim()
 const args = process.argv.slice(2).filter((arg) => arg !== '--')
@@ -28,6 +28,8 @@ if (!emoji) {
   process.exit(1)
 }
 
-const store = new RunStore(loadControlConfig().controlDir)
-const item = await store.enqueueReaction(runId, emoji)
-console.log(JSON.stringify({ ok: true, run: runId, outbox_id: item.id, emoji: item.emoji }))
+const controlDir = loadControlConfig().controlDir
+const item = await callDeliverySocket(socketPathFor(controlDir), {
+  op: 'enqueue', payload: { kind: 'reaction', runId, emoji },
+}) as { outbox_id: string; id: string; emoji?: string }
+console.log(JSON.stringify({ ok: true, run: runId, outbox_id: item.id, emoji: item.emoji ?? emoji }))

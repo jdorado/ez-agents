@@ -118,3 +118,20 @@ test('provider catalog leaves ambiguous and effort-mismatched selections untouch
   assert.equal(await store.normalizeProviderBindings(mismatch), false)
   assert.equal((await store.status()).ai!.presets.find((item) => item.id === 'deepseek')!.provider, undefined)
 }))
+
+test('steady-state owner checks and session pins write nothing to control/', async () => fixture(async (store, _advance, directory) => {
+  const { stat } = await import('node:fs/promises')
+  const { initialPreset } = await import('../src/ai.js')
+  await store.requestPairing(101, 101)
+  await store.approveOwner(101)
+  await store.aiState(initialPreset('codex'))
+  // First pin may persist the session binding; everything after must be quiet.
+  await store.captureChoice(initialPreset('codex'), 'hello')
+  const before = await stat(path.join(directory, 'control-state.json'))
+  await store.status()
+  await store.captureChoice(initialPreset('codex'), 'hello again')
+  await store.status()
+  const after = await stat(path.join(directory, 'control-state.json'))
+  assert.equal(after.mtimeMs, before.mtimeMs)
+  assert.equal(after.size, before.size)
+}))

@@ -16,6 +16,7 @@ import { ownsRun, isOwner } from '../src/identity.js'
 import { createRelay } from '../src/index.js'
 import { EXECUTOR_REGISTRY } from '../src/executor.js'
 import { loadConfig } from '../src/config.js'
+import { serveTestLedger } from './helpers/ledger.js'
 
 const secret = () => randomBytes(32).toString('base64url')
 const waitFor = async (check: () => Promise<boolean>) => {
@@ -89,11 +90,13 @@ test('web owner uses the standard schedule CLI, executor and outbox with Telegra
   EXECUTOR_REGISTRY.grok={...original,command:process.execPath,buildArgs:()=>['--import',require.resolve('tsx'),fixture]}
   const config=loadConfig({EZ_APPLICATION_PORT:'8787',EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'grok'})
   const relay=createRelay(config), control=new ControlStore(root,60000), runs=new RunStore(root)
+  // Engine children reach the relay memory ledger through the delivery socket.
+  const ledger=await serveTestLedger(root)
   const owner=await control.registerOwner('web-owner'),token=secret()
   const binding=(await relay.applicationChannel.bindings.register('web',token,owner))!
   const address=await relay.applicationChannel.listen(0) as {port:number}
   const timer=setInterval(()=>{void relay.drainSources();void relay.drainOutbox()},25)
-  t.after(async()=>{clearInterval(timer);await relay.stop();EXECUTOR_REGISTRY.grok=original;await rm(root,{recursive:true,force:true})})
+  t.after(async()=>{clearInterval(timer);await relay.stop();EXECUTOR_REGISTRY.grok=original;await ledger.stop();await rm(root,{recursive:true,force:true})})
   const first=await relay.applicationChannel.submit(binding.bindingId,{requestId:'chat',scope:'main',text:'Schedule a followup'})
   await waitFor(async()=> (await runs.get(first.id))?.status==='completed')
   await waitFor(async()=> (await runs.list()).some(r=>r.scheduled && r.status==='completed'))

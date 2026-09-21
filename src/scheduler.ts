@@ -133,10 +133,10 @@ export class Scheduler {
         (!!s.delivery || ((s.owner.telegramLinkedAt ?? s.owner.pairedAt) === (owner.telegramLinkedAt ?? owner.pairedAt) && s.owner.telegramChatId === owner.telegramChatId))
     } catch { return false }
   }
-  async cancel(runId: string) {
+  async cancel(runId: string, run?: RunRecord | null) {
     assertId(runId); await this.ensure()
-    const run = await new RunStore(this.controlDir).get(runId)
-    if (!run?.scheduled) throw new Error('Unknown background run')
+    const record = run ?? await new RunStore(this.controlDir).get(runId)
+    if (!record?.scheduled) throw new Error('Unknown background run')
     await atomic(join(this.dir,runId+'.cancel'),{})
   }
   async cancelled(runId: string): Promise<boolean> {
@@ -172,11 +172,12 @@ export class Scheduler {
         if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && ownsRun(owner, r) && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
           await atomic(cursor,{next:future}); continue
         }
+        const dueAt = new Date(next).toISOString()
         await runs.create({id:scheduledRunId(s,next),
           ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
           ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
-          texts:[s.text],execution:s.execution,
-          scheduled:{id:s.id,revision:s.revision,dueAt:new Date(next).toISOString(),pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}})
+          texts:[`[schedule ${s.id} due ${dueAt}]`, s.text],execution:s.execution,
+          scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}})
         // A restart between run creation and this cursor write sees the same occurrence ID.
         await atomic(cursor,{next:future})
       } catch { console.error('Schedule dispatch failed',s.id) }

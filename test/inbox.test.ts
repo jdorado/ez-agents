@@ -8,12 +8,11 @@ import { InboxStore } from '../src/inbox.js'
 import { RunStore } from '../src/runs.js'
 
 const update = (id: number): Update => ({ update_id: id })
-test('intake survives restart, deduplicates IDs, seals membership and retains cancellation tombstones', async () => {
+test('intake deduplicates IDs, seals membership and retains cancellation tombstones (memory only)', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-inbox-'))
   try {
-    let inbox = new InboxStore(dir)
+    const inbox = new InboxStore(dir)
     assert.equal(await inbox.accept(update(1)), true)
-    inbox = new InboxStore(dir)
     assert.equal(await inbox.accept(update(1)), false)
     await inbox.accept(update(2))
     assert.equal(await inbox.next(), undefined)
@@ -23,12 +22,11 @@ test('intake survives restart, deduplicates IDs, seals membership and retains ca
       [1, 2],
     )
     await inbox.accept(update(3))
-    inbox = new InboxStore(dir)
     assert.deepEqual(await inbox.next(true), batch)
     const runs = new RunStore(dir)
     const input = { id: batch.id, chatId: 101, telegramUserId: 101, texts: ['hello'] }
     await runs.create(input)
-    // Crash between run creation and inbox completion must not produce a second run.
+    // Retry with the same run ID returns the existing run; no second run.
     await runs.create(input)
     assert.equal((await runs.list()).length, 1)
     await inbox.finish(batch.id)
@@ -36,19 +34,19 @@ test('intake survives restart, deduplicates IDs, seals membership and retains ca
     assert.equal(await inbox.cancel(), 1)
     assert.equal(await inbox.accept(update(3)), false)
     assert.equal(await inbox.next(true), undefined)
-    assert.equal((await stat(join(dir, 'inbox.json'))).mode & 0o777, 0o600)
+    // Stateless pipe: no inbox.json exists on disk; restart drops by design.
+    await assert.rejects(stat(join(dir, 'inbox.json')))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })
 
-test('corrupt intake fails closed without overwriting evidence; invalid identifiers are rejected', async () => {
+test('restart loses nothing by design; invalid identifiers are rejected', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-inbox-corrupt-'))
   try {
-    await writeFile(join(dir, 'inbox.json'), '{broken')
+    // A fresh directory starts empty: no durable journal survives a restart.
     const inbox = new InboxStore(dir)
-    await assert.rejects(inbox.accept(update(4)), /Inbox unreadable/)
-    assert.equal(await readFile(join(dir, 'inbox.json'), 'utf8'), '{broken')
+    assert.deepEqual(await inbox.status(), { pending: 0, failed: 0 })
     assert.throws(() => inbox.accept(update(-1)), /Invalid update ID/)
     await assert.rejects(
       new RunStore(dir).create({ id: '../escape', chatId: 101, telegramUserId: 101, texts: [] }),

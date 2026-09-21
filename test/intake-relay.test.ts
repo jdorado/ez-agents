@@ -392,7 +392,7 @@ test('slow voice normalization preserves instruction order and leaves controls r
     release()
     await processing
     assert.equal(f.launched[0][0], 'Use the following voice note')
-    assert.match(f.launched[0][1], /Quoted context/)
+    assert.doesNotMatch(f.launched[0][1], /Quoted context/)
     assert.match(f.launched[0][1], /Fixture voice transcript/)
     assert.equal(f.launched[0].length, 2)
     assert.equal((await new InboxStore(f.dir).status()).pending, 1)
@@ -686,7 +686,7 @@ test('Telegram and application image/PDF/text use identical native attachment me
       const telegram=(await new RunStore(f.dir).list()).find(run=>run.messageId===update.message!.message_id)!
       assert.ok(telegram)
       const application=await f.relay.applicationChannel.submit(binding.bindingId,{requestId:name,scope:'chat',followOwner:true,text:update.message!.caption,attachment:{name,data:bytes.toString('base64')}})
-      const normalize=(text:string)=>text.replace(/inbox\/[a-f0-9-]+_/,'inbox/ID_')
+      const normalize=(text:string)=>text.replace(/attachments\/[a-f0-9-]+_/,'attachments/ID_')
       assert.equal(normalize(application.texts[0]),normalize(telegram.texts[0]))
       assert.equal(application.ownerId,telegram.ownerId)
       assert.equal(application.execution?.sessionId,telegram.execution?.sessionId)

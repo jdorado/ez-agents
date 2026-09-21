@@ -1,5 +1,3 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import type { Update } from 'grammy/types'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
 import { isOwner } from './identity.js'
@@ -21,58 +19,26 @@ type Entry = { update: Update; receivedAt: number; execution?: ExecutionChoice }
 export type InboxBatch = { id: string; entries: Entry[]; status: 'pending' | 'failed' | 'cancelled' }
 type State = { version: 1; seen: number[]; waiting: Entry[]; batches: InboxBatch[] }
 
-// One relay writer. Serialize read/modify/rename, including commands arriving during STT.
+// Stateless pipe: process memory only. Intake dedup lives in the relay that
+// polls Telegram, so no other process reads this journal. A restart drops
+// unprocessed updates by design; Telegram redelivery is the replay mechanism.
+const statesByDirectory = new Map<string, State>()
+
+const stateFor = (directory: string): State => {
+  let state = statesByDirectory.get(directory)
+  if (!state) { state = { version: 1, seen: [], waiting: [], batches: [] }; statesByDirectory.set(directory, state) }
+  return state
+}
+
 export class InboxStore {
   private lock: Promise<unknown> = Promise.resolve()
-  private readonly file: string
   constructor(
     private readonly directory: string,
     private readonly now = Date.now,
-  ) {
-    this.file = join(directory, 'inbox.json')
-  }
-
-  private async read(): Promise<State> {
-    try {
-      const state = JSON.parse(await readFile(this.file, 'utf8')) as State
-      const entry = (e: Entry) =>
-        e && Number.isSafeInteger(e.update?.update_id) && Number.isFinite(e.receivedAt) &&
-        (e.execution === undefined || isExecutionChoice(e.execution))
-      if (
-        state.version !== 1 ||
-        !Array.isArray(state.seen) ||
-        !state.seen.every(Number.isSafeInteger) ||
-        !Array.isArray(state.waiting) ||
-        !state.waiting.every(entry) ||
-        !Array.isArray(state.batches) ||
-        !state.batches.every(
-          (b) =>
-            /^tg_\d+$/.test(b.id) &&
-            ['pending', 'failed', 'cancelled'].includes(b.status) &&
-            Array.isArray(b.entries) &&
-            b.entries.length > 0 &&
-            b.entries.every(entry),
-        )
-      )
-        throw new Error('Invalid inbox shape')
-      return state
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        return { version: 1, seen: [], waiting: [], batches: [] }
-      throw new Error('Inbox unreadable; restore the local journal before accepting messages')
-    }
-  }
+  ) {}
 
   private change<T>(work: (state: State) => T): Promise<T> {
-    const next = this.lock.then(async () => {
-      const state = await this.read()
-      const result = work(state)
-      await mkdir(this.directory, { recursive: true, mode: 0o700 })
-      const temporary = `${this.file}.${process.pid}.tmp`
-      await writeFile(temporary, JSON.stringify(state), { mode: 0o600 })
-      await rename(temporary, this.file)
-      return result
-    })
+    const next = this.lock.then(async () => work(stateFor(this.directory)))
     this.lock = next.catch(() => {})
     return next
   }
@@ -163,12 +129,12 @@ export class InboxStore {
 
   async pending(id: string): Promise<boolean> {
     await this.lock
-    return (await this.read()).batches.some((b) => b.id === id && b.status === 'pending')
+    return stateFor(this.directory).batches.some((b) => b.id === id && b.status === 'pending')
   }
 
   async status(): Promise<{ pending: number; failed: number }> {
     await this.lock
-    const state = await this.read()
+    const state = stateFor(this.directory)
     return {
       pending:
         state.waiting.length +

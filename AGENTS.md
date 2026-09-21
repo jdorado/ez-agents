@@ -103,8 +103,8 @@ find flaws:
 If no answer identifies a material blocker, finish. Do not start another review
 round merely to seek more criticism, tests or hypothetical edge cases.
 
-## 3. Crash-Safe Atomic Disk State
-- All persistent stores (`ControlStore`, `RunStore`, outbox queue) must be disk-backed JSON files.
+## 3. Crash-Safe Disk State
+- Persistent authority state (`ControlStore` owner/pairing/sessions/presets, application bindings, schedule definitions) stays in disk-backed JSON files. Run/outbox/inbox bookkeeping is relay memory reached through the delivery socket (`src/delivery-socket.ts`): a restart drops in-flight runs and queued deliveries by design, uncertain sends report unknown rather than success, and Telegram redelivery is the replay mechanism. The live delivery socket also replaces the relay flock as the single-relay guard.
 - **Atomic write pattern:** Never write directly to a state file. Always write to a temporary file (`${target}.${process.pid}.tmp`) with mode `0o600`, then atomically `rename` it over the destination.
 - **Path sanitization:** Every ID parameter (`runId`, `outboxId`, `pairingId`) must be validated against `/^[a-zA-Z0-9_-]+$/` before being joined into paths. Never allow directory traversal (`..`).
 
@@ -120,7 +120,7 @@ round merely to seek more criticism, tests or hypothetical edge cases.
 
 ## 6. Concurrency & Workspace Invariants
 - **1 Writer Job per Workspace:** The agent's Markdown folder (`./agent/`) is its mind. Never run concurrent background processes writing to the same workspace simultaneously.
-- Main-conversation jobs queue sequentially in `RunStore`. Scheduled/background work uses separate task directories and native CLI sessions (up to four alongside chat). Never share a mutable task directory. Delegation decisions and goal persistence belong to the agent/executor; there is no automatic planner or canned chat ACK. Production executor runs have no wall-clock timeout; cancellation is explicit.
+- Main-conversation jobs queue sequentially in the relay's memory ledger; the delivery socket carries every cross-process enqueue/receipt, never control/ files. Scheduled/background work uses separate task directories under the control directory and native CLI sessions (up to four alongside chat). Never share a mutable task directory. Delegation decisions and goal persistence belong to the agent/executor; there is no automatic planner or canned chat ACK. Production executor runs have no wall-clock timeout; cancellation is explicit.
 
 ## 7. Fail-Closed Authority (Channel Access ≠ Execution)
 - Incoming messages outside the approved owner binding must **never** spawn the executor. A first DM or group message records a pending request only. Explicitly approved owner groups grant owner access to all human members in that exact chat; bots and anonymous posts are ignored.

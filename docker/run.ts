@@ -4,7 +4,6 @@ import { executorEnvironment, executorInvocation } from '../src/executor.js'
 import { parseEnv } from 'node:util'
 import { writeFile, rm } from 'node:fs/promises'
 import { loadConfig } from '../src/config.js'
-import { recoverInterruptedRuns } from './recovery.js'
 import { createRelay } from '../src/index.js'
 import { packageVersion } from '../src/version.js'
 
@@ -26,7 +25,6 @@ for (const [key, value] of Object.entries(privateEnv)) {
 privateEnv = {}
 const [command = 'start', ...args] = process.argv.slice(2)
 process.argv = [process.argv[0], '', ...args]
-if (['start', 'smoke'].includes(command)) await recoverInterruptedRuns(loadConfig().controlDir, Boolean(loadConfig().channelBackendUrl))
 if (command === 'start') {
   const config = loadConfig()
   const relay = createRelay(config)

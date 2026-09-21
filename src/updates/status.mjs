@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { read, state, jobs } from './control.mjs';
 import { execute, pluginArgs } from './runtime.mjs';
+import { callDeliverySocket } from '../delivery-socket-client.mjs';
 
 async function heartbeat(file,maxAge,polling=false) {
   try {
@@ -8,6 +9,14 @@ async function heartbeat(file,maxAge,polling=false) {
     const running=fresh&&(!polling||h.polling===true);
     return {state:running?'running':'offline',runningVersion:running&&typeof h.version==='string'?h.version:null};
   }catch(error){return {state:error.code==='ENOENT'?'offline':'unknown',runningVersion:null};}
+}
+
+// The relay owns liveness in memory and answers through the control-volume
+// socket; the legacy heartbeat file remains the fallback when it is offline.
+async function relay(control) {
+  const status=await callDeliverySocket(path.join(control,'delivery.sock'),{op:'status'},2000).catch(()=>null);
+  if(status)return {state:status.polling===true?'running':'offline',runningVersion:typeof status.version==='string'?status.version:null};
+  return heartbeat(path.join(control,'heartbeat.json'),20000,true);
 }
 
 async function plugin(record,run) {
@@ -59,7 +68,7 @@ export async function status(home,run=execute) {
   let installedVersion=null;
   try {installedVersion=(await read(path.join(config.packageRoot,'package.json'))).version;}catch {}
   return {
-    main:{installedVersion,...await heartbeat(path.join(agent.controlDir,'heartbeat.json'),20000,true),
+    main:{installedVersion,...await relay(agent.controlDir),
       host:await heartbeat(path.join(agent.controlDir,'host-executor/heartbeat.json'),15000)},
     plugins:await Promise.all(Object.values(registry.plugins).map(record=>plugin(record,run))),
     jobs:(await jobs(home)).map(({rollback,...job})=>job)

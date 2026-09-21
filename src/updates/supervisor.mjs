@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { atomic, locked } from '../plugins/manager.mjs';
+import { callDeliverySocket } from '../delivery-socket-client.mjs';
 import { state, read, jobs, jobPath, check, missing, cleanupStaleBackups } from './control.mjs';
 import { perform, environment } from './runtime.mjs';
 import { digest } from './artifact.mjs';
@@ -23,10 +24,10 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function idle(control) {
   const host=await fs.readdir(path.join(control,'host-executor')).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
   if(host.some(f=>f.endsWith('.running.json')||f.endsWith('.request.json')))return false;
-  for(const file of await fs.readdir(path.join(control,'runs')).catch(e=>{if(e.code==='ENOENT')return [];throw e;})) {
-    if(file.endsWith('.json')&&(await read(path.join(control,'runs',file))).status==='running')return false;
-  }
-  return true;
+  // Run records live in relay memory: the live socket status is the only
+  // cross-process view of active work. A down relay cannot own a run.
+  const status=await callDeliverySocket(path.join(control,'delivery.sock'),{op:'status'},2000).catch(()=>null);
+  return !status||status.running===0;
 }
 export async function notice(control,key) {
   await atomic(path.join(control,'update-attention.json'),{id:digest(key)});
