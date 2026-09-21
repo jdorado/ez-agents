@@ -28,6 +28,6 @@ fi
 ( : <&3 ) 2>/dev/null || exec 3</dev/null
 case "${1:-start}" in
   start|smoke|exec|setup)
-    exec node --import /app/node_modules/tsx/dist/loader.mjs /app/docker/run.ts "$@" ;;
+    exec flock --no-fork -n -E 73 /state/control/relay.lock node --import /app/node_modules/tsx/dist/loader.mjs /app/docker/run.ts "$@" ;;
   *) exec node --import /app/node_modules/tsx/dist/loader.mjs /app/docker/run.ts "$@" ;;
 esac
