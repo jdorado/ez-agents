@@ -2,6 +2,7 @@ import { sharedIdentity } from '../plugins/shared.mjs';
 import * as fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { parseEnv } from 'node:util';
 import { atomic, compose, snapshot, checkFolders } from '../plugins/manager.mjs';
@@ -46,6 +47,13 @@ export async function packageManager(root,run=execute) {
   throw Error(`Upgrade prerequisite unavailable: ${required}. ${failures.join('; ')}. Check the host supervisor service PATH (shell aliases do not count). Reuse its installed pnpm or Corepack; expose the launcher directory to that service and restart it after the current turn. If neither exists, provision the pinned manager first. Do not substitute npm install or reinstall the agent. After repair, prepare/apply a new job when status is failed; recover is only for recovery-required.`);
 }
 export const relayArgs = config => ['compose','--env-file',path.join(config.deploymentDir,'docker.env')];
+// The managed guidance block is replaced only during an upgrade, never by
+// relay/host startup. Malformed personal text stays untouched and only logs.
+async function replaceGuidance(root, workspace, run) {
+  const entry = path.join(root, 'src', 'agent-guidance.ts');
+  const script = `const m = await import(${JSON.stringify(pathToFileURL(entry).href)}); await m.installAgentGuidance(${JSON.stringify(workspace)});`;
+  await run(process.execPath, ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', script], { cwd: root, timeout: 60000 });
+}
 export async function relayServices(config) {
   const env = await fs.readFile(path.join(config.deploymentDir,'docker.env'),'utf8').catch(() => '');
   return parseEnv(env).EZ_EXECUTOR_TRANSPORT === 'local' ? ['relay','plugin-broker'] : ['relay'];
@@ -96,6 +104,8 @@ export async function perform(home,job,hooks) {
       await fs.copyFile(path.join(root,'docker/pnpm-lock.yaml'),path.join(root,'pnpm-lock.yaml'));
       await run(job.packageManager.command,[...job.packageManager.args,'install','--frozen-lockfile','--ignore-scripts'],{cwd:root});
       await run(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'bin/ezenciel-agents.mjs'),'--version'],{cwd:root});
+      try { await replaceGuidance(root, config.workspace, run); }
+      catch(error) { console.error(`Workspace guidance replacement failed; upgrade continues: ${error.message}`); }
       const image=`ez-upgrade-${job.sha256.slice(0,24)}`;
       await run('docker',['build','--target','runtime','-t',image,root]);
       const envFile=path.join(config.deploymentDir,'docker.env'),oldEnv=await fs.readFile(envFile,'utf8');

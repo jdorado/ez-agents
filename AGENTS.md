@@ -54,6 +54,7 @@ This package will be published as an open-source, lightweight Telegram-to-CLI re
 - Plugins are ordinary CLI tools with explicit inputs, outputs and errors. Packaging a tool does not justify another LLM worker or business workflow owner.
 - **SUBTRACT is as valid as ADD.** Question the requirement; delete unnecessary behavior; simplify; shorten feedback; automate last. Name and try the subtraction option before proposing additions. Removing a wrapper or correcting existing engine instructions/tool contracts can be the complete fix.
 - Add code only for a demonstrated missing transport or tool capability. Prompts, agents, retries and lifecycle owners also count as machinery; do not replace deleted code with a scripted prompt workflow. Prefer existing engine, CLI and Docker capabilities.
+- The spawn core (`src/executor.ts` `startExecutorJob`) is spawn + stream only: callers own admission/authority and pass the one trigger suffix; the core never reads the run ledger, history or the workspace.
 - `/goal do my daily routine` is literal task-prompt text for the engine. ez does not parse it, construct a native objective or own its workflow.
 - Keep changes focused. State what was removed, why anything added is necessary, and which observed outcome proves the simpler system works. Preserve authority and uncertain-delivery safeguards. Unchanged, non-actionable maintenance stops quietly; queued updates and passing tests alone do not prove an installed fix.
 

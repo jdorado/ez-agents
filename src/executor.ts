@@ -1,7 +1,6 @@
 import { executionDefaults } from './model-policy.js'
-import { Tasks } from './tasks.js'
 import { startTaskExecutor } from './task-executor.js'
-import { authorizeRun, deliverySocketPath, readRun } from './delivery-socket.js'
+import { deliverySocketPath } from './delivery-socket.js'
 import { mkdtemp, rm, writeFile, mkdir, symlink, readFile } from 'node:fs/promises'
 import { accessSync, constants as fsConstants } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
@@ -20,13 +19,18 @@ export type ExecutorOptions = {
   runId: string
   controlDir: string
   binDir: string
+  // Caller-owned trigger line appended to literal input. The core never reads
+  // the run ledger; admission and authorization happen before launch.
+  promptSuffix?: string
+  // Caller-owned routing flags. The core only spawns and streams.
+  taskRun?: boolean
+  nativeSession?: boolean
   toolsHome?: string
   sharedWorkspace?: string
   additionalWorkspaces?: string[]
   cli?: string
   sessionId?: string
   isResume?: boolean
-  eventSource?: string
   model?: string
   effort?: string
   provider?: string
@@ -296,29 +300,19 @@ export const startExecutorJob = async (
   options: ExecutorOptions,
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
   options = executionDefaults(executorKey(options.cli), options)
-  if(options.runId.startsWith('r_schedule_') && !/^[a-zA-Z0-9_-]+$/.test(options.runId))throw new Error('Invalid native task run ID')
-  // Socket-first so host-side launches read the relay ledger; same-process
-  // launches fall back to direct memory and stay fail-closed when absent.
-  const run = await readRun(options.controlDir, options.runId)
-  if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || !run || run.taskId || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an owner-authorized native local run')
-  if (run?.taskId) {
-    if (run.status !== 'running') throw new Error('No active task run')
-    await new Tasks(options.controlDir).authorize(run, process.env.EZ_EXECUTOR_TRANSPORT === 'host')
-    if (process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
-  } else await authorizeRun(options.controlDir, options.runId)
-  if (!run?.taskId && options.eventSource !== undefined) throw new Error('Execution blocked: external-execution-unavailable')
+  // Routing is caller-owned: a restricted task run goes to the task runner
+  // unless the host transport must ship it across the boundary first.
+  if (options.taskRun && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
+  if (options.nativeSession && !/^[a-zA-Z0-9_-]+$/.test(options.runId)) throw new Error('Invalid native task run ID')
+  if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || options.taskRun || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an owner-authorized native local run')
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   const gui = !host && key === 'codex-gui'
-  const nativeSession = !host && key === 'codex' && options.runId.startsWith('r_schedule_')
-  // Slim per-turn injection: transport reminder only (channel/trigger/contact).
-  // No coaching, tool/delegate/schedule advice, or workflow guidance.
-  const scope = run?.application?.scope ?? run?.delivery?.scope
-  const channel = run?.taskId ? 'task' : run?.scheduled ? 'schedule' : run?.application || run?.delivery ? 'application' : run?.messageId !== undefined ? 'chat' : 'trigger'
-  const contact = run?.messageId !== undefined ? ` message ${run.messageId}` : scope !== undefined ? ` scope ${JSON.stringify(scope)}` : ''
-  const needsReply = !host && !run?.taskId && (run?.messageId !== undefined || run?.application !== undefined || run?.delivery !== undefined)
-  const promptText = texts.join('\n\n') + (needsReply ? `\n\n[${channel}${contact}] Reply via ezenciel-agents-message --text "..."; stdout is not delivered.` : '')
+  const nativeSession = !host && key === 'codex' && options.nativeSession === true
+  // Literal input plus the caller-provided trigger line. No coaching,
+  // tool/delegate/schedule advice, or workflow guidance.
+  const promptText = texts.join('\n\n') + (options.promptSuffix ?? '')
   const promptFile = path.join(outputDirectory, 'prompt.txt')
   await writeFile(promptFile, promptText, { encoding: 'utf8', mode: 0o600 })
 
