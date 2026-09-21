@@ -196,7 +196,7 @@ EZ_EXECUTOR_TRANSPORT='host'
 `);await assert.rejects(eligibility(f.home,'main',f.source,false),/deployment/);
 });
 test('legacy runtime migration admits homes without docker.env when purpose fallback is already bound',async t=>{
- const f=await fixture(t),oldCompose=`services:
+  const f=await fixture(t),oldCompose=`services:
   relay:
     environment:
       EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md

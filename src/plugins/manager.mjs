@@ -419,7 +419,7 @@ const readJson = async file => JSON.parse(await fs.readFile(file,'utf8'));
 const authorizedApplicationRun = async (controlDir,runId) => {
   if(!path.isAbsolute(controlDir)||!/^[A-Za-z0-9_-]+$/.test(runId))throw Error('Plugin context requires a bound active run');
   const run=await readJson(path.join(controlDir,'runs',`${runId}.json`)).catch(error=>{if(error.code==='ENOENT')return undefined;throw error;});
-  const application=run?.application;
+  const application=run?.application ?? run?.telegramApplication;
   if(!application?.context||run?.id!==runId||run.status!=='running'||typeof application.bindingId!=='string')return undefined;
   const state=await readJson(path.join(controlDir,'control-state.json'));
   const bindings=await readJson(path.join(controlDir,'application-bindings.json'));
@@ -475,7 +475,7 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     }
     const invocationRelease=invocation?await invocationLease(home,container):undefined;
     const release=(invocationRelease||contextFile)?(async()=>{try{if(contextFile)await fs.rm(contextFile,{force:true});}finally{await invocationRelease?.();}}):undefined;
-    return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),...(contextFile?['--env-file',contextFile]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
+    return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),...(contextFile?['--env-file',contextFile]:[]),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
   },{allowInvocations:true});
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
