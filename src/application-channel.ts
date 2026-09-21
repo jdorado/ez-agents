@@ -308,12 +308,20 @@ export class ApplicationChannel {
         send(200, await this.createTelegramConnection(binding.bindingId)); return
       }
       if (request.method === 'GET' && path === '/v1/runs') {
-        const all = (await this.runs.list()).filter(run => (run.application ?? run.delivery)?.bindingId === binding.bindingId)
+        const owned = await this.runs.list()
+        const all = owned.filter(run => (run.application ?? run.delivery)?.bindingId === binding.bindingId)
+        const currentOwner = binding.shareTelegram ? telegramOwner((await new ControlStore(this.options.controlDir, 900000).status()).owner) : null
+        const telegram = currentOwner
+          ? owned.filter(run => run.application === undefined && run.delivery === undefined && run.taskId === undefined && run.external === undefined && run.scheduled === undefined && run.telegramUserId === currentOwner.telegramUserId && run.ownerId === ownerId(currentOwner) && run.ownerEpoch === ownerEpoch(currentOwner) && (run.telegramApplication === undefined || run.telegramApplication.bindingId === binding.bindingId) && !all.some(item => item.id === run.id))
+          : []
+        const visible = [...all, ...telegram]
         const before = url.searchParams.get('before')
-        const end = before ? all.findIndex(run => run.id === before) : all.length
+        const end = before ? visible.findIndex(run => run.id === before) : visible.length
         if (end < 0) throw new Error('Invalid application inbox cursor')
-        const records = all.slice(Math.max(0,end-100),end)
-        send(200, {runs: await Promise.all(records.map(run => this.snapshot(binding.bindingId, run.id))), nextCursor:end>100?records[0].id:null}); return
+        const records = visible.slice(Math.max(0,end-100),end)
+        send(200, {runs: await Promise.all(records.map(run => (run.application ?? run.delivery)
+          ? this.snapshot(binding.bindingId, run.id)
+          : Promise.resolve({id: run.id, scope: 'telegram', status: run.status, texts: run.texts, telegramUserId: run.telegramUserId, createdAt: run.createdAt}))), nextCursor:end>100?records[0].id:null}); return
       }
       if (path==='/v1/scope-control' && ['GET','POST'].includes(request.method ?? '')) {
         const scope = url.searchParams.get('scope')
@@ -350,6 +358,32 @@ export class ApplicationChannel {
         await new ApprovalStore(this.options.controlDir).recordOwnerDecision(approvalMatch[1],input.decision,binding.owner)
         if(!await new Tasks(this.options.controlDir).decide(approvalMatch[1]))throw new Error('Unknown application approval')
         send(200,{id:approvalMatch[1],decision:input.decision});return
+      }
+      const attachMatch = path.match(/^\/v1\/runs\/([A-Za-z0-9_-]{1,160})\/application$/)
+      if (attachMatch && request.method === 'POST') {
+        if (!binding.shareTelegram) { send(403, { error: 'Application authority does not permit Telegram admission' }); return }
+        const chunks: Buffer[] = []; let size = 0
+        for await (const chunk of request) { size += chunk.length; if (size > 65536) throw new Error('Invalid application admission size'); chunks.push(chunk) }
+        const input = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { context?: unknown; scope?: unknown }
+        if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'context' && key !== 'scope')) throw new Error('Invalid application admission')
+        const scope = input.scope === undefined ? 'telegram' : input.scope
+        if (typeof scope !== 'string') throw new Error('Invalid application admission')
+        const target = await this.runs.get(attachMatch[1])
+        if (target?.telegramApplication?.bindingId === binding.bindingId) {
+          const same = target.telegramApplication.scope === scope &&
+            JSON.stringify(target.telegramApplication.context ?? null) === JSON.stringify(input.context ?? null)
+          if (same) { send(200, { id: target.id, scope: target.telegramApplication.scope, status: target.status }); return }
+          throw new Error('Application admission conflicts with prior context')
+        }
+        if (!target || target.application || target.telegramApplication || target.taskId || target.external || target.scheduled || target.telegramUserId === undefined) throw new Error('Unknown application run')
+        const state = await new ControlStore(this.options.controlDir, 900000).status()
+        const linked = telegramOwner(state.owner)
+        if (!linked || target.telegramUserId !== linked.telegramUserId || !sameOwner(binding.owner, state.owner)) throw new Error('Application authority does not permit Telegram admission')
+        if (target.status !== 'queued' && target.status !== 'running') throw new Error('Application admission conflicts with finished run')
+        const application = { bindingId: binding.bindingId, scope, requestId: target.id, context: input.context as Record<string, unknown> }
+        if (!validApplicationOrigin(application)) throw new Error('Invalid application admission')
+        const admitted = await this.runs.attachTelegramApplication(target.id, application)
+        send(200, { id: admitted.id, scope, status: admitted.status }); return
       }
       const match = path.match(/^\/v1\/runs\/(r_(?:app|schedule)_[a-f0-9]{64})(\/cancel)?$/)
       if (match && ((!match[2] && request.method === 'GET') || (match[2] && request.method === 'POST'))) {

@@ -115,7 +115,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       }
       for (const agent of installation.agents) {
         const directory=path.join(agent.controlDir,'host-executor')
-        await writeFile(path.join(directory,'heartbeat.tmp'),JSON.stringify({at:Date.now(),pid:process.pid,version:packageVersion,plugins:await installedPluginVersions(agent.toolsHome)}),{mode:0o600})
+        await writeFile(path.join(directory,'heartbeat.tmp'),JSON.stringify({at:Date.now(),pid:process.pid,version:packageVersion,platform:process.platform,arch:process.arch,plugins:await installedPluginVersions(agent.toolsHome)}),{mode:0o600})
         await rename(path.join(directory,'heartbeat.tmp'),path.join(directory,'heartbeat.json'))
         for (const file of await readdir(directory)) {
           if (!file.endsWith('.request.json') || !isHostRunId(file.slice(0,-13))) continue

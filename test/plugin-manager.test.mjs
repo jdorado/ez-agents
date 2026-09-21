@@ -121,6 +121,7 @@ test('application plugin context is namespaced, authorized, and absent from ordi
  await runs.patch(run.id,{status:'running'});
  const command=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}});
  const index=command.argv.indexOf('--env-file');assert.ok(index>0);
+ assert.equal(command.argv[index+2],'run');
  const contextFile=command.argv[index+1];
  assert.match(contextFile,/\/plugin-context\/[0-9a-f-]+\.env$/);
  assert.equal(command.argv.join(' ').includes('must-not-leak'),false);
