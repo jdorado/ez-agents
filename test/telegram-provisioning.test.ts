@@ -32,8 +32,20 @@ test('Telegram provisioning writes only a private relay secret and restarts the 
   const value = await fixture()
   t.after(async () => { await import('node:fs/promises').then(({ rm }) => rm(value.root, { recursive: true, force: true })) })
   const calls: string[][] = []
-  await provisionTelegramBot(value.configFile, token, async (args) => { calls.push(args) })
+  const environments: NodeJS.ProcessEnv[] = []
+  const priorImage = process.env.EZ_RELAY_IMAGE
+  process.env.EZ_RELAY_IMAGE = 'stale:shell-export'
+  try {
+    await provisionTelegramBot(value.configFile, token, async (args, environment) => { calls.push(args); environments.push(environment) })
+  } finally {
+    if (priorImage === undefined) delete process.env.EZ_RELAY_IMAGE; else process.env.EZ_RELAY_IMAGE = priorImage
+  }
 
+  // The deployment's docker.env is the only source for its runtime values:
+  // shell exports never override the installed image or mounts.
+  assert.equal('EZ_RELAY_IMAGE' in environments[0], false)
+  assert.equal('TELEGRAM_BOT_TOKEN' in environments[0], false)
+  assert.equal(environments[0].PATH, process.env.PATH)
   assert.equal(await readFile(value.relayEnvFile, 'utf8'), `TELEGRAM_BOT_TOKEN=${token}\n`)
   assert.equal((await stat(value.relayEnvFile)).mode & 0o777, 0o600)
   const override = await readFile(value.overrideFile, 'utf8')
@@ -64,6 +76,14 @@ test('provisioning rejects a self-set image and custom deployments without a Doc
   const calls: string[][] = []
   await provisionTelegramBot(value.configFile, token, async (args) => { calls.push(args) })
   assert.ok(!calls[0].includes('--env-file'))
+})
+
+test('provisioning fails closed when the deployment docker.env has no installed image', async (t) => {
+  const value = await fixture()
+  t.after(async () => { await rm(value.root, { recursive: true, force: true }) })
+  await writeFile(value.deploymentEnvFile, "EZ_AGENT_WORKSPACE='/private/agents/tenant/mind'\n", { mode: 0o600 })
+  await assert.rejects(provisionTelegramBot(value.configFile, token, async () => {}), /must define EZ_RELAY_IMAGE/)
+  await assert.rejects(readFile(value.relayEnvFile, 'utf8'), { code: 'ENOENT' })
 })
 
 test('Telegram provisioning restores the botless relay when startup fails', async (t) => {
