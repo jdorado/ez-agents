@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { startExecutorJob } from '../src/executor.js'
+import { runPromptSuffix } from '../src/prompt-suffix.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { initializeWorkspace } from '../src/workspace.js'
 import { RunStore } from '../src/runs.js'
@@ -61,9 +62,9 @@ if(args[0]==='app-server'){
   }
   for(const isResume of [false,true]) {
    const runId='tg_chat_'+String(isResume)
-   await new RunStore(controlDir).create({id:runId,chatId:101,telegramUserId:101,texts:['hi'],messageId:42})
+   const chatRun=await new RunStore(controlDir).create({id:runId,chatId:101,telegramUserId:101,texts:['hi'],messageId:42})
    await new RunStore(controlDir).patch(runId,{status:'running'})
-   const job=await startExecutorJob(['hi'],{workspace,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:5000,isResume,sessionId:'native-existing'})
+   const job=await startExecutorJob(['hi'],{workspace,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:5000,isResume,sessionId:'native-existing',promptSuffix:runPromptSuffix(chatRun)})
    const code=await new Promise(resolve=>job.child.once('close',resolve));await job.cleanup();assert.equal(code,0)
    const {prompt}=JSON.parse(await readFile(path.join(workspace,'capture.json'),'utf8'))
    assert.ok(prompt.startsWith('hi\n\n[chat message 42]'))

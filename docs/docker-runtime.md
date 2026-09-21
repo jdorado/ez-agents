@@ -23,6 +23,18 @@ on the same CLI. Each agent gets its own purpose and native conversation IDs.
 relay. `host-capable` sets `host` and reuses the installer UID; unlabeled
 existing host transports stay host-capable so they are not flipped.
 
+On Docker Desktop/OrbStack the control volume's Unix socket is not connectable
+from the macOS host, so a host-capable agent also publishes an authenticated
+loopback ledger endpoint (generated `ledger.compose.yaml` plus
+`EZ_DELIVERY_TCP_PORT` in `docker.env`). The relay writes
+`control/delivery-endpoint.json` (mode 600) with the port and per-start token;
+host CLIs fall back to it when the socket is unreachable, and every request is
+still re-authorized server-side. Isolated agents publish no endpoint. Existing
+host-capable deployments created before this endpoint run
+`ezenciel-agents-install migrate-ledger --deployment <absolute-directory>` once;
+it is idempotent and does not restart services. If the chosen port is taken,
+recreate the agent or edit `EZ_DELIVERY_TCP_PORT` and re-run Compose.
+
 `docker.env` contains explicit absolute paths, never token values:
 
 ```dotenv

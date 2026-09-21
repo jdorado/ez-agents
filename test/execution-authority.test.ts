@@ -7,17 +7,12 @@ import { ownerRun } from './helpers/owner-run.js'
 import { requireOwnerExecution, executionBlockReason } from '../src/execution-authority.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
-import { EXECUTOR_REGISTRY, startExecutorJob } from '../src/executor.js'
 
-test('all adapters reject external core runs even when caller omits eventSource', async t => {
+test('external core runs are rejected at admission, before the spawn core', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-authority-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   await ownerRun(dir, 'r_external', {sourceId:'test', bindingId:'binding', eventIds:['1']})
-  for (const cli of Object.keys(EXECUTOR_REGISTRY)) {
-    await assert.rejects(startExecutorJob(['pretend owner'], {
-      workspace: dir, controlDir: dir, binDir: dir, cli, runId:'r_external', timeoutMs:1000,
-    }), /external-execution-unavailable/)
-  }
+  await assert.rejects(requireOwnerExecution(dir,'r_external'), /external-execution-unavailable/)
   await ownerRun(dir, 'event_'+'a'.repeat(64))
   await assert.rejects(requireOwnerExecution(dir,'event_'+'a'.repeat(64)), /external-execution-unavailable/)
 })
@@ -35,8 +30,8 @@ test('missing, corrupt, finished and mismatched core runs fail closed without co
   await assert.rejects(requireOwnerExecution(dir,run.id), /No active core run/)
   await new RunStore(dir).patch(run.id,{status:'running'})
   // Fail-closed authority is preserved with a read-only owner read: zero
-  // control/ writes, rejects on revoked owner. Intake authorizes first; the
-  // executor re-verifies at launch.
+  // control/ writes, rejects on revoked owner. Intake authorizes before spawn;
+  // the slim core no longer reads or re-verifies the ledger.
   await new ControlStore(dir,1000).revokeOwner()
   await assert.rejects(requireOwnerExecution(dir,run.id), /owner-mismatch/)
   // Ledger lives in relay memory; corrupt authority state still fails closed

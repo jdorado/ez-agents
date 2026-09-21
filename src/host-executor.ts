@@ -1,8 +1,8 @@
-import { installAgentGuidance } from './agent-guidance.js'
 import { redactFailure } from './failure.js'
 import { Tasks } from './tasks.js'
 import { ControlStore } from './control-state.js'
 import { authorizeRun, readRun } from './delivery-socket.js'
+import { runPromptSuffix } from './prompt-suffix.js'
 import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { isHostRunId } from './host-executor-protocol.js'
@@ -77,7 +77,6 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid)}),{mode:0o600,flag:'wx'})
       locks.push(lock)
-      await installAgentGuidance(agent.workspace)
       const models = await catalog(agent)
       await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
       const modelsFile=path.join(directory,'models.json')
@@ -165,7 +164,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},await catalog(agent))
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.controlDir,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
-                sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider}
+                sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
+                promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled)}
               job=await launch(request.texts,options)
               active.set(base,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})

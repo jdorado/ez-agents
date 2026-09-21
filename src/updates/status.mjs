@@ -34,7 +34,8 @@ async function plugin(record,run) {
       }));
     } else {
       const output=(await run('docker',[...pluginArgs(record),'ps','--all','--format','json'],{timeout:15000})).trim();
-      rows=output?output.startsWith('[')?JSON.parse(output):output.split('\n').map(line=>JSON.parse(line)):[];
+      const json=output.slice(output.search(/^[[{]/m));
+      rows=!json?[]:json.startsWith('[')?JSON.parse(json):json.split('\n').map(line=>line.trim()).filter(line=>line.startsWith('{')).map(line=>JSON.parse(line));
     }
     for(const [service,spec] of Object.entries(record.deployment.services)) {
       const containers=rows.filter(row=>row.Service===service);
