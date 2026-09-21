@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve, dirname, delimiter } from 'node:path'
 import { parseArgs } from 'node:util'
 import { executorKey } from './executor.js'
 import { isolationTransport, parseIsolationClass, type IsolationClass } from './isolation.js'
+import { ledgerOverlayName, ledgerOverlayYaml } from './ledger-endpoint.mjs'
 import { fileURLToPath } from 'node:url'
 import { validateCodexProvider, type CodexProviderBinding } from './executor.js'
 
@@ -62,7 +63,7 @@ export const createAgent = async (options: {
   await mkdir(directory, {mode:0o700})
   try {
     const project = `ez-agent-${name}`
-    const ledgerOverlay = join(deploymentDir, 'ledger.compose.yaml')
+    const ledgerOverlay = join(deploymentDir, ledgerOverlayName)
     const values = {
       COMPOSE_PROJECT_NAME: project,
       COMPOSE_FILE: [composeFile, ...(ledgerPort ? [ledgerOverlay] : [])].join(delimiter),
@@ -84,19 +85,7 @@ export const createAgent = async (options: {
       EZ_WHATSAPP_CLIENT_VOLUME: `${project}-whatsapp-client`,
     }
     await writeFile(join(directory, 'docker.env'), Object.entries(values).map(([k,v]) => `${k}='${v}'\n`).join(''), {mode:0o600, flag:'wx'})
-    if (ledgerPort) await writeFile(join(directory, 'ledger.compose.yaml'), [
-      '# Host-capable execution: on Docker Desktop/OrbStack the control-volume',
-      '# Unix socket is not connectable from the host, so the relay serves its',
-      '# memory ledger on this published loopback port and requests authenticate',
-      '# with the per-run token in the control directory.',
-      'services:',
-      '  relay:',
-      '    environment:',
-      '      EZ_DELIVERY_TCP_PORT: ${EZ_DELIVERY_TCP_PORT:?}',
-      '    ports:',
-      '      - "127.0.0.1:${EZ_DELIVERY_TCP_PORT:?}:${EZ_DELIVERY_TCP_PORT:?}"',
-      '',
-    ].join('\n'), {mode:0o600, flag:'wx'})
+    if (ledgerPort) await writeFile(join(directory, ledgerOverlayName), ledgerOverlayYaml(), {mode:0o600, flag:'wx'})
     await writeFile(join(directory, 'relay.env'), `TELEGRAM_BOT_TOKEN=${token}\n`, {mode:0o600, flag:'wx'})
     await writeFile(join(directory, 'purpose.md'), purpose.trim()+'\n', {mode:0o644, flag:'wx'})
     await mkdir(join(directory,'mind'),{mode:0o700})

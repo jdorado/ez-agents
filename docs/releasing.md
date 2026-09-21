@@ -87,3 +87,10 @@ unlabeled source build or reuse an RC label for different contents.
 
 This beta includes owner-policy release checks and durable
 main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). Earlier main upgrade/rollback VM QA passed; final-release fresh-host/reboot and live plugin upgrade acceptance remain pending.
+
+Automatic main upgrades are gated on deployment compatibility: the candidate's
+`compose.yaml` and `compose.whatsapp.yaml` must match the release the agent
+already runs, or that installed release must carry the reviewed migration.
+Before publishing a release, confirm no compose change slipped in since the
+previous tag; otherwise bootstrap the agents or ship the migration in the
+release they already run.

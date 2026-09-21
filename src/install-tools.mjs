@@ -4,7 +4,10 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import { parseEnv } from 'node:util';
 import { callDeliverySocket } from './delivery-socket-client.mjs';
+import { ledgerOverlayName, ledgerOverlayYaml } from './ledger-endpoint.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const read=async file=>JSON.parse(await fs.readFile(file,'utf8'));
@@ -61,6 +64,54 @@ export async function installationStatus(deployment) {
     stage:!configured?'not-configured':!runtimeReady?'runtime-offline':!paired?'awaiting-owner':!reply?'awaiting-telegram-reply':'ready-for-telegram-plugin-request',
     note:'Read-only: a live receipt from the running relay is delivery evidence; it is not retained across a relay restart. Request plugins through the working Telegram conversation.'};
 }
+// Existing host-capable deployments created before the loopback endpoint need
+// one idempotent migration: a published loopback port in docker.env plus the
+// generated overlay that maps it. New agents receive both at create time.
+const envLine = (text, key, value) => {
+  if (/['\r\n\0]/.test(value)) throw Error('Unsafe deployment value');
+  const line = `${key}='${value}'`;
+  const pattern = new RegExp(`^${key}=.*$`, 'm');
+  return pattern.test(text) ? text.replace(pattern, () => line) : text.replace(/\n*$/, '\n') + line + '\n';
+}
+
+const freeLoopbackPort = async (start = 20000) => {
+  for (let port = start; port < start + 500 && port <= 65535; port++) {
+    const free = await new Promise(resolve => {
+      const probe = createServer();
+      probe.once('error', () => resolve(false));
+      probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)));
+    });
+    if (free) return port;
+  }
+  throw Error('No free loopback port in the deployment range');
+};
+
+const ledgerPortStart = name => 20000 + createHash('sha256').update(name).digest().readUInt16BE(0) % 10000;
+
+export async function migrateLedger({ deployment } = {}) {
+  if (!path.isAbsolute(deployment || '')) throw Error('Supply --deployment with the absolute deployment directory');
+  const directory = path.resolve(deployment), envFile = path.join(directory, 'docker.env');
+  const text = await fs.readFile(envFile, 'utf8').catch(error => { if (error.code === 'ENOENT') throw Error('Deployment docker.env not found'); throw error; });
+  const values = parseEnv(text);
+  if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(values.COMPOSE_PROJECT_NAME || '')) throw Error('Invalid deployment COMPOSE_PROJECT_NAME');
+  if (values.EZ_ISOLATION === 'isolated' || values.EZ_EXECUTOR_TRANSPORT === 'local')
+    return { ok: true, deployment: directory, changed: false, note: 'Isolated deployment; no host ledger endpoint is needed.' };
+  if (!values.COMPOSE_FILE) throw Error('Deployment COMPOSE_FILE not found');
+  const overlay = path.join(directory, ledgerOverlayName);
+  const files = values.COMPOSE_FILE.split(path.delimiter).filter(Boolean);
+  const configured = values.EZ_DELIVERY_TCP_PORT !== undefined && files.includes(overlay) &&
+    await fs.stat(overlay).then(info => info.isFile(), () => false);
+  if (configured) return { ok: true, deployment: directory, changed: false, port: Number(values.EZ_DELIVERY_TCP_PORT) };
+  const port = values.EZ_DELIVERY_TCP_PORT !== undefined ? Number(values.EZ_DELIVERY_TCP_PORT) : await freeLoopbackPort(ledgerPortStart(values.COMPOSE_PROJECT_NAME));
+  if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw Error('Invalid EZ_DELIVERY_TCP_PORT');
+  const next = envLine(envLine(text, 'EZ_DELIVERY_TCP_PORT', String(port)), 'COMPOSE_FILE', [...new Set([...files, overlay])].join(path.delimiter));
+  const temporary = `${envFile}.${process.pid}.tmp`;
+  await fs.writeFile(temporary, next, { mode: 0o600 });
+  await fs.rename(temporary, envFile);
+  await fs.writeFile(overlay, ledgerOverlayYaml(), { mode: 0o600 });
+  return { ok: true, deployment: directory, changed: true, port, overlay };
+}
+
 async function fingerprintOf(source,invoke) {
   const listing=JSON.parse(await invoke('npm',['pack','--dry-run','--ignore-scripts','--json'],{cwd:source}));
   const hash=createHash('sha256');
@@ -111,8 +162,8 @@ export async function build({home=defaultHome(),source=root,label},invoke=run) {
 }
 export async function main(args) {
   const [action,...rest]=args;const options={};
-  if(!action||action==='--help'){console.log(JSON.stringify({commands:['preflight --executor <name-or-absolute-path> [--home PATH]','build [--home PATH] [--label X.Y.Z-beta.N.rc.M]','status --deployment PATH'],note:'Source checkouts build RCs only: commit and open the PR first, then pass the next --label. Host prerequisites and main-agent diagnostics only; initialize an empty registry and verify Telegram before asking the installed agent to add plugins.'}));return;}
+  if(!action||action==='--help'){console.log(JSON.stringify({commands:['preflight --executor <name-or-absolute-path> [--home PATH]','build [--home PATH] [--label X.Y.Z-beta.N.rc.M]','migrate-ledger --deployment PATH','status --deployment PATH'],note:'Source checkouts build RCs only: commit and open the PR first, then pass the next --label. migrate-ledger adds the loopback host endpoint to an existing host-capable deployment. Host prerequisites and main-agent diagnostics only; initialize an empty registry and verify Telegram before asking the installed agent to add plugins.'}));return;}
   for(let i=0;i<rest.length;i+=2){if(!['--home','--executor','--deployment','--label'].includes(rest[i])||!rest[i+1]||Object.hasOwn(options,rest[i].slice(2)))throw Error('Invalid arguments');options[rest[i].slice(2)]=rest[i+1];}
-  const allowed={preflight:['home','executor'],build:['home','label'],status:['deployment']};if(!allowed[action]||Object.keys(options).some(k=>!allowed[action].includes(k)))throw Error('Invalid action/options');
-  const result=action==='preflight'?await preflight(options):action==='build'?await build(options):await installationStatus(options.deployment);console.log(JSON.stringify(result));if(result.ok===false)process.exitCode=1;
+  const allowed={preflight:['home','executor'],build:['home','label'],'migrate-ledger':['deployment'],status:['deployment']};if(!allowed[action]||Object.keys(options).some(k=>!allowed[action].includes(k)))throw Error('Invalid action/options');
+  const result=action==='preflight'?await preflight(options):action==='build'?await build(options):action==='migrate-ledger'?await migrateLedger(options):await installationStatus(options.deployment);console.log(JSON.stringify(result));if(result.ok===false)process.exitCode=1;
 }

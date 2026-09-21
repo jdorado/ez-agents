@@ -238,6 +238,7 @@ credentials, startup, and verified pairing; never present this as human homework
 |---|---|
 | `ezenciel-agents-install preflight --executor <path-or-name>` | Check prerequisites, disk and executor identity hints before setup |
 | `ezenciel-agents-install build [--label <X.Y.Z-beta.N.rc.M>]` | Build once per artifact, with a private log and duplicate-build detection; a source checkout requires the RC label and a clean reviewed commit |
+| `ezenciel-agents-install migrate-ledger --deployment <path>` | Add the loopback host ledger endpoint to an existing host-capable deployment (idempotent; no restart) |
 | `ezenciel-agents-install status --deployment <path>` | Distinguish runtime/configuration, pairing and Telegram reply evidence |
 | `ezenciel-agents-create --register-cli <current-cli>` | Record the CLI that installs the initial package |
 | `ezenciel-agents-create --name <name> --purpose <agent-brief>` | Create an agent from the installing LLM's compact brief; packaged Codex defaults isolated, other CLIs stay host-capable; token via stdin |
