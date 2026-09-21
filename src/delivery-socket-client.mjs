@@ -25,6 +25,10 @@ const unavailable = (target, cause) => {
   return error
 }
 
+// A timeout is not a connect failure: the relay may already have processed the
+// request, so replaying the frame elsewhere could duplicate an uncertain write.
+const timedOut = target => new Error(`Delivery relay unavailable at ${target}`)
+
 const exchange = (connect, envelope, timeoutMs, target) => new Promise((resolve, reject) => {
   let done = false
   const socket = connect()
@@ -32,7 +36,7 @@ const exchange = (connect, envelope, timeoutMs, target) => new Promise((resolve,
     if (done) return
     done = true
     socket.destroy()
-    reject(unavailable(target))
+    reject(timedOut(target))
   }, timeoutMs)
   let buffer = ''
   socket.setEncoding('utf8')

@@ -151,5 +151,6 @@ repository.
 
 Source-checkout image builds are RCs: commit and open the PR first, then
 `ezenciel-agents-install build --label X.Y.Z-beta.N.rc.M` (increasing `.rc.N`)
-from the clean reviewed commit. The build refuses a dirty checkout and an
-unlabeled build installs a fallback label; `/status` must show the RC tag first.
+from the clean reviewed commit. The build refuses a dirty checkout or a package
+tree that is not the checkout root; `/status` must show the RC tag for source
+installs.

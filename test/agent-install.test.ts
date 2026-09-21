@@ -36,6 +36,9 @@ test('new agents receive independent projects, secrets and plugin bindings; dupl
     const overlay=await readFile(join(root,'family/ledger.compose.yaml'),'utf8')
     assert.match(overlay,/EZ_DELIVERY_TCP_PORT: \$\{EZ_DELIVERY_TCP_PORT:\?\}/)
     assert.match(overlay,/127\.0\.0\.1:\$\{EZ_DELIVERY_TCP_PORT:\?\}:\$\{EZ_DELIVERY_TCP_PORT:\?\}/)
+    // Creation seeds the agent's mind once; the relay never writes it at start.
+    assert.match(await readFile(join(root,'family/mind/AGENTS.md'),'utf8'),/## Purpose\n\nHousehold shopper/)
+    assert.equal((await stat(join(root,'family/mind/AGENTS.md'))).mode & 0o777,0o644)
     await assert.rejects(createAgent({...base,name:'bad-image',image:"bad'\nINJECT=yes"}),/Invalid relay image/)
     for(const key of ['COMPOSE_PROJECT_NAME','EZ_RELAY_ENV_FILE','EZ_AGENT_PURPOSE_FILE','EZ_AGENT_WORKSPACE','EZ_CONTROL_DIR','EZ_WHATSAPP_IPC_VOLUME','EZ_WHATSAPP_CLIENT_VOLUME'])assert.notEqual(a[key],b[key])
     assert.equal((await stat(join(root,'family/relay.env'))).mode & 0o777,0o600)

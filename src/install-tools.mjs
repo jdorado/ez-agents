@@ -105,10 +105,12 @@ export async function migrateLedger({ deployment } = {}) {
   const port = values.EZ_DELIVERY_TCP_PORT !== undefined ? Number(values.EZ_DELIVERY_TCP_PORT) : await freeLoopbackPort(ledgerPortStart(values.COMPOSE_PROJECT_NAME));
   if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw Error('Invalid EZ_DELIVERY_TCP_PORT');
   const next = envLine(envLine(text, 'EZ_DELIVERY_TCP_PORT', String(port)), 'COMPOSE_FILE', [...new Set([...files, overlay])].join(path.delimiter));
+  // Publish the overlay before docker.env references it: a crash in between
+  // leaves an unreferenced file instead of a deployment Compose cannot start.
+  await fs.writeFile(overlay, ledgerOverlayYaml(), { mode: 0o600 });
   const temporary = `${envFile}.${process.pid}.tmp`;
   await fs.writeFile(temporary, next, { mode: 0o600 });
   await fs.rename(temporary, envFile);
-  await fs.writeFile(overlay, ledgerOverlayYaml(), { mode: 0o600 });
   return { ok: true, deployment: directory, changed: true, port, overlay };
 }
 
@@ -124,7 +126,11 @@ async function fingerprintOf(source,invoke) {
 export const rcLabel = /^\d+\.\d+\.\d+-beta\.\d+\.rc\.[1-9]\d*$/;
 async function buildIdentity(source,label,invoke) {
   const git=async args=>{try{return await invoke('git',['-C',source,...args]);}catch{return undefined;}};
-  if(await git(['rev-parse','--is-inside-work-tree'])!=='true') {
+  // The package root itself must be the checkout root; a tarball unpacked
+  // inside an unrelated repository is not a source checkout.
+  const top=await git(['rev-parse','--show-toplevel']);
+  const atRoot=Boolean(top)&&await fs.realpath(top).then(value=>value===source,()=>false);
+  if(!atRoot) {
     if(label!==undefined)throw Error('--label requires a git checkout so the RC pins the reviewed commit');
     return {};
   }

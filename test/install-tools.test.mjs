@@ -89,12 +89,12 @@ test('same-artifact build retries do not spawn a second Docker build and reuse v
 });
 test('source checkouts build RCs only: clean reviewed commit plus increasing label',async t=>{
   const home=await fixture(t),source=path.join(home,'source');await fs.mkdir(source);await fs.writeFile(path.join(source,'package.json'),'{}');
-  let inside=true,status='',built=[];const sha='a'.repeat(40);
+  let inside=true,status='',built=[],toplevel=source;const sha='a'.repeat(40);
   const invoke=async(cmd,args)=>{
     if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);
     if(cmd==='git'){
       if(!inside)throw Error('not a git repository');
-      if(args[2]==='rev-parse'&&args[3]==='--is-inside-work-tree')return 'true';
+      if(args[2]==='rev-parse'&&args[3]==='--show-toplevel')return toplevel;
       if(args[2]==='status')return status;
       if(args[2]==='rev-parse'&&args[3]==='HEAD')return sha;
       return '';
@@ -114,6 +114,9 @@ test('source checkouts build RCs only: clean reviewed commit plus increasing lab
   assert.ok(args.includes('ezenciel-agents:0.1.0-beta.36.rc.2'));
   inside=false;
   await assert.rejects(build({home,source,label:'0.1.0-beta.36.rc.2'},invoke),/--label requires a git checkout/);
+  // A tarball unpacked inside an unrelated repository is not a source checkout.
+  inside=true;toplevel=home;
+  assert.equal((await build({home,source},invoke)).label,undefined);
 });
 test('a failed build releases its own lock and leaves a failure receipt for diagnosis',async t=>{
   const home=await fixture(t),source=path.join(home,'source');await fs.mkdir(source);await fs.writeFile(path.join(source,'package.json'),'{}');
