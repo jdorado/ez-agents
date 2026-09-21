@@ -137,8 +137,9 @@ if(result.status!==0){console.error(result.stderr);process.exit(1)};
   assert.deepEqual(resumeIds,[undefined,nativeId])
   assert.equal(telegramCalls,0)
   assert.ok(prompts[0].startsWith('Hello from the app'))
-  assert.ok(prompts[0].includes('[Application channel]'))
+  assert.ok(prompts[0].includes('[application scope "program"]'))
   assert.ok(!prompts[0].includes('must-stay-out-of-prompt'))
+  assert.ok(!prompts[0].includes('delegate'))
   assert.equal((await relay.applicationChannel.snapshot(binding.bindingId,second.id)).messages[0].text,'Fixture engine reply')
 })
 

@@ -30,7 +30,7 @@ if (['start', 'smoke'].includes(command)) await recoverInterruptedRuns(loadConfi
 if (command === 'start') {
   const config = loadConfig()
   const relay = createRelay(config)
-  const heartbeat = '/state/control/heartbeat.json'
+  const heartbeat = process.env.EZ_HEARTBEAT_FILE || '/tmp/ez-relay-heartbeat.json'
   await rm(heartbeat, { force: true })
   const timer = setInterval(() => {
     if (relay.isRunning()) void writeFile(heartbeat, JSON.stringify({ at: Date.now(), polling: Boolean(relay.bot?.isRunning()), applicationOnly: !relay.telegramEnabled, telegramConfigured: config.telegramBotToken !== '', version: packageVersion }), { mode: 0o600 })

@@ -22,7 +22,7 @@ test('all adapters reject external core runs even when caller omits eventSource'
   await assert.rejects(requireOwnerExecution(dir,'event_'+'a'.repeat(64)), /external-execution-unavailable/)
 })
 
-test('missing, corrupt, finished, unpaired and mismatched core runs fail closed', async t => {
+test('missing, corrupt, finished and mismatched core runs fail closed without control writes', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-authority-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   await assert.rejects(requireOwnerExecution(dir, 'r_missing'), /No active core run/)
@@ -34,6 +34,9 @@ test('missing, corrupt, finished, unpaired and mismatched core runs fail closed'
   await new RunStore(dir).patch(run.id,{status:'completed'})
   await assert.rejects(requireOwnerExecution(dir,run.id), /No active core run/)
   await new RunStore(dir).patch(run.id,{status:'running'})
+  // Fail-closed authority is preserved with a read-only owner read: zero
+  // control/ writes, rejects on revoked owner. Intake authorizes first; the
+  // executor re-verifies at launch.
   await new ControlStore(dir,1000).revokeOwner()
   await assert.rejects(requireOwnerExecution(dir,run.id), /owner-mismatch/)
   await writeFile(join(dir,'runs',run.id+'.json'),'{')

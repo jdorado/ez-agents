@@ -309,14 +309,13 @@ export const startExecutorJob = async (
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   const gui = !host && key === 'codex-gui'
   const nativeSession = !host && key === 'codex' && options.runId.startsWith('r_schedule_')
-  // Chat-mode experiment: only direct chat input at the engine boundary.
-  const applicationReminder = !host && (run?.application || run?.delivery)
-    ? '\n\n[Application channel] This is an owner-authorized application conversation. Send text replies using ezenciel-agents-message; stdout alone is not delivered. Outgoing file delivery, reactions and approval controls are unsupported here. Domain tools can retrieve private context from ezenciel-agents-schedule context under run.application.context; do not expose credentials from that data. The application scope is ' + JSON.stringify((run.application ?? run.delivery)!.scope) + '.'
-    : ''
-  const chatReminder = !host && !run?.taskId && run?.messageId !== undefined
-    ? '\n\n[Chat context] You are replying in chat. Send replies with ezenciel-agents-message --text "..."; your final answer alone is not delivered. Before lengthy tool or repository work, briefly acknowledge through that CLI. Keep chat responsive: use ezenciel-agents-schedule for long-running work and native subagents for useful independent parts. Decide when to delegate and what to send.'
-    : ''
-  const promptText = texts.join('\n\n') + applicationReminder + chatReminder
+  // Slim per-turn injection: transport reminder only (channel/trigger/contact).
+  // No coaching, tool/delegate/schedule advice, or workflow guidance.
+  const scope = run?.application?.scope ?? run?.delivery?.scope
+  const channel = run?.taskId ? 'task' : run?.scheduled ? 'schedule' : run?.application || run?.delivery ? 'application' : run?.messageId !== undefined ? 'chat' : 'trigger'
+  const contact = run?.messageId !== undefined ? ` message ${run.messageId}` : scope !== undefined ? ` scope ${JSON.stringify(scope)}` : ''
+  const needsReply = !host && !run?.taskId && (run?.messageId !== undefined || run?.application !== undefined || run?.delivery !== undefined)
+  const promptText = texts.join('\n\n') + (needsReply ? `\n\n[${channel}${contact}] Reply via ezenciel-agents-message --text "..."; stdout is not delivered.` : '')
   const promptFile = path.join(outputDirectory, 'prompt.txt')
   await writeFile(promptFile, promptText, { encoding: 'utf8', mode: 0o600 })
 

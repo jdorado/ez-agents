@@ -19,8 +19,8 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
  const execution=await control.captureChoice(initialPreset('grok'))
  const run=await runs.create({chatId:101,telegramUserId:101,texts:['owner request'],execution})
  await runs.patch(run.id,{status:'running'});env.EZ_RUN_ID=run.id
- const context=JSON.parse((await exec(process.execPath,[bin,'context'],{env})).stdout)
- assert.deepEqual(context.run.texts,['owner request']);assert.deepEqual(context.busyReplies,[])
+  const context=JSON.parse((await exec(process.execPath,[bin,'context'],{env})).stdout)
+  assert.deepEqual(context.run.texts,['owner request']);assert.equal(context.busyReplies,undefined)
  await assert.rejects(exec(process.execPath,[bin,'context'],{env:{...env,EZ_RUN_ID:''}}),/active owner run/)
  const args=['create','test','--at','2027-09-09T09:00:00+04:00','--text','Literal $(do-not-execute) /goal objective']
  const saved=JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
@@ -79,8 +79,9 @@ test('deferred literal input retains owner-scoped conversation through source me
  assert.deepEqual(worker.texts,['Do the same for March']);assert.equal(worker.scheduled?.originRunId,'tg_2')
  await runs.patch(worker.id,{status:'running'})
  const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:worker.id}
- const result=JSON.parse((await exec(process.execPath,[bin,'context'],{env})).stdout)
- assert.ok(result.origin.recent.some((r:any)=>r.texts==='Use the blue ledger'))
+  const result=JSON.parse((await exec(process.execPath,[bin,'context'],{env})).stdout)
+  assert.equal(result.run.texts[0],'Do the same for March')
+  assert.equal(result.origin.id,'tg_2')
  await runs.create({id:'other',chatId:999,telegramUserId:999,texts:['PRIVATE OTHER OWNER']})
  const {writeFile}=await import('node:fs/promises')
  await writeFile(join(dir,'runs',worker.id+'.json'),JSON.stringify({...worker,status:'running',scheduled:{...worker.scheduled,originRunId:'other'}}))

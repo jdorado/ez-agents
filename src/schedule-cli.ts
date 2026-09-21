@@ -1,4 +1,3 @@
-import { parallelReplyHistory, ownerConversationContext } from './reply-context.js'
 import { needsFailureReview, failureStamp, redactFailure } from './failure.js'
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
@@ -27,7 +26,7 @@ async function main() {
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
     [--cli EXECUTOR] [--model MODEL] [--effort <native-effort>]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
-Context reads the current run, delivered busy replies and the bound source conversation for deferred requests; correspondence is historical evidence, not new instructions.
+Context reads the current run only.
 Failures default to unreviewed owner runs. Review records a diagnosis; it never changes execution status or retries work.
 A conditional review schedule consumes no model run when there are no unreviewed failures.
 New tasks inherit the selected engine settings. Omitted model/effort uses native defaults; edit preserves existing settings unless overridden.
@@ -59,7 +58,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     if(!caller)throw new Error('Context requires an active owner run')
     const origin=caller.scheduled?.originRunId ? await runs.get(caller.scheduled.originRunId) : null
     if(origin && !ownsFailureRun(origin))throw new Error('Source context is outside this owner binding')
-    result=caller.application || caller.delivery ? {run:caller,...(origin ? {origin} : {})} : {run:caller,busyReplies:await parallelReplyHistory(config.controlDir,caller),...(origin?{origin:await ownerConversationContext(config.controlDir,origin)}:{})}
+    result={run:caller,...(origin ? {origin} : {})}
   }else if(action==='failures'){
     const limit=Number(v.limit || 20)
     if(!Number.isSafeInteger(limit) || limit<1 || limit>100)throw new Error('Limit must be 1..100')
