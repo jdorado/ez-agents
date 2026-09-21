@@ -49,7 +49,8 @@ that enables Telegram.
 Host-capable agents run `ezenciel-agents-host` under the host's service manager
 with `EZ_DEPLOYMENT_DIR` bound to that deployment. This small transport invokes
 the existing CLI; it is not a second relay or model loop. Isolated agents do not
-start it. It reads requests fromthe agent's control directory, fixes cwd/control/tool paths from its installation
+start it. It reads requests from
+the agent's control directory, fixes cwd/control/tool paths from its installation
 binding, strips environment secrets, forwards native output and exit status, and
 propagates cancellation. Requests cannot select another executable. No network
 listener, Docker socket in containers, new provider API or per-CLI service shim
