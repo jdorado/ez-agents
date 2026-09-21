@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { provisionTelegramBot } from './telegram-provisioning.js'
 
-const help = 'Usage: ezenciel-agents-provision-telegram --config PRIVATE_CONFIG_FILE < BOTFATHER_TOKEN\nConfigures one existing Ez deployment. The token is accepted only through stdin, written only to that deployment\'s private relay secret, and is never printed.'
+const help = 'Usage: ezenciel-agents-provision-telegram --config PRIVATE_CONFIG_FILE < BOTFATHER_TOKEN\nConfigures one existing Ez deployment using its installed relay image and version from the deployment\'s docker.env; the config never selects an image. The token is accepted only through stdin, written only to that deployment\'s private relay secret, and is never printed.'
 
 export const runTelegramProvisioningCli = async (args = process.argv.slice(2), input = process.stdin): Promise<void> => {
   if (args.includes('--help') || args.includes('-h')) { console.log(help); return }
