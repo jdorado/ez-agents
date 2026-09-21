@@ -242,6 +242,42 @@ test('model catalog can read an agent-bound Codex home', async () => {
   }
 })
 
+test('Choose AI lists the agent-bound Codex home instead of only the desktop fallback', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-codex-home-'))
+  const codexHome = await mkdtemp(join(tmpdir(), 'ez-ai-menu-cache-'))
+  try {
+    await writeFile(join(codexHome, 'models_cache.json'), JSON.stringify({ models: [
+      { slug: 'fixture-bound-model', display_name: 'Bound Fixture', visibility: 'list',
+        supported_reasoning_levels: [{ effort: 'medium' }] },
+    ] }))
+    const store = new ControlStore(dir, 1000)
+    await store.aiState(initialPreset('codex'))
+    // Default catalog (no explicit override): the menu must bind it to codexHome,
+    // otherwise an empty process-home cache drops codex and only codex-gui lists.
+    const menu = createAiMenu(store, 'codex', undefined, dir, codexHome,
+      async (cli) => cli === 'codex' || cli === 'codex-gui')
+    const replies: Array<{ text: string; buttons: Array<{ text: string; callback_data: string }> }> = []
+    const context = (data?: string) => ({
+      callbackQuery: data ? { data } : undefined,
+      answerCallbackQuery: async () => ({}),
+      reply: async (text: string, options?: { reply_markup?: { inline_keyboard?: Array<Array<{ text: string; callback_data: string }>> } }) => {
+        replies.push({ text, buttons: options?.reply_markup?.inline_keyboard?.flat() ?? [] })
+        return {} as never
+      },
+    })
+    await menu.list(context() as never)
+    assert.deepEqual(replies.at(-1)!.buttons.map((button) => button.text), [
+      'codex', 'codex-gui (desktop)', 'Refresh available AIs',
+    ])
+    const client = replies.at(-1)!.buttons.find((button) => button.text === 'codex')!
+    await menu.handle(context(client.callback_data) as never)
+    assert.deepEqual(replies.at(-1)!.buttons.map((button) => button.text), ['Bound Fixture', 'Back to clients'])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+    await rm(codexHome, { recursive: true, force: true })
+  }
+})
+
 test('native executor flags carry the exact model and effort; only structured metadata binds sessions', () => {
   const opts = { workspace: '/tmp/fixture', sessionId: crypto.randomUUID(), isResume: true,
     model: 'fixture-model', effort: 'medium' }
