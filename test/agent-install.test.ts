@@ -29,6 +29,13 @@ test('new agents receive independent projects, secrets and plugin bindings; dupl
     assert.equal(JSON.parse(await readFile(join(root,'family/agent.json'),'utf8')).isolation,'host-capable')
     assert.equal(a.EZ_RELAY_IMAGE,'ezenciel-agents:install-candidate')
     assert.equal(b.EZ_RELAY_IMAGE,'ezenciel-agents:local')
+    // Host-capable agents publish an authenticated loopback ledger endpoint so
+    // host CLIs can reach the relay on Docker Desktop/OrbStack.
+    assert.match(a.EZ_DELIVERY_TCP_PORT!,/^2\d{4}$/)
+    assert.equal(a.COMPOSE_FILE,`/opt/ez/compose.yaml:/private/agents/family/ledger.compose.yaml`)
+    const overlay=await readFile(join(root,'family/ledger.compose.yaml'),'utf8')
+    assert.match(overlay,/EZ_DELIVERY_TCP_PORT: \$\{EZ_DELIVERY_TCP_PORT:\?\}/)
+    assert.match(overlay,/127\.0\.0\.1:\$\{EZ_DELIVERY_TCP_PORT:\?\}:\$\{EZ_DELIVERY_TCP_PORT:\?\}/)
     await assert.rejects(createAgent({...base,name:'bad-image',image:"bad'\nINJECT=yes"}),/Invalid relay image/)
     for(const key of ['COMPOSE_PROJECT_NAME','EZ_RELAY_ENV_FILE','EZ_AGENT_PURPOSE_FILE','EZ_AGENT_WORKSPACE','EZ_CONTROL_DIR','EZ_WHATSAPP_IPC_VOLUME','EZ_WHATSAPP_CLIENT_VOLUME'])assert.notEqual(a[key],b[key])
     assert.equal((await stat(join(root,'family/relay.env'))).mode & 0o777,0o600)
@@ -64,6 +71,8 @@ test('package installer records its CLI before any agent exists; creation inheri
     assert.equal(env.EZ_ISOLATION,'isolated')
     assert.equal(env.EZ_EXECUTOR_TRANSPORT,'local')
     assert.equal(env.EZ_CODEX_SANDBOX,'external')
+    assert.equal(env.EZ_DELIVERY_TCP_PORT,undefined)
+    assert.equal(env.COMPOSE_FILE,'/opt/ez/compose.yaml')
     assert.equal(JSON.parse(await readFile(join(root,'shopper/host-executor.json'),'utf8')).agents[0].toolsHome,'/private/agents/shopper/tools')
     assert.equal(await installationCli(root),'codex')
     await assert.rejects(installationCli(root,'grok'),/already selected/)

@@ -1,5 +1,7 @@
 import { createServer, type Server, type Socket } from 'node:net'
-import { rm } from 'node:fs/promises'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { rename, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import { callDeliverySocket as callSocket, deliverySocketAlive as socketAlive, deliverySocketPath } from './delivery-socket-client.mjs'
 import { RunStore, sentOutbox, type RunRecord } from './runs.js'
 import { ApprovalStore } from './approval.js'
@@ -71,13 +73,20 @@ export const authorizeRun = async (controlDir: string, runId: string): Promise<R
 
 const encode = (value: unknown): string => `${JSON.stringify(value)}\n`
 
+export type DeliveryEndpoint = { host: '127.0.0.1'; port: number; token: string }
+export type DeliveryServeOptions = { tcpPort?: number }
+const endpointFile = 'delivery-endpoint.json'
+const tokensMatch = (candidate: unknown, token: string): boolean =>
+  typeof candidate === 'string' && candidate.length === token.length && timingSafeEqual(Buffer.from(candidate), Buffer.from(token))
+
 export const serveDeliverySocket = async (
   controlDir: string,
   handle: DeliveryHandler,
-): Promise<{ socketPath: string; stop: () => Promise<void> }> => {
+  options: DeliveryServeOptions = {},
+): Promise<{ socketPath: string; endpoint: DeliveryEndpoint | null; stop: () => Promise<void> }> => {
   const socketPath = deliverySocketPath(controlDir)
   await rm(socketPath, { force: true }).catch(() => {})
-  const server: Server = createServer((socket: Socket) => {
+  const attach = (socket: Socket, token: string | null): void => {
     let buffer = ''
     socket.setEncoding('utf8')
     socket.on('data', (chunk: string) => {
@@ -90,8 +99,14 @@ export const serveDeliverySocket = async (
         void (async () => {
           let id: unknown = null
           try {
-            const request = JSON.parse(line) as { id?: unknown; op?: unknown; payload?: unknown }
-            id = request.id ?? null
+            const envelope = JSON.parse(line) as { id?: unknown; token?: unknown; op?: unknown; payload?: unknown }
+            id = envelope.id ?? null
+            // Loopback TCP callers authenticate per frame against the token in
+            // the owner-readable control directory; the filesystem channels
+            // (Unix socket) keep their existing peer trust. Every op still
+            // re-verifies owner authority server-side.
+            if (token !== null && !tokensMatch(envelope.token, token)) { socket.destroy(); return }
+            const { token: _token, ...request } = envelope
             const result = await handle(request as DeliverySocketOp)
             socket.write(encode({ id, ok: true, result: result ?? null }))
           } catch (error) {
@@ -100,7 +115,8 @@ export const serveDeliverySocket = async (
         })()
       }
     })
-  })
+  }
+  const server: Server = createServer((socket: Socket) => attach(socket, null))
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
     server.listen(socketPath, () => {
@@ -110,11 +126,48 @@ export const serveDeliverySocket = async (
   })
   // A live sibling relay already owns this agent. Refuse to split-brain.
   server.on('error', () => {})
+  let tcp: Server | null = null
+  let endpoint: DeliveryEndpoint | null = null
+  if (options.tcpPort !== undefined) {
+    if (!Number.isSafeInteger(options.tcpPort) || options.tcpPort < 0 || options.tcpPort > 65535) throw new Error('Invalid delivery TCP port')
+    const token = randomBytes(32).toString('hex')
+    const listener: Server = createServer((socket: Socket) => attach(socket, token))
+    try {
+      await new Promise<void>((resolve, reject) => {
+        listener.once('error', reject)
+        listener.listen(options.tcpPort, '0.0.0.0', () => {
+          listener.removeListener('error', reject)
+          resolve()
+        })
+      })
+    } catch (error) {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      throw error
+    }
+    listener.on('error', () => {})
+    const address = listener.address()
+    if (!address || typeof address === 'string') {
+      await new Promise<void>((resolve) => listener.close(() => resolve()))
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      throw new Error('Delivery TCP listener address unavailable')
+    }
+    tcp = listener
+    endpoint = { host: '127.0.0.1', port: address.port, token }
+    const file = path.join(controlDir, endpointFile)
+    const temporary = `${file}.${process.pid}.tmp`
+    await writeFile(temporary, JSON.stringify(endpoint), { mode: 0o600 })
+    await rename(temporary, file)
+  }
+  const tcpServer = tcp
+  const tcpEndpoint = endpoint
   return {
     socketPath,
+    endpoint,
     stop: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()))
       await rm(socketPath, { force: true }).catch(() => {})
+      if (tcpServer) await new Promise<void>((resolve) => tcpServer.close(() => resolve()))
+      if (tcpEndpoint) await rm(path.join(controlDir, endpointFile), { force: true }).catch(() => {})
     },
   }
 }

@@ -1174,7 +1174,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // ping and this relay refuses to split-brain the agent.
       if (await deliverySocketAlive(deliverySocketPath(config.controlDir)).catch(() => false))
         throw new Error(`Another relay owns ${config.controlDir}; stop it before starting a second one`)
-      deliveryServer = await serveDeliverySocket(config.controlDir, handleDeliveryOp)
+      const deliveryTcpPort = Number(process.env.EZ_DELIVERY_TCP_PORT ?? '')
+      deliveryServer = await serveDeliverySocket(config.controlDir, handleDeliveryOp, {
+        ...(Number.isSafeInteger(deliveryTcpPort) && deliveryTcpPort >= 1024 && deliveryTcpPort <= 65535 ? { tcpPort: deliveryTcpPort } : {}),
+      })
       if (config.applicationPort) await applicationChannel.listen(config.applicationPort, config.applicationHost)
       runtimeStarted = true
       const owner = (await control.status()).owner
