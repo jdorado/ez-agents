@@ -72,7 +72,23 @@ try {
   assert.equal(JSON.parse(custom.stdout).uid,20001);
   const failed = run(['run','--rm',image,'exec','node','-e','process.exit(23)']);
   assert.equal(failed.status, 23, failed.stderr);
-  const held = run(['run','-d','--name',holder,'-v',`${volume}:/state/control`,image,'exec','node','-e',"require('fs').writeFileSync('/state/control/ready','yes');setInterval(()=>{},1000)"]);
+  // The live delivery socket is the single-relay guard (it replaced the kernel
+  // flock). This mirrors the relay's own start check: an answering address
+  // refuses the second owner; a stale file is removed before binding.
+  const guardScript = `
+    const net=require('net'),fs=require('fs'),stay=process.argv[1]==='hold',path='/state/control/delivery.sock';
+    const probe=net.createConnection(path);
+    const bind=()=>{
+      fs.rmSync(path,{force:true});
+      const s=net.createServer(()=>{});
+      s.on('error',()=>process.exit(1));
+      s.listen(path,()=>{if(stay){fs.writeFileSync('/state/control/ready','yes');setInterval(()=>{},1000)}else s.close(()=>process.exit(0))});
+    };
+    probe.on('connect',()=>{probe.destroy();process.exit(73)});
+    probe.on('error',bind);
+    probe.setTimeout(3000,()=>{probe.destroy();process.exit(1)});
+  `;
+  const held = run(['run','-d','--name',holder,'-v',`${volume}:/state/control`,image,'exec','node','-e',guardScript,'hold']);
   assert.equal(held.status,0,held.stderr);
   for (let n=0;n<30;n++) {
     const probe=run(['exec',holder,'test','-f','/state/control/ready']);
@@ -80,10 +96,16 @@ try {
     await new Promise(resolve=>setTimeout(resolve,100));
   }
   assert.equal(run(['exec',holder,'test','-f','/state/control/ready']).status,0);
-  const duplicate=run(['run','--rm','-v',`${volume}:/state/control`,image,'exec','node','-e','process.exit(0)']);
+  const duplicate=run(['run','--rm','-v',`${volume}:/state/control`,image,'exec','node','-e',guardScript]);
   assert.equal(duplicate.status,73,duplicate.stderr);
   assert.equal(run(['kill',holder]).status,0);
-  const recovered=run(['run','--rm','-v',`${volume}:/state/control`,image,'exec','node','-e','process.exit(0)']);
-  assert.equal(recovered.status,0,recovered.stderr);
-  console.log('Docker smoke passed: direct non-root application help/start/health/stop, inherited private descriptor, non-root executor, isolated Codex on PATH, private secret isolation, literal argv, exit code, no Docker socket, duplicate writer rejection and crash lock release.');
+  let released=1;
+  for (let n=0;n<50;n++) {
+    const recovered=run(['run','--rm','-v',`${volume}:/state/control`,image,'exec','node','-e',guardScript]);
+    released=recovered.status;
+    if(released===0)break;
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  assert.equal(released,0,'a dead relay must release the delivery socket');
+  console.log('Docker smoke passed: direct non-root application help/start/health/stop, inherited private descriptor, non-root executor, isolated Codex on PATH, private secret isolation, literal argv, exit code, no Docker socket, live delivery-socket guard and crash release.');
 } finally { run(['rm','-f',holder,application]); run(['volume','rm',volume]); rmSync(dir, {recursive:true, force:true}); }
