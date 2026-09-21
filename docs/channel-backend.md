@@ -29,9 +29,9 @@ failures back off. No response body or credential is logged.
 Native `/new` and AI settings belong to the application. `/stop` cannot cancel
 an application job and explicitly reports that limitation. `/cancel` removes
 pending relay work only; it does not undo work already accepted by a backend.
-External plugin/maintenance wakes do not dispatch through this channel backend.
+External plugin wakes do not dispatch through this channel backend.
 
 Backend mode handles owner Telegram intake only. Existing native schedules,
-restricted messaging tasks, plugin events and maintenance prompts are not
+restricted messaging tasks and plugin events are not
 forwarded to the application and cannot launch a fallback CLI. Their scheduling
 and authority remain separate from the application's own job lifecycle.

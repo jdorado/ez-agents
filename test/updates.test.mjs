@@ -399,11 +399,8 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));if(j.status==='failed'||j.status==='rolled-back')throw Error(JSON.stringify(j)+first.output());return j.status==='completed';});
  const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);assert.equal(await firstClosed,0,first.output());
  if(provider==='pnpm'){assert.match(first.output(),/Update discovery failed; host remains running/);assert.doesNotMatch(first.output(),/Synthetic discovery failure/);}
- // Completion is persisted before the supervisor publishes its attention receipt.
- await wait(async()=>{
-  try{return (await read(path.join(f.agent.controlDir,'update-attention.json'))).id===digest(job.id);}
-  catch(error){if(error.code==='ENOENT')return false;throw error;}
- });
+ // Adversarial: a completed update must not publish an agent wakeup notice.
+ await assert.rejects(fs.readFile(path.join(f.agent.controlDir,'update-attention.json')),error=>error.code==='ENOENT');
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).packageManager.command,provider);
  const second=start();t.after(()=>second.p.kill('SIGTERM'));
