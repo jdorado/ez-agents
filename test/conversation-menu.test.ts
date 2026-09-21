@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Context, InlineKeyboard } from 'grammy'
 import { ControlStore } from '../src/control-state.js'
-import { RunStore } from '../src/runs.js'
 import { createConversationMenu } from '../src/conversation-menu.js'
 import { initialPreset } from '../src/ai.js'
 
@@ -13,11 +12,10 @@ test('empty placeholders stay out of history and Back edits one panel without cr
   const dir = await mkdtemp(join(tmpdir(), 'ez-empty-chats-'))
   try {
     const control = new ControlStore(dir, 1000)
-    const runs = new RunStore(dir)
     const choice = await control.captureChoice(initialPreset('grok'), 'Client launch')
     await control.markSessionStarted(choice.sessionId)
     for (let n = 0; n < 3; n++) await control.resetSession()
-    const menu = createConversationMenu(control, runs)
+    const menu = createConversationMenu(control)
     let sent = 0, edited = 0, text = '', keyboard: InlineKeyboard
     const ctx = {
       callbackQuery: undefined,
@@ -55,7 +53,7 @@ test('an identical Back edit does not send another message', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-same-menu-'))
   try {
     let sent = 0
-    const menu = createConversationMenu(new ControlStore(dir,1000),new RunStore(dir))
+    const menu = createConversationMenu(new ControlStore(dir,1000))
     await menu.handle({
       callbackQuery:{data:'chat:list:0:0',message:{message_id:1}},
       answerCallbackQuery:async()=>{},

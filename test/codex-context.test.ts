@@ -110,11 +110,11 @@ if(q.method==='turn/start'){send({id:q.id,result:{turn:{id:'one'}}});send({metho
 send({id:q.id,result:q.method==='thread/goal/get'?{goal:null}:{}});});setInterval(()=>{},1000);
 `,{mode:0o700})
   process.env.HOME=root;process.env.PATH=bin+path.delimiter+priorPath
-  await assert.rejects(startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId:'r_schedule_/../../escape',timeoutMs:0}),/Invalid native task run ID/)
+  await assert.rejects(startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId:'r_schedule_/../../escape',timeoutMs:0,nativeSession:true}),/Invalid native task run ID/)
   await ownerRun(controlDir, 'r_pair_fixture')
   await Promise.all(['r_schedule_one','r_schedule_two'].map(async runId=>{
    await ownerRun(controlDir, runId)
-   const job=await startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:0})
+   const job=await startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:0,nativeSession:true})
    assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0);await job.cleanup()
    const home=path.join(controlDir,'cli/codex/tasks',runId)
    assert.equal(JSON.parse(await readFile(path.join(home,'observed.json'),'utf8')).home,home)

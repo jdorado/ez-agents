@@ -638,7 +638,7 @@ test('conversation menu paginates and stale pages remain usable after archiving'
 })
 
 
-test('older conversation names come from owner messages and detail keeps archive available when resume fails', async () => {
+test('conversation names never read run history and detail keeps archive available when resume fails', async () => {
   const f = await fixture()
   try {
     const store = new ControlStore(f.dir, 1000)
@@ -655,7 +655,8 @@ test('older conversation names come from owner messages and detail keeps archive
     await store.resetSession()
     await f.relay.bot.handleUpdate(message(1, '/chats'))
     const rows = f.keyboards.at(-1)!
-    assert.ok(rows.flat().some(b => b.text.startsWith('Client launch checklist · ')))
+    assert.ok(rows.flat().some(b => b.text.startsWith('Untitled conversation')))
+    assert.ok(!rows.flat().some(b => b.text.includes('Client launch checklist')))
     assert.ok(!rows.flat().some(b => b.text === '✓ New conversation'))
     assert.ok(!rows.flat().some(b => b.text.includes(old.sessionId.slice(0, 8))))
     assert.ok(!rows.flat().some(b => b.callback_data.startsWith('chat:archive:')))
@@ -663,7 +664,7 @@ test('older conversation names come from owner messages and detail keeps archive
       id: '2', chat_instance: 'fixture', data: `chat:open:${old.sessionId}`,
       from: { id: 101, first_name: 'Fixture', is_bot: false }, message: message(2).message!,
     } })
-    assert.match(f.replies.at(-1)!, /Client launch checklist.*\n.*binding/)
+    assert.match(f.replies.at(-1)!, /Untitled conversation \d+[\s\S]*binding/)
     assert.deepEqual(f.keyboards.at(-1)![0], [{text: 'Archive this conversation', callback_data: `chat:archive:${old.sessionId}`}])
   } finally { await f.close() }
 })

@@ -1,9 +1,9 @@
 import { InlineKeyboard, type Context } from 'grammy'
 import { ControlStore, sessionTitle } from './control-state.js'
-import type { RunStore } from './runs.js'
 
 // IDs identify existing relay bindings only; the engine still owns all context.
-export const createConversationMenu = (control: ControlStore, runs: Pick<RunStore, 'list'>) => {
+// Titles come from owner renames; no run text or delivery history is read here.
+export const createConversationMenu = (control: ControlStore) => {
   const render = async (ctx: Context, text: string, keyboard: InlineKeyboard) => {
     if (!ctx.callbackQuery?.message) { await ctx.reply(text, { reply_markup: keyboard }); return }
     try { await ctx.editMessageText(text, { reply_markup: keyboard }) }
@@ -13,23 +13,12 @@ export const createConversationMenu = (control: ControlStore, runs: Pick<RunStor
   }
   const sessionsWithNames = async () => {
     const sessions = await control.listSessions()
-    if (sessions.every(s => s.title)) return sessions
-    // Display existing owner input only. Do not create another history store or
-    // ask an engine to generate titles just to render a menu. Commands and JSON
-    // event records (including approval callbacks) are not readable chat names.
-    const history = await runs.list()
+    // Display session bindings only. Titles come from explicit owner renames;
+    // no prompt, run or delivery history is read to derive a menu label.
     return sessions.flatMap((session, index) => {
       if (session.title) return [session]
-      const first = history.find(run => run.execution?.sessionId === session.sessionId &&
-        run.messageId && !run.taskId && !run.scheduled && !run.external && !run.replyOnly &&
-        run.texts[0]?.trim() && !/^[/{]/.test(run.texts[0].trim()))
-      // New only reserves a routing ID. Do not present empty routing placeholders
-      // as engine conversations. Retain the records for already accepted work.
-      if (!session.hasStarted && !session.nativeSessionId && !first) return []
-      const title = first
-        ? `${first.texts[0].replace(/\s+/g, ' ').trim().slice(0, 40)} · ${first.createdAt.slice(0, 16).replace('T', ' ')} UTC`
-        : `Untitled conversation ${index + 1}`
-      return [{ ...session, title }]
+      if (!session.hasStarted && !session.nativeSessionId) return []
+      return [{ ...session, title: `Untitled conversation ${index + 1}` }]
     })
   }
   const list = async (ctx: Context, archived = false, page = 0) => {
