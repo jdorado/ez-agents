@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { provisionTelegramBot } from '../src/telegram-provisioning.js'
@@ -13,7 +13,9 @@ const fixture = async () => {
   const configFile = path.join(root, 'telegram-provisioning.json')
   const relayEnvFile = path.join(root, 'secrets', 'relay.env')
   const overrideFile = path.join(root, 'telegram.compose.yml')
+  const deploymentEnvFile = path.join(root, 'docker.env')
   await writeFile(composeFile, 'services: {}\n')
+  await writeFile(deploymentEnvFile, "EZ_RELAY_IMAGE='ezenciel-agents:0.1.0-beta.36.rc.4'\n", { mode: 0o600 })
   await writeFile(configFile, JSON.stringify({
     version: 1,
     composeFile,
@@ -22,9 +24,8 @@ const fixture = async () => {
     service: 'relay',
     relayEnvFile,
     overrideFile,
-    image: 'aifit-ez-purpose:telegram-pair',
   }), { mode: 0o600 })
-  return { root, composeFile, configFile, relayEnvFile, overrideFile }
+  return { root, composeFile, configFile, relayEnvFile, overrideFile, deploymentEnvFile }
 }
 
 test('Telegram provisioning writes only a private relay secret and restarts the exact relay', async (t) => {
@@ -36,7 +37,8 @@ test('Telegram provisioning writes only a private relay secret and restarts the 
   assert.equal(await readFile(value.relayEnvFile, 'utf8'), `TELEGRAM_BOT_TOKEN=${token}\n`)
   assert.equal((await stat(value.relayEnvFile)).mode & 0o777, 0o600)
   const override = await readFile(value.overrideFile, 'utf8')
-  assert.match(override, /image: "aifit-ez-purpose:telegram-pair"/)
+  // The installed deployment supplies the relay image; the override never sets one.
+  assert.ok(!override.includes('image:'))
   assert.match(override, /relay_env/)
   assert.match(override, /EZ_TELEGRAM_ENABLED: "true"/)
   assert.ok(!override.includes(token))
@@ -44,10 +46,24 @@ test('Telegram provisioning writes only a private relay secret and restarts the 
   assert.deepEqual(calls, [[
     '--project-directory', value.root,
     '--project-name', 'tenant-aifit',
+    '--env-file', value.deploymentEnvFile,
     '-f', value.composeFile,
     '-f', value.overrideFile,
     'up', '-d', '--wait', 'relay',
   ]])
+})
+
+test('provisioning rejects a self-set image and custom deployments without a Docker env file still start', async (t) => {
+  const value = await fixture()
+  t.after(async () => { await rm(value.root, { recursive: true, force: true }) })
+  const configured = JSON.parse(await readFile(value.configFile, 'utf8'))
+  await writeFile(value.configFile, JSON.stringify({ ...configured, image: 'eizenciel-agents:0.1.0-beta.36.rc.3' }))
+  await assert.rejects(provisionTelegramBot(value.configFile, token, async () => {}), /Invalid Telegram provisioning configuration/)
+  await writeFile(value.configFile, JSON.stringify(configured))
+  await rm(value.deploymentEnvFile)
+  const calls: string[][] = []
+  await provisionTelegramBot(value.configFile, token, async (args) => { calls.push(args) })
+  assert.ok(!calls[0].includes('--env-file'))
 })
 
 test('Telegram provisioning restores the botless relay when startup fails', async (t) => {

@@ -11,13 +11,11 @@ export type TelegramProvisioningConfig = {
   service: 'relay'
   relayEnvFile: string
   overrideFile: string
-  image: string
 }
 
 type ComposeRunner = (args: string[]) => Promise<void>
 
 const botToken = (value: string) => value.length <= 512 && /^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(value)
-const imageReference = (value: string) => /^[a-zA-Z0-9][a-zA-Z0-9._/:@-]{0,255}$/.test(value)
 const projectName = (value: string) => /^[a-z0-9][a-z0-9_-]{0,62}$/.test(value)
 const redactToken = (value: string) => value.replace(/\d{5,}:[A-Za-z0-9_-]{20,}/g, '[redacted]')
 
@@ -79,13 +77,26 @@ const restoreFile = async (file: string, previous: string | null) => {
 const parseConfig = (value: unknown): TelegramProvisioningConfig => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid Telegram provisioning configuration')
   const config = value as Record<string, unknown>
-  if (Object.keys(config).sort().join(',') !== 'composeFile,image,overrideFile,projectDirectory,projectName,relayEnvFile,service,version')
+  if (Object.keys(config).sort().join(',') !== 'composeFile,overrideFile,projectDirectory,projectName,relayEnvFile,service,version')
     throw new Error('Invalid Telegram provisioning configuration')
-  if (config.version !== 1 || config.service !== 'relay' || ![config.composeFile, config.projectDirectory, config.projectName, config.relayEnvFile, config.overrideFile, config.image].every(value => typeof value === 'string'))
+  if (config.version !== 1 || config.service !== 'relay' || ![config.composeFile, config.projectDirectory, config.projectName, config.relayEnvFile, config.overrideFile].every(value => typeof value === 'string'))
     throw new Error('Invalid Telegram provisioning configuration')
   const parsed = config as unknown as TelegramProvisioningConfig
-  if (!projectName(parsed.projectName) || !imageReference(parsed.image)) throw new Error('Invalid Telegram provisioning configuration')
+  if (!projectName(parsed.projectName)) throw new Error('Invalid Telegram provisioning configuration')
   return parsed
+}
+
+// The deployment records its installed relay image and runtime values in its
+// own docker.env; provisioning must use that record instead of a self-set tag.
+const deploymentEnvFile = async (projectDirectory: string): Promise<string | null> => {
+  const file = path.join(projectDirectory, 'docker.env')
+  try {
+    await absoluteRegularFile(file)
+    return file
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
 }
 
 export const readTelegramProvisioningConfig = async (configFile: string): Promise<TelegramProvisioningConfig> => {
@@ -106,7 +117,6 @@ export const readTelegramProvisioningConfig = async (configFile: string): Promis
 const composeOverride = (config: TelegramProvisioningConfig) => [
   'services:',
   '  relay:',
-  `    image: ${JSON.stringify(config.image)}`,
   '    environment:',
   '      EZ_TELEGRAM_ENABLED: "true"',
   '    secrets:',
@@ -130,9 +140,10 @@ const runDockerCompose: ComposeRunner = async (args) => await new Promise<void>(
   child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`Telegram relay could not start (${code ?? 'unknown'}): ${redactToken(output.replace(/\s+/g, ' ').trim()) || 'no diagnostic'}`)))
 })
 
-const composeArguments = (config: TelegramProvisioningConfig, includeOverride: boolean) => [
+const composeArguments = (config: TelegramProvisioningConfig, includeOverride: boolean, envFile: string | null) => [
   '--project-directory', config.projectDirectory,
   '--project-name', config.projectName,
+  ...(envFile ? ['--env-file', envFile] : []),
   '-f', config.composeFile,
   ...(includeOverride ? ['-f', config.overrideFile] : []),
   'up', '-d', '--wait', config.service,
@@ -145,6 +156,7 @@ export const provisionTelegramBot = async (
 ): Promise<void> => {
   if (!botToken(token)) throw new Error('Invalid Telegram bot token')
   const config = await readTelegramProvisioningConfig(configFile)
+  const envFile = await deploymentEnvFile(config.projectDirectory)
   const lock = path.join(config.projectDirectory, 'telegram-provisioning.lock')
   try {
     await writeFile(lock, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), { mode: 0o600, flag: 'wx' })
@@ -171,11 +183,11 @@ export const provisionTelegramBot = async (
   try {
     await privateWrite(config.relayEnvFile, `TELEGRAM_BOT_TOKEN=${token}\n`)
     await privateWrite(config.overrideFile, composeOverride(config))
-    await runCompose(composeArguments(config, true))
+    await runCompose(composeArguments(config, true, envFile))
   } catch (error) {
     const restored = await Promise.allSettled([restoreFile(config.relayEnvFile, previousSecret), restoreFile(config.overrideFile, previousOverride)])
     try {
-      await runCompose(composeArguments(config, previousOverride !== null))
+      await runCompose(composeArguments(config, previousOverride !== null, envFile))
     } catch (rollbackError) {
       console.error(`Telegram rollback restart failed: ${redactToken(rollbackError instanceof Error ? rollbackError.message : String(rollbackError))}`)
     }

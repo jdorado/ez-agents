@@ -39,11 +39,17 @@ EZ_PLUGIN_BROKER_SOCKET=/absolute/private/agents/family/control/plugin-broker.so
 EZ_PLUGIN_BROKER_HOST_CONFIG=/absolute/private/agents/family/host-executor.json
 ```
 
+`ezenciel-agents-provision-telegram --config <private-config>` attaches Telegram
+to an existing deployment. The private config names only the compose file,
+project, secret and override paths; it never selects a relay image. The command
+loads the deployment's own `docker.env`, so the relay restarts on its installed
+image and version, then writes only the bot-token secret and a small override
+that enables Telegram.
+
 Host-capable agents run `ezenciel-agents-host` under the host's service manager
 with `EZ_DEPLOYMENT_DIR` bound to that deployment. This small transport invokes
 the existing CLI; it is not a second relay or model loop. Isolated agents do not
-start it. It reads requests from
-the agent's control directory, fixes cwd/control/tool paths from its installation
+start it. It reads requests fromthe agent's control directory, fixes cwd/control/tool paths from its installation
 binding, strips environment secrets, forwards native output and exit status, and
 propagates cancellation. Requests cannot select another executable. No network
 listener, Docker socket in containers, new provider API or per-CLI service shim
