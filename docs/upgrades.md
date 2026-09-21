@@ -16,9 +16,9 @@ The agent owns release review, policy decisions and communication. The host
 supervisor owns interruption-safe replacement. There is one host service per
 agent, not a second agent or an additional updater daemon. Its replaceable child
 runs the normal CLI transport. It checks npm every six hours while running and
-queues an owner-bound maintenance turn only when an automatic channel changes.
-No owner means no maintenance executor. Normal user work and maintenance share
-one serial queue. Checks use the installed scoped npm identity; failures are
+records automatic-channel changes; discovery never wakes the agent or injects
+wrapper state into a session. Updates stay owner-invoked through `ez updates`.
+Checks use the installed scoped npm identity; failures are
 visible in `updates check` and private `tools/updates/available.json`. Plugins marked
 `private: true` in their package metadata are reported as local-source updates
 only, without querying public npm; this does not mean they are up to date.
@@ -144,7 +144,7 @@ rollback is a recovery operation for the previous installation only.
 queuing it.** It must not wait for completion in that same turn. The supervisor
 pauses new run admission, drains already-started work, then consumes the job.
 One job at a time; an unresolved recovery blocks new upgrades. The agent processes
-multiple requested packages over successive maintenance turns.
+multiple requested packages over successive update requests.
 
 The exact archive is reverified and re-extracted before execution; editing a
 prepared tree cannot substitute code. Main dependencies install with the frozen

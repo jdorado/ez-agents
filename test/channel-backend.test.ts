@@ -74,7 +74,7 @@ test('backend dispatch keeps owner/private gate and never starts a CLI', async (
   } finally { await relay.stop(); globalThis.fetch = originalFetch; await rm(root, { recursive: true, force: true }) }
 })
 
-test('backend mode cannot dispatch restricted, external, scheduled or update runs', async () => {
+test('backend mode cannot dispatch restricted, external or scheduled runs', async () => {
   const { createRelay } = await import('../src/index.js')
   const { ControlStore } = await import('../src/control-state.js')
   const root = await mkdtemp(join(tmpdir(), 'channel-authority-'))
