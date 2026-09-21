@@ -44,6 +44,7 @@ export type RunRecord = {
   external?: ExternalOrigin
   externalReleased?: true
   application?: ApplicationOrigin
+  telegramApplication?: ApplicationOrigin
   delivery?: { bindingId: string; scope: string }
 }
 
@@ -93,6 +94,7 @@ const isRun = (value: unknown): value is RunRecord => {
     (candidate.externalReleased === undefined || candidate.external !== undefined && candidate.externalReleased === true) &&
     (candidate.id.startsWith('r_app_') === (candidate.application !== undefined)) &&
     (candidate.application === undefined || (validApplicationOrigin(candidate.application) && candidate.external === undefined && candidate.scheduled === undefined && candidate.taskId === undefined && !candidate.replyOnly)) &&
+    (candidate.telegramApplication === undefined || (validApplicationOrigin(candidate.telegramApplication) && candidate.application === undefined && candidate.telegramUserId !== undefined && candidate.taskId === undefined && candidate.external === undefined && candidate.scheduled === undefined && !candidate.replyOnly)) &&
     (candidate.delivery === undefined || (!!candidate.scheduled && validApplicationOrigin({...candidate.delivery, requestId: candidate.id}) && candidate.application === undefined)) &&
     (candidate.execution === undefined || isExecutionChoice(candidate.execution))
   )
@@ -197,6 +199,25 @@ export class RunStore {
       if (change.failureReview && (!validFailureReview(change.failureReview) || run.status !== 'failed' || change.failureReview.failedAt !== failureStamp(run))) throw new Error('Failure changed or review is invalid; inspect the run again')
       const failure = change.status === 'failed' && !change.failure ? await failureEvidence(this.controlDir, change.failureReason || (change.interrupted ? 'Execution interrupted by relay restart; inspect effects before recovery' : 'No error detail recorded')) : undefined
       const next = { ...run, ...(failure ? {failure} : {}), ...change }
+      await this.writeRun(next)
+      return next
+    })
+    this.changes.set(id, work)
+    try { return await work }
+    finally { if (this.changes.get(id) === work) this.changes.delete(id) }
+  }
+
+  async attachTelegramApplication(id: string, application: ApplicationOrigin): Promise<RunRecord> {
+    const prior = this.changes.get(id) || Promise.resolve()
+    const work = prior.catch(() => {}).then(async () => {
+      const run = await this.get(id)
+      if (!run) throw new Error(`Unknown run ${id}`)
+      if (run.application || run.telegramApplication || run.taskId || run.external || run.scheduled || run.replyOnly || run.telegramUserId === undefined)
+        throw new Error('Run is not an unadmitted Telegram run')
+      if (run.status !== 'queued' && run.status !== 'running')
+        throw new Error('Run already finished; application admission conflicts with its terminal state')
+      if (!validApplicationOrigin(application)) throw new Error('Invalid application context')
+      const next = { ...run, telegramApplication: application }
       await this.writeRun(next)
       return next
     })

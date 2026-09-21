@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { ApplicationChannel, ApplicationBindings, applicationScope } from '../src/application-channel.js'
-import { ControlStore, ownerId } from '../src/control-state.js'
+import { ControlStore, ownerId, ownerEpoch } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
@@ -334,4 +334,48 @@ test('generic attachments stage after auth, preserve literal comments and reject
   await channel.bindings.register('web',null,owned)
   await assert.rejects(channel.submit(binding.bindingId,{...input,requestId:'revoked'}),/revoked/)
   assert.equal((await readdir(join(root,'inbox'))).length,before)
+})
+
+test('shareTelegram bindings list Telegram intake and admit one run with context', async t => {
+  const root=await mkdtemp(join(tmpdir(),'ez-app-telegram-'))
+  const control=new ControlStore(root,1000), runs=new RunStore(root)
+  await control.requestPairing(42,42); await control.approveOwner(42)
+  const owned=(await control.status()).owner!
+  const channel=new ApplicationChannel({controlDir:root,initial:initialPreset('codex'),wake:()=>{},cancel:async()=>{},createTelegramPairing:async()=>{throw new Error('unavailable')},telegramAvailable:()=>false})
+  t.after(async()=>{await channel.stop();await rm(root,{recursive:true,force:true})})
+  const sharedToken=token(), plainToken=token()
+  await channel.bindings.register('tg-app',sharedToken,owned,true)
+  await channel.bindings.register('plain',plainToken,owned)
+  const address=await channel.listen(0) as {port:number}
+  const url=`http://127.0.0.1:${address.port}`
+  const get=(bearer:string)=>fetch(url+'/v1/runs',{headers:{Authorization:`Bearer ${bearer}`}})
+  const attach=(id:string,bearer:string,body:unknown)=>fetch(url+`/v1/runs/${id}/application`,{method:'POST',headers:{Authorization:`Bearer ${bearer}`},body:JSON.stringify(body)})
+  const telegram=await runs.create({id:'tg_intake_1',chatId:42,telegramUserId:42,texts:['Attach the session'],ownerId:ownerId(owned),ownerEpoch:ownerEpoch(owned)})
+  assert.equal(telegram.application,undefined)
+  const listed=await (await get(sharedToken)).json() as {runs:{id:string;scope:string}[]}
+  assert.ok(listed.runs.some(run=>run.id==='tg_intake_1' && run.scope==='telegram'))
+  const hidden=await (await get(plainToken)).json() as {runs:{id:string}[]}
+  assert.ok(!hidden.runs.some(run=>run.id==='tg_intake_1'))
+  assert.equal((await attach('tg_intake_1',plainToken,{context:{aifit:{capability:'x'}}})).status,403)
+  assert.equal((await attach('tg_intake_1',sharedToken,{context:'nope'})).status,400)
+  assert.equal((await attach('tg_nope',sharedToken,{context:{}})).status,404)
+  const admitted=await attach('tg_intake_1',sharedToken,{context:{aifit:{capability:'granted'}}})
+  assert.equal(admitted.status,200)
+  assert.deepEqual(await admitted.json(),{id:'tg_intake_1',scope:'telegram',status:'queued'})
+  const stored=await runs.get('tg_intake_1')
+  const storedContext=stored?.telegramApplication?.context as {aifit?:{capability?:string}}|undefined
+  assert.equal(storedContext?.aifit?.capability,'granted')
+  assert.equal(stored?.application,undefined,'owner delivery routing is untouched')
+  const retrySame=await attach('tg_intake_1',sharedToken,{context:{aifit:{capability:'granted'}}})
+  assert.equal(retrySame.status,200)
+  assert.equal((await attach('tg_intake_1',sharedToken,{context:{aifit:{capability:'changed'}}})).status,409)
+  const stranger=await runs.create({id:'tg_stranger_1',chatId:43,telegramUserId:43,texts:['Not the owner'],ownerId:ownerId(owned),ownerEpoch:ownerEpoch(owned)})
+  const stillHidden=await (await get(sharedToken)).json() as {runs:{id:string}[]}
+  assert.ok(!stillHidden.runs.some(run=>run.id===stranger.id))
+  assert.equal((await attach(stranger.id,sharedToken,{context:{}})).status,400)
+  const plain=await runs.create({id:'r_plain_1',texts:['No telegram origin'],ownerId:ownerId(owned),ownerEpoch:ownerEpoch(owned)})
+  assert.equal((await attach(plain.id,sharedToken,{context:{}})).status,404)
+  const finished=await runs.create({id:'tg_finished_1',chatId:42,telegramUserId:42,texts:['Done already'],ownerId:ownerId(owned),ownerEpoch:ownerEpoch(owned)})
+  await runs.patch(finished.id,{status:'completed'})
+  assert.equal((await attach(finished.id,sharedToken,{context:{}})).status,409)
 })
