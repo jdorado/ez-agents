@@ -474,16 +474,22 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     const secrets=await json(path.join(home,'packages',record.manifest.id,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
     await atomic(record.compose,await compose(config,record,secrets,home));
     const container=`${record.project}-call-${randomUUID()}`;
+    // The application context must reach the command container as an
+    // environment variable. A top-level `compose --env-file` only feeds
+    // variable interpolation in both Compose v1 and v2, so the container never
+    // receives it; a one-shot override file sets the service environment
+    // directly and keeps the value out of the process argument list.
     const context=await applicationPluginContext(record.manifest.id,environment);
     let contextFile;
     if(context!==undefined){
       await privateDir(path.join(home,'plugin-context'));
-      contextFile=path.join(home,'plugin-context',`${randomUUID()}.env`);
-      await fs.writeFile(contextFile,`EZ_PLUGIN_CONTEXT=${context}\n`,{mode:0o600,flag:'wx'});
+      contextFile=path.join(home,'plugin-context',`${randomUUID()}.json`);
+      const override={services:{[binding.service]:{environment:{EZ_PLUGIN_CONTEXT:context}}}};
+      await fs.writeFile(contextFile,JSON.stringify(override,null,2)+'\n',{mode:0o600,flag:'wx'});
     }
     const invocationRelease=invocation?await invocationLease(home,container):undefined;
     const release=(invocationRelease||contextFile)?(async()=>{try{if(contextFile)await fs.rm(contextFile,{force:true});}finally{await invocationRelease?.();}}):undefined;
-    return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),...(contextFile?['--env-file',contextFile]:[]),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
+    return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),...(contextFile?['--file',contextFile]:[]),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
   },{allowInvocations:true});
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {

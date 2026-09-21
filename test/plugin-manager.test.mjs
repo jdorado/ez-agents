@@ -119,17 +119,19 @@ test('application plugin context is namespaced, authorized, and absent from ordi
  assert.ok(binding);
  const runs=new RunStore(f.control),run=await runs.create({id:'r_app_plugin',ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),texts:['Use the plugin'],application:{bindingId:binding.bindingId,requestId:'plugin',scope:'owner-chat',context:{plugins:{sample:{capability:'scoped-value'},other:{capability:'must-not-leak'}}}}});
  await runs.patch(run.id,{status:'running'});
- const command=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}});
- const index=command.argv.indexOf('--env-file');assert.ok(index>0);
- assert.equal(command.argv[index+2],'run');
- const contextFile=command.argv[index+1];
- assert.match(contextFile,/\/plugin-context\/[0-9a-f-]+\.env$/);
- assert.equal(command.argv.join(' ').includes('must-not-leak'),false);
- assert.equal(await fs.readFile(contextFile,'utf8'),'EZ_PLUGIN_CONTEXT={"capability":"scoped-value"}\n');
- assert.equal((await fs.stat(contextFile)).mode&0o777,0o600);
- await command.release();await assert.rejects(fs.access(contextFile),{code:'ENOENT'});
- const ordinary=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control}});
- assert.equal(ordinary.argv.includes('--env-file'),false);assert.equal(ordinary.contextFile,undefined);
+  const command=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}});
+  const index=command.argv.lastIndexOf('--file');assert.ok(index>0);
+  assert.equal(command.argv[index+2],'run');
+  const contextFile=command.argv[index+1];
+  assert.match(contextFile,/\/plugin-context\/[0-9a-f-]+\.json$/);
+  assert.equal(command.argv.join(' ').includes('must-not-leak'),false);
+  // The run container receives the slice through the service environment, not
+  // through interpolation-only --env-file.
+  assert.deepEqual(JSON.parse(await fs.readFile(contextFile,'utf8')),{services:{sample:{environment:{EZ_PLUGIN_CONTEXT:'{"capability":"scoped-value"}'}}}});
+  assert.equal((await fs.stat(contextFile)).mode&0o777,0o600);
+  await command.release();await assert.rejects(fs.access(contextFile),{code:'ENOENT'});
+  const ordinary=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control}});
+  assert.equal(ordinary.argv.includes('--env-file'),false);assert.equal(ordinary.contextFile,undefined);
 });
 test('Telegram-admitted application runs receive the same scoped plugin context',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
@@ -141,12 +143,12 @@ test('Telegram-admitted application runs receive the same scoped plugin context'
  const runs=new RunStore(f.control),run=await runs.create({id:'tg_plugin_context',chatId:42,telegramUserId:42,ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),texts:['Use the plugin']});
  await runs.attachTelegramApplication(run.id,{bindingId:binding.bindingId,requestId:run.id,scope:'telegram',context:{plugins:{sample:{capability:'telegram-scoped-value'}}}});
  await runs.patch(run.id,{status:'running'});
- const command=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}});
- const index=command.argv.indexOf('--env-file');assert.ok(index>0);
- assert.equal(command.argv[index+2],'run');
- const contextFile=command.argv[index+1];
- assert.equal(await fs.readFile(contextFile,'utf8'),'EZ_PLUGIN_CONTEXT={"capability":"telegram-scoped-value"}\n');
- await command.release();await assert.rejects(fs.access(contextFile),{code:'ENOENT'});
+  const command=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}});
+  const index=command.argv.lastIndexOf('--file');assert.ok(index>0);
+  assert.equal(command.argv[index+2],'run');
+  const contextFile=command.argv[index+1];
+  assert.deepEqual(JSON.parse(await fs.readFile(contextFile,'utf8')),{services:{sample:{environment:{EZ_PLUGIN_CONTEXT:'{"capability":"telegram-scoped-value"}'}}}});
+  await command.release();await assert.rejects(fs.access(contextFile),{code:'ENOENT'});
 });
 test('application plugin context fails closed on revoked, cancelled, and oversized runs',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
@@ -161,8 +163,8 @@ test('application plugin context fails closed on revoked, cancelled, and oversiz
  await control.requestPairing(43,43);await control.approveOwner(43);
  await assert.rejects(prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}}),/revoked/);
  const stale=await runs.create({id:'r_app_stale',ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),texts:['Use the plugin'],application:{bindingId:binding.bindingId,requestId:'stale',scope:'owner-chat',context:{plugins:{sample:{capability:'scoped-value'}}}}});
- const idle=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:stale.id}});
- assert.equal(idle.argv.includes('--env-file'),false);assert.equal(idle.contextFile,undefined);
+  const idle=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:stale.id}});
+  assert.equal(idle.contextFile,undefined);assert.equal(idle.argv.includes('--env-file'),false);
  const freshOwner=(await control.status()).owner;
  const binding2=await new ApplicationBindings(f.control).register('app2',randomBytes(32).toString('base64url'),freshOwner);
  const big=await runs.create({id:'r_app_big',ownerId:ownerId(freshOwner),ownerEpoch:ownerEpoch(freshOwner),texts:['Use the plugin'],application:{bindingId:binding2.bindingId,requestId:'big',scope:'owner-chat',context:{plugins:{sample:{blob:'x'.repeat(17*1024)}}}}});
