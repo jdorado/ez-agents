@@ -6,7 +6,7 @@ an immutable candidate in the PA's local tools directory. The agent reads its
 manifest and uses `ez updates prepare main --file ...` and `apply` on the owner's
 request. Automatic public update policy stays unchanged.
 
-Stage from a clean, reviewed feature checkout:
+Commit, push and open a PR first — then stage only from that PR's exact commit. The staging script refuses dirty checkouts, so uncommitted work can never become a candidate. If QA finds issues, fix forward in the same PR (or a new PR) and stage a new versioned candidate; never leave a QA-only copy lingering outside the PR:
 
 ```sh
 node scripts/stage-qa.mjs --source /absolute/feature-checkout \
@@ -32,7 +32,7 @@ Add the catalog path and the following instructions to the PA's local policy fil
 > If no local entry exists, report that; do not silently substitute a public beta.
 > Follow an explicit request for a public npm release separately.
 
-For every feature, the developer handoff includes the beta label, exact private
+For every feature, the developer handoff includes the PR URL, beta label, exact private
 version, source commit, checks completed and a short user-facing QA flow with
 expected results. Include any limitations. A prepared archive or healthy service
 does not prove the feature works; read back its result through the PA.
