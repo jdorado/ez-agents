@@ -1,12 +1,13 @@
 import { dirname, join } from 'node:path'
-import { readdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { loadConfig } from '../src/config.js'
 import { ControlStore } from '../src/control-state.js'
 import { startExecutorJob, terminateJob } from '../src/executor.js'
-import { RunStore } from '../src/runs.js'
+import { RunStore, sentOutbox } from '../src/runs.js'
 import { createRelay } from '../src/index.js'
+import { serveDeliverySocket, createLedgerHandler } from '../src/delivery-socket.js'
+import { packageVersion } from '../src/version.js'
 
 // Outbound integration test, not proof of Telegram intake or UI interactions.
 // Run while the polling relay is stopped; the owner must already be paired.
@@ -39,6 +40,11 @@ async function main() {
     texts: [prompt],
   })
   await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
+  // The engine child reaches the smoke-process memory ledger through the socket.
+  const ledger = await serveDeliverySocket(config.controlDir, createLedgerHandler(config.controlDir, {
+    wake: () => { void relay.drainOutbox(run.id) },
+    status: () => ({ polling: false, applicationOnly: !relay.telegramEnabled, telegramConfigured: config.telegramBotToken !== '', version: packageVersion }),
+  }))
   const job = await startExecutorJob(run.texts, {
     workspace: config.workspace,
     timeoutMs: config.executorTimeoutMs,
@@ -72,18 +78,14 @@ async function main() {
       status: code === 0 ? 'completed' : 'failed',
       endedAt: new Date().toISOString(),
     })
-    const names = (await readdir(join(config.controlDir, 'outbox'))).filter((name) =>
-      name.startsWith(run.id + '_'),
-    )
-    const receipts = []
-    for (const name of names.filter((name) => name.endsWith('.sent.json'))) {
-      const item = JSON.parse(await readFile(join(config.controlDir, 'outbox', name), 'utf8'))
-      if (item.receipt) receipts.push(item.receipt)
-    }
+    const receipts = sentOutbox(config.controlDir)
+      .filter((item) => item.runId === run.id && item.receipt)
+      .map((item) => item.receipt)
+    const delivery = await runs.deliveryStatus()
     console.log(
       JSON.stringify({ runId: run.id, executor: config.executorCli, model: choice?.model, effort: choice?.effort, exitCode: code, receipts }, null, 2),
     )
-    if (code !== 0 || !receipts.length || names.some((name) => !name.endsWith('.sent.json'))) {
+    if (code !== 0 || !receipts.length || (await runs.pendingOutbox()).length || delivery.failed || delivery.unknown) {
       throw new Error('Smoke failed: executor failure, missing receipt, or undelivered outbox item')
     }
     console.log('Outbound smoke passed. Telegram intake and button/media UI still require a live chat test.')
@@ -93,6 +95,7 @@ async function main() {
     process.removeListener('SIGTERM', stop)
     await job.cleanup()
     await relay.stop()
+    await ledger.stop()
   }
 }
 

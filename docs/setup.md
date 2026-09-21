@@ -331,9 +331,9 @@ default. Existing queued jobs retain their captured execution choice.
 | Symptom | Inspect and recover |
 |---|---|
 | Docker unavailable | Check engine and Compose, start the supported installation; complete any required OS consent. |
-| Bot stays silent | Check pending owner identity, relay health, host heartbeat (host-capable only) and outbox; approve only the verified owner. |
+| Bot stays silent | Check pending owner identity, relay health, host heartbeat (host-capable only) and delivery receipts; approve only the verified owner. |
 | CLI exits without reply | Inspect the actual tool result and delivery receipt; stdout is not Telegram output. |
-| Exit 73 | An existing writer holds this deployment; stop the exact duplicate, never delete the kernel lock. |
+| Second relay refuses to start | A live relay already owns this deployment's delivery socket; stop the exact duplicate, never remove a live socket. |
 | Plugin absent | Check the bound catalog and install/start the reviewed package explicitly; no plugin ships by default. |
 | Plugin revision mismatch | Reinspect stable source, review the changed hash and explicitly update its catalog pin. |
 | Interrupted CLI cannot resume | Use the explicit new-conversation command after inspecting the failure; no automatic fallback. |

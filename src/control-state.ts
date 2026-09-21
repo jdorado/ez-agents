@@ -184,6 +184,9 @@ export class ControlStore {
     private readonly clock: Clock = () => Date.now(),
   ) {
     this.statePath = path.join(controlDir, 'control-state.json')
+    // The lock stays on the shared control volume: relay (container) and CLI
+    // children (host) must exclude each other. Hot reads avoid it entirely
+    // (see status/captureChoice fast paths); only real mutations take it.
     this.lockPath = path.join(controlDir, 'control-state.lock')
   }
 
@@ -209,8 +212,16 @@ export class ControlStore {
   }
 
   private async writeState(state: ControlState): Promise<void> {
+    const serialized = `${JSON.stringify(state, null, 2)}\n`
+    // Steady-state reads (owner checks, session pins that already match) must
+    // not churn control/: skip the write when nothing changed.
+    try {
+      if ((await readFile(this.statePath, 'utf8')) === serialized) return
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
     const temporary = `${this.statePath}.${process.pid}.tmp`
-    await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
+    await writeFile(temporary, serialized, { mode: 0o600 })
     await rename(temporary, this.statePath)
   }
 
@@ -239,6 +250,12 @@ export class ControlStore {
   }
 
   async status(): Promise<ControlState> {
+    // Hot path (owner checks every message and every source tick): when no
+    // pairing expired, the pruned state is returned with zero control/ writes
+    // and without taking the lock. Expiry still converges under the lock.
+    const current = await this.readState()
+    const pruned = this.prune(current)
+    if (pruned.pending.length === current.pending.length) return pruned
     return this.withLock(async () => {
       const state = this.prune(await this.readState())
       await this.writeState(state)
@@ -597,6 +614,23 @@ export class ControlStore {
   }
 
   async captureChoice(initial: AiPreset, title?: string): Promise<ExecutionChoice> {
+    // Hot path (every inbound message and every source tick): when the pinned
+    // session already matches the selected preset, return it with zero
+    // control/ writes and without taking the lock. Any divergence (missing
+    // session, CLI/provider/model change, untitled fresh session) falls
+    // through to the serializing slow path. A concurrent control edit inside
+    // the microsecond unlocked window fails closed downstream (the execution
+    // session lookup rejects a stale pin; the batch can be retried).
+    const settled = await this.readState()
+    const settledAi = settled.ai
+    const settledPreset = settledAi?.presets.find((p) => p.id === settledAi.selectedId)
+    const session = settled.activeSession
+    if (settledPreset && session && (session.cli || session.hasStarted) &&
+      !(session.cli === settledPreset.cli && session.hasStarted && session.preset &&
+        (session.preset.provider !== settledPreset.provider || session.preset.model !== settledPreset.model)) &&
+      (session.cli !== settledPreset.cli || JSON.stringify(session.preset) === JSON.stringify(settledPreset)) &&
+      Boolean(session.title || session.hasStarted || !title?.trim()))
+      return { sessionId: session.sessionId, preset: settledPreset }
     return this.withLock(async () => {
       const state = await this.readState()
       state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id, recentIds: [] }

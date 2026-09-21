@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { callDeliverySocket } from './delivery-socket-client.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const read=async file=>JSON.parse(await fs.readFile(file,'utf8'));
@@ -52,18 +53,13 @@ export async function installationStatus(deployment) {
   let isolated=false;
   try { isolated=(await read(path.join(deployment,'agent.json'))).isolation==='isolated'; } catch { isolated=false; }
   const runtimeReady=Boolean(relay?.polling&&fresh(relay,20000)&&(isolated||fresh(host,15000)));
+  // Delivery receipts live in relay memory and are re-authorized server-side;
+  // ask the running relay. A restart drops receipts by design.
   let reply=null;
-  if(paired)for(const name of await fs.readdir(path.join(control,'outbox')).catch(e=>{if(e.code==='ENOENT')return [];throw e;})) {
-    if(!name.endsWith('.sent.json'))continue;
-    const item=await read(path.join(control,'outbox',name));
-    if(!/^tg_\d+$/.test(item.runId||'')||item.chatId!==owner.telegramChatId||(item.type&&item.type!=='message')||!Array.isArray(item.receipt?.messageIds)||!item.receipt.messageIds.length||!item.receipt.messageIds.every(n=>Number.isSafeInteger(n)&&n>0))continue;
-    const delivered=Date.parse(item.receipt.deliveredAt);if(!Number.isFinite(delivered)||delivered<Date.parse(owner.pairedAt)||delivered>Date.now())continue;
-    const r=await read(path.join(control,'runs',item.runId+'.json')).catch(absent);
-    if(r?.status==='completed'&&!r.external&&r.chatId===owner.telegramChatId&&Number.isSafeInteger(r.telegramUserId)&&r.telegramUserId>0&&(owner.kind==='group'||r.telegramUserId===owner.telegramUserId)&&(!reply||delivered>Date.parse(reply.deliveredAt)))reply={runId:item.runId,messageIds:item.receipt.messageIds,deliveredAt:item.receipt.deliveredAt};
-  }
+  if(paired)reply=(await callDeliverySocket(path.join(control,'delivery.sock'),{op:'latestReply'},2000).catch(()=>null))?.reply??null;
   return {deployment,configured,runtimeReady,ownerPaired:paired,telegramReplyVerified:Boolean(reply),reply,
     stage:!configured?'not-configured':!runtimeReady?'runtime-offline':!paired?'awaiting-owner':!reply?'awaiting-telegram-reply':'ready-for-telegram-plugin-request',
-    note:'Read-only: a saved receipt is historical delivery evidence, not a fresh live probe or proof of reboot persistence. Request plugins through the working Telegram conversation.'};
+    note:'Read-only: a live receipt from the running relay is delivery evidence; it is not retained across a relay restart. Request plugins through the working Telegram conversation.'};
 }
 async function fingerprintOf(source,invoke) {
   const listing=JSON.parse(await invoke('npm',['pack','--dry-run','--ignore-scripts','--json'],{cwd:source}));

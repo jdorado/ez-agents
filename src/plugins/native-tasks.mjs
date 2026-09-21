@@ -20,8 +20,8 @@ export async function nativeTaskBinding(home,environment=process.env) {
   const matches=host.agents.filter(a=>a.toolsHome===home&&a.workspace===workspace);
   if(matches.length!==1||typeof matches[0].controlDir!=='string'||!path.isAbsolute(matches[0].controlDir))throw Error('Native task binding does not match owning agent');
   const controlDir=await fs.realpath(matches[0].controlDir);
-  const env=Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR'].filter(k=>environment[k]!==undefined).map(k=>[k,environment[k]]));
-  return {cwd:workspace,env:{...env,EZ_CONTROL_DIR:controlDir,EZ_AGENT_WORKSPACE:workspace,EZ_EXECUTOR_CLI:host.cli}};
+  const env=Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','EZ_DELIVERY_SOCKET'].filter(k=>environment[k]!==undefined).map(k=>[k,environment[k]]));
+  return {cwd:workspace,env:{...env,EZ_CONTROL_DIR:controlDir,EZ_AGENT_WORKSPACE:workspace,EZ_EXECUTOR_CLI:host.cli,EZ_DELIVERY_SOCKET:env.EZ_DELIVERY_SOCKET??path.join(matches[0].controlDir,'delivery.sock')}};
 }
 
 export async function nativeTasks(home,args,{signal,command='schedule',deliveryContext}={}) {

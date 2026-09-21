@@ -258,8 +258,8 @@ export class ApplicationChannel {
       }
       const control = new ControlStore(this.options.controlDir, 900000)
       if (!sameOwner(binding.owner, (await control.status()).owner)) throw new Error('Application authority revoked')
-      if (bytes && !this.options.workspace) throw new Error('Invalid application attachment: workspace unavailable')
-      const staged = bytes ? await stageChatAttachment(this.options.workspace!, value.attachment!.name as string, bytes, value.text) : undefined
+      if (bytes && !this.options.controlDir) throw new Error('Invalid application attachment: control unavailable')
+      const staged = bytes ? await stageChatAttachment(this.options.controlDir, value.attachment!.name as string, bytes, value.text) : undefined
       let run: RunRecord
       try {
       const execution = value.followTelegram ? await control.captureChoice(this.options.initial) : await control.captureApplicationChoice(this.options.initial, applicationScope(bindingId, value.scope), binding.shareTelegram === true && value.activateTelegram === true, requestedPreset, value.expectedNativeSessionId as string | undefined)

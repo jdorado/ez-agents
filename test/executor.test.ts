@@ -72,6 +72,7 @@ test('the Grok job env binds the run and still strips the bot token', () => {
   )
   assert.equal(environment.EZ_RUN_ID, 'r_1')
   assert.equal(environment.EZ_CONTROL_DIR, '/tmp/control')
+  assert.equal(environment.EZ_DELIVERY_SOCKET, '/tmp/control/delivery.sock')
   assert.match(environment.PATH ?? '', /^\/tmp\/bin/)
   assert.ok(!('TELEGRAM_BOT_TOKEN' in environment))
 })

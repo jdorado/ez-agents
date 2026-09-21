@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -207,10 +207,8 @@ test('failed delivery is quarantined and never blindly retried', async () => {
     await assert.rejects(runs.waitForDelivery(item.id), /Ambiguous network failure/)
     assert.deepEqual(await runs.deliveryStatus(), { failed: 0, unknown: 1 })
     await assert.rejects(runs.waitForDelivery('missing', 1), /outcome unknown/)
-    assert.equal(
-      (await readdir(join(dir, 'outbox'))).filter((name) => name.endsWith('.failed.json')).length,
-      1,
-    )
+    // Quarantine lives in relay memory; no outbox state touches control/.
+    await assert.rejects(stat(join(dir, 'outbox')))
   } finally {
     await relay.stop()
     await rm(dir, { recursive: true, force: true })
@@ -245,8 +243,8 @@ test('outbox stores provider receipts and does not redeliver sent messages', asy
     assert.equal(sends, 1)
     assert.deepEqual(((await runs.waitForDelivery(item.id)) as { messageIds: number[] }).messageIds, [42])
     assert.deepEqual(await runs.pendingOutbox(), [])
-    const sent = (await readdir(join(dir, 'outbox'))).find((name) => name.endsWith('.sent.json'))!
-    assert.deepEqual(JSON.parse(await readFile(join(dir, 'outbox', sent), 'utf8')).receipt.messageIds, [42])
+    // Receipts live in relay memory; no outbox state touches control/.
+    await assert.rejects(stat(join(dir, 'outbox')))
   } finally {
     await relay.stop()
     await rm(dir, { recursive: true, force: true })

@@ -16,7 +16,7 @@ test('native tasks use verified control binding, sanitized environment and uncha
     const binding=await nativeTaskBinding(home,{HOME:root,PATH:process.env.PATH,TELEGRAM_BOT_TOKEN:'secret',EZ_RUN_ID:'forged',NODE_OPTIONS:'injection',EZ_CONTROL_DIR:'/wrong'})
     assert.equal(binding.cwd,workspace);assert.equal(binding.env.EZ_CONTROL_DIR,controlDir);assert.equal(binding.env.EZ_EXECUTOR_CLI,'grok')
     for(const key of ['TELEGRAM_BOT_TOKEN','EZ_RUN_ID','NODE_OPTIONS'])assert.equal(binding.env[key],undefined)
-    assert.match((await nativeTasks(home,['--help'])).stdout,/durable, asynchronous CLI task/)
+    assert.match((await nativeTasks(home,['--help'])).stdout,/Creates a scheduled task/)
     const denied=await nativeTasks(home,['list']);assert.notEqual(denied.code,0);assert.match(denied.stderr,/Pair an owner/)
     const control=new ControlStore(controlDir,1000);await control.requestPairing(101,101);await control.approveOwner(101)
     const text='Read scan; $(must-not-run) /goal literal'

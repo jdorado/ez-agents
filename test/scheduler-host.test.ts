@@ -35,10 +35,9 @@ test('host transport reserves separate task and main lanes, pins directories, an
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
   const scheduled=JSON.parse(stdout(await exists(id+'.events')))
   const main=JSON.parse(stdout(await exists('tg_1.events')))
-  assert.equal(scheduled.cwd,await realpath(join(workspace,'work/tasks',id)));assert.equal(main.cwd,await realpath(workspace))
+  assert.equal(scheduled.cwd,await realpath(join(controlDir,'work/tasks',id)));assert.equal(main.cwd,await realpath(workspace))
   assert.equal(scheduled.token,undefined);assert.equal(main.token,undefined)
-  // A malformed scheduled request must not unwind the shared host service.
-  await writeFile(join(controlDir,'runs/r_schedule_corrupt.json'),'{')
+  // An unknown scheduled run must not unwind the shared host service.
   await submit('r_schedule_corrupt')
   await until(async()=>(await exists('r_schedule_corrupt.events')).includes('"stream":"exit","code":1'))
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))

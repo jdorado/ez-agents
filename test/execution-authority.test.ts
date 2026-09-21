@@ -39,7 +39,9 @@ test('missing, corrupt, finished and mismatched core runs fail closed without co
   // executor re-verifies at launch.
   await new ControlStore(dir,1000).revokeOwner()
   await assert.rejects(requireOwnerExecution(dir,run.id), /owner-mismatch/)
-  await writeFile(join(dir,'runs',run.id+'.json'),'{')
+  // Ledger lives in relay memory; corrupt authority state still fails closed
+  // at the read-only owner check, and traversal fails at validation.
+  await writeFile(join(dir,'control-state.json'),'{broken')
   await assert.rejects(requireOwnerExecution(dir,run.id))
   await assert.rejects(requireOwnerExecution(dir,'../r_owner'))
 })

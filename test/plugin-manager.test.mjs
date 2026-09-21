@@ -10,6 +10,7 @@ import {snapshot,init as initManager,validate,compose,locked,bindToolDiscovery,p
 import { ControlStore, ownerId, ownerEpoch } from '../src/control-state.js';
 import { ApplicationBindings } from '../src/application-channel.js';
 import { RunStore } from '../src/runs.js';
+import { serveTestLedger } from './helpers/ledger.js';
 import { randomBytes } from 'node:crypto';
 // Synthetic manager tests explicitly opt out of the product's default packages.
 async function init(home,workspace,catalog,hostConfig) {
@@ -112,6 +113,7 @@ test('installed snippets follow install, upgrade and uninstall without files or 
 test('application plugin context is namespaced, authorized, and absent from ordinary commands',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
  const home=await fs.realpath(f.home);
+ const ledger=await serveTestLedger(f.control);t.after(()=>ledger.stop());
  const control=new ControlStore(f.control,1000);await control.requestPairing(42,42);const owner=await control.approveOwner(42);
  const binding=await new ApplicationBindings(f.control).register('app',randomBytes(32).toString('base64url'),owner);
  assert.ok(binding);
@@ -131,6 +133,7 @@ test('application plugin context is namespaced, authorized, and absent from ordi
 test('application plugin context fails closed on revoked, cancelled, and oversized runs',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
  const home=await fs.realpath(f.home);
+ const ledger=await serveTestLedger(f.control);t.after(()=>ledger.stop());
  const control=new ControlStore(f.control,1000);await control.requestPairing(42,42);const owner=await control.approveOwner(42);
  const binding=await new ApplicationBindings(f.control).register('app',randomBytes(32).toString('base64url'),owner);
  const runs=new RunStore(f.control);

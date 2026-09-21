@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto'
 import { loadControlConfig } from './config.js'
 import { ControlStore, sameOwner } from './control-state.js'
 import { ApplicationBindings } from './application-channel.js'
-import { RunStore } from './runs.js'
+import type { RunRecord } from './runs.js'
+import { callDeliverySocket, socketPathFor } from './delivery-socket.js'
 import { initialPreset, isPreset } from './ai.js'
 import { executionOverrides } from './model-policy.js'
 import { holdsSchedule, Scheduler } from './scheduler.js'
@@ -30,23 +31,42 @@ Context reads the current run only.
 Failures default to unreviewed owner runs. Review records a diagnosis; it never changes execution status or retries work.
 A conditional review schedule consumes no model run when there are no unreviewed failures.
 New tasks inherit the selected engine settings. Omitted model/effort uses native defaults; edit preserves existing settings unless overridden.
-Creates a durable, asynchronous CLI task. Instructions are text, never shell commands.
-Use --now to delegate long work and return to chat. Run completion is not delivery proof.
+Creates a scheduled task. Instructions are text, never shell commands.
+Use --now to run once. Run completion is not delivery proof.
 Edit replaces the full schedule. Pause/remove affect future work; cancel stops a particular run.
 Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/weekday OR semantics.`);return}
   const config=loadControlConfig(), control=new ControlStore(config.controlDir,config.pairingTtlMs)
   const owner=(await control.status()).owner
   if(!owner)throw new Error('Pair an owner before scheduling')
-  const runs=new RunStore(config.controlDir), scheduler=new Scheduler(config.controlDir)
+  const socketPath=socketPathFor(config.controlDir)
+  // Run records live in the relay memory ledger, reached through the delivery
+  // socket. Schedule files stay on disk, so list/show/create/edit/pause/
+  // resume/remove keep working with the relay stopped; run-inspecting actions
+  // (context/failures/run/review/runs/cancel) require the running relay.
+  const socketUnavailable = (error: unknown): boolean =>
+    error instanceof Error && /Delivery relay unavailable/.test(error.message)
+  const runs={
+    get: (runId: string): Promise<RunRecord | null> =>
+      callDeliverySocket(socketPath, { op: 'get', payload: { runId } }).then(run => run as RunRecord).catch(error => {
+        if (error instanceof Error && /Unknown run/.test(error.message)) return null
+        throw error
+      }),
+    list: (): Promise<RunRecord[]> => callDeliverySocket(socketPath, { op: 'list' }).then(result => result as RunRecord[]),
+    listBestEffort: (): Promise<RunRecord[]> => callDeliverySocket(socketPath, { op: 'list' })
+      .then(result => result as RunRecord[]).catch(error => { if (socketUnavailable(error)) return []; throw error }),
+    patch: (runId: string, change: unknown): Promise<RunRecord> =>
+      callDeliverySocket(socketPath, { op: 'patch', payload: { runId, change: change as Record<string, unknown> } }).then(run => run as RunRecord),
+  }
+  const scheduler=new Scheduler(config.controlDir)
   const caller=process.env.EZ_RUN_ID ? await runs.get(process.env.EZ_RUN_ID) : null
   if (caller?.application || caller?.delivery) await new ApplicationBindings(config.controlDir).authorize(caller)
   if(process.env.EZ_RUN_ID && (!caller || caller.status!=='running' || caller.external || caller.taskId || caller.replyOnly ||
     !ownsRun(owner, caller) ||
     (caller.scheduled && caller.scheduled.pairedAt!==owner.pairedAt)))throw new Error('Scheduling requires an active owner-authorized run')
   const owned=(s:{owner:typeof owner})=>sameOwner(s.owner,owner)
-  const ownsFailureRun=(r:Awaited<ReturnType<RunStore['get']>>)=>r && ownsRun(owner,r) && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt)
+  const ownsFailureRun=(r:RunRecord | null)=>r && ownsRun(owner,r) && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt)
   const show=async(s:Awaited<ReturnType<Scheduler['get']>>)=>{
-    const held=(await runs.list()).filter(r=>holdsSchedule(s,r))
+    const held=(await runs.listBestEffort()).filter(r=>holdsSchedule(s,r))
     const interruptedRunIds=held.filter(r=>r.interrupted).map(r=>r.id)
     const failedReviewRunIds=held.filter(r=>!r.interrupted).map(r=>r.id)
     const next=s.enabled && !held.length ? nextOccurrence(s.trigger,Date.now()) : null
@@ -101,7 +121,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     if(action==='cancel'){
       const run=await runs.get(id)
       if(!run?.scheduled || run.scheduled.pairedAt!==owner.pairedAt || !ownsRun(owner,run))throw new Error('Unknown background run')
-      await scheduler.cancel(id);result={cancelRequested:id}
+      await scheduler.cancel(id, run);result={cancelRequested:id}
     }else{
       const s=await scheduler.get(id)
       if(!owned(s))throw new Error('Schedule ownership mismatch')

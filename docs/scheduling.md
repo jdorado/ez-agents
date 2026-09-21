@@ -94,10 +94,10 @@ queued occurrence; already-running work continues until explicitly cancelled.
 
 `/stop` stops all active work; `cancel RUN_ID` stops one background task. `/cancel`
 clears queued work. Pause/remove a recurring schedule to prevent future runs.
-Stopping the relay also stops its workers. A crashed or interrupted execution is
-not automatically replayed. Status labels failed runs as history and shows recent reasons; new failures retain their exit code or interruption cause. Typing indicators stop after 30 seconds even when work continues. Runs found active at startup are marked failed with
-`interrupted: true`; their schedule revision stays held until the agent inspects
-the evidence and explicitly edits the schedule. Inspect the task's files, native session and delivery
+Stopping the relay also stops its workers. Run and delivery records are relay
+memory: a process restart drops in-flight runs and queued deliveries by design,
+so the next eligible occurrence dispatches normally and nothing is replayed from
+disk. Status labels failed runs as history and shows recent reasons; new failures retain their exit code or interruption cause. Typing indicators stop after 30 seconds even when work continues. A failed run that cannot prove whether an external side effect happened stays visible until the agent inspects the evidence and explicitly edits the schedule. Inspect the task's files, native session and delivery
 receipts before deciding whether to resume. A clock cannot reconstruct an
 in-flight process or prove whether an external side effect happened.
 

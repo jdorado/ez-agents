@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { RunStore } from './runs.js'
+import { readRun } from './delivery-socket.js'
 import { Tasks } from './tasks.js'
 import { executorEnvironment, terminateJob, type ExecutorOptions } from './executor.js'
 
@@ -38,7 +38,7 @@ export function taskArguments(directory: string, broker: string[], prompt: strin
     '-'] // Literal input travels on stdin, including slash commands and leading options.
 }
 export async function startTaskExecutor(options: ExecutorOptions) {
-  const run = await new RunStore(options.controlDir).get(options.runId)
+  const run = await readRun(options.controlDir, options.runId)
   if (!run || run.status !== 'running') throw new Error('No active task run')
   const task = await new Tasks(options.controlDir).authorize(run, false)
   const capabilityNames = (task.capabilities ?? []).map(item => `capability_${item.id}`)

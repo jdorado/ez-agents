@@ -35,13 +35,13 @@ test('sanitizes dangerous file names', () => {
   assert.equal(sanitizeFileName('report 2026!@#.pdf'), 'report_2026___.pdf')
 })
 
-test('stages file into workspace inbox cleanly', async () => {
+test('stages file into control attachments, never the workspace', async () => {
   const tmp = await mkdtemp(path.join(tmpdir(), 'ez-files-'))
   try {
     const data = Buffer.from('%PDF-1.4 sample content')
     const staged = await stageIncomingFile(tmp, 'sample.pdf', data)
     assert.equal(staged.fileType, 'pdf')
-    assert.match(staged.relativePath, /^inbox[/\\][a-f0-9-]+_sample\.pdf$/)
+    assert.match(staged.relativePath, /^attachments[/\\][a-f0-9-]+_sample\.pdf$/)
     const read = await readFile(staged.fullPath)
     assert.deepEqual(read, data)
   } finally {

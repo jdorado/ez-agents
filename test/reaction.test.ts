@@ -7,15 +7,19 @@ import test from 'node:test'
 import { promisify } from 'node:util'
 import { isSupportedReactionEmoji, normalizeReactionEmoji, TELEGRAM_REACTIONS } from '../src/reaction.js'
 import { RunStore } from '../src/runs.js'
+import { serveTestLedger } from './helpers/ledger.js'
 
 const execFileAsync = promisify(execFile)
 const reactScriptPath = path.resolve('src/react.ts')
 
 const fixture = async (run: (store: RunStore, dir: string) => Promise<void>): Promise<void> => {
   const directory = await mkdtemp(path.join(tmpdir(), 'ez-reactions-'))
+  // The react CLI child reaches the memory ledger through the socket.
+  const ledger = await serveTestLedger(directory)
   try {
     await run(new RunStore(directory), directory)
   } finally {
+    await ledger.stop()
     await rm(directory, { recursive: true, force: true })
   }
 }

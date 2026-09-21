@@ -7,6 +7,8 @@ import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
 import { Scheduler } from '../src/scheduler.js'
 import { RunStore } from '../src/runs.js'
+import { serveDeliverySocket, createLedgerHandler } from '../src/delivery-socket.js'
+import { packageVersion } from '../src/version.js'
 import { initialPreset } from '../src/ai.js'
 import { initializeWorkspace } from '../src/workspace.js'
 import type { Update } from 'grammy/types'
@@ -22,6 +24,11 @@ await control.requestPairing(101,101);await control.approveOwner(101)
 const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset(cli))
 const replies:{at:number;text:string}[]=[]
 const relay=createRelay({workspace,controlDir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:cli,telegramBotToken:'fixture'})
+// Engine children reach this process's memory ledger through the socket.
+const ledger=await serveDeliverySocket(controlDir,createLedgerHandler(controlDir,{
+ wake:()=>{void relay.drainOutbox()},
+ status:()=>({polling:false,applicationOnly:!relay.telegramEnabled,telegramConfigured:true,version:packageVersion}),
+}))
 relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as typeof relay.bot.botInfo
 relay.bot.api.config.use(async(_previous,method,payload)=>{
  if(method==='sendMessage') {const reply={at:Date.now(),text:(payload as {text:string}).text};replies.push(reply);console.log(JSON.stringify({reply}))}
@@ -59,11 +66,11 @@ try{
  await relay.drainOutbox()
  const status=(await runs.get(background.id))?.status
  if(status!=='completed' || replies.filter(r=>r.text.includes('BACKGROUND_DONE')).length!==1)throw new Error('Missing completed run or exactly one delivered result')
- const finished=await readFile(join(workspace,'work/tasks',background.id,'finished.txt'),'utf8')
+ const finished=await readFile(join(controlDir,'work/tasks',background.id,'finished.txt'),'utf8')
  if(finished.trim()!=='DONE')throw new Error('Missing finished.txt artifact')
  if(nativeGoal){
   for(const [file,expected] of [['phase1.txt','ONE'],['phase2.txt','TWO']])
-   if((await readFile(join(workspace,'work/tasks',background.id,file),'utf8')).trim()!==expected)throw new Error(`Missing native goal artifact: ${file}`)
+   if((await readFile(join(controlDir,'work/tasks',background.id,file),'utf8')).trim()!==expected)throw new Error(`Missing native goal artifact: ${file}`)
  }
  const record=(await runs.get(background.id))!
  if(Date.parse(record.endedAt!)-Date.parse(record.startedAt!) < duration*1000)throw new Error('Worker completed before requested duration')
@@ -88,4 +95,4 @@ try{
  const evidence={duration,cli,nativeGoal,goalEvidence,status,replies,run:await runs.get(background.id)}
  await writeFile(join(root,'evidence.json'),JSON.stringify(evidence,null,2),{mode:0o600})
  console.log(JSON.stringify({passed:true,evidence:join(root,'evidence.json')}))
-}finally{clearInterval(tick);while(draining)await new Promise(r=>setTimeout(r,50));await relay.stop()}
+}finally{clearInterval(tick);while(draining)await new Promise(r=>setTimeout(r,50));await relay.stop();await ledger.stop()}

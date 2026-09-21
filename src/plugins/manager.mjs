@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { callDeliverySocket } from '../delivery-socket-client.mjs';
 import { readFileSync, realpathSync } from 'node:fs';
 
 const reserved = new Set(['status','updates','plugins','tools','message','owner','approval','react','setup','help','version']);
@@ -413,12 +414,19 @@ const ownerKey = owner => owner?.id || (Number.isSafeInteger(owner?.telegramUser
   ? `telegram:${owner.telegramUserId}:${owner.telegramChatId}` : undefined);
 const ownerEpoch = owner => owner?.generation || owner?.pairedAt;
 const readJson = async file => JSON.parse(await fs.readFile(file,'utf8'));
+// Run records live in relay memory; this manager stays plain Node, so it asks
+// the relay through the shared delivery socket client. A relay that is down
+// reads like a missing run: no context is forwarded.
+const readRun = async (socketPath,runId) => callDeliverySocket(socketPath,{op:'get',payload:{runId}}).catch(error=>{
+  if(/Unknown run/.test(error.message)||/Delivery relay unavailable/.test(error.message))return undefined;
+  throw error;
+});
 // This manager is intentionally runnable as plain Node. Read only the current
 // run and existing application binding rather than importing the TypeScript
 // relay, and fail closed on missing/revoked ownership.
-const authorizedApplicationRun = async (controlDir,runId) => {
+const authorizedApplicationRun = async (controlDir,runId,socketPath) => {
   if(!path.isAbsolute(controlDir)||!/^[A-Za-z0-9_-]+$/.test(runId))throw Error('Plugin context requires a bound active run');
-  const run=await readJson(path.join(controlDir,'runs',`${runId}.json`)).catch(error=>{if(error.code==='ENOENT')return undefined;throw error;});
+  const run=await readRun(socketPath||path.join(controlDir,'delivery.sock'),runId);
   const application=run?.application;
   if(!application?.context||run?.id!==runId||run.status!=='running'||typeof application.bindingId!=='string')return undefined;
   const state=await readJson(path.join(controlDir,'control-state.json'));
@@ -434,7 +442,7 @@ export async function applicationPluginContext(pluginId, environment=process.env
   if(!path.isAbsolute(rawDir))throw Error('Plugin context requires a bound active run');
   const controlDir=await fs.realpath(rawDir).catch(()=>undefined);
   if(!controlDir)return undefined;
-  const application=await authorizedApplicationRun(controlDir,runId);
+  const application=await authorizedApplicationRun(controlDir,runId,environment.EZ_DELIVERY_SOCKET?.trim()||path.join(rawDir,'delivery.sock'));
   const contexts=application?.context?.plugins;
   if(!contexts||typeof contexts!=='object'||Array.isArray(contexts)||!Object.hasOwn(contexts,pluginId))return undefined;
   const context=contexts[pluginId];

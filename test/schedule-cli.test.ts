@@ -9,9 +9,12 @@ import { fileURLToPath } from 'node:url'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
+import { serveTestLedger } from './helpers/ledger.js'
 const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
 test('public scheduler CLI saves literal text, reads back, edits, pauses, and rejects external or finished callers',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-schedule-cli-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ // The schedule CLI child reaches the relay memory ledger through the socket.
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
  const control=new ControlStore(dir,1000),runs=new RunStore(dir)
  const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:'',EZ_EXECUTOR_CLI:'grok'}
  await assert.rejects(exec(process.execPath,[bin,'list'],{env}),/Pair an owner/)
@@ -59,13 +62,14 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
 
 test('executor PATH exposes the extensionless scheduler command',async()=>{
  const command=fileURLToPath(new URL('../bin/ezenciel-agents-schedule',import.meta.url))
- assert.match((await exec(command,['--help'])).stdout,/durable, asynchronous CLI task/)
+  assert.match((await exec(command,['--help'])).stdout,/Creates a scheduled task/)
 })
 
 
 test('deferred literal input retains owner-scoped conversation through source metadata',async t=>{
  const {Scheduler}=await import('../src/scheduler.js')
  const dir=await mkdtemp(join(tmpdir(),'ez-origin-context-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
  const control=new ControlStore(dir,1000),runs=new RunStore(dir)
  await control.requestPairing(101,101);await control.approveOwner(101)
  const execution=await control.captureChoice(initialPreset('codex'))
@@ -76,14 +80,14 @@ test('deferred literal input retains owner-scoped conversation through source me
  await new Scheduler(dir).save({id:'legacy-deferred',name:'Owner request',text:'Do the same for March',originRunId:'tg_2',owner:(await control.status()).owner!,execution,enabled:true,trigger:{at:new Date(Date.now()+1000).toISOString()}},true)
  await new Scheduler(dir).tick((await control.status()).owner!,runs,Date.now()+2000)
  const worker=(await runs.list()).find(r=>r.scheduled)!
- assert.deepEqual(worker.texts,['Do the same for March']);assert.equal(worker.scheduled?.originRunId,'tg_2')
+  assert.match(worker.texts[0],/^\[schedule legacy-deferred due .+\]$/);assert.equal(worker.texts[1],'Do the same for March');assert.equal(worker.scheduled?.originRunId,'tg_2')
  await runs.patch(worker.id,{status:'running'})
  const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:worker.id}
   const result=JSON.parse((await exec(process.execPath,[bin,'context'],{env})).stdout)
-  assert.equal(result.run.texts[0],'Do the same for March')
+  assert.equal(result.run.texts[1],'Do the same for March')
   assert.equal(result.origin.id,'tg_2')
  await runs.create({id:'other',chatId:999,telegramUserId:999,texts:['PRIVATE OTHER OWNER']})
- const {writeFile}=await import('node:fs/promises')
- await writeFile(join(dir,'runs',worker.id+'.json'),JSON.stringify({...worker,status:'running',scheduled:{...worker.scheduled,originRunId:'other'}}))
- await assert.rejects(exec(process.execPath,[bin,'context'],{env}),/outside this owner binding/)
+ const tampered=await runs.create({id:'tg_tampered',chatId:101,telegramUserId:101,texts:worker.texts,execution,scheduled:{...worker.scheduled!,originRunId:'other'}})
+ await runs.patch(tampered.id,{status:'running'})
+ await assert.rejects(exec(process.execPath,[bin,'context'],{env:{...env,EZ_RUN_ID:tampered.id}}),/outside this owner binding/)
 })

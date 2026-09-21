@@ -1,7 +1,5 @@
 import { validApplicationOrigin, type ApplicationOrigin } from './application-origin.js'
 import { type FailureEvidence, type FailureReview, validFailureReview, failureStamp, failureEvidence } from './failure.js'
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { validOrigin, type ExternalOrigin } from './event-sources.js'
 import { normalizeReactionEmoji } from './reaction.js'
@@ -44,6 +42,7 @@ export type RunRecord = {
   external?: ExternalOrigin
   externalReleased?: true
   application?: ApplicationOrigin
+  telegramApplication?: ApplicationOrigin
   delivery?: { bindingId: string; scope: string }
 }
 
@@ -66,65 +65,65 @@ export type OutboxItem = {
   createdAt: string
 }
 
-const isRun = (value: unknown): value is RunRecord => {
-  if (!value || typeof value !== 'object') return false
-  const candidate = value as Partial<RunRecord>
-  return (
-    ((candidate.version === 1 && candidate.taskId === undefined) || (candidate.version === 2 && typeof candidate.taskId === 'string' && /^task_[a-f0-9]{32}$/.test(candidate.taskId))) &&
-    typeof candidate.id === 'string' &&
-    /^[a-zA-Z0-9_-]+$/.test(candidate.id) &&
-    ((Number.isSafeInteger(candidate.chatId) && Number.isSafeInteger(candidate.telegramUserId)) ||
-      (typeof candidate.ownerId === 'string' && /^[a-zA-Z0-9_:.-]{1,200}$/.test(candidate.ownerId) &&
-       typeof candidate.ownerEpoch === 'string' && (/^[a-f0-9-]{36}$/.test(candidate.ownerEpoch) || Number.isFinite(Date.parse(candidate.ownerEpoch))) &&
-       candidate.chatId === undefined && candidate.telegramUserId === undefined)) &&
-    Array.isArray(candidate.texts) &&
-    candidate.texts.every((text) => typeof text === 'string') &&
-    ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(candidate.status ?? '') &&
-    typeof candidate.createdAt === 'string' &&
-    Number.isFinite(Date.parse(candidate.createdAt)) &&
-    (candidate.failureReview === undefined || validFailureReview(candidate.failureReview)) &&
-    (candidate.failure === undefined || (typeof candidate.failure.error === 'string' && candidate.failure.error.length <= 4096 && typeof candidate.failure.relayVersion === 'string')) &&
-    (candidate.replyOnly === undefined || typeof candidate.replyOnly === 'boolean') &&
-    (candidate.backendSubmitted === undefined || typeof candidate.backendSubmitted === 'boolean') &&
-    (candidate.pid === undefined || (Number.isSafeInteger(candidate.pid) && candidate.pid > 0)) &&
-    (candidate.scheduled === undefined || validScheduledOrigin(candidate.scheduled)) &&
-    (candidate.blockReason === undefined || ['owner-mismatch', 'external-execution-unavailable'].includes(candidate.blockReason)) &&
-    (candidate.external === undefined || validOrigin(candidate.external)) &&
-    (candidate.externalReleased === undefined || candidate.external !== undefined && candidate.externalReleased === true) &&
-    (candidate.id.startsWith('r_app_') === (candidate.application !== undefined)) &&
-    (candidate.application === undefined || (validApplicationOrigin(candidate.application) && candidate.external === undefined && candidate.scheduled === undefined && candidate.taskId === undefined && !candidate.replyOnly)) &&
-    (candidate.delivery === undefined || (!!candidate.scheduled && validApplicationOrigin({...candidate.delivery, requestId: candidate.id}) && candidate.application === undefined)) &&
-    (candidate.execution === undefined || isExecutionChoice(candidate.execution))
-  )
+export type StoredOutboxItem = OutboxItem & { state?: 'queued' | 'sending' | 'sent' | 'failed'; deliveryError?: string; deliveryUnknown?: boolean; receipt?: unknown }
+
+// Memory scan of settled outbox items for explicit history reads.
+export const sentOutbox = (controlDir: string): StoredOutboxItem[] =>
+  [...outboxFor(controlDir).values()].filter(item => item.state === 'sent')
+
+// Stateless pipe: the relay owns the ledger in process memory. Cross-process
+// producers (engine children, plugin children, host executor) reach it through
+// the delivery socket (see delivery-socket.ts), never through control/ files.
+// A restart drops in-flight runs and queued items by design; in-flight sends
+// report unknown rather than claiming success. Long-lived relays cap retained
+// terminal records so memory stays bounded.
+const MAX_TERMINAL_RUNS = 2000
+const MAX_TERMINAL_OUTBOX = 2000
+
+const runsByControl = new Map<string, Map<string, RunRecord>>()
+const outboxByControl = new Map<string, Map<string, StoredOutboxItem>>()
+const deliveryWaiters = new Map<string, Map<string, Set<() => void>>>()
+
+const runsFor = (controlDir: string): Map<string, RunRecord> => {
+  let map = runsByControl.get(controlDir)
+  if (!map) { map = new Map(); runsByControl.set(controlDir, map) }
+  return map
+}
+
+const outboxFor = (controlDir: string): Map<string, StoredOutboxItem> => {
+  let map = outboxByControl.get(controlDir)
+  if (!map) { map = new Map(); outboxByControl.set(controlDir, map) }
+  return map
+}
+
+const waitersFor = (controlDir: string): Map<string, Set<() => void>> => {
+  let map = deliveryWaiters.get(controlDir)
+  if (!map) { map = new Map(); deliveryWaiters.set(controlDir, map) }
+  return map
+}
+
+const notifyDelivery = (controlDir: string, id: string): void => {
+  const waiters = deliveryWaiters.get(controlDir)?.get(id)
+  if (!waiters) return
+  deliveryWaiters.get(controlDir)!.delete(id)
+  for (const resolve of [...waiters]) resolve()
+}
+
+const pruneTerminals = (controlDir: string): void => {
+  const store = runsFor(controlDir)
+  const terminal = [...store.values()].filter(run => ['completed', 'failed', 'cancelled'].includes(run.status)).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  for (const run of terminal.slice(0, Math.max(0, terminal.length - MAX_TERMINAL_RUNS))) store.delete(run.id)
+  const outbox = outboxFor(controlDir)
+  const settled = [...outbox.values()].filter(item => item.state === 'sent' || item.state === 'failed').sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  for (const item of settled.slice(0, Math.max(0, settled.length - MAX_TERMINAL_OUTBOX))) {
+    if (!deliveryWaiters.get(controlDir)?.has(item.id)) outbox.delete(item.id)
+  }
 }
 
 export const newRunId = (): string => `r_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`
 
 export class RunStore {
-  private readonly changes = new Map<string, Promise<unknown>>()
-  private readonly runsDir: string
-  private readonly outboxDir: string
-
-  constructor(private readonly controlDir: string) {
-    this.runsDir = path.join(controlDir, 'runs')
-    this.outboxDir = path.join(controlDir, 'outbox')
-  }
-
-  private async ensure(): Promise<void> {
-    await mkdir(this.runsDir, { recursive: true, mode: 0o700 })
-    await mkdir(this.outboxDir, { recursive: true, mode: 0o700 })
-  }
-
-  private runPath(id: string): string {
-    return path.join(this.runsDir, `${assertId(id)}.json`)
-  }
-
-  private async writeRun(run: RunRecord): Promise<void> {
-    await this.ensure()
-    const temporary = `${this.runPath(run.id)}.${process.pid}.tmp`
-    await writeFile(temporary, `${JSON.stringify(run, null, 2)}\n`, { mode: 0o600 })
-    await rename(temporary, this.runPath(run.id))
-  }
+  constructor(private readonly controlDir: string) {}
 
   async create(input: {
     id?: string
@@ -143,8 +142,10 @@ export class RunStore {
     application?: ApplicationOrigin
     delivery?: { bindingId: string; scope: string }
   }): Promise<RunRecord> {
+    const store = runsFor(this.controlDir)
     if (input.id) {
-      const existing = await this.get(input.id)
+      assertId(input.id)
+      const existing = store.get(input.id)
       if (existing) {
         if (existing.ownerId !== input.ownerId || existing.ownerEpoch !== input.ownerEpoch || existing.chatId !== input.chatId || existing.telegramUserId !== input.telegramUserId)
           throw new Error('Run ownership mismatch')
@@ -171,65 +172,60 @@ export class RunStore {
       status: 'queued',
       createdAt: new Date().toISOString(),
     }
-    await this.writeRun(run)
+    store.set(run.id, run)
+    pruneTerminals(this.controlDir)
     return run
   }
 
   async get(id: string): Promise<RunRecord | null> {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(this.runPath(id), 'utf8'))
-      if (!isRun(parsed) || parsed.id !== id) throw new Error('Run record has an unsupported shape')
-      return parsed
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
+    assertId(id)
+    return runsFor(this.controlDir).get(id) ?? null
   }
 
   async patch(
     id: string,
     change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased'>>,
   ): Promise<RunRecord> {
-    const prior = this.changes.get(id) || Promise.resolve()
-    const work = prior.catch(() => {}).then(async () => {
-      const run = await this.get(id)
-      if (!run) throw new Error(`Unknown run ${id}`)
-      if (change.failureReview && (!validFailureReview(change.failureReview) || run.status !== 'failed' || change.failureReview.failedAt !== failureStamp(run))) throw new Error('Failure changed or review is invalid; inspect the run again')
-      const failure = change.status === 'failed' && !change.failure ? await failureEvidence(this.controlDir, change.failureReason || (change.interrupted ? 'Execution interrupted by relay restart; inspect effects before recovery' : 'No error detail recorded')) : undefined
-      const next = { ...run, ...(failure ? {failure} : {}), ...change }
-      await this.writeRun(next)
-      return next
-    })
-    this.changes.set(id, work)
-    try { return await work }
-    finally { if (this.changes.get(id) === work) this.changes.delete(id) }
+    const store = runsFor(this.controlDir)
+    const run = store.get(id)
+    if (!run) throw new Error(`Unknown run ${id}`)
+    if (change.failureReview && (!validFailureReview(change.failureReview) || run.status !== 'failed' || change.failureReview.failedAt !== failureStamp(run))) throw new Error('Failure changed or review is invalid; inspect the run again')
+    const failure = change.status === 'failed' && !change.failure
+      ? await failureEvidence(this.controlDir, change.failureReason || (change.interrupted ? 'Execution interrupted by relay restart; inspect effects before recovery' : 'No error detail recorded'))
+      : undefined
+    const next = { ...run, ...(failure ? { failure } : {}), ...change }
+    store.set(id, next)
+    pruneTerminals(this.controlDir)
+    return next
+  }
+
+  async attachTelegramApplication(id: string, application: ApplicationOrigin): Promise<RunRecord> {
+    const store = runsFor(this.controlDir)
+    const run = store.get(id)
+    if (!run) throw new Error(`Unknown run ${id}`)
+    if (run.application || run.telegramApplication || run.taskId || run.external || run.scheduled || run.replyOnly || run.telegramUserId === undefined)
+      throw new Error('Run is not an unadmitted Telegram run')
+    if (run.status !== 'queued' && run.status !== 'running')
+      throw new Error('Run already finished; application admission conflicts with its terminal state')
+    if (!validApplicationOrigin(application)) throw new Error('Invalid application context')
+    const next = { ...run, telegramApplication: application }
+    store.set(id, next)
+    return next
   }
 
   async list(): Promise<RunRecord[]> {
-    await this.ensure()
-    const names = await readdir(this.runsDir)
-    const runs: RunRecord[] = []
-    for (const name of names) {
-      if (!name.endsWith('.json') || name.includes('.tmp')) continue
-      try {
-        const run = await this.get(name.slice(0, -5))
-        if (run) runs.push(run)
-      } catch {
-        console.error('Unreadable run record', name)
-      }
-    }
-    return runs.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    return [...runsFor(this.controlDir).values()].sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   }
 
   async pruneTaskHistory(taskId:string,keep=100):Promise<void>{
-    const terminal=(await this.list()).filter(run=>run.taskId===taskId&&['completed','failed','cancelled'].includes(run.status)&&(run.external===undefined||run.externalReleased===true)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt))
-    for(const run of terminal.slice(0,Math.max(0,terminal.length-keep)))await rm(this.runPath(run.id),{force:true})
+    const terminal=[...runsFor(this.controlDir).values()].filter(run=>run.taskId===taskId&&['completed','failed','cancelled'].includes(run.status)&&(run.external===undefined||run.externalReleased===true)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt))
+    const store = runsFor(this.controlDir)
+    for(const run of terminal.slice(0,Math.max(0,terminal.length-keep)))store.delete(run.id)
   }
 
   async running(background?: boolean): Promise<RunRecord | undefined> {
-    const runs = await this.list()
     let first: RunRecord | undefined
-    for (const run of runs) {
+    for (const run of [...runsFor(this.controlDir).values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt))) {
       if (run.status === 'running' && (background === undefined || Boolean(run.scheduled) === background)) {
         first ??= run
       }
@@ -238,37 +234,30 @@ export class RunStore {
   }
 
   async nextQueued(background?: boolean): Promise<RunRecord | undefined> {
-    const queued = (await this.list()).filter((run) => run.status === 'queued' && (background === undefined || Boolean(run.scheduled) === background))
+    const queued = [...runsFor(this.controlDir).values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).filter((run) => run.status === 'queued' && (background === undefined || Boolean(run.scheduled) === background))
     return queued.find(run => !run.taskId) ?? queued[0]
   }
 
   async deliveryStatus(): Promise<{ failed: number; unknown: number }> {
-    await this.ensure()
-    const names = await readdir(this.outboxDir)
-    const result = { failed: 0, unknown: names.filter((name) => name.endsWith('.sending.json')).length }
-    for (const name of names.filter((name) => name.endsWith('.failed.json'))) {
-      try {
-        const item = JSON.parse(await readFile(path.join(this.outboxDir, name), 'utf8'))
-        if (item.deliveryUnknown) result.unknown++
-        else result.failed++
-      } catch {
-        result.unknown++
-      }
+    let failed = 0, unknown = 0
+    for (const item of outboxFor(this.controlDir).values()) {
+      // A claimed but unsettled send is awaiting confirmation, exactly like a
+      // failed send with an unknown outcome.
+      if (item.state === 'sending') unknown++
+      else if (item.state === 'failed' && item.deliveryUnknown) unknown++
+      else if (item.state === 'failed') failed++
     }
-    return result
+    return { failed, unknown }
   }
 
-  private async writeOutboxItem(item: OutboxItem): Promise<OutboxItem> {
-    await this.ensure()
-    const file = path.join(this.outboxDir, `${item.id}.json`)
-    const temporary = `${file}.${process.pid}.tmp`
-    await writeFile(temporary, `${JSON.stringify(item, null, 2)}\n`, { mode: 0o600 })
-    await rename(temporary, file)
+  private writeOutboxItem(item: OutboxItem): OutboxItem {
+    const stored: StoredOutboxItem = { ...item, state: 'queued' }
+    outboxFor(this.controlDir).set(item.id, stored)
+    notifyDelivery(this.controlDir, item.id)
     return item
   }
 
   async enqueueOwnerDelivery(context: DeliveryContext, payload: {type:'message'|'document'|'voice';text?:string;documentPath?:string;voiceText?:string;replyToMessageId?:number}): Promise<OutboxItem> {
-    await this.ensure()
     const authorized=authorizeDeliveryContext(context,await currentDeliveryOwner(this.controlDir))
     const item:OutboxItem={...payload,id:`delivery_${Date.now().toString(36)}_${randomBytes(8).toString('hex')}`,deliveryContext:authorized,chatId:authorized.owner.telegramChatId,createdAt:new Date().toISOString()}
     return this.writeOutboxItem(item)
@@ -278,14 +267,12 @@ export class RunStore {
     assertId(id)
     const owner=await currentDeliveryOwner(this.controlDir)
     authorizeDeliveryContext(context,owner)
-    for(const [suffix,status] of [['sent.json','delivered'],['failed.json','failed'],['sending.json','sending'],['json','queued']] as const) {
-      let item
-      try {item=JSON.parse(await readFile(path.join(this.outboxDir,`${id}.${suffix}`),'utf8'))}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')continue;throw error}
-      authorizeDeliveryContext(item.deliveryContext,owner)
-      if(item.runId||item.chatId!==owner!.telegramChatId)throw new Error('Outbox ownership mismatch')
-      return {outbox_id:id,status:item.deliveryUnknown?'unknown':status,...(item.receipt?{receipt:item.receipt}:{}),...(item.deliveryError?{error:item.deliveryError}:{})}
-    }
-    throw new Error('Unknown owner delivery receipt')
+    const item = outboxFor(this.controlDir).get(id)
+    if (!item) throw new Error('Unknown owner delivery receipt')
+    authorizeDeliveryContext(item.deliveryContext,owner)
+    if(item.runId||item.chatId!==owner!.telegramChatId)throw new Error('Outbox ownership mismatch')
+    const status = item.state === 'sent' ? 'delivered' : item.state === 'failed' ? 'failed' : item.state === 'sending' ? 'sending' : 'queued'
+    return {outbox_id:id,status:item.deliveryUnknown?'unknown':status,...(item.receipt?{receipt:item.receipt}:{}),...(item.deliveryError?{error:item.deliveryError}:{})}
   }
 
   async enqueueMessage(
@@ -293,15 +280,13 @@ export class RunStore {
     text: string,
     options?: { replyToMessageId?: number; id?: string },
   ): Promise<OutboxItem> {
-    const run = await this.get(runId)
+    const run = runsFor(this.controlDir).get(runId)
     if (!run) throw new Error(`Unknown run ${runId}`)
     if (run.status !== 'running' && run.status !== 'queued') throw new Error(`Run ${runId} cannot send`)
     if (options?.id) {
       assertId(options.id)
-      for (const suffix of ['json', 'sending.json', 'sent.json', 'failed.json']) {
-        try { return JSON.parse(await readFile(path.join(this.outboxDir, `${options.id}.${suffix}`), 'utf8')) }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-      }
+      const existing = outboxFor(this.controlDir).get(options.id)
+      if (existing) return existing
     }
     const item: OutboxItem = {
       id: options?.id ?? `${runId}_${Date.now().toString(36)}_${randomBytes(2).toString('hex')}`,
@@ -320,7 +305,7 @@ export class RunStore {
     documentPath: string,
     options?: { caption?: string; replyToMessageId?: number },
   ): Promise<OutboxItem> {
-    const run = await this.get(runId)
+    const run = runsFor(this.controlDir).get(runId)
     if (!run) throw new Error(`Unknown run ${runId}`)
     if (run.status !== 'running' && run.status !== 'queued') throw new Error(`Run ${runId} cannot send`)
     const item: OutboxItem = {
@@ -341,7 +326,7 @@ export class RunStore {
     voiceText: string,
     options?: { replyToMessageId?: number },
   ): Promise<OutboxItem> {
-    const run = await this.get(runId)
+    const run = runsFor(this.controlDir).get(runId)
     if (!run) throw new Error(`Unknown run ${runId}`)
     if (run.status !== 'running' && run.status !== 'queued') throw new Error(`Run ${runId} cannot send`)
     const item: OutboxItem = {
@@ -362,7 +347,7 @@ export class RunStore {
     actionId: string,
     options?: { replyToMessageId?: number },
   ): Promise<OutboxItem> {
-    const run = await this.get(runId)
+    const run = runsFor(this.controlDir).get(runId)
     if (!run) throw new Error(`Unknown run ${runId}`)
     if (run.status !== 'running' && run.status !== 'queued')
       throw new Error(`Run ${runId} cannot request approval`)
@@ -380,7 +365,7 @@ export class RunStore {
   }
 
   async enqueueReaction(runId: string, rawEmoji: string): Promise<OutboxItem> {
-    const run = await this.get(runId)
+    const run = runsFor(this.controlDir).get(runId)
     if (!run) throw new Error(`Unknown run ${runId}`)
     if (run.status !== 'running' && run.status !== 'queued') throw new Error(`Run ${runId} cannot react`)
     if (!run.messageId) throw new Error(`Run ${runId} has no messageId to react to`)
@@ -401,151 +386,79 @@ export class RunStore {
   }
 
   async pendingOutbox(): Promise<OutboxItem[]> {
-    await this.ensure()
-    const names = (await readdir(this.outboxDir)).filter(
-      (name) =>
-        name.endsWith('.json') &&
-        !name.endsWith('.sent.json') &&
-        !name.endsWith('.failed.json') &&
-        !name.endsWith('.sending.json') &&
-        !name.includes('.tmp'),
-    )
-    const items: OutboxItem[] = []
-    for (const name of names) {
-      try {
-        const parsed: unknown = JSON.parse(await readFile(path.join(this.outboxDir, name), 'utf8'))
-        if (
-          parsed &&
-          typeof parsed === 'object' &&
-          ('text' in parsed ||
-            'emoji' in parsed ||
-            'documentPath' in parsed ||
-            'voiceText' in parsed ||
-            'approvalPrompt' in parsed ||
-            'type' in parsed)
-        ) {
-          items.push(parsed as OutboxItem)
-        }
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
-          console.error('Unreadable outbox record', name)
-      }
-    }
-    return items.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    return [...outboxFor(this.controlDir).values()].filter(item => item.state === 'queued').sort((left, right) => left.createdAt.localeCompare(right.createdAt))
   }
 
   async applicationMessages(runId: string): Promise<{ id: string; text: string }[]> {
     assertId(runId)
-    await this.ensure()
-    const messages = new Map<string, OutboxItem>()
-    for (const name of await readdir(this.outboxDir)) {
-      if (!name.startsWith(`${runId}_`) || !name.endsWith('.json') || name.includes('.tmp') || name.endsWith('.failed.json')) continue
-      try {
-        const item = JSON.parse(await readFile(path.join(this.outboxDir, name), 'utf8')) as OutboxItem
-        if (item.runId === runId && (!item.type || item.type === 'message') && typeof item.text === 'string') messages.set(item.id, item)
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    }
-    return [...messages.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(item => ({ id: item.id, text: item.text! }))
+    return [...outboxFor(this.controlDir).values()].filter(item => item.runId === runId && (!item.type || item.type === 'message') && typeof item.text === 'string' && item.state !== 'failed').sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map(item => ({ id: item.id, text: item.text! }))
   }
 
   async applicationApprovals(runId:string):Promise<{id:string;prompt:string;state:string}[]> {
-    assertId(runId);await this.ensure();const result=[] as {id:string;prompt:string;state:string}[]
-    for(const name of await readdir(this.outboxDir))if(name.startsWith(`${runId}_`)&&name.endsWith('.json')&&!name.includes('.tmp')&&!name.endsWith('.failed.json'))try{
-      const item=JSON.parse(await readFile(path.join(this.outboxDir,name),'utf8')) as OutboxItem
-      if(item.runId===runId&&item.type==='approval'&&item.approvalActionId&&item.approvalPrompt)result.push({id:item.approvalActionId,prompt:item.approvalPrompt,state:name.endsWith('.sent.json')?'delivered':'pending'})
-    }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error}
-    return result
+    assertId(runId)
+    return [...outboxFor(this.controlDir).values()].filter(item=>item.runId===runId&&item.type==='approval'&&item.approvalActionId&&item.approvalPrompt&&item.state!=='failed').map(item=>({id:item.approvalActionId!,prompt:item.approvalPrompt!,state:item.state==='sent'?'delivered':'pending'}))
   }
 
   async claimOutbox(id: string): Promise<boolean> {
     assertId(id)
-    const from = path.join(this.outboxDir, `${id}.json`)
-    const to = path.join(this.outboxDir, `${id}.sending.json`)
-    try {
-      await rename(from, to)
-      return true
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-      throw error
-    }
+    const item = outboxFor(this.controlDir).get(id)
+    if (!item || item.state !== 'queued') return false
+    outboxFor(this.controlDir).set(id, { ...item, state: 'sending' })
+    return true
   }
 
+  // Resolves when the relay pump settles the item. Same contract as the
+  // former file poll: delivered receipt, failed error, or unknown on timeout.
   async waitForDelivery(id: string, timeoutMs = 120_000): Promise<unknown> {
     assertId(id)
     const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      for (const status of ['sent', 'failed'] as const) {
-        let item
-        try {
-          item = JSON.parse(await readFile(path.join(this.outboxDir, `${id}.${status}.json`), 'utf8'))
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-          throw error
-        }
-        if (status === 'failed' && item.deliveryUnknown)
+    for (;;) {
+      const item = outboxFor(this.controlDir).get(id)
+      if (item && (item.state === 'sent' || item.state === 'failed')) {
+        if (item.state === 'failed' && item.deliveryUnknown)
           throw new Error(`Delivery outcome unknown; inspect before retrying: ${item.deliveryError || id}`)
-        if (status === 'failed')
+        if (item.state === 'failed')
           throw new Error(item.deliveryError || 'Delivery failed; inspect the local outbox')
         return item.receipt ?? { delivered: true }
       }
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw new Error(`Delivery outcome unknown for ${id}; inspect the outbox before retrying`)
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          waitersFor(this.controlDir).get(id)?.delete(wrapped)
+          resolve()
+        }, remaining)
+        const wrapped = () => { clearTimeout(timer); resolve() }
+        let set = waitersFor(this.controlDir).get(id)
+        if (!set) { set = new Set(); waitersFor(this.controlDir).set(id, set) }
+        set.add(wrapped)
+      })
     }
-    throw new Error(`Delivery outcome unknown for ${id}; inspect the outbox before retrying`)
   }
 
   async failOutbox(id: string, reason = 'Delivery failed', deliveryUnknown = false): Promise<void> {
     assertId(id)
-    const source = path.join(this.outboxDir, `${id}.sending.json`)
-    const item = JSON.parse(await readFile(source, 'utf8'))
-    const temporary = `${source}.${process.pid}.tmp`
-    await writeFile(temporary, JSON.stringify({ ...item, deliveryError: reason, deliveryUnknown }), {
-      mode: 0o600,
-    })
-    await rename(temporary, source)
-    await rename(
-      path.join(this.outboxDir, `${id}.sending.json`),
-      path.join(this.outboxDir, `${id}.failed.json`),
-    )
+    const item = outboxFor(this.controlDir).get(id)
+    if (!item) return
+    const next = { ...item, state: 'failed' as const, deliveryError: reason, deliveryUnknown }
+    outboxFor(this.controlDir).set(id, next)
+    notifyDelivery(this.controlDir, id)
+    pruneTerminals(this.controlDir)
   }
 
   async unclaimOutbox(id: string): Promise<void> {
     assertId(id)
-    const from = path.join(this.outboxDir, `${id}.sending.json`)
-    const to = path.join(this.outboxDir, `${id}.json`)
-    try {
-      await rename(from, to)
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
+    const item = outboxFor(this.controlDir).get(id)
+    if (item && item.state === 'sending') outboxFor(this.controlDir).set(id, { ...item, state: 'queued' })
   }
 
   async markOutboxSent(id: string, messageIds: number[] = []): Promise<void> {
     assertId(id)
-    const sendingFile = path.join(this.outboxDir, `${id}.sending.json`)
-    const normalFile = path.join(this.outboxDir, `${id}.json`)
-    const target = path.join(this.outboxDir, `${id}.sent.json`)
-    if (messageIds.length) {
-      const record = JSON.parse(await readFile(sendingFile, 'utf8'))
-      const temporary = `${sendingFile}.${process.pid}.tmp`
-      await writeFile(
-        temporary,
-        JSON.stringify({ ...record, receipt: { messageIds, deliveredAt: new Date().toISOString() } }),
-        { mode: 0o600 },
-      )
-      await rename(temporary, sendingFile)
-    }
-    try {
-      await rename(sendingFile, target)
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        try {
-          await rename(normalFile, target)
-        } catch (e: unknown) {
-          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
-        }
-      } else {
-        throw err
-      }
-    }
+    const item = outboxFor(this.controlDir).get(id)
+    if (!item) return
+    const next = { ...item, state: 'sent' as const, ...(messageIds.length ? { receipt: { messageIds, deliveredAt: new Date().toISOString() } } : {}) }
+    outboxFor(this.controlDir).set(id, next)
+    notifyDelivery(this.controlDir, id)
+    pruneTerminals(this.controlDir)
   }
 }

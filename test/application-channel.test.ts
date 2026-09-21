@@ -15,6 +15,7 @@ import { initialPreset } from '../src/ai.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
 import { createRelay } from '../src/index.js'
 import { EXECUTOR_REGISTRY, executorEnvironment } from '../src/executor.js'
+import { serveTestLedger } from './helpers/ledger.js'
 
 const token = () => randomBytes(32).toString('base64url')
 const owner = async (dir: string) => {
@@ -124,12 +125,14 @@ if(result.status!==0){console.error(result.stderr);process.exit(1)};
 `)
   EXECUTOR_REGISTRY.codex={...original,command:process.execPath,buildArgs:(options,_file,prompt)=>{prompts.push(prompt);resumeIds.push(options.isResume?options.sessionId:undefined);return ['--import',require.resolve('tsx'),fixture]}}
   const relay=createRelay({controlDir:root,workspace:root,pairingTtlMs:1000,telegramBotToken:'fixture',executorTimeoutMs:0,executorCli:'codex'})
+  // The engine child reaches the relay memory ledger through the delivery socket.
+  const ledger=await serveTestLedger(root)
   let telegramCalls=0
   relay.bot.api.config.use(async()=>{telegramCalls++;return {ok:true,result:{message_id:1}} as never})
   const owned=await owner(root), secret=token()
   const binding=(await relay.applicationChannel.bindings.register('app',secret,owned))!
   const drain=setInterval(()=>void relay.drainOutbox(),10)
-  t.after(async()=>{clearInterval(drain);await relay.stop();EXECUTOR_REGISTRY.codex=original;await rm(root,{recursive:true,force:true})})
+  t.after(async()=>{clearInterval(drain);await relay.stop();EXECUTOR_REGISTRY.codex=original;await ledger.stop();await rm(root,{recursive:true,force:true})})
   const first=await relay.applicationChannel.submit(binding.bindingId,{requestId:'one',scope:'program',text:'Hello from the app',context:{secret:'must-stay-out-of-prompt'}})
   await waitFor(async()=> (await new RunStore(root).get(first.id))?.status==='completed')
   const second=await relay.applicationChannel.submit(binding.bindingId,{requestId:'two',scope:'program',text:'Continue'})
@@ -303,7 +306,7 @@ test('generic attachments stage after auth, preserve literal comments and reject
   const input={requestId:'image',scope:'chat',followOwner:true,text:'  /goal literal\n comment  ',attachment:{name:'image.png',data:Buffer.from('89504e470d0a1a0a','hex').toString('base64')}}
   assert.equal((await post(input,'bad')).status,401)
   const {readdir,stat}=await import('node:fs/promises')
-  await assert.rejects(readdir(join(root,'inbox')),/ENOENT/)
+  await assert.rejects(readdir(join(root,'attachments')),/ENOENT/)
   for (const [name,bytes] of [['image.png',Buffer.from('89504e470d0a1a0a','hex')],['file.pdf',Buffer.from('%PDF-1.4\nfixture')],['notes.md',Buffer.from('# Fixture')]] as const) {
     const body={...input,requestId:name,attachment:{name,data:bytes.toString('base64')}}
     const response=await post(body);assert.equal(response.status,202)
@@ -312,12 +315,12 @@ test('generic attachments stage after auth, preserve literal comments and reject
     assert.equal(run.ownerId,ownerId(owned))
     assert.equal(run.application?.inputText,input.text)
     assert.ok(run.texts[0].endsWith(`Caption: ${input.text}`))
-    const path=run.texts[0].match(/staged at (inbox\/[^ ]+)/)![1]
-    assert.deepEqual(await readFile(join(root,path)),bytes)
-    assert.equal((await stat(join(root,path))).mode & 0o777,0o600)
-    const before=(await readdir(join(root,'inbox'))).length
+    const path=run.texts[0].match(/staged at (\/[^ ]+)/)![1]
+    assert.deepEqual(await readFile(path),bytes)
+    assert.equal((await stat(path)).mode & 0o777,0o600)
+    const before=(await readdir(join(root,'attachments'))).length
     assert.equal((await post(body)).status,202)
-    assert.equal((await readdir(join(root,'inbox'))).length,before)
+    assert.equal((await readdir(join(root,'attachments'))).length,before)
     assert.equal((await post({...body,text:'changed'})).status,409)
     assert.equal((await post({...body,attachment:{name,data:Buffer.from('changed').toString('base64')}})).status,409)
     assert.equal((await fetch(`http://127.0.0.1:${address.port}/v1/runs/${snapshot.id}`,{headers:{Authorization:`Bearer ${other}`}})).status,404)
@@ -327,12 +330,12 @@ test('generic attachments stage after auth, preserve literal comments and reject
   const invalidActivation=await post({...input,requestId:'invalid-activation',followOwner:false,activateTelegram:true,scope:'new-scope',attachment:{name:'x.exe',data:Buffer.from('text').toString('base64')}})
   assert.equal(invalidActivation.status,400)
   assert.deepEqual((await control.status()).activeSession,priorSession)
-  const before=(await readdir(join(root,'inbox'))).length
+  const before=(await readdir(join(root,'attachments'))).length
   for (const attachment of [{name:'x.exe',data:Buffer.from('text').toString('base64')},{name:'x.txt',data:'%%%invalid'},{name:'x.txt',data:Buffer.alloc(10*1024*1024+1,65).toString('base64')}]) {
     assert.equal((await post({...input,requestId:'bad',attachment})).status,400)
   }
-  assert.equal((await readdir(join(root,'inbox'))).length,before)
+  assert.equal((await readdir(join(root,'attachments'))).length,before)
   await channel.bindings.register('web',null,owned)
   await assert.rejects(channel.submit(binding.bindingId,{...input,requestId:'revoked'}),/revoked/)
-  assert.equal((await readdir(join(root,'inbox'))).length,before)
+  assert.equal((await readdir(join(root,'attachments'))).length,before)
 })

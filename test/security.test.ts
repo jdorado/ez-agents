@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile, symlink, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, symlink, mkdir, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isOwner } from '../src/identity.js'
@@ -26,7 +26,7 @@ test('owner gate denies groups, bots, missing identity, and a different sender o
   assert.equal(isOwner({ from, chat }, null), false)
 })
 
-test('store identifiers reject traversal; corrupt records cannot authorize or block healthy runs', async () => {
+test('store identifiers reject traversal; corrupt control state fails closed and the ledger writes nothing', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-negative-'))
   try {
     const runs = new RunStore(dir)
@@ -34,8 +34,11 @@ test('store identifiers reject traversal; corrupt records cannot authorize or bl
     await assert.rejects(runs.claimOutbox('../control-state'), /Invalid/)
     await assert.rejects(new ApprovalStore(dir).getDecision('../escape'), /Invalid/)
     const run = await runs.create({ chatId: 101, telegramUserId: 101, texts: ['test'] })
-    await writeFile(join(dir, 'runs', 'broken.json'), '{')
     assert.equal((await runs.nextQueued())?.id, run.id)
+    // Run/outbox/inbox bookkeeping is memory-only: no control/ files exist to corrupt.
+    await assert.rejects(stat(join(dir, 'runs')), { code: 'ENOENT' })
+    await assert.rejects(stat(join(dir, 'outbox')), { code: 'ENOENT' })
+    await assert.rejects(stat(join(dir, 'inbox.json')), { code: 'ENOENT' })
     await writeFile(join(dir, 'control-state.json'), '{')
     await assert.rejects(new ControlStore(dir, 1000).status())
   } finally {

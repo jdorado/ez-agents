@@ -1,9 +1,8 @@
 import { installAgentGuidance } from './agent-guidance.js'
 import { redactFailure } from './failure.js'
-import { RunStore } from './runs.js'
 import { Tasks } from './tasks.js'
 import { ControlStore } from './control-state.js'
-import { requireOwnerExecution } from './execution-authority.js'
+import { authorizeRun, readRun } from './delivery-socket.js'
 import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { isHostRunId } from './host-executor-protocol.js'
@@ -123,7 +122,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           const id=file.slice(0,-13)
           let run
           try {
-            run = await new RunStore(agent.controlDir).get(id)
+            run = await readRun(agent.controlDir, id)
             if(id.startsWith('r_schedule_') && !run?.scheduled) throw new Error('Missing scheduled run')
           } catch {
             await appendFile(path.join(directory,id+'.events'),JSON.stringify({stream:'exit',code:1})+'\n',{mode:0o600})
@@ -146,11 +145,11 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               try { await readFile(base+'.cancel'); throw new Error('Cancelled') } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
               const request=JSON.parse(await readFile(base+'.running.json','utf8'))
               if (!Array.isArray(request.texts) || request.texts.some((text:unknown)=>typeof text!=='string')) throw new Error('Invalid job')
-              const run = await new RunStore(agent.controlDir).get(path.basename(base))
+              const run = await readRun(agent.controlDir, path.basename(base))
               if (run?.taskId) {
                 if (run.status !== 'running') throw new Error('No active task run')
                 await new Tasks(agent.controlDir).authorize(run, false)
-              } else await requireOwnerExecution(agent.controlDir, path.basename(base))
+              } else await authorizeRun(agent.controlDir, path.basename(base))
               const opts=request.options as ExecutorOptions
               const cli = opts.cli || installation.cli
               resolveExecutor(cli)
@@ -164,7 +163,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               if (!provider && model && (agent.codexProviders ?? []).some(binding=>binding.models.includes(model)))
                 throw new Error('Selected Codex provider is required for this model')
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},await catalog(agent))
-              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.workspace,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
+              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.controlDir,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,eventSource:opts.eventSource,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider}
               job=await launch(request.texts,options)
