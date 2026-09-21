@@ -95,6 +95,8 @@ test('isolated broker authenticates an owned run, pins plugin revision, and writ
   const serving = servePluginBroker(binding, abort.signal);
   try {
     await waitForSocket(f.socket);
+    const published = JSON.parse(await fs.readFile(path.join(f.controlDir, 'plugin-broker-plugins.json'), 'utf8'));
+    assert.deepEqual(published.plugins, [{ id: 'sample', version: '1.0.0' }]);
     const listed = await request(f.socket, { version: 1, id: randomUUID(), operation: 'manager', runId: f.runId, args: ['tools', 'list'] });
     assert.equal(listed.ok, true);
     assert.deepEqual(JSON.parse(listed.stdout), { sample: 'sample' });

@@ -15,6 +15,10 @@ ARG CODEX_CLI_VERSION=0.153.4
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} && command -v codex
 RUN chmod +x docker/entrypoint.sh bin/ez bin/ezenciel-agents* && mkdir -p /state/control /state/home /workspace && chown node:node /state/control /state/home /workspace
 RUN node -e 'for (const [name, target] of Object.entries(require("./package.json").bin)) require("node:fs").symlinkSync("/app/" + target, "/usr/local/bin/" + name); require("node:fs").symlinkSync("/app/bin/ez", "/usr/local/bin/ez")'
+# Build identity for relay status (package version stays release-owned).
+ARG BUILD_TAG=""
+ARG BUILD_SHA=""
+RUN node -e 'require("node:fs").writeFileSync("/app/build.json",JSON.stringify({tag:process.env.BUILD_TAG||"",sha:process.env.BUILD_SHA||""})+"\n")'
 ENV HOME=/state/home EZ_AGENT_WORKSPACE=/workspace EZ_CONTROL_DIR=/state/control EZ_EXECUTOR_CLI=grok PATH=/app/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
