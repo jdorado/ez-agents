@@ -484,7 +484,10 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     if(context!==undefined){
       await privateDir(path.join(home,'plugin-context'));
       contextFile=path.join(home,'plugin-context',`${randomUUID()}.json`);
-      const override={services:{[binding.service]:{environment:{EZ_PLUGIN_CONTEXT:context}}}};
+      // Compose interpolates every file it loads, including this override, so
+      // an opaque `$` in the context must be escaped as `$$` to reach the
+      // container byte-for-byte.
+      const override={services:{[binding.service]:{environment:{EZ_PLUGIN_CONTEXT:context.replaceAll('$',()=> '$$')}}}};
       await fs.writeFile(contextFile,JSON.stringify(override,null,2)+'\n',{mode:0o600,flag:'wx'});
     }
     const invocationRelease=invocation?await invocationLease(home,container):undefined;

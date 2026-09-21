@@ -117,7 +117,7 @@ test('application plugin context is namespaced, authorized, and absent from ordi
  const control=new ControlStore(f.control,1000);await control.requestPairing(42,42);const owner=await control.approveOwner(42);
  const binding=await new ApplicationBindings(f.control).register('app',randomBytes(32).toString('base64url'),owner);
  assert.ok(binding);
- const runs=new RunStore(f.control),run=await runs.create({id:'r_app_plugin',ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),texts:['Use the plugin'],application:{bindingId:binding.bindingId,requestId:'plugin',scope:'owner-chat',context:{plugins:{sample:{capability:'scoped-value'},other:{capability:'must-not-leak'}}}}});
+ const runs=new RunStore(f.control),run=await runs.create({id:'r_app_plugin',ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),texts:['Use the plugin'],application:{bindingId:binding.bindingId,requestId:'plugin',scope:'owner-chat',context:{plugins:{sample:{capability:'scoped-value',template:'cost $5 for ${plan} and $HOME'},other:{capability:'must-not-leak'}}}}});
  await runs.patch(run.id,{status:'running'});
   const command=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control,EZ_RUN_ID:run.id}});
   const index=command.argv.lastIndexOf('--file');assert.ok(index>0);
@@ -126,8 +126,13 @@ test('application plugin context is namespaced, authorized, and absent from ordi
   assert.match(contextFile,/\/plugin-context\/[0-9a-f-]+\.json$/);
   assert.equal(command.argv.join(' ').includes('must-not-leak'),false);
   // The run container receives the slice through the service environment, not
-  // through interpolation-only --env-file.
-  assert.deepEqual(JSON.parse(await fs.readFile(contextFile,'utf8')),{services:{sample:{environment:{EZ_PLUGIN_CONTEXT:'{"capability":"scoped-value"}'}}}});
+  // through interpolation-only --env-file. Compose collapses the escaped
+  // `$$` back to `$`, so every context value must survive byte-for-byte.
+  const override=JSON.parse(await fs.readFile(contextFile,'utf8'));
+  const delivered=override.services.sample.environment.EZ_PLUGIN_CONTEXT.replaceAll('$$','$');
+  assert.deepEqual(JSON.parse(delivered),{capability:'scoped-value',template:'cost $5 for ${plan} and $HOME'});
+  assert.ok(override.services.sample.environment.EZ_PLUGIN_CONTEXT.includes('$$5'));
+  assert.ok(override.services.sample.environment.EZ_PLUGIN_CONTEXT.includes('$${plan}'));
   assert.equal((await fs.stat(contextFile)).mode&0o777,0o600);
   await command.release();await assert.rejects(fs.access(contextFile),{code:'ENOENT'});
   const ordinary=await prepareCommand(home,'sample',['context'],{environment:{EZ_CONTROL_DIR:f.control}});

@@ -291,8 +291,9 @@ and commands launched outside an application run receive no such environment
 variable. The manager authorizes the active run and application binding at command
 admission (prepare time) and rejects revoked authority there; revocation between
 admission and container start is a documented residual window. Transport is a
-`0o600` env file consumed via `--env-file`, never process arguments; the value
-remains visible in `docker inspect` while the container runs.
+`0o600` one-shot compose override consumed via `--file` that sets the command
+service environment directly, never process arguments; the value remains
+visible in `docker inspect` while the container runs.
 
 Use this for a short-lived, domain-scoped capability or an application service
 address. It is not prompt text, a general secret channel, or an environment
