@@ -67,30 +67,52 @@ async function fingerprintOf(source,invoke) {
   for(const f of listing[0].files){const file=path.resolve(source,f.path);if(!file.startsWith(source+path.sep))throw Error('Invalid package path');const data=await fs.readFile(file);hash.update(JSON.stringify([f.path,f.mode,data.length]));hash.update(data);}
   return hash.digest('hex');
 }
-export async function build({home=defaultHome(),source=root},invoke=run) {
+// Source-checkout builds are RCs. The reviewed commit is the only SHA that may
+// label an installable image, so a dirty tree can never become one and /status
+// never falls back to the bare package version on a deployment.
+export const rcLabel = /^\d+\.\d+\.\d+-beta\.\d+\.rc\.[1-9]\d*$/;
+async function buildIdentity(source,label,invoke) {
+  const git=async args=>{try{return await invoke('git',['-C',source,...args]);}catch{return undefined;}};
+  if(await git(['rev-parse','--is-inside-work-tree'])!=='true') {
+    if(label!==undefined)throw Error('--label requires a git checkout so the RC pins the reviewed commit');
+    return {};
+  }
+  if(label===undefined)throw Error('A source checkout requires --label X.Y.Z-beta.N.rc.M; commit, push and open the PR first');
+  if(!rcLabel.test(label))throw Error('RC label must look like X.Y.Z-beta.N.rc.M');
+  if((await git(['status','--porcelain']))!=='')throw Error('Commit the reviewed source before an RC build; uncommitted work cannot be installed as an RC');
+  const sha=await git(['rev-parse','HEAD']);
+  if(!/^[a-f0-9]{40}$/.test(sha||''))throw Error('RC builds require the reviewed commit SHA');
+  return {label,sha};
+}
+export async function build({home=defaultHome(),source=root,label},invoke=run) {
   source=await fs.realpath(source);
-  const fingerprint=await fingerprintOf(source,invoke),image='ezenciel-agents:install-'+fingerprint.slice(0,24);
-  const dir=path.join(path.resolve(home),'builds',fingerprint);await fs.mkdir(dir,{recursive:true,mode:0o700});
+  const identity=await buildIdentity(source,label,invoke);
+  const fingerprint=await fingerprintOf(source,invoke);
+  const artifact=createHash('sha256').update(JSON.stringify([fingerprint,identity.label??'',identity.sha??''])).digest('hex');
+  const image='ezenciel-agents:install-'+artifact.slice(0,24);
+  const dir=path.join(path.resolve(home),'builds',artifact);await fs.mkdir(dir,{recursive:true,mode:0o700});
   const lock=path.join(dir,'lock'),receipt=path.join(dir,'status.json'),log=path.join(dir,'build.log');
   let handle;
   try{handle=await fs.open(lock,'wx',0o600);}catch(e){if(e.code!=='EEXIST')throw e;return {state:'busy-or-interrupted',image,log,note:'An existing build owns this artifact. Inspect its status/log and owning process; do not start another build or remove a live lock.'};}
   try {
-    await handle.writeFile(JSON.stringify({pid:process.pid,source,image}));
+    await handle.writeFile(JSON.stringify({pid:process.pid,source,image,...identity}));
     const prior=await read(receipt).catch(absent);
     if(prior?.state==='completed')try{if(await invoke('docker',['image','inspect','--format','{{.Id}}',image])===prior.imageId)return {...prior,reused:true};}catch{/* Image was removed; rebuild under the same exclusive lock. */}
-    await atomic(receipt,{state:'building',pid:process.pid,source,image,log});
-    console.error(JSON.stringify({state:'building',image,log}));
+    await atomic(receipt,{state:'building',pid:process.pid,source,image,log,...identity});
+    console.error(JSON.stringify({state:'building',image,log,...identity}));
+    const buildArgs=identity.label?['--build-arg',`BUILD_TAG=${identity.label}`,'--build-arg',`BUILD_SHA=${identity.sha}`]:[];
+    const tags=[image,...(identity.label?[`ezenciel-agents:${identity.label}`]:[])];
     const output=await fs.open(log,'a',0o600);
-    try{await invoke('docker',['build','--progress','plain','--target','runtime','-t',image,source],{log:output.fd,timeout:3600000});}finally{await output.close();}
+    try{await invoke('docker',['build','--progress','plain','--target','runtime',...buildArgs,...tags.flatMap(t=>['-t',t]),source],{log:output.fd,timeout:3600000});}finally{await output.close();}
     if(await fingerprintOf(source,invoke)!==fingerprint)throw Error('Package changed during build; keep the source stable and retry');
-    const result={state:'completed',source,image,imageId:await invoke('docker',['image','inspect','--format','{{.Id}}',image]),log};await atomic(receipt,result);return result;
-  }catch(e){await atomic(receipt,{state:'failed',source,image,log,error:e.message});throw e;}
+    const result={state:'completed',source,image,imageId:await invoke('docker',['image','inspect','--format','{{.Id}}',image]),log,...identity};await atomic(receipt,result);return result;
+  }catch(e){await atomic(receipt,{state:'failed',source,image,log,error:e.message,...identity});throw e;}
   finally{await handle.close();await fs.rm(lock);}
 }
 export async function main(args) {
   const [action,...rest]=args;const options={};
-  if(!action||action==='--help'){console.log(JSON.stringify({commands:['preflight --executor <name-or-absolute-path> [--home PATH]','build [--home PATH]','status --deployment PATH'],note:'Host prerequisites and main-agent diagnostics only. Initialize an empty registry; verify Telegram before asking the installed agent to add plugins.'}));return;}
-  for(let i=0;i<rest.length;i+=2){if(!['--home','--executor','--deployment'].includes(rest[i])||!rest[i+1]||Object.hasOwn(options,rest[i].slice(2)))throw Error('Invalid arguments');options[rest[i].slice(2)]=rest[i+1];}
-  const allowed={preflight:['home','executor'],build:['home'],status:['deployment']};if(!allowed[action]||Object.keys(options).some(k=>!allowed[action].includes(k)))throw Error('Invalid action/options');
+  if(!action||action==='--help'){console.log(JSON.stringify({commands:['preflight --executor <name-or-absolute-path> [--home PATH]','build [--home PATH] [--label X.Y.Z-beta.N.rc.M]','status --deployment PATH'],note:'Source checkouts build RCs only: commit and open the PR first, then pass the next --label. Host prerequisites and main-agent diagnostics only; initialize an empty registry and verify Telegram before asking the installed agent to add plugins.'}));return;}
+  for(let i=0;i<rest.length;i+=2){if(!['--home','--executor','--deployment','--label'].includes(rest[i])||!rest[i+1]||Object.hasOwn(options,rest[i].slice(2)))throw Error('Invalid arguments');options[rest[i].slice(2)]=rest[i+1];}
+  const allowed={preflight:['home','executor'],build:['home','label'],status:['deployment']};if(!allowed[action]||Object.keys(options).some(k=>!allowed[action].includes(k)))throw Error('Invalid action/options');
   const result=action==='preflight'?await preflight(options):action==='build'?await build(options):await installationStatus(options.deployment);console.log(JSON.stringify(result));if(result.ok===false)process.exitCode=1;
 }

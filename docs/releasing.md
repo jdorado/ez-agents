@@ -77,6 +77,12 @@ read back `npm view @jc_stack/ez-agents@0.1.0-beta.12 name version dist-tags --j
 contents/checksum against the reviewed artifact. Keep the npm artifact and
 GitHub tag on the same reviewed commit. Do not create a new token to bypass 2FA.
 
+Source-checkout images for a deployment are RC builds of the unreleased commit:
+`ezenciel-agents-install build --label X.Y.Z-beta.N.rc.M` (increasing `.rc.N`)
+from the clean reviewed commit after the PR is open. The label and commit SHA are
+baked into the image; `/status` shows the RC tag first. Never install an
+unlabeled source build or reuse an RC label for different contents.
+
 ## Agent-owned upgrades
 
 This beta includes owner-policy release checks and durable

@@ -65,6 +65,34 @@ test('same-artifact build retries do not spawn a second Docker build and reuse v
   assert.equal((await build({home,source},invoke)).reused,true);assert.equal(count,1);
   await fs.writeFile(path.join(source,'package.json'),'{"changed":true}');await build({home,source},invoke);assert.equal(count,2);
 });
+test('source checkouts build RCs only: clean reviewed commit plus increasing label',async t=>{
+  const home=await fixture(t),source=path.join(home,'source');await fs.mkdir(source);await fs.writeFile(path.join(source,'package.json'),'{}');
+  let inside=true,status='',built=[];const sha='a'.repeat(40);
+  const invoke=async(cmd,args)=>{
+    if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);
+    if(cmd==='git'){
+      if(!inside)throw Error('not a git repository');
+      if(args[2]==='rev-parse'&&args[3]==='--is-inside-work-tree')return 'true';
+      if(args[2]==='status')return status;
+      if(args[2]==='rev-parse'&&args[3]==='HEAD')return sha;
+      return '';
+    }
+    if(args[0]==='build'){built.push(args);return 'image';}
+    return 'sha256:fixture';
+  };
+  await assert.rejects(build({home,source},invoke),/requires --label/);
+  await assert.rejects(build({home,source,label:'0.1.0-beta.36'},invoke),/RC label/);
+  status=' M src/executor.ts';
+  await assert.rejects(build({home,source,label:'0.1.0-beta.36.rc.2'},invoke),/Commit the reviewed source/);
+  status='';
+  const result=await build({home,source,label:'0.1.0-beta.36.rc.2'},invoke);
+  assert.equal(result.label,'0.1.0-beta.36.rc.2');assert.equal(result.sha,sha);
+  const args=built.at(-1);
+  assert.ok(args.includes('BUILD_TAG=0.1.0-beta.36.rc.2'));assert.ok(args.includes(`BUILD_SHA=${sha}`));
+  assert.ok(args.includes('ezenciel-agents:0.1.0-beta.36.rc.2'));
+  inside=false;
+  await assert.rejects(build({home,source,label:'0.1.0-beta.36.rc.2'},invoke),/--label requires a git checkout/);
+});
 test('a failed build releases its own lock and leaves a failure receipt for diagnosis',async t=>{
   const home=await fixture(t),source=path.join(home,'source');await fs.mkdir(source);await fs.writeFile(path.join(source,'package.json'),'{}');
   const invoke=async(cmd)=>{if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);throw Error('Synthetic build failed');};
