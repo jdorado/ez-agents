@@ -235,7 +235,7 @@ updaters need an exact-version core update to adopt this discovery behavior.
 
 ## Operating-agent instructions
 
-Setup and runtime startup strip any obsolete `<!-- ez shared guidance -->`
+Setup and the main upgrade step strip any obsolete `<!-- ez shared guidance -->`
 handbook from workspace `AGENTS.md` (and existing `AGENTS.override.md`).
 Personal text outside that block is preserved byte-for-byte. Do not reinsert
 coding, KISS, contribution or repair loops into operating minds.

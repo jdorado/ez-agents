@@ -107,16 +107,16 @@ test('relay healthcheck emits bounded predicate evidence without state contents'
 });
 test('plugin status verifies images and reports stopped, mismatched and unreachable runtimes honestly',async t=>{
  const f=await fixture(t,'plugin'),id='a'.repeat(64),image='sha256:'+'b'.repeat(64);
- for(const mode of ['running','ndjson','stopped','missing','mismatched','offline']) {
+ for(const mode of ['running','ndjson','warned','stopped','missing','mismatched','offline']) {
   const calls=[];
   const run=async(c,args)=>{
    calls.push([c,...args]);assert.equal(c,'docker');
    if(mode==='offline')throw Error('synthetic secret must not escape');
-   if(args.includes('ps')) {const rows=mode==='missing'?[]:[{Service:'sample',State:mode==='stopped'?'exited':'running',Health:'healthy',ID:id}];return mode==='ndjson'?rows.map(r=>JSON.stringify(r)).join('\n'):JSON.stringify(rows);}
+   if(args.includes('ps')) {const rows=mode==='missing'?[]:[{Service:'sample',State:mode==='stopped'?'exited':'running',Health:'healthy',ID:id}];const lines=mode==='ndjson'?rows.map(r=>JSON.stringify(r)).join('\n'):JSON.stringify(rows);return mode==='warned'?'time="now" level=warning msg="the attribute version is obsolete"\n'+rows.map(r=>JSON.stringify(r)).join('\n'):lines;}
    assert(args.includes('inspect'));return mode==='mismatched'&&args[0]==='image'?'sha256:'+'c'.repeat(64):image;
   };
   const s=await runtimeStatus(f.home,run),p=s.plugins[0];
-  assert.equal(p.installedVersion,'0.1.0');assert.equal(p.runningVersion,['running','ndjson'].includes(mode)?'0.1.0':null);
+  assert.equal(p.installedVersion,'0.1.0');assert.equal(p.runningVersion,['running','ndjson','warned'].includes(mode)?'0.1.0':null);
   assert.equal(p.state,mode==='offline'?'unknown':['stopped','missing'].includes(mode)?'stopped':'running');
   assert(!JSON.stringify(s).includes('synthetic secret'));assert(calls.every(c=>!c.includes('exec')&&!c.includes('start')&&!c.includes('up')));
  }

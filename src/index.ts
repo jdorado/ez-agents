@@ -38,7 +38,7 @@ import { createConversationMenu } from './conversation-menu.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
 import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
-import { initializeWorkspace } from './workspace.js'
+import { runPromptSuffix } from './prompt-suffix.js'
 import { softwareStatus } from './software-status.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
@@ -70,7 +70,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let taskTimer: ReturnType<typeof setInterval> | undefined
   let drainTimer: ReturnType<typeof setInterval> | undefined
   const codexHome = join(config.controlDir, 'cli', 'codex')
-  const conversationMenu = createConversationMenu(control, runs)
+  const conversationMenu = createConversationMenu(control)
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
   const durableWorkerChoice = () => control.captureChoice(aiMenu.initial)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
@@ -248,7 +248,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           codexSandbox: !run.taskId && selected.cli === 'codex' ? config.codexSandbox : undefined,
           sessionId: session.nativeSessionId || session.sessionId,
           isResume: session.hasStarted,
-          eventSource: run.external?.sourceId,
+          promptSuffix: runPromptSuffix(started),
+          taskRun: Boolean(run.taskId),
+          nativeSession: Boolean(run.scheduled),
           onSession: run.external || run.taskId ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
         })
         const executionStarted = performance.now()
@@ -1162,13 +1164,17 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const start = async () => {
     let failed = false
     try {
-      await initializeWorkspace(config.workspace)
+      // Workspace seeding and managed-block replacement happen at install or
+      // upgrade only; relay startup never writes the agent workspace.
       // The delivery socket is the cross-process ledger transport and the
       // single-relay guard (replacing relay.lock): a live sibling answers the
       // ping and this relay refuses to split-brain the agent.
       if (await deliverySocketAlive(deliverySocketPath(config.controlDir)).catch(() => false))
         throw new Error(`Another relay owns ${config.controlDir}; stop it before starting a second one`)
-      deliveryServer = await serveDeliverySocket(config.controlDir, handleDeliveryOp)
+      const deliveryTcpPort = Number(process.env.EZ_DELIVERY_TCP_PORT ?? '')
+      deliveryServer = await serveDeliverySocket(config.controlDir, handleDeliveryOp, {
+        ...(Number.isSafeInteger(deliveryTcpPort) && deliveryTcpPort >= 1024 && deliveryTcpPort <= 65535 ? { tcpPort: deliveryTcpPort } : {}),
+      })
       if (config.applicationPort) await applicationChannel.listen(config.applicationPort, config.applicationHost)
       runtimeStarted = true
       const owner = (await control.status()).owner

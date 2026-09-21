@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeInvocation, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
+import { requireOwnerExecution } from '../src/execution-authority.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
 
@@ -242,7 +243,7 @@ test('external Codex isolation cannot launch host runs', async t => {
   }
 })
 
-test('external local owner chat preserves authorization and literal input', async t => {
+test('external local owner chat preserves literal input and admission rejects foreign or restricted runs', async t => {
   const root=await mkdtemp(path.join(tmpdir(),'ez-external-owner-'))
   t.after(()=>rm(root,{recursive:true,force:true}))
   const prior={path:process.env.PATH,transport:process.env.EZ_EXECUTOR_TRANSPORT}
@@ -262,10 +263,10 @@ test('external local owner chat preserves authorization and literal input', asyn
     const runs=new RunStore(root)
     await runs.create({id:'r_foreign',chatId:999,telegramUserId:999,texts:['no']})
     await runs.patch('r_foreign',{status:'running'})
-    await assert.rejects(startExecutorJob(['no'],{...opts,runId:'r_foreign'}),/blocked|owner/i)
+    await assert.rejects(requireOwnerExecution(root,'r_foreign'),/blocked: owner-mismatch/i)
     await runs.create({id:'r_restricted',chatId:101,telegramUserId:101,texts:['no'],taskId:'task_'+'a'.repeat(32)})
     await runs.patch('r_restricted',{status:'running'})
-    await assert.rejects(startExecutorJob(['no'],{...opts,runId:'r_restricted'}),/owner-authorized native local/)
+    await assert.rejects(requireOwnerExecution(root,'r_restricted'),/external-execution-unavailable/)
   } finally {
     if(prior.path===undefined)delete process.env.PATH;else process.env.PATH=prior.path
     if(prior.transport===undefined)delete process.env.EZ_EXECUTOR_TRANSPORT;else process.env.EZ_EXECUTOR_TRANSPORT=prior.transport

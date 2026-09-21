@@ -125,6 +125,8 @@ pnpm install --frozen-lockfile
 export PATH="$PWD/bin:$PATH"
 export EZ_AGENTS_HOME=/absolute/private/agents
 node bin/ezenciel-agents-install build
+# Source checkout only: commit, open the PR, then build
+# node bin/ezenciel-agents-install build --label X.Y.Z-beta.N.rc.M
 # Set EZ_RELAY_IMAGE to the exact image returned by build for create/start.
 export EZ_RELAY_IMAGE='<returned-image>'
 ```
@@ -132,7 +134,10 @@ export EZ_RELAY_IMAGE='<returned-image>'
 Node 22+ and pnpm 10.30.3 are needed by the host transport. The tarball carries
 its lockfile under docker/ because npm excludes the root pnpm lockfile. Do not
 move this package directory after binding a service to its absolute paths.
-For a source checkout the root lockfile is already present. Do not run a second
+For a source checkout the root lockfile is already present. A source checkout is
+an RC: commit and open the PR first, then `build --label X.Y.Z-beta.N.rc.M`; the
+command refuses a dirty tree and bakes the RC tag and commit into the image so
+`/status` never reports the bare package version. Do not run a second
 copy of an existing bot token. Continue with the per-agent configuration below.
 
 Verify the tarball against its adjacent `.sha256` or the kit's `SHA256SUMS` before
