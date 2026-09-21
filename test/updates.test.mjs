@@ -107,16 +107,16 @@ test('relay healthcheck emits bounded predicate evidence without state contents'
 });
 test('plugin status verifies images and reports stopped, mismatched and unreachable runtimes honestly',async t=>{
  const f=await fixture(t,'plugin'),id='a'.repeat(64),image='sha256:'+'b'.repeat(64);
- for(const mode of ['running','ndjson','stopped','missing','mismatched','offline']) {
+ for(const mode of ['running','ndjson','warned','stopped','missing','mismatched','offline']) {
   const calls=[];
   const run=async(c,args)=>{
    calls.push([c,...args]);assert.equal(c,'docker');
    if(mode==='offline')throw Error('synthetic secret must not escape');
-   if(args.includes('ps')) {const rows=mode==='missing'?[]:[{Service:'sample',State:mode==='stopped'?'exited':'running',Health:'healthy',ID:id}];return mode==='ndjson'?rows.map(r=>JSON.stringify(r)).join('\n'):JSON.stringify(rows);}
+   if(args.includes('ps')) {const rows=mode==='missing'?[]:[{Service:'sample',State:mode==='stopped'?'exited':'running',Health:'healthy',ID:id}];const lines=mode==='ndjson'?rows.map(r=>JSON.stringify(r)).join('\n'):JSON.stringify(rows);return mode==='warned'?'time="now" level=warning msg="the attribute version is obsolete"\n'+rows.map(r=>JSON.stringify(r)).join('\n'):lines;}
    assert(args.includes('inspect'));return mode==='mismatched'&&args[0]==='image'?'sha256:'+'c'.repeat(64):image;
   };
   const s=await runtimeStatus(f.home,run),p=s.plugins[0];
-  assert.equal(p.installedVersion,'0.1.0');assert.equal(p.runningVersion,['running','ndjson'].includes(mode)?'0.1.0':null);
+  assert.equal(p.installedVersion,'0.1.0');assert.equal(p.runningVersion,['running','ndjson','warned'].includes(mode)?'0.1.0':null);
   assert.equal(p.state,mode==='offline'?'unknown':['stopped','missing'].includes(mode)?'stopped':'running');
   assert(!JSON.stringify(s).includes('synthetic secret'));assert(calls.every(c=>!c.includes('exec')&&!c.includes('start')&&!c.includes('up')));
  }
@@ -399,11 +399,8 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));if(j.status==='failed'||j.status==='rolled-back')throw Error(JSON.stringify(j)+first.output());return j.status==='completed';});
  const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);assert.equal(await firstClosed,0,first.output());
  if(provider==='pnpm'){assert.match(first.output(),/Update discovery failed; host remains running/);assert.doesNotMatch(first.output(),/Synthetic discovery failure/);}
- // Completion is persisted before the supervisor publishes its attention receipt.
- await wait(async()=>{
-  try{return (await read(path.join(f.agent.controlDir,'update-attention.json'))).id===digest(job.id);}
-  catch(error){if(error.code==='ENOENT')return false;throw error;}
- });
+ // Adversarial: a completed update must not publish an agent wakeup notice.
+ await assert.rejects(fs.readFile(path.join(f.agent.controlDir,'update-attention.json')),error=>error.code==='ENOENT');
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).packageManager.command,provider);
  const second=start();t.after(()=>second.p.kill('SIGTERM'));

@@ -30,8 +30,8 @@ test('missing, corrupt, finished and mismatched core runs fail closed without co
   await assert.rejects(requireOwnerExecution(dir,run.id), /No active core run/)
   await new RunStore(dir).patch(run.id,{status:'running'})
   // Fail-closed authority is preserved with a read-only owner read: zero
-  // control/ writes, rejects on revoked owner. Intake authorizes first; the
-  // executor re-verifies at launch.
+  // control/ writes, rejects on revoked owner. Intake authorizes before spawn;
+  // the slim core no longer reads or re-verifies the ledger.
   await new ControlStore(dir,1000).revokeOwner()
   await assert.rejects(requireOwnerExecution(dir,run.id), /owner-mismatch/)
   // Ledger lives in relay memory; corrupt authority state still fails closed

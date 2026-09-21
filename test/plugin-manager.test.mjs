@@ -217,6 +217,23 @@ test('unconfirmed direct-command cancellation retains its lifecycle lease',async
  assert.equal((await fs.readdir(path.join(f.home,'command-invocations'))).length,1);
  await assert.rejects(f.call('plugins','uninstall','sample'),/Stale command invocation lease/);
 });
+test('an unreadable invocation lease pid falls through to container verification',async t=>{
+ const f=await fixture(t);
+ const directory=path.join(f.home,'command-invocations');await fs.mkdir(directory,{recursive:true});
+ const lease=path.join(directory,'00000000-0000-4000-8000-000000000000.json');
+ await fs.writeFile(lease,JSON.stringify({pid:process.pid,container:'gone-call'}),{mode:0o600});
+ const path0=process.env.PATH,kill0=process.kill;
+ process.env.PATH=f.fake+path.delimiter+path0;
+ process.kill=()=>{const error=new Error('kill EPERM');error.code='EPERM';throw error;};
+ try {
+  await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){console.error('No such container: gone-call');process.exit(1)}\n`,{mode:0o700});
+  assert.equal(await locked(f.home,async()=>'ok'),'ok');
+  await assert.rejects(fs.access(lease),{code:'ENOENT'});
+  await fs.writeFile(lease,JSON.stringify({pid:process.pid,container:'live-call'}),{mode:0o600});
+  await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){console.log('live-call');process.exit(0)}\n`,{mode:0o700});
+  await assert.rejects(locked(f.home,async()=>{}),/Stale command invocation lease/);
+ } finally {process.kill=kill0;process.env.PATH=path0;}
+});
 test('changed source, symlinks, reserved aliases, arbitrary Docker fields rejected',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
  await fs.writeFile(path.join(f.source,'client.mjs'),'changed');await assert.rejects(f.call('plugins','install','sample','--source',f.source,'--revision',p.revision));

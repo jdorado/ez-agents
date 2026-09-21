@@ -15,4 +15,4 @@ Authorization, sandboxing and tool handlers enforce contact and lifecycle limits
 An owner-approved channel capability adds only a fixed installed alias declared
 as a read-only channel query; it does not expose the workspace, shell, owner
 session or other installed tools.
-Maintenance and group notifications carry event data; CLI help owns operations.
+Group notifications carry event data; CLI help owns operations.

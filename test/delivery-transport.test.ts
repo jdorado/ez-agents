@@ -59,3 +59,14 @@ test('the client fails closed when neither the socket nor an endpoint exists', a
   t.after(() => rm(dir, { recursive: true, force: true }))
   await assert.rejects(callDeliverySocket(deliverySocketPath(dir), { op: 'ping' }, 500), /Delivery relay unavailable/)
 })
+
+test('a response timeout is not replayed over the loopback endpoint', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-delivery-timeout-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  let calls = 0
+  const server = await serveDeliverySocket(dir, async () => { calls++; return new Promise(() => {}) }, { tcpPort: 0 })
+  t.after(() => server.stop())
+  assert.ok(server.endpoint)
+  await assert.rejects(callDeliverySocket(deliverySocketPath(dir), { op: 'enqueue' }, 200), /Delivery relay unavailable/)
+  assert.equal(calls, 1)
+})

@@ -11,16 +11,18 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { Scheduler } from '../src/scheduler.js'
 import { initialPreset } from '../src/ai.js'
-import { randomUUID } from 'node:crypto'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let i=0;i<200;i++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Timed out')}
 
-test('maintenance wakeups use an independent ephemeral session after a relay restart',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'ez-maintenance-session-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
- let launchSession='',onSessionCalls=0
+// Adversarial: the relay must not reserve wrapper semantics for an
+// update-shaped run id or a stale attention notice.
+test('a wrapper-shaped run id has no maintenance treatment and a stale notice is inert',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-no-maintenance-session-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
+ let launchSession='',onSessionCalls=0,launches=0
  const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(_texts,options)=>{
+  launches++
   launchSession=options.sessionId ?? ''
-  if(options.onSession){onSessionCalls++;await options.onSession('native-maintenance')}
+  if(options.onSession){onSessionCalls++;await options.onSession('native-review')}
   const child=spawn(process.execPath,['-e','setTimeout(()=>{},10)'],{detached:process.platform!=='win32'})
   await once(child,'spawn')
   return {child,cleanup:async()=>{},stdout:''}
@@ -29,13 +31,17 @@ test('maintenance wakeups use an independent ephemeral session after a relay res
  relay.bot.api.config.use(async()=>({ok:true,result:{message_id:42}}) as never)
  try{
   await control.requestPairing(101,101);await control.approveOwner(101)
-  const execution={sessionId:randomUUID(),preset:initialPreset('codex')}
+  const execution=await control.captureChoice(initialPreset('codex'))
   await runs.create({id:'r_update_fixture',chatId:101,telegramUserId:101,texts:['maintenance'],execution})
   await relay.drainSources()
   await until(async()=> (await runs.get('r_update_fixture'))?.status==='completed')
-  assert.notEqual(launchSession,execution.sessionId)
-  assert.equal(onSessionCalls,0)
-}finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
+  assert.equal(launchSession,execution.sessionId)
+  assert.equal(onSessionCalls,1)
+  await writeFile(join(dir,'update-attention.json'),JSON.stringify({id:'a'.repeat(64)}))
+  await relay.drainSources()
+  assert.equal(launches,1)
+  assert.equal((await runs.list()).length,1)
+ }finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
 })
 
 test('chat replies through the real ingress/outbox while scheduled CLI remains alive; targeted cancellation',async()=>{

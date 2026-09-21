@@ -6,7 +6,6 @@ import { atomic, locked } from '../plugins/manager.mjs';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
 import { state, read, jobs, jobPath, check, missing, cleanupStaleBackups } from './control.mjs';
 import { perform, environment } from './runtime.mjs';
-import { digest } from './artifact.mjs';
 
 const reservedProviderKeys=new Set(['HOME','LANG','LC_ALL','LOGNAME','PATH','SHELL','TERM','TMPDIR','USER','CODEX_HOME','NODE_OPTIONS']);
 const providerEnvironmentKey=value=>{
@@ -28,9 +27,6 @@ export async function idle(control) {
   // cross-process view of active work. A down relay cannot own a run.
   const status=await callDeliverySocket(path.join(control,'delivery.sock'),{op:'status'},2000).catch(()=>null);
   return !status||status.running===0;
-}
-export async function notice(control,key) {
-  await atomic(path.join(control,'update-attention.json'),{id:digest(key)});
 }
 export async function supervise(deployment,signal,{discover=check}={}) {
   const host=await read(path.join(deployment,'host-executor.json'));
@@ -77,7 +73,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     await sleep(1200);
     const interrupted=(await jobs(home)).find(j=>j.status==='applying');
     if(interrupted){
-      await atomic(pause,{id:interrupted.id});const result=await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));await fs.rm(pause,{force:true});await notice(agent.controlDir,interrupted.id);
+      await atomic(pause,{id:interrupted.id});const result=await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));await fs.rm(pause,{force:true});
       if(result.status==='completed'&&interrupted.target==='main')return;
     }
     const isolated=host.isolation==='isolated'
@@ -100,16 +96,12 @@ export async function supervise(deployment,signal,{discover=check}={}) {
           const latest=await read(path.join(jobPath(home,pending.id),'job.json'));
           if(latest.status==='queued'){latest.status='failed';latest.error=error.message;await atomic(path.join(jobPath(home,pending.id),'job.json'),latest);}else throw error;
         } finally {await fs.rm(pause,{force:true});}
-        await notice(agent.controlDir,pending.id);
         if(result?.status==='completed'&&pending.target==='main')return;
       }
       if(Date.now()>=nextCheck) {
         nextCheck=Date.now()+6*60*60*1000;
         try {
           const results=await discover(home);await atomic(path.join(directory,'available.json'),results);
-          const available=results.filter(r=>r.newer&&r.policy.automatic);
-          const key=digest(JSON.stringify(available)),saved=await read(path.join(directory,'discovery.json')).catch(missing);
-          if(available.length&&saved?.key!==key){await notice(agent.controlDir,key);await atomic(path.join(directory,'discovery.json'),{key});}
         } catch {
           // Discovery is optional; its failure must not terminate the host.
           // Do not expose registry response bodies or credentials in logs.

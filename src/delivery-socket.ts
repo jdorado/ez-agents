@@ -126,6 +126,9 @@ export const serveDeliverySocket = async (
   })
   // A live sibling relay already owns this agent. Refuse to split-brain.
   server.on('error', () => {})
+  // A deployment that no longer publishes the endpoint must not leave a stale
+  // token/port behind for host CLIs to dial before failing.
+  if (options.tcpPort === undefined) await rm(path.join(controlDir, endpointFile), { force: true }).catch(() => {})
   let tcp: Server | null = null
   let endpoint: DeliveryEndpoint | null = null
   if (options.tcpPort !== undefined) {

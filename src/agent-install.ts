@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises'
+import { chmod, mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { isAbsolute, join, resolve, dirname, delimiter } from 'node:path'
 import { parseArgs } from 'node:util'
 import { executorKey } from './executor.js'
 import { isolationTransport, parseIsolationClass, type IsolationClass } from './isolation.js'
 import { ledgerOverlayName, ledgerOverlayYaml } from './ledger-endpoint.mjs'
+import { initializeWorkspace } from './workspace.js'
 import { fileURLToPath } from 'node:url'
 import { validateCodexProvider, type CodexProviderBinding } from './executor.js'
 
@@ -89,6 +90,11 @@ export const createAgent = async (options: {
     await writeFile(join(directory, 'relay.env'), `TELEGRAM_BOT_TOKEN=${token}\n`, {mode:0o600, flag:'wx'})
     await writeFile(join(directory, 'purpose.md'), purpose.trim()+'\n', {mode:0o644, flag:'wx'})
     await mkdir(join(directory,'mind'),{mode:0o700})
+    // Install-time seed: the relay never writes the workspace at startup.
+    // Readable beyond the installer UID so a mismatched runtime UID still
+    // loads its own purpose; the 0700 deployment directory keeps it private.
+    const seeded = await initializeWorkspace(join(directory,'mind'), join(directory,'purpose.md'))
+    if (seeded.includes('AGENTS.md')) await chmod(join(directory,'mind','AGENTS.md'), 0o644)
     await mkdir(join(directory,'control'),{mode:0o700})
     await mkdir(join(directory,'tools'),{mode:0o700})
     const agent = {name, project, deploymentDir, purpose:purpose.trim(), executor:cli, isolation}

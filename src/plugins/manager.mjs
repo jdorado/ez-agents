@@ -63,7 +63,7 @@ async function activeInvocations(home) {
     if(!/^[0-9a-f-]{36}\.json$/.test(file))throw Error('Invalid command invocation lease; inspect before recovery');
     const lease=await json(path.join(directory,file));
     if(!Number.isSafeInteger(lease.pid)||lease.pid<1||typeof lease.container!=='string'||!lease.container)throw Error('Invalid command invocation lease; inspect before recovery');
-    try {process.kill(lease.pid,0);return true;} catch(error) {if(error.code!=='ESRCH')throw error;}
+    try {process.kill(lease.pid,0);return true;} catch(error) {if(error.code!=='ESRCH'&&error.code!=='EPERM')throw error;}
     const state=await run(['container','inspect',lease.container],{capture:true});
     if(state.code===0)throw Error(`Stale command invocation lease; inspect container ${lease.container} before recovery`);
     if(!/No such (?:object|container)/i.test(state.stderr+state.stdout))throw Error('Unable to verify a stale command invocation lease; inspect Docker before recovery');
