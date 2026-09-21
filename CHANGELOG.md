@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Stop waking the agent for software updates. The supervisor no longer writes an
+  attention notice and the relay no longer queues a wrapper-owned
+  `software_update_attention` run, so nothing outside the managed `ez tools`
+  locator is injected into an operating agent. `ez updates` stays owner-invoked.
 - Stop injecting a package-owned coding handbook into operating-agent
   `AGENTS.md`. Upgrades strip the old `ez shared guidance` block. Seed only the
   installer purpose. The managed `ez tools` locator binds the agent launcher

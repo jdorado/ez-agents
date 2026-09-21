@@ -89,7 +89,6 @@ test('backend mode cannot dispatch restricted, external, scheduled or update run
     await runs.create({ ...common, id: 'restricted', taskId: `task_${'a'.repeat(32)}` })
     await runs.create({ ...common, id: 'external', external: { sourceId: 'fixture', bindingId: 'binding', eventIds: ['1'] } })
     await runs.create({ ...common, id: 'scheduled', scheduled: { id: 's', revision: 'r', dueAt: new Date().toISOString(), pairedAt: owner.pairedAt } })
-    await runs.create({ ...common, id: 'r_update_fixture' })
     await relay.drainSources()
     assert.equal(calls, 0); assert.equal(launches, 0)
     assert.ok((await runs.list()).every(run => run.status === 'failed'))

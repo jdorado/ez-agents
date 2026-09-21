@@ -164,7 +164,8 @@ running. Failed activation restores the previous code/configuration and checks i
 If recovery itself fails, inspect and fix the reported infrastructure problem,
 then use `ez updates recover <job-id>` and finish the turn. This retries only the
 saved code/configuration recovery, not provider operations.
-Completion or failure wakes the agent to inspect the receipt and report naturally.
+An update never wakes the agent or injects wrapper state into its session; the
+owner or agent inspects receipts with `ez updates` when asked.
 
 Backups contain credentials and must stay private. Main backups cover the
 canonical mind/control and deployment files. Plugins back up existing named

@@ -13,7 +13,6 @@ import { stat } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
 import { ownedScheduledTasks, scheduledTaskDetailText, scheduledTasksText } from './scheduled-tasks.js'
 import { taskWorkspace } from './task-workspace.js'
-import { queueUpdateAttention } from './update-attention.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
 import {removeTaskAttachments} from './task-attachments.js'
 import { dirname, join, basename } from 'node:path'
@@ -181,7 +180,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         catch { await runs.patch(run.id, { status: 'cancelled', endedAt: new Date().toISOString() }); await releaseExternal(run); return }
       }
       if (config.channelBackendUrl) {
-        if (run.external || run.taskId || run.scheduled || run.id.startsWith('r_update_')) { await runs.patch(run.id, { status: 'failed' }); await releaseExternal(run); return }
+        if (run.external || run.taskId || run.scheduled) { await runs.patch(run.id, { status: 'failed' }); await releaseExternal(run); return }
         activeBackend = true
         await runs.patch(run.id, { status: 'running', backendSubmitted: true })
         void dispatchChannel(config, run).then(async reply => {
@@ -229,8 +228,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const launchStarted = performance.now()
         const started = await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
         if (!started.execution && !run.taskId) throw new Error('Legacy queued work has no pinned AI. Resend the request after /new.')
-        const maintenanceWakeup = run.id.startsWith('r_update_')
-        const startsOwnSession = Boolean(run.external || run.taskId || run.scheduled || maintenanceWakeup)
+        const startsOwnSession = Boolean(run.external || run.taskId || run.scheduled)
         const session = startsOwnSession
           ? { sessionId: randomUUID(), hasStarted: false, nativeSessionId: undefined }
           : await control.executionSession(started.execution!)
@@ -251,7 +249,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           sessionId: session.nativeSessionId || session.sessionId,
           isResume: session.hasStarted,
           eventSource: run.external?.sourceId,
-          onSession: run.external || run.taskId || maintenanceWakeup ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
+          onSession: run.external || run.taskId ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
         })
         const executionStarted = performance.now()
         // Attach before disk writes: a fast child can close while PID persistence
@@ -390,7 +388,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       for (const task of await tasks.list()) if (task.state === 'pending' || task.state === 'active' || task.unwatchPending) {
         try { await tasks.decide(task.id) } catch { /* Failed or stale grants cannot launch. */ }
       }
-      if (telegramOwner(owner)) await queueUpdateAttention(config.controlDir,owner,runs,await durableWorkerChoice())
       }
       for (const source of config.channelBackendUrl ? [] : await sources.available(owner)) {
         try {
