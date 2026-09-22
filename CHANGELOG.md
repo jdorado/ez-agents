@@ -1,7 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.36
 
+- Move relay run/outbox/inbox bookkeeping into relay memory behind the control
+  delivery socket. A restart drops in-flight runs and queued deliveries by
+  design; Telegram redelivery is the replay mechanism. The live socket replaces
+  the relay flock as the single-relay guard.
+- Slim the spawn core to spawn and stream only. Callers authorize admission and
+  pass the one trigger suffix; the core no longer reads the run ledger, history
+  or workspace.
+- Add a dedicated plugin-broker service (isolated profile) that owns Docker
+  access with no network access. Isolated plugin commands run over a Unix socket
+  with single-use capabilities, pinned revisions and per-invocation receipts.
+- Publish installed plugin versions through the broker and report the deployed
+  build identity; show the running RC tag, isolation/transport mode and host
+  platform in `/status`.
+- Add `ezenciel-agents-provision-telegram` to attach a Telegram channel to an
+  existing botless deployment using that deployment's installed image.
+- Add the Telegram `/tasks` list with numbered detail, attach Telegram identity
+  to an existing web owner, and infer Telegram transport from the token instead
+  of `EZ_TELEGRAM_ENABLED`.
+- Remove PagerDuty and Workforce Watch from core. Authorization, transport,
+  scheduling, safety gates and delivery receipts remain.
 - Stop waking the agent for software updates. The supervisor no longer writes an
   attention notice and the relay no longer queues a wrapper-owned
   `software_update_attention` run, so nothing outside the managed `ez tools`
@@ -11,6 +31,20 @@
   installer purpose. The managed `ez tools` locator binds the agent launcher
   (`ez --help` and `ez tools list --details`); inventory is generated on read.
   Do not create `inbox/`, `work/`, `SOUL.md`, or `USER.md`.
+- Generalize compatibility bridge upgrades so `.compat.N` builds hand off to
+  their canonical release, and allow reviewed legacy homes without `docker.env`.
+- List the agent-bound Codex catalog in `/ai` for local relays, make declared
+  provider models authoritative and migrate persisted provider selections.
+- Source-checkout RC builds require a clean reviewed commit and an increasing
+  `.rc.N` label; the label and commit SHA are baked into the image and shown
+  first in `/status`.
+- Existing host-capable deployments need one installer-owned migration before
+  this release: `ezenciel-agents-install migrate-ledger --deployment <dir>` adds
+  the authenticated loopback ledger endpoint. Pre-beta.36 deployments also need
+  the installer-owned bootstrap because the new `plugin-broker` service and
+  environment changes do not match the previous release's deployment gate.
+- Fix plugin application context delivery into the command container, plugin
+  status JSON parsing under Compose warnings, and EPERM lease liveness.
 
 ## 0.1.0-beta.35
 
