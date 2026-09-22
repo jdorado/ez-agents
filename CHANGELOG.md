@@ -12,9 +12,9 @@
 - Add a dedicated plugin-broker service (isolated profile) that owns Docker
   access with no network access. Isolated plugin commands run over a Unix socket
   with single-use capabilities, pinned revisions and per-invocation receipts.
-- Publish installed plugin versions and build identity through the broker, and
-  show the running RC tag, isolation/transport mode and host platform in
-  `/status`.
+- Publish installed plugin versions through the broker and report the deployed
+  build identity; show the running RC tag, isolation/transport mode and host
+  platform in `/status`.
 - Add `ezenciel-agents-provision-telegram` to attach a Telegram channel to an
   existing botless deployment using that deployment's installed image.
 - Add the Telegram `/tasks` list with numbered detail, attach Telegram identity
