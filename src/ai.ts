@@ -1,9 +1,11 @@
 import { assertEffort, allowedEffort } from './model-policy.js'
 import { access, readFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { homedir } from 'node:os'
 import { join, delimiter } from 'node:path'
-import { executorKey, resolveExecutor } from './executor.js'
+import { executorEnvironment, executorKey, resolveExecutor } from './executor.js'
 import { desktopCodexPath } from './desktop-bridge.js'
 
 export type AiPreset = { id: string; name: string; cli: string; provider?: string; model?: string; effort?: string }
@@ -45,7 +47,47 @@ export const installed = async (cli: string): Promise<boolean> => {
 
 // Read only metadata from native client catalogs. Never import prompts, credentials,
 // provider configuration, or model instructions into relay context.
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex')): Promise<ModelChoice[]> => {
+// The optional runner injects `opencode models` output in tests; production
+// spawns the installed CLI with the whitelisted executor environment.
+export const readOpencodeModels = async (run?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
+  const exec = run ?? (async (args: string[]) =>
+    (await promisify(execFile)('opencode', args, { env: executorEnvironment(), timeout: 8000, maxBuffer: 4 * 1024 * 1024 })).stdout)
+  const record = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  try {
+    const stdout = await exec(['models', '--verbose'])
+    // Verbose output alternates a `provider/model` identifier line with its
+    // pretty-printed JSON metadata (name, variants). Split on identifier lines
+    // so variant keys can be projected as selectable efforts.
+    const segments = stdout.split(/^([A-Za-z0-9_.\-]+\/[A-Za-z0-9_./:~\-]+)$/m)
+    const entries: ModelChoice[] = []
+    for (let index = 1; index + 1 < segments.length; index += 2) {
+      const id = segments[index].trim()
+      if (!safe(id)) continue
+      let meta: Record<string, unknown>
+      try { meta = record(JSON.parse(segments[index + 1])) } catch { continue }
+      const friendly = typeof meta.name === 'string' ? meta.name.trim() : ''
+      const efforts = Object.keys(record(meta.variants))
+        .filter((effort) => safe(effort) && allowedEffort(effort, id, 'opencode'))
+      entries.push({ cli: 'opencode', model: id,
+        name: (friendly ? `${friendly} · ${id}` : id).slice(0, 80), efforts })
+    }
+    if (entries.length) return entries
+  } catch { /* fall through to the plain list, then the client default */ }
+  try {
+    const stdout = await exec(['models'])
+    const entries: ModelChoice[] = []
+    for (const line of stdout.split(/\r?\n/)) {
+      const id = line.trim()
+      if (!id || !safe(id)) continue
+      entries.push({ cli: 'opencode', model: id, name: id.slice(0, 80), efforts: [] })
+    }
+    if (entries.length) return entries
+  } catch { /* unavailable metadata stays client default */ }
+  return []
+}
+
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -79,8 +121,12 @@ export const readModels = async (home = homedir(), available = installed, codexH
     models.push(...(desktop.length ? desktop : [{ cli: 'codex-gui', name: 'codex-gui · desktop', efforts: [] }]))
   }
   // Other adapters expose the authenticated client's default, not a guessed catalog.
-  for (const cli of ['claude', 'opencode', 'agy'])
+  for (const cli of ['claude', 'agy'])
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
+  if (await available('opencode')) {
+    const discovered = await readOpencodeModels(opencodeRunner)
+    models.push(...(discovered.length ? discovered : [{ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] }]))
+  }
   return models
 }
 

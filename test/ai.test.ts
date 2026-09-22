@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, chatPreset, readModels, isPreset } from '../src/ai.js'
+import { initialPreset, chatPreset, readModels, isPreset, readOpencodeModels, validateSelection } from '../src/ai.js'
 import { createAiMenu } from '../src/menu.js'
 import { EXECUTOR_REGISTRY, nativeSessionId } from '../src/executor.js'
 import { InboxStore } from '../src/inbox.js'
@@ -287,6 +287,12 @@ test('native executor flags carry the exact model and effort; only structured me
   const codex = EXECUTOR_REGISTRY.codex.buildArgs(opts, '', 'fixture')
   assert.ok(codex.includes('model_reasoning_effort="medium"'))
   assert.deepEqual(codex.slice(-3), ['resume', opts.sessionId, '-'])
+  // Opencode variants pass through verbatim on every platform; there is no
+  // OS-specific effort mapping between the catalog and `run --variant`.
+  const opencode = EXECUTOR_REGISTRY.opencode.buildArgs(
+    { workspace: '/tmp/fixture', model: 'opencode/muse-spark-1.3-contributor-free', effort: 'xhigh' }, '', 'fixture')
+  assert.equal(opencode[opencode.indexOf('-m') + 1], 'opencode/muse-spark-1.3-contributor-free')
+  assert.equal(opencode[opencode.indexOf('--variant') + 1], 'xhigh')
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'thread.started', thread_id: opts.sessionId })), opts.sessionId)
   assert.equal(nativeSessionId('opencode', JSON.stringify({ type: 'step_start', sessionID: 'ses_fixture' })), 'ses_fixture')
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'text', thread_id: opts.sessionId })), undefined)
@@ -352,4 +358,55 @@ test('upgrades expose responsive chat without replacing an existing default or q
     assert.equal(state.defaultId, old.id)
     assert.ok(state.presets.some(p => p.id === 'chat-default'))
   } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('opencode catalog projects installed models with variants as efforts', async () => {
+  const verbose = [
+    'opencode/big-pickle',
+    JSON.stringify({ id: 'big-pickle', providerID: 'opencode', name: 'Big Pickle', variants: {} }),
+    'opencode/ling-free',
+    JSON.stringify({ id: 'ling-free', providerID: 'opencode', name: 'Ling Free',
+      variants: { low: { reasoningEffort: 'low' }, medium: { reasoningEffort: 'medium' }, 'bad option': {} } }),
+    'openrouter/~aliased/model',
+    JSON.stringify({ id: 'model', providerID: 'openrouter', name: 'Aliased', variants: {} }),
+  ].join('\n')
+  const catalog = await readOpencodeModels(async (args) => {
+    assert.deepEqual(args, ['models', '--verbose'])
+    return verbose
+  })
+  assert.deepEqual(catalog, [
+    { cli: 'opencode', model: 'opencode/big-pickle', name: 'Big Pickle · opencode/big-pickle', efforts: [] },
+    { cli: 'opencode', model: 'opencode/ling-free', name: 'Ling Free · opencode/ling-free', efforts: ['low', 'medium'] },
+  ])
+})
+
+test('opencode catalog falls back to the plain list, then to the client default', async () => {
+  const plain = await readOpencodeModels(async (args) => {
+    if (args.includes('--verbose')) throw new Error('no verbose metadata')
+    return 'opencode/alpha\nopenrouter/~aliased/model\nnot a model line\n'
+  })
+  assert.deepEqual(plain, [{ cli: 'opencode', model: 'opencode/alpha', name: 'opencode/alpha', efforts: [] }])
+  assert.deepEqual(await readOpencodeModels(async () => { throw new Error('opencode unavailable') }), [])
+  const fallback = await readModels(undefined, async (cli) => cli === 'opencode', undefined as never,
+    async () => { throw new Error('opencode unavailable') })
+  assert.deepEqual(fallback, [{ cli: 'opencode', name: 'opencode · client default', efforts: [] }])
+  const listed = await readModels(undefined, async (cli) => cli === 'opencode', undefined as never,
+    async () => 'opencode/alpha\n')
+  assert.deepEqual(listed, [{ cli: 'opencode', model: 'opencode/alpha', name: 'opencode/alpha', efforts: [] }])
+})
+
+test('opencode model and variant selections validate against the installed catalog', async () => {
+  const catalog = [
+    { cli: 'opencode', model: 'opencode/ling-free', name: 'Ling Free · opencode/ling-free', efforts: ['low', 'medium'] },
+    { cli: 'opencode', model: 'opencode/big-pickle', name: 'Big Pickle · opencode/big-pickle', efforts: [] },
+  ]
+  const available = async (cli: string) => cli === 'opencode'
+  await validateSelection({ id: 'choice', name: 'Ling', cli: 'opencode', model: 'opencode/ling-free', effort: 'low' }, catalog, available)
+  await validateSelection({ id: 'default', name: 'Default', cli: 'opencode', model: 'opencode/big-pickle' }, catalog, available)
+  await assert.rejects(
+    validateSelection({ id: 'bad', name: 'Bad', cli: 'opencode', model: 'opencode/ling-free', effort: 'max' }, catalog, available),
+    /installed client catalog/)
+  await assert.rejects(
+    validateSelection({ id: 'missing', name: 'Missing', cli: 'opencode', model: 'opencode/unknown' }, catalog, available),
+    /installed client catalog/)
 })

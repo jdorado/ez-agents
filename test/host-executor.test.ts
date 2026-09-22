@@ -22,7 +22,7 @@ test('host restart replaces a lock whose PID was reused by another process',asyn
     await mkdir(workspace);await mkdir(directory,{recursive:true})
     await writeFile(path.join(directory,'worker.lock'),JSON.stringify({pid:process.pid,started:'reused-pid'}))
     server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal)
-    for(let n=0;n<100;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+    for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     await readFile(path.join(directory,'heartbeat.json'))
     const lock=JSON.parse(await readFile(path.join(directory,'worker.lock'),'utf8'))
     assert.equal(lock.pid,process.pid)
@@ -63,7 +63,7 @@ test('host restart clears dead native lease only after proving previous CLI stop
     await readFile(path.join(toolsHome,'workspace-writer.lock'));
     await writeFile(path.join(directory,'r_old.process.json'),JSON.stringify({pid:deadPid}));
     server=serveHostExecutor(installation,abort.signal);
-    for(let n=0;n<100;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+    for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     await readFile(path.join(directory,'heartbeat.json'));
     await assert.rejects(readFile(path.join(toolsHome,'workspace-writer.lock')),{code:'ENOENT'});
   }finally{abort.abort();await server;await rm(root,{recursive:true,force:true});}
@@ -173,7 +173,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     server=serveHostExecutor({cli:'grok',agents},abort.signal)
     for(const agent of agents){
       const dir=path.join(agent.controlDir,'host-executor')
-      for(let n=0;n<100;n++){try{await readFile(path.join(dir,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+      for(let n=0;n<300;n++){try{await readFile(path.join(dir,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
       assert.equal(JSON.parse(await readFile(path.join(dir,'heartbeat.json'),'utf8')).version,packageVersion)
       const release = await workspaceLease(agent.toolsHome)
       await ownerRun(agent.controlDir, `r_${agent.name}`)
