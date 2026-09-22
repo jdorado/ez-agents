@@ -40,7 +40,10 @@ catalog with the whitelisted executor environment, so only models the relay can 
 run are offered; provider variants become selectable efforts (`--variant`).
 Authenticated providers appear only when the agent-bound
 `control/cli/opencode/auth.json` binding exists (host runs keep the installer
-login); otherwise the free tier lists. Refresh by opening the native client;
+login); otherwise the free tier lists. `EZ_OPENCODE_PROVIDERS` optionally
+restricts the catalog to named providers (e.g. `opencode-go`); a set
+allowlist that matches nothing offers no OpenCode choice rather than falling
+back outside it. Refresh by opening the native client;
 the relay does not install models, manage subscriptions or guess aliases.
 
 Setup initialization and relay startup seed one default choice per installed client.

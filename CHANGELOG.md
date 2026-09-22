@@ -13,6 +13,8 @@
   `control/cli/opencode/auth.json`: isolated runs resolve it via an
   agent-bound data home, so paid models list and run; host runs keep the
   installer login and the free tier stays the fallback.
+- Scope the OpenCode catalog with `EZ_OPENCODE_PROVIDERS` (e.g. Go only):
+  unlisted providers, including the free tier, can no longer be selected.
 
 ## 0.1.0-beta.36
 

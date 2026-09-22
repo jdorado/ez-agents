@@ -249,6 +249,12 @@ only the free tier is offered and paid turns fail closed with the provider
 error. Only the directory path crosses into the executor environment, never a
 secret. Host-capable agents reuse the host login and ignore the binding.
 
+`EZ_OPENCODE_PROVIDERS` (relay `environment` in `compose.yaml`, value from
+`docker.env`) optionally restricts the catalog to named providers, e.g.
+`opencode-go` for Go credentials only. Unset means unfiltered; a set
+allowlist that matches nothing offers no OpenCode choice rather than falling
+back outside it.
+
 ## Chat latency
 
 Interactive Codex CLI turns resume the existing native session and use native

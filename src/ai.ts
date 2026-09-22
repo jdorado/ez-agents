@@ -125,9 +125,27 @@ export const readModels = async (home = homedir(), available = installed, codexH
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
   if (await available('opencode')) {
     const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
-    models.push(...(discovered.length ? discovered : [{ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] }]))
+    const allow = opencodeProviderAllowlist()
+    const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
+    if (scoped.length) models.push(...scoped)
+    // A set allowlist that matches nothing offers no OpenCode choice rather
+    // than falling back to the client default outside the allowed providers.
+    else if (!allow) models.push({ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] })
   }
   return models
+}
+
+// Optional deployment-scoped restriction of the OpenCode catalog to named
+// providers (e.g. EZ_OPENCODE_PROVIDERS=opencode-go). Unset means unfiltered.
+// Reads process env directly like OPENCODE_MODEL; malformed values fail fast
+// so /ai reports the misconfiguration instead of a silently wrong list.
+export const opencodeProviderAllowlist = (env: NodeJS.ProcessEnv = process.env): string[] | undefined => {
+  const raw = env.EZ_OPENCODE_PROVIDERS?.trim()
+  if (!raw) return undefined
+  const providers = [...new Set(raw.split(',').map((p) => p.trim()).filter(Boolean))]
+  if (!providers.length || providers.length > 16 || providers.some((p) => !/^[a-z][a-z0-9_-]{0,31}$/.test(p)))
+    throw new Error('EZ_OPENCODE_PROVIDERS must be one to sixteen comma-separated provider IDs')
+  return providers
 }
 
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {
