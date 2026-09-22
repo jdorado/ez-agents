@@ -278,15 +278,14 @@ export async function hostNetworkBindings(config, record, home) {
   const configured = agent.pluginNetworkBindings;
   if (configured !== undefined && (!configured || typeof configured !== 'object' || Array.isArray(configured)))
     throw Error('Invalid host network bindings');
+  const route = configured?.[record.manifest?.id];
+  if (route === undefined) return [];
   if (process.env.EZ_DOCKER_COMPOSE === 'standalone') {
-    if (configured && Object.keys(configured).length) throw Error('Isolated broker cannot use host network bindings');
-    return [];
+    throw Error('Isolated broker cannot use host network bindings');
   }
   if (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
       realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir))
     throw Error('Invalid host network binding deployment');
-  const route = configured?.[record.manifest?.id];
-  if (route === undefined) return [];
   keys(route, ['revisions', 'bindings']);
   const trusted = await snapshot(record.source);
   if (record.revision !== trusted.revision || record.source !== trusted.source ||
