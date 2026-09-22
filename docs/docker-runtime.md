@@ -239,6 +239,16 @@ workspace (a tenant farm), while allowing explicitly shared and additional
 workspace grants and leaving `$HOME` readable for the host CLI.
 Codex then uses `danger-full-access` so it does not apply a nested Seatbelt.
 
+## OpenCode auth
+
+Isolated agents run the image OpenCode with `XDG_DATA_HOME` set to the
+agent-bound `control/cli` directory only when the owner provisioned
+`control/cli/opencode/auth.json` there (mode `600`, copied once from the host
+`opencode auth login`). Authenticated providers then list and run; otherwise
+only the free tier is offered and paid turns fail closed with the provider
+error. Only the directory path crosses into the executor environment, never a
+secret. Host-capable agents reuse the host login and ignore the binding.
+
 ## Chat latency
 
 Interactive Codex CLI turns resume the existing native session and use native

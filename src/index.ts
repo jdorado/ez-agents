@@ -26,7 +26,7 @@ import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch } from './control-state.js'
 import { ApprovalStore } from './approval.js'
-import { startExecutorJob, terminateJob } from './executor.js'
+import { startExecutorJob, terminateJob, opencodeDataHome } from './executor.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
 import { markdownToTelegramHtml, escapeHtml } from './format.js'
@@ -71,7 +71,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let drainTimer: ReturnType<typeof setInterval> | undefined
   const codexHome = join(config.controlDir, 'cli', 'codex')
   const conversationMenu = createConversationMenu(control)
-  const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome)
+  const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome,
+    undefined, opencodeDataHome(config.controlDir))
   const durableWorkerChoice = () => control.captureChoice(aiMenu.initial)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
 

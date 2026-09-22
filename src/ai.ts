@@ -49,9 +49,9 @@ export const installed = async (cli: string): Promise<boolean> => {
 // provider configuration, or model instructions into relay context.
 // The optional runner injects `opencode models` output in tests; production
 // spawns the installed CLI with the whitelisted executor environment.
-export const readOpencodeModels = async (run?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
+export const readOpencodeModels = async (run?: (args: string[]) => Promise<string>, dataHome?: string): Promise<ModelChoice[]> => {
   const exec = run ?? (async (args: string[]) =>
-    (await promisify(execFile)('opencode', args, { env: executorEnvironment(), timeout: 8000, maxBuffer: 4 * 1024 * 1024 })).stdout)
+    (await promisify(execFile)('opencode', args, { env: { ...executorEnvironment(), ...(dataHome ? { XDG_DATA_HOME: dataHome } : {}) }, timeout: 8000, maxBuffer: 4 * 1024 * 1024 })).stdout)
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
   try {
@@ -87,7 +87,7 @@ export const readOpencodeModels = async (run?: (args: string[]) => Promise<strin
   return []
 }
 
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -124,7 +124,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
   for (const cli of ['claude', 'agy'])
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
   if (await available('opencode')) {
-    const discovered = await readOpencodeModels(opencodeRunner)
+    const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
     models.push(...(discovered.length ? discovered : [{ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] }]))
   }
   return models

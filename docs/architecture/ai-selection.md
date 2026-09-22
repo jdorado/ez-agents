@@ -37,7 +37,10 @@ The catalog is local metadata, not an authentication or billing health check.
 Grok/Codex/OpenCode support explicit listed model/effort choices. Other installed clients
 offer their own default only in this slice. OpenCode lists the installed `opencode models`
 catalog with the whitelisted executor environment, so only models the relay can actually
-run are offered; provider variants become selectable efforts (`--variant`). Refresh by opening the native client;
+run are offered; provider variants become selectable efforts (`--variant`).
+Authenticated providers appear only when the agent-bound
+`control/cli/opencode/auth.json` binding exists (host runs keep the installer
+login); otherwise the free tier lists. Refresh by opening the native client;
 the relay does not install models, manage subscriptions or guess aliases.
 
 Setup initialization and relay startup seed one default choice per installed client.

@@ -9,6 +9,10 @@
   `run --variant` on every platform. Restricted messaging tasks stay on the
   audited Codex. The relay image now ships pinned OpenCode 1.18.29 for
   isolated agents; host-capable agents reuse the host installation.
+- Provision authenticated OpenCode providers per agent through
+  `control/cli/opencode/auth.json`: isolated runs resolve it via an
+  agent-bound data home, so paid models list and run; host runs keep the
+  installer login and the free tier stays the fallback.
 
 ## 0.1.0-beta.36
 
