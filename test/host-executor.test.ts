@@ -47,6 +47,16 @@ test('isolated installations cannot start host transport', async () => {
   abort.abort()
 })
 
+test('host bindings reject invalid opencode provider scopes before touching state', async () => {
+  const abort=new AbortController()
+  for (const opencodeProviders of [['BAD NAME'], [], ['ok', 'ok'], new Array(17).fill('ok')]) {
+    await assert.rejects(serveHostExecutor({cli:'grok',agents:[{
+      name:'t',workspace:'/tmp/ez-scope-x',controlDir:'/tmp/ez-scope-y',binDir:'/tmp/ez-scope-z',opencodeProviders} as never]},abort.signal),
+      /one to sixteen unique provider IDs/)
+  }
+  abort.abort()
+})
+
 test('host restart clears dead native lease only after proving previous CLI stopped',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'ez-native-recovery-'));
   const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),toolsHome=path.join(root,'tools'),directory=path.join(controlDir,'host-executor');

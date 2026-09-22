@@ -401,7 +401,7 @@ test('opencode provider allowlist scopes the catalog to Go and never falls back 
   assert.deepEqual(opencodeProviderAllowlist({ EZ_OPENCODE_PROVIDERS: 'opencode-go' }), ['opencode-go'])
   assert.deepEqual(opencodeProviderAllowlist({ EZ_OPENCODE_PROVIDERS: ' opencode-go ,openrouter,opencode-go ' }), ['opencode-go', 'openrouter'])
   for (const bad of ['Bad Name!', 'has space', 'UPPER', 'a'.repeat(33), ',,,', 'ok,,bad name'])
-    assert.throws(() => opencodeProviderAllowlist({ EZ_OPENCODE_PROVIDERS: bad }), /EZ_OPENCODE_PROVIDERS/)
+    assert.throws(() => opencodeProviderAllowlist({ EZ_OPENCODE_PROVIDERS: bad }), /one to sixteen unique provider IDs/)
   const verbose = [
     'opencode/mimo-free',
     JSON.stringify({ id: 'mimo-free', providerID: 'opencode', name: 'Mimo Free', variants: {} }),
@@ -429,6 +429,21 @@ test('opencode provider allowlist scopes the catalog to Go and never falls back 
     else process.env.EZ_OPENCODE_PROVIDERS = prior
   }
 })
+test('explicit host binding allowlist overrides the process environment', async () => {
+  const runner = async () => 'opencode/a\nopencode-go/b\n'
+  const only = (models: { cli: string; model?: string }[]) => models.filter((m) => m.cli === 'opencode').map((m) => m.model)
+  const prior = process.env.EZ_OPENCODE_PROVIDERS
+  try {
+    process.env.EZ_OPENCODE_PROVIDERS = 'opencode'
+    assert.deepEqual(only(await readModels(undefined, async () => true, undefined as never, runner)), ['opencode/a'])
+    assert.deepEqual(only(await readModels(undefined, async () => true, undefined as never, runner, undefined, ['opencode-go'])), ['opencode-go/b'])
+    assert.deepEqual(only(await readModels(undefined, async () => true, undefined as never, runner, undefined, undefined)), ['opencode/a'])
+  } finally {
+    if (prior === undefined) delete process.env.EZ_OPENCODE_PROVIDERS
+    else process.env.EZ_OPENCODE_PROVIDERS = prior
+  }
+})
+
 test('opencode model and variant selections validate against the installed catalog', async () => {
   const catalog = [
     { cli: 'opencode', model: 'opencode/ling-free', name: 'Ling Free · opencode/ling-free', efforts: ['low', 'medium'] },

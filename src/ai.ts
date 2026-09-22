@@ -87,7 +87,7 @@ export const readOpencodeModels = async (run?: (args: string[]) => Promise<strin
   return []
 }
 
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string): Promise<ModelChoice[]> => {
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[]): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -125,7 +125,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
   if (await available('opencode')) {
     const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
-    const allow = opencodeProviderAllowlist()
+    const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
     const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
     if (scoped.length) models.push(...scoped)
     // A set allowlist that matches nothing offers no OpenCode choice rather
@@ -139,13 +139,17 @@ export const readModels = async (home = homedir(), available = installed, codexH
 // providers (e.g. EZ_OPENCODE_PROVIDERS=opencode-go). Unset means unfiltered.
 // Reads process env directly like OPENCODE_MODEL; malformed values fail fast
 // so /ai reports the misconfiguration instead of a silently wrong list.
+const providerId = (p: unknown): p is string => typeof p === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(p)
+export const validateOpencodeProviders = (value: unknown): string[] | undefined => {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || !value.length || value.length > 16 || new Set(value).size !== value.length || value.some((p) => !providerId(p)))
+    throw new Error('opencode provider allowlist must be one to sixteen unique provider IDs')
+  return value as string[]
+}
 export const opencodeProviderAllowlist = (env: NodeJS.ProcessEnv = process.env): string[] | undefined => {
   const raw = env.EZ_OPENCODE_PROVIDERS?.trim()
   if (!raw) return undefined
-  const providers = [...new Set(raw.split(',').map((p) => p.trim()).filter(Boolean))]
-  if (!providers.length || providers.length > 16 || providers.some((p) => !/^[a-z][a-z0-9_-]{0,31}$/.test(p)))
-    throw new Error('EZ_OPENCODE_PROVIDERS must be one to sixteen comma-separated provider IDs')
-  return providers
+  return validateOpencodeProviders([...new Set(raw.split(',').map((p) => p.trim()).filter(Boolean))])
 }
 
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {

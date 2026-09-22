@@ -9,7 +9,7 @@ import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
 import { startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
-import { readModels, validateSelection } from './ai.js'
+import { readModels, validateSelection, validateOpencodeProviders } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
 import { taskWorkspace } from './task-workspace.js'
 import { packageVersion } from './version.js'
@@ -17,7 +17,7 @@ import { installedPluginVersions } from './software-status.js'
 import { processSnapshot } from './process-tree.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
-export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]>; codexProviders?: CodexProviderBinding[] }
+export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]>; codexProviders?: CodexProviderBinding[]; opencodeProviders?: string[] }
 export type HostInstallation = { cli: string; isolation?: IsolationClass; agents: HostBinding[] }
 
 const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth
@@ -35,7 +35,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const sharedWorkspaces = new Map<HostBinding, string>()
   const additionalWorkspaces = new Map<HostBinding, string[]>()
   const catalog = async (agent: HostBinding) => {
-    const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'))
+    const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'),
+      undefined, undefined, validateOpencodeProviders(agent.opencodeProviders))
     const providers = (agent.codexProviders ?? []).map(validateCodexProvider)
     const declared = providers.flatMap(provider => provider.models.map(model => {
       const native = discovered.find(candidate => candidate.cli === 'codex' && !candidate.provider && candidate.model === model)
@@ -51,6 +52,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       if (![agent.workspace,agent.controlDir,agent.binDir].every(path.isAbsolute)) throw new Error('Host bindings require absolute paths')
       const providers=(agent.codexProviders ?? []).map(validateCodexProvider)
       if (new Set(providers.map(provider=>provider.id)).size !== providers.length) throw new Error('Codex provider IDs must be unique')
+      validateOpencodeProviders(agent.opencodeProviders)
       if (agent.sharedWorkspace && !path.isAbsolute(agent.sharedWorkspace)) throw new Error('Shared workspace requires an absolute path')
       if (agent.sharedWorkspace) sharedWorkspaces.set(agent, await realpath(agent.sharedWorkspace))
       if (agent.additionalWorkspaces) {
