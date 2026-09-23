@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, unrealModelId, validateCodexProvider } from '../src/executor.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
@@ -116,6 +116,21 @@ test('the opencode invocation is headless, auto-approves, and sets model and wor
     '--',
     'test prompt',
   ])
+})
+
+test('the unreal-agent invocation pins workspace, control sessions, model, and effort', () => {
+  assert.equal(resolveExecutor('unreal').command, 'unreal-agent-runner')
+  assert.equal(resolveExecutor('unreal-agent').command, 'unreal-agent-runner')
+  assert.equal(unrealModelId('opencode-go/muse-spark'), 'muse-spark')
+  assert.equal(unrealModelId('muse-spark-1.3-contributor'), 'muse-spark-1.3-contributor')
+  assert.throws(() => unrealModelId('bad model!'), /Invalid Unreal Agent model/)
+  const args = EXECUTOR_REGISTRY['unreal-agent'].buildArgs(
+    { workspace: '/agent/mind', controlDir: '/agent/control', sessionId: 'ez-session', model: 'opencode-go/muse-spark', effort: 'xhigh' },
+    '/prompt', 'review CAMT')
+  assert.deepEqual(args.slice(0, 6), ['-workspace', '/agent/mind', '-session-directory', '/agent/control/cli/unreal-agent/sessions', '-log-directory', '/agent/control/cli/unreal-agent/logs'])
+  const request = JSON.parse(args[6])
+  assert.deepEqual(request, { prompt: 'review CAMT', session_id: 'ez-session', model: 'muse-spark', thinking_level: 'xhigh' })
+  assert.throws(() => EXECUTOR_REGISTRY['unreal-agent'].buildArgs({ workspace: '/agent' }, '/prompt', 'hi'), /bound control directory/)
 })
 
 test('resolveExecutor correctly maps keys and aliases', () => {

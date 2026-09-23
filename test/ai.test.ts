@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, chatPreset, readModels, isPreset, readOpencodeModels, validateSelection, opencodeProviderAllowlist } from '../src/ai.js'
+import { initialPreset, chatPreset, readModels, isPreset, readOpencodeModels, validateSelection, opencodeProviderAllowlist, unrealCatalogModels } from '../src/ai.js'
 import { createAiMenu } from '../src/menu.js'
 import { EXECUTOR_REGISTRY, nativeSessionId } from '../src/executor.js'
 import { InboxStore } from '../src/inbox.js'
@@ -458,4 +458,27 @@ test('opencode model and variant selections validate against the installed catal
   await assert.rejects(
     validateSelection({ id: 'missing', name: 'Missing', cli: 'opencode', model: 'opencode/unknown' }, catalog, available),
     /installed client catalog/)
+})
+
+test('unreal-agent mirrors the opencode catalog and validates model plus effort', async () => {
+  const runner = async () => [
+    'opencode-go/muse-spark-1.3-contributor',
+    JSON.stringify({ id: 'muse-spark-1.3-contributor', providerID: 'opencode-go', name: 'Muse Spark 1.3 Contributor', variants: { high: {}, xhigh: {} } }),
+  ].join('\n')
+  const catalog = await readModels(undefined, async (cli) => cli === 'unreal-agent', undefined as never, runner)
+  assert.deepEqual(catalog, [{
+    cli: 'unreal-agent', model: 'opencode-go/muse-spark-1.3-contributor',
+    name: 'Unreal Agent · opencode-go/muse-spark-1.3-contributor', efforts: ['high', 'xhigh'],
+  }])
+  assert.equal(isPreset({ id: 'x', name: 'Unreal', cli: 'unreal-agent' }), true)
+  await validateSelection(
+    { id: 'choice', name: 'Spark', cli: 'unreal-agent', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' },
+    catalog, async (cli) => cli === 'unreal-agent')
+  await assert.rejects(
+    validateSelection(
+      { id: 'bad', name: 'Bad', cli: 'unreal-agent', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'max' },
+      catalog, async (cli) => cli === 'unreal-agent'),
+    /installed client catalog/)
+  assert.deepEqual(await unrealCatalogModels(async () => { throw new Error('unavailable') }, undefined, undefined, 'unreal-agent'),
+    [{ cli: 'unreal-agent', name: 'Unreal Agent · client default', efforts: [] }])
 })
