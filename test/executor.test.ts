@@ -246,6 +246,37 @@ test('unreal-agent jobs run the runner with control-bound sessions plus runner r
     if (prior.transport === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT; else process.env.EZ_EXECUTOR_TRANSPORT = prior.transport
   }
 })
+
+test('the pi invocation pins control sessions, model, and thinking level', () => {
+  assert.equal(resolveExecutor('pi').command, 'pi')
+  const args = EXECUTOR_REGISTRY.pi.buildArgs(
+    { workspace: '/agent/mind', controlDir: '/agent/control', sessionId: 'ez-session', isResume: true, model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' },
+    '/prompt', 'review CAMT')
+  assert.deepEqual(args, ['-p', '--mode', 'json', '--session-dir', '/agent/control/cli/pi/sessions', '--continue',
+    '--model', 'opencode-go/muse-spark-1.3-contributor', '--thinking', 'xhigh', '--', 'review CAMT'])
+  assert.throws(() => EXECUTOR_REGISTRY.pi.buildArgs({ workspace: '/agent' }, '/prompt', 'hi'), /bound control directory/)
+})
+
+test('pi jobs run with control-bound sessions and no secret leakage', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-pi-auth-')); t.after(() => rm(root, { recursive: true, force: true }))
+  const bin = path.join(root, 'bin'); await mkdir(bin)
+  await writeFile(path.join(bin, 'pi'), `#!${process.execPath}\nconst fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(root, 'observed.json'))},JSON.stringify({args:process.argv.slice(2),telegram:process.env.TELEGRAM_BOT_TOKEN}));`, { mode: 0o755 })
+  const prior = { path: process.env.PATH, telegram: process.env.TELEGRAM_BOT_TOKEN, transport: process.env.EZ_EXECUTOR_TRANSPORT }
+  try {
+    await ownerRun(root, 'r_pibound')
+    process.env.PATH = bin + path.delimiter + prior.path; process.env.TELEGRAM_BOT_TOKEN = 'relay-secret'; delete process.env.EZ_EXECUTOR_TRANSPORT
+    const job = await startExecutorJob(['review CAMT'], { workspace: root, controlDir: root, binDir: bin, runId: 'r_pibound', timeoutMs: 0, cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' })
+    assert.equal(await new Promise(resolve => job.child.once('close', resolve)), 0); await job.cleanup()
+    const observed = JSON.parse(await readFile(path.join(root, 'observed.json'), 'utf8'))
+    assert.deepEqual(observed.args, ['-p', '--mode', 'json', '--session-dir', path.join(root, 'cli', 'pi', 'sessions'),
+      '--model', 'opencode-go/muse-spark-1.3-contributor', '--thinking', 'xhigh', '--', 'review CAMT'])
+    assert.equal(observed.telegram, undefined)
+  } finally {
+    if (prior.path === undefined) delete process.env.PATH; else process.env.PATH = prior.path
+    if (prior.telegram === undefined) delete process.env.TELEGRAM_BOT_TOKEN; else process.env.TELEGRAM_BOT_TOKEN = prior.telegram
+    if (prior.transport === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT; else process.env.EZ_EXECUTOR_TRANSPORT = prior.transport
+  }
+})
 test('a configured Codex provider receives only its declared key and runtime selection', async t => {
   const root=await mkdtemp(path.join(tmpdir(),'ez-codex-provider-'));t.after(()=>rm(root,{recursive:true,force:true}))
   const bin=path.join(root,'bin');await mkdir(bin)

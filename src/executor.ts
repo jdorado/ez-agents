@@ -219,6 +219,20 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       return args
     },
   },
+  pi: {
+    name: 'pi',
+    command: 'pi',
+    description: 'Pi coding agent (opencode-go models)',
+    buildArgs: (opts, _promptFile, promptText) => {
+      if (!opts.controlDir) throw new Error('Pi runs require a bound control directory for sessions')
+      const args = ['-p', '--mode', 'json', '--session-dir', path.join(opts.controlDir, 'cli', 'pi', 'sessions')]
+      if (opts.isResume) args.push('--continue')
+      if (opts.model) args.push('--model', opts.model)
+      if (opts.effort) args.push('--thinking', opts.effort)
+      args.push('--', promptText)
+      return args
+    },
+  },
   'unreal-agent': {
     name: 'unreal-agent',
     command: 'unreal-agent-runner',
