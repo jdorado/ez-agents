@@ -9,7 +9,7 @@ The container is built locally; no bundled third-party binary image is promised.
 Direct runtime dependencies: grammy (MIT), tsx (MIT). Development dependencies
 include TypeScript (Apache-2.0) and Node type definitions (MIT). The runtime
 image installs ffmpeg, Debian packages, and these reviewed CLI versions:
-`@openai/codex` 0.156.1 (Apache-2.0), `opencode-ai` 1.18.32 (MIT),
+`@openai/codex` 0.153.4 (Apache-2.0), `opencode-ai` 1.18.32 (MIT),
 `@earendil-works/pi-coding-agent` 0.87.1 (MIT), and
 `unreal-agent-runner` 0.1.1 (MIT; Copyright 2026 Unreal Labs). The Unreal
 Agent binary comes from the upstream release with SHA256SUMS verification;
