@@ -225,6 +225,27 @@ test('opencode jobs use the agent-bound data home only when its auth binding exi
     if(prior.transport===undefined)delete process.env.EZ_EXECUTOR_TRANSPORT;else process.env.EZ_EXECUTOR_TRANSPORT=prior.transport
   }
 })
+
+test('unreal-agent jobs run the runner with control-bound sessions plus runner request', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-unreal-auth-')); t.after(() => rm(root, { recursive: true, force: true }))
+  const bin = path.join(root, 'bin'); await mkdir(bin)
+  await writeFile(path.join(bin, 'unreal-agent-runner'), `#!${process.execPath}\nconst fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(root, 'observed.json'))},JSON.stringify({args:process.argv.slice(2),telegram:process.env.TELEGRAM_BOT_TOKEN}));`, { mode: 0o755 })
+  const prior = { path: process.env.PATH, telegram: process.env.TELEGRAM_BOT_TOKEN, transport: process.env.EZ_EXECUTOR_TRANSPORT }
+  try {
+    await ownerRun(root, 'r_uabound')
+    process.env.PATH = bin + path.delimiter + prior.path; process.env.TELEGRAM_BOT_TOKEN = 'relay-secret'; delete process.env.EZ_EXECUTOR_TRANSPORT
+    const job = await startExecutorJob(['review CAMT'], { workspace: root, controlDir: root, binDir: bin, runId: 'r_uabound', timeoutMs: 0, cli: 'unreal-agent', sessionId: 'ez-session-1', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' })
+    assert.equal(await new Promise(resolve => job.child.once('close', resolve)), 0); await job.cleanup()
+    const observed = JSON.parse(await readFile(path.join(root, 'observed.json'), 'utf8'))
+    assert.deepEqual(observed.args.slice(0, 6), ['-workspace', root, '-session-directory', path.join(root, 'cli', 'unreal-agent', 'sessions'), '-log-directory', path.join(root, 'cli', 'unreal-agent', 'logs')])
+    assert.deepEqual(JSON.parse(observed.args[6]), { prompt: 'review CAMT', session_id: 'ez-session-1', model: 'muse-spark-1.3-contributor', thinking_level: 'xhigh' })
+    assert.equal(observed.telegram, undefined)
+  } finally {
+    if (prior.path === undefined) delete process.env.PATH; else process.env.PATH = prior.path
+    if (prior.telegram === undefined) delete process.env.TELEGRAM_BOT_TOKEN; else process.env.TELEGRAM_BOT_TOKEN = prior.telegram
+    if (prior.transport === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT; else process.env.EZ_EXECUTOR_TRANSPORT = prior.transport
+  }
+})
 test('a configured Codex provider receives only its declared key and runtime selection', async t => {
   const root=await mkdtemp(path.join(tmpdir(),'ez-codex-provider-'));t.after(()=>rm(root,{recursive:true,force:true}))
   const bin=path.join(root,'bin');await mkdir(bin)

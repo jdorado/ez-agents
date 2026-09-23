@@ -39,8 +39,10 @@ export const chatPreset = (cli: string): AiPreset => ({...initialPreset(cli),id:
 
 export const installed = async (cli: string): Promise<boolean> => {
   if (cli === 'codex-gui') return Boolean(await desktopCodexPath())
+  // Registry key and binary differ: `unreal-agent` runs via `unreal-agent-runner`.
+  const command = cli === 'unreal-agent' ? 'unreal-agent-runner' : cli
   for (const directory of (process.env.PATH || '').split(delimiter)) {
-    try { await access(join(directory, cli), constants.X_OK); return true } catch {}
+    try { await access(join(directory, command), constants.X_OK); return true } catch {}
   }
   return false
 }
