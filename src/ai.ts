@@ -13,6 +13,9 @@ export type ExecutionChoice = { sessionId: string; preset: AiPreset }
 export type ModelChoice = { cli: string; provider?: string; model?: string; name: string; efforts: string[] }
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
 const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'unreal-agent', 'pi']
+const nativeEffort = (cli: string, effort: string) =>
+  cli === 'unreal-agent' ? ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort) :
+  cli === 'pi' ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) : true
 export const isPreset = (p: unknown): p is AiPreset => {
   if (!p || typeof p !== 'object') return false
   const v = p as AiPreset
@@ -117,7 +120,7 @@ export const readCuratedModels = async (controlDir?: string): Promise<ModelChoic
         name: (typeof entry.name === 'string' && entry.name ? entry.name : String(entry.model ?? entry.cli)).slice(0, 80),
         efforts: (Array.isArray(entry.efforts) ? entry.efforts : [])
           .filter((effort): effort is string => safe(effort))
-          .filter((effort) => allowedEffort(effort, typeof entry.model === 'string' ? entry.model : undefined, entry.cli)),
+          .filter((effort) => allowedEffort(effort, typeof entry.model === 'string' ? entry.model : undefined, entry.cli as string) && nativeEffort(entry.cli as string, effort)),
       })
     }
   } catch { return [] }
@@ -160,32 +163,38 @@ export const readModels = async (home = homedir(), available = installed, codexH
   // Other adapters expose the authenticated client's default, not a guessed catalog.
   for (const cli of ['claude', 'agy'])
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
-  if (await available('opencode')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'opencode'))
-  if (await available('unreal-agent')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'unreal-agent'))
-  if (await available('pi')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'pi'))
+  if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist))
+  // These clients have separate provider configuration. OpenCode's catalog
+  // cannot establish which models either client can execute.
+  for (const cli of ['unreal-agent', 'pi'])
+    if (await available(cli)) models.push({ cli, name: `${cli === 'pi' ? 'Pi' : 'Unreal Agent'} · client default`, efforts: [] })
   const curated = await readCuratedModels(curationDir)
   if (!curated.length) return models
+  const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
+  const scoped: ModelChoice[] = []
+  for (const entry of curated) {
+    if (!(await available(entry.cli))) continue
+    if (['opencode', 'unreal-agent', 'pi'].includes(entry.cli) && allow &&
+        (entry.model === undefined || !allow.includes(entry.model.split('/')[0]))) continue
+    scoped.push(entry)
+  }
   const key = (m: { cli: string; provider?: string; model?: string }) => `${m.cli}‖${m.provider ?? ''}‖${m.model ?? ''}`
-  const curatedKeys = new Set(curated.map(key))
-  return [...curated, ...models.filter((m) => !curatedKeys.has(key(m)))]
+  const curatedKeys = new Set(scoped.map(key))
+  return [...scoped, ...models.filter((m) => !curatedKeys.has(key(m)))]
 }
-// Unreal Agent and pi speak the same provider model IDs as OpenCode over the
-// same credentials, so all three CLIs project the same installed catalog.
-export const unrealCatalogModels = async (
+export const opencodeCatalogModels = async (
   opencodeRunner?: (args: string[]) => Promise<string>,
   opencodeDataHome?: string,
   opencodeAllowlist?: string[],
-  cli: 'opencode' | 'unreal-agent' | 'pi' = 'opencode',
 ): Promise<ModelChoice[]> => {
-  const label = cli === 'unreal-agent' ? 'Unreal Agent' : cli === 'pi' ? 'Pi' : 'opencode'
   const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
   const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
   const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
-  if (scoped.length) return scoped.map((entry) => ({ ...entry, cli, name: entry.name.replace(/^.*? · /, `${label} · `) }))
+  if (scoped.length) return scoped
   // A set allowlist that matches nothing offers no choice rather than falling
   // back outside the allowed providers.
   if (allow) return []
-  return [{ cli, name: `${label} · client default`, efforts: [] as string[] }]
+  return [{ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] }]
 }
 
 // Optional deployment-scoped restriction of the OpenCode catalog to named

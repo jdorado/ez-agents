@@ -225,6 +225,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
     description: 'Pi coding agent (opencode-go models)',
     buildArgs: (opts, _promptFile, promptText) => {
       if (!opts.controlDir) throw new Error('Pi runs require a bound control directory for sessions')
+      if (opts.effort && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) throw new Error('Invalid Pi thinking level')
       const args = ['-p', '--mode', 'json', '--session-dir', path.join(opts.controlDir, 'cli', 'pi', 'sessions')]
       // Owner-provisioned delivery skill (control/cli/pi/skills/ez-delivery).
       // Loaded by path, never by prompt text, so the model cannot miss it.
@@ -233,7 +234,9 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
         accessSync(skill, fsConstants.R_OK)
         args.push('--skill', path.dirname(skill))
       } catch { /* runs without the skill exactly as before */ }
-      if (opts.isResume) args.push('--continue')
+      // Bind Pi to this conversation, not the most recently used session in
+      // the shared directory. --session-id creates or resumes that exact ID.
+      if (opts.sessionId) args.push('--session-id', opts.sessionId)
       if (opts.model) args.push('--model', opts.model)
       if (opts.effort) args.push('--thinking', opts.effort)
       args.push('--', promptText)
@@ -246,6 +249,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
     description: 'Unreal Agent runner (async harness, opencode-go models)',
     buildArgs: (opts, _promptFile, promptText) => {
       if (!opts.controlDir) throw new Error('Unreal Agent runs require a bound control directory for sessions and logs')
+      if (opts.effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) throw new Error('Invalid Unreal Agent thinking level')
       const sessions = path.join(opts.controlDir, 'cli', 'unreal-agent', 'sessions')
       const logs = path.join(opts.controlDir, 'cli', 'unreal-agent', 'logs')
       const request: Record<string, unknown> = { prompt: promptText, session_id: opts.sessionId }

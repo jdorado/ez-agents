@@ -293,8 +293,11 @@ test('the pi invocation pins control sessions, model, and thinking level', () =>
   const args = EXECUTOR_REGISTRY.pi.buildArgs(
     { workspace: '/agent/mind', controlDir: '/agent/control', sessionId: 'ez-session', isResume: true, model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' },
     '/prompt', 'review CAMT')
-  assert.deepEqual(args, ['-p', '--mode', 'json', '--session-dir', '/agent/control/cli/pi/sessions', '--continue',
+  assert.deepEqual(args, ['-p', '--mode', 'json', '--session-dir', '/agent/control/cli/pi/sessions', '--session-id', 'ez-session',
     '--model', 'opencode-go/muse-spark-1.3-contributor', '--thinking', 'xhigh', '--', 'review CAMT'])
+  const other = EXECUTOR_REGISTRY.pi.buildArgs({ workspace: '/agent/mind', controlDir: '/agent/control', sessionId: 'other-session', isResume: true }, '/prompt', 'other')
+  assert.equal(other[other.indexOf('--session-id') + 1], 'other-session')
+  assert.ok(!other.includes('--continue'))
   assert.throws(() => EXECUTOR_REGISTRY.pi.buildArgs({ workspace: '/agent' }, '/prompt', 'hi'), /bound control directory/)
 })
 
