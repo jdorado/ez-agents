@@ -11,8 +11,9 @@
   isolated agents; host-capable agents reuse the host installation.
 - Provision authenticated OpenCode providers per agent through
   `control/cli/opencode/auth.json`: isolated runs resolve it via an
-  agent-bound data home, so paid models list and run; host runs keep the
-  installer login and the free tier stays the fallback.
+  agent-bound data home. Paid models may appear in the catalog; execution
+  depends on valid provider authorization. Host runs keep the installer login
+  and the free tier stays the fallback.
 - Scope selectable OpenCode catalog entries with `EZ_OPENCODE_PROVIDERS` (e.g.
   Go only): unlisted providers, including the free tier, leave the menu.
   Isolated relays read it from their environment; host transports take
