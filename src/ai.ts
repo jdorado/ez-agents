@@ -12,11 +12,12 @@ export type AiPreset = { id: string; name: string; cli: string; provider?: strin
 export type ExecutionChoice = { sessionId: string; preset: AiPreset }
 export type ModelChoice = { cli: string; provider?: string; model?: string; name: string; efforts: string[] }
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
+const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'unreal-agent', 'pi']
 export const isPreset = (p: unknown): p is AiPreset => {
   if (!p || typeof p !== 'object') return false
   const v = p as AiPreset
   return safe(v.id) && typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 80 &&
-    ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'unreal-agent', 'pi'].includes(v.cli) &&
+    knownClis.includes(v.cli) &&
     (v.provider === undefined || safe(v.provider)) && (v.model === undefined || safe(v.model)) && (v.effort === undefined || safe(v.effort))
 }
 export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
@@ -89,7 +90,41 @@ export const readOpencodeModels = async (run?: (args: string[]) => Promise<strin
   return []
 }
 
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[]): Promise<ModelChoice[]> => {
+// User-curated entries live in the agent's own setup (control/ai-models.json),
+// never in the repo. They pin models the native catalogs may not currently
+// serve (e.g. paid tiers) and merge ahead of discovered entries, so selection
+// validation accepts them.
+export const readCuratedModels = async (controlDir?: string): Promise<ModelChoice[]> => {
+  if (!controlDir) return []
+  const curated: ModelChoice[] = []
+  const seen = new Set<string>()
+  try {
+    const raw = JSON.parse(await readFile(join(controlDir, 'ai-models.json'), 'utf8'))
+    if (!Array.isArray(raw)) return []
+    for (const candidate of raw) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+      const entry = candidate as Record<string, unknown>
+      if (typeof entry.cli !== 'string' || !knownClis.includes(entry.cli)) continue
+      if (entry.provider !== undefined && !safe(entry.provider)) continue
+      if (entry.model !== undefined && !safe(entry.model)) continue
+      const key = `${entry.cli}‖${entry.provider ?? ''}‖${entry.model ?? ''}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      curated.push({
+        cli: entry.cli,
+        ...(entry.provider !== undefined ? { provider: entry.provider as string } : {}),
+        ...(entry.model !== undefined ? { model: entry.model as string } : {}),
+        name: (typeof entry.name === 'string' && entry.name ? entry.name : String(entry.model ?? entry.cli)).slice(0, 80),
+        efforts: (Array.isArray(entry.efforts) ? entry.efforts : [])
+          .filter((effort): effort is string => safe(effort))
+          .filter((effort) => allowedEffort(effort, typeof entry.model === 'string' ? entry.model : undefined, entry.cli)),
+      })
+    }
+  } catch { return [] }
+  return curated
+}
+
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[], curationDir?: string): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -128,7 +163,11 @@ export const readModels = async (home = homedir(), available = installed, codexH
   if (await available('opencode')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'opencode'))
   if (await available('unreal-agent')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'unreal-agent'))
   if (await available('pi')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'pi'))
-  return models
+  const curated = await readCuratedModels(curationDir)
+  if (!curated.length) return models
+  const key = (m: { cli: string; provider?: string; model?: string }) => `${m.cli}‖${m.provider ?? ''}‖${m.model ?? ''}`
+  const curatedKeys = new Set(curated.map(key))
+  return [...curated, ...models.filter((m) => !curatedKeys.has(key(m)))]
 }
 // Unreal Agent and pi speak the same provider model IDs as OpenCode over the
 // same credentials, so all three CLIs project the same installed catalog.

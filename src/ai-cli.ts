@@ -12,7 +12,7 @@ if(values.help){
 }
 if (!process.env.EZ_CONTROL_DIR) throw new Error('Use this agent’s bound control directory')
 const catalog=await readFile(join(process.env.EZ_CONTROL_DIR,'host-executor','models.json'),'utf8')
-  .then(text=>JSON.parse(text)).catch(()=>readModels(undefined,undefined,join(process.env.EZ_CONTROL_DIR!,'cli','codex')))
+  .then(text=>JSON.parse(text)).catch(()=>readModels(undefined,undefined,join(process.env.EZ_CONTROL_DIR!,'cli','codex'),undefined,undefined,undefined,process.env.EZ_CONTROL_DIR))
 if(positionals[0]==='list')console.log(JSON.stringify(catalog))
 else if(positionals[0]==='select'){
   const preset:AiPreset={id:randomBytes(8).toString('hex'),name:[values.provider,values.model||values.cli,values.effort].filter(Boolean).join(' · '),cli:values.cli||'',provider:values.provider,model:values.model,effort:values.effort}
