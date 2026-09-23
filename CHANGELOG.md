@@ -1,11 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.37
 
 - List installed OpenCode models with their provider variants as selectable
   efforts in Choose AI, chat and scheduled tasks. The relay spawns the
-  installed `opencode` CLI with the whitelisted executor environment, so only
-  models it can actually run are offered; variants pass through verbatim as
+  installed `opencode` CLI with the whitelisted executor environment, so the
+  menu reflects that CLI's reported catalog; variants pass through verbatim as
   `run --variant` on every platform. Restricted messaging tasks stay on the
   audited Codex. The relay image now ships pinned OpenCode 1.18.32 for
   isolated agents; host-capable agents reuse the host installation.
@@ -13,10 +13,13 @@
   `control/cli/opencode/auth.json`: isolated runs resolve it via an
   agent-bound data home, so paid models list and run; host runs keep the
   installer login and the free tier stays the fallback.
-- Scope the OpenCode catalog with `EZ_OPENCODE_PROVIDERS` (e.g. Go only):
-  unlisted providers, including the free tier, can no longer be selected.
+- Scope selectable OpenCode catalog entries with `EZ_OPENCODE_PROVIDERS` (e.g.
+  Go only): unlisted providers, including the free tier, leave the menu.
   Isolated relays read it from their environment; host transports take
-  `opencodeProviders` on the agent's host binding instead.
+  `opencodeProviders` on the agent's host binding instead. An existing
+  model-less default still follows the native client's provider choice.
+  Existing deployments need an installer-owned bootstrap for the new Compose
+  environment field before their automatic main updater accepts this release.
 - Allow unbound plugins to run through the isolated broker when a different
   installed plugin declares a host network binding; bound plugins still fail
   closed on an isolated deployment.
