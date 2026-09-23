@@ -12,9 +12,8 @@ export type AiPreset = { id: string; name: string; cli: string; provider?: strin
 export type ExecutionChoice = { sessionId: string; preset: AiPreset }
 export type ModelChoice = { cli: string; provider?: string; model?: string; name: string; efforts: string[] }
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
-const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'unreal-agent', 'pi']
+const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'pi']
 const nativeEffort = (cli: string, effort: string) =>
-  cli === 'unreal-agent' ? ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort) :
   cli === 'pi' ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) : true
 export const isPreset = (p: unknown): p is AiPreset => {
   if (!p || typeof p !== 'object') return false
@@ -43,10 +42,8 @@ export const chatPreset = (cli: string): AiPreset => ({...initialPreset(cli),id:
 
 export const installed = async (cli: string): Promise<boolean> => {
   if (cli === 'codex-gui') return Boolean(await desktopCodexPath())
-  // Registry key and binary differ: `unreal-agent` runs via `unreal-agent-runner`.
-  const command = cli === 'unreal-agent' ? 'unreal-agent-runner' : cli
   for (const directory of (process.env.PATH || '').split(delimiter)) {
-    try { await access(join(directory, command), constants.X_OK); return true } catch {}
+    try { await access(join(directory, cli), constants.X_OK); return true } catch {}
   }
   return false
 }
@@ -165,16 +162,15 @@ export const readModels = async (home = homedir(), available = installed, codexH
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
   const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
   if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, allow))
-  // These clients have separate provider configuration. OpenCode's catalog
-  // cannot establish which models either client can execute.
-  for (const cli of ['unreal-agent', 'pi'])
-    if (!allow && await available(cli)) models.push({ cli, name: `${cli === 'pi' ? 'Pi' : 'Unreal Agent'} · client default`, efforts: [] })
+  // Pi has separate provider configuration. OpenCode's catalog cannot
+  // establish which models Pi can execute.
+  if (!allow && await available('pi')) models.push({ cli: 'pi', name: 'Pi · client default', efforts: [] })
   const curated = await readCuratedModels(curationDir)
   if (!curated.length) return models
   const scoped: ModelChoice[] = []
   for (const entry of curated) {
     if (!(await available(entry.cli))) continue
-    if (['opencode', 'unreal-agent', 'pi'].includes(entry.cli) && allow &&
+    if (['opencode', 'pi'].includes(entry.cli) && allow &&
         (entry.model === undefined || !allow.includes(entry.model.split('/')[0]))) continue
     scoped.push(entry)
   }

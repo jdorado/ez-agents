@@ -20,11 +20,10 @@
 - Allow unbound plugins to run through the isolated broker when a different
   installed plugin declares a host network binding; bound plugins still fail
   closed on an isolated deployment.
-- Add Pi and Unreal Agent native executors. Pi uses the exact conversation
-  session ID, while Unreal Agent uses control-bound sessions and logs. Both
-  offer their native default when no provider scope is set; owner-curated model
-  choices require their own provider credentials and are filtered by scope.
-  The relay image also installs pinned Pi 0.87.1 and Unreal Agent 0.1.1.
+- Add a Pi native executor with the exact conversation session ID. It offers
+  its native default when no provider scope is set. Owner-curated model choices
+  require Pi's own provider credentials and are filtered by scope. The relay
+  image installs pinned Pi 0.87.1.
 
 ## 0.1.0-beta.36
 

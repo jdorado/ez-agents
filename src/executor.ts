@@ -103,16 +103,6 @@ export const resolveHostCommand = (command: string, pathValue = process.env.PATH
   }
   throw new Error(`Native CLI ${command} is not executable on the host PATH`)
 }
-// Unreal Agent takes the provider's bare model ID (e.g. muse-spark-1.3-contributor),
-// never the `<provider>/<id>` catalog form Ez selections carry.
-export const unrealModelId = (model?: string): string | undefined => {
-  if (!model) return undefined
-  const slash = model.indexOf('/')
-  const id = slash >= 0 ? model.slice(slash + 1) : model
-  if (!id || !/^[a-zA-Z0-9_./:-]{1,160}$/.test(id)) throw new Error('Invalid Unreal Agent model')
-  return id
-}
-
 export type CliAdapter = {
   name: string
   command: string
@@ -222,7 +212,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
   pi: {
     name: 'pi',
     command: 'pi',
-    description: 'Pi coding agent (opencode-go models)',
+    description: 'Pi coding agent',
     buildArgs: (opts, _promptFile, promptText) => {
       if (!opts.controlDir) throw new Error('Pi runs require a bound control directory for sessions')
       if (opts.effort && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) throw new Error('Invalid Pi thinking level')
@@ -243,22 +233,6 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       return args
     },
   },
-  'unreal-agent': {
-    name: 'unreal-agent',
-    command: 'unreal-agent-runner',
-    description: 'Unreal Agent runner (async harness, opencode-go models)',
-    buildArgs: (opts, _promptFile, promptText) => {
-      if (!opts.controlDir) throw new Error('Unreal Agent runs require a bound control directory for sessions and logs')
-      if (opts.effort && !['low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) throw new Error('Invalid Unreal Agent thinking level')
-      const sessions = path.join(opts.controlDir, 'cli', 'unreal-agent', 'sessions')
-      const logs = path.join(opts.controlDir, 'cli', 'unreal-agent', 'logs')
-      const request: Record<string, unknown> = { prompt: promptText, session_id: opts.sessionId }
-      const model = unrealModelId(opts.model)
-      if (model) request.model = model
-      if (opts.effort) request.thinking_level = opts.effort
-      return ['-workspace', opts.workspace, '-session-directory', sessions, '-log-directory', logs, JSON.stringify(request)]
-    },
-  },
   'codex-gui': {
     name: 'codex-gui',
     command: 'codex',
@@ -271,7 +245,6 @@ export const EXECUTOR_ALIASES: Record<string, string> = {
   antigravity: 'agy',
   'claude-code': 'claude',
   oc: 'opencode',
-  unreal: 'unreal-agent',
 }
 
 export const executorKey = (name?: string): string => {

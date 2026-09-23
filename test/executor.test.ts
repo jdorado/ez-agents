@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, unrealModelId, validateCodexProvider } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
@@ -118,21 +118,6 @@ test('the opencode invocation is headless, auto-approves, and sets model and wor
   ])
 })
 
-test('the unreal-agent invocation pins workspace, control sessions, model, and effort', () => {
-  assert.equal(resolveExecutor('unreal').command, 'unreal-agent-runner')
-  assert.equal(resolveExecutor('unreal-agent').command, 'unreal-agent-runner')
-  assert.equal(unrealModelId('opencode-go/muse-spark'), 'muse-spark')
-  assert.equal(unrealModelId('muse-spark-1.3-contributor'), 'muse-spark-1.3-contributor')
-  assert.throws(() => unrealModelId('bad model!'), /Invalid Unreal Agent model/)
-  const args = EXECUTOR_REGISTRY['unreal-agent'].buildArgs(
-    { workspace: '/agent/mind', controlDir: '/agent/control', sessionId: 'ez-session', model: 'opencode-go/muse-spark', effort: 'xhigh' },
-    '/prompt', 'review CAMT')
-  assert.deepEqual(args.slice(0, 6), ['-workspace', '/agent/mind', '-session-directory', '/agent/control/cli/unreal-agent/sessions', '-log-directory', '/agent/control/cli/unreal-agent/logs'])
-  const request = JSON.parse(args[6])
-  assert.deepEqual(request, { prompt: 'review CAMT', session_id: 'ez-session', model: 'muse-spark', thinking_level: 'xhigh' })
-  assert.throws(() => EXECUTOR_REGISTRY['unreal-agent'].buildArgs({ workspace: '/agent' }, '/prompt', 'hi'), /bound control directory/)
-})
-
 test('resolveExecutor correctly maps keys and aliases', () => {
   assert.equal(resolveExecutor('agy').command, 'agy')
   assert.equal(resolveExecutor('antigravity').command, 'agy')
@@ -140,6 +125,7 @@ test('resolveExecutor correctly maps keys and aliases', () => {
   assert.equal(resolveExecutor('grok').command, 'grok')
   assert.equal(resolveExecutor('opencode').command, 'opencode')
   assert.equal(resolveExecutor('oc').command, 'opencode')
+  assert.throws(() => resolveExecutor('unreal-agent'), /Unsupported executor CLI/)
   assert.equal(resolveExecutor('codex-gui').name, 'codex-gui')
   assert.notEqual(resolveExecutor('codex-gui').name, resolveExecutor('codex').name)
   assert.equal(resolveExecutor(undefined).command, 'agy')
@@ -264,27 +250,6 @@ test('pi jobs use the agent-bound config dir only when its auth binding exists',
     if(prior.telegram===undefined)delete process.env.TELEGRAM_BOT_TOKEN;else process.env.TELEGRAM_BOT_TOKEN=prior.telegram
     if(prior.transport===undefined)delete process.env.EZ_EXECUTOR_TRANSPORT;else process.env.EZ_EXECUTOR_TRANSPORT=prior.transport
     if(prior.agentDir===undefined)delete process.env.PI_CODING_AGENT_DIR;else process.env.PI_CODING_AGENT_DIR=prior.agentDir
-  }
-})
-
-test('unreal-agent jobs run the runner with control-bound sessions plus runner request', async t => {
-  const root = await mkdtemp(path.join(tmpdir(), 'ez-unreal-auth-')); t.after(() => rm(root, { recursive: true, force: true }))
-  const bin = path.join(root, 'bin'); await mkdir(bin)
-  await writeFile(path.join(bin, 'unreal-agent-runner'), `#!${process.execPath}\nconst fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(root, 'observed.json'))},JSON.stringify({args:process.argv.slice(2),telegram:process.env.TELEGRAM_BOT_TOKEN}));`, { mode: 0o755 })
-  const prior = { path: process.env.PATH, telegram: process.env.TELEGRAM_BOT_TOKEN, transport: process.env.EZ_EXECUTOR_TRANSPORT }
-  try {
-    await ownerRun(root, 'r_uabound')
-    process.env.PATH = bin + path.delimiter + prior.path; process.env.TELEGRAM_BOT_TOKEN = 'relay-secret'; delete process.env.EZ_EXECUTOR_TRANSPORT
-    const job = await startExecutorJob(['review CAMT'], { workspace: root, controlDir: root, binDir: bin, runId: 'r_uabound', timeoutMs: 0, cli: 'unreal-agent', sessionId: 'ez-session-1', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' })
-    assert.equal(await new Promise(resolve => job.child.once('close', resolve)), 0); await job.cleanup()
-    const observed = JSON.parse(await readFile(path.join(root, 'observed.json'), 'utf8'))
-    assert.deepEqual(observed.args.slice(0, 6), ['-workspace', root, '-session-directory', path.join(root, 'cli', 'unreal-agent', 'sessions'), '-log-directory', path.join(root, 'cli', 'unreal-agent', 'logs')])
-    assert.deepEqual(JSON.parse(observed.args[6]), { prompt: 'review CAMT', session_id: 'ez-session-1', model: 'muse-spark-1.3-contributor', thinking_level: 'xhigh' })
-    assert.equal(observed.telegram, undefined)
-  } finally {
-    if (prior.path === undefined) delete process.env.PATH; else process.env.PATH = prior.path
-    if (prior.telegram === undefined) delete process.env.TELEGRAM_BOT_TOKEN; else process.env.TELEGRAM_BOT_TOKEN = prior.telegram
-    if (prior.transport === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT; else process.env.EZ_EXECUTOR_TRANSPORT = prior.transport
   }
 })
 
