@@ -276,6 +276,23 @@ test('isolated broker host binding validates exact mounts without deployment sym
   if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
  }
 });
+test('isolated broker allows unbound plugins when another plugin has host binding',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source),isolated=path.join(f.root,'isolated-other'),workspace=path.join(isolated,'workspace'),control=path.join(isolated,'control'),hostConfig=path.join(isolated,'host-executor.json'),previous=process.env.EZ_DOCKER_COMPOSE;
+ await fs.mkdir(f.home,{recursive:true});await fs.mkdir(workspace,{recursive:true});await fs.mkdir(control,{recursive:true});
+ await fs.writeFile(hostConfig,JSON.stringify({cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir:control,binDir:path.join(f.root,'bin'),toolsHome:f.home}]}));
+ const record={source:p.source,project:'ezp-synthetic',revision:p.revision,manifest:p.manifest,deployment:p.deployment};
+ const config={workspace:await fs.realpath(workspace),hostConfig:await fs.realpath(hostConfig)};
+ await fs.writeFile(hostConfig,JSON.stringify({cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir:control,binDir:path.join(f.root,'bin'),toolsHome:f.home,pluginNetworkBindings:{voice:{revisions:[p.revision],bindings:[{service:'sample',network:'voice_default'}]}}}]}));
+ process.env.EZ_DOCKER_COMPOSE='standalone';
+ try {
+  const c=await compose(config,record,{},f.home);
+  assert.equal(c.version,'3.8');assert.equal(c.networks,undefined);
+  await fs.writeFile(hostConfig,JSON.stringify({cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir:control,binDir:path.join(f.root,'bin'),toolsHome:f.home,pluginNetworkBindings:{sample:{revisions:[p.revision],bindings:[{service:'sample',network:'sample_default'}]}}}]}));
+  await assert.rejects(compose(config,record,{},f.home),/Isolated broker cannot use host network bindings/);
+ } finally {
+  if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
+ }
+});
 test('host-owned private networks survive registered-call Compose regeneration',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
  await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
