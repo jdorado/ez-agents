@@ -16,7 +16,7 @@ export const isPreset = (p: unknown): p is AiPreset => {
   if (!p || typeof p !== 'object') return false
   const v = p as AiPreset
   return safe(v.id) && typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 80 &&
-    ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'unreal-agent'].includes(v.cli) &&
+    ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'unreal-agent', 'pi'].includes(v.cli) &&
     (v.provider === undefined || safe(v.provider)) && (v.model === undefined || safe(v.model)) && (v.effort === undefined || safe(v.effort))
 }
 export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
@@ -127,17 +127,18 @@ export const readModels = async (home = homedir(), available = installed, codexH
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
   if (await available('opencode')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'opencode'))
   if (await available('unreal-agent')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'unreal-agent'))
+  if (await available('pi')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'pi'))
   return models
 }
-// Unreal Agent speaks the same provider model IDs as OpenCode over the same
-// credentials, so both CLIs project the same installed catalog per entry.
+// Unreal Agent and pi speak the same provider model IDs as OpenCode over the
+// same credentials, so all three CLIs project the same installed catalog.
 export const unrealCatalogModels = async (
   opencodeRunner?: (args: string[]) => Promise<string>,
   opencodeDataHome?: string,
   opencodeAllowlist?: string[],
-  cli: 'opencode' | 'unreal-agent' = 'opencode',
+  cli: 'opencode' | 'unreal-agent' | 'pi' = 'opencode',
 ): Promise<ModelChoice[]> => {
-  const label = cli === 'unreal-agent' ? 'Unreal Agent' : 'opencode'
+  const label = cli === 'unreal-agent' ? 'Unreal Agent' : cli === 'pi' ? 'Pi' : 'opencode'
   const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
   const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
   const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
