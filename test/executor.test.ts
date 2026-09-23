@@ -253,6 +253,12 @@ test('pi jobs use the agent-bound config dir only when its auth binding exists',
     const free=await launch('r_pifree')
     assert.equal(free.agentDir,undefined)
     assert.equal(free.telegram,undefined)
+    // Owner-provisioned delivery skill loads by path; absence keeps prior args.
+    assert.ok(!bound.args.includes('--skill'))
+    await mkdir(path.join(root,'cli','pi','skills','ez-delivery'),{recursive:true})
+    await writeFile(path.join(root,'cli','pi','skills','ez-delivery','SKILL.md'),'# delivery',{mode:0o644})
+    const skilled=await launch('r_piskilled')
+    assert.equal(skilled.args[skilled.args.indexOf('--skill')+1],path.join(root,'cli','pi','skills','ez-delivery'))
   } finally {
     if(prior.path===undefined)delete process.env.PATH;else process.env.PATH=prior.path
     if(prior.telegram===undefined)delete process.env.TELEGRAM_BOT_TOKEN;else process.env.TELEGRAM_BOT_TOKEN=prior.telegram

@@ -226,6 +226,13 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
     buildArgs: (opts, _promptFile, promptText) => {
       if (!opts.controlDir) throw new Error('Pi runs require a bound control directory for sessions')
       const args = ['-p', '--mode', 'json', '--session-dir', path.join(opts.controlDir, 'cli', 'pi', 'sessions')]
+      // Owner-provisioned delivery skill (control/cli/pi/skills/ez-delivery).
+      // Loaded by path, never by prompt text, so the model cannot miss it.
+      try {
+        const skill = path.join(opts.controlDir, 'cli', 'pi', 'skills', 'ez-delivery', 'SKILL.md')
+        accessSync(skill, fsConstants.R_OK)
+        args.push('--skill', path.dirname(skill))
+      } catch { /* runs without the skill exactly as before */ }
       if (opts.isResume) args.push('--continue')
       if (opts.model) args.push('--model', opts.model)
       if (opts.effort) args.push('--thinking', opts.effort)
