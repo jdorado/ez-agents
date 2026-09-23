@@ -16,7 +16,7 @@ export const isPreset = (p: unknown): p is AiPreset => {
   if (!p || typeof p !== 'object') return false
   const v = p as AiPreset
   return safe(v.id) && typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 80 &&
-    ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy'].includes(v.cli) &&
+    ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'unreal-agent'].includes(v.cli) &&
     (v.provider === undefined || safe(v.provider)) && (v.model === undefined || safe(v.model)) && (v.effort === undefined || safe(v.effort))
 }
 export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
@@ -123,16 +123,27 @@ export const readModels = async (home = homedir(), available = installed, codexH
   // Other adapters expose the authenticated client's default, not a guessed catalog.
   for (const cli of ['claude', 'agy'])
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
-  if (await available('opencode')) {
-    const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
-    const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
-    const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
-    if (scoped.length) models.push(...scoped)
-    // A set allowlist that matches nothing offers no OpenCode choice rather
-    // than falling back to the client default outside the allowed providers.
-    else if (!allow) models.push({ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] })
-  }
+  if (await available('opencode')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'opencode'))
+  if (await available('unreal-agent')) models.push(...await unrealCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist, 'unreal-agent'))
   return models
+}
+// Unreal Agent speaks the same provider model IDs as OpenCode over the same
+// credentials, so both CLIs project the same installed catalog per entry.
+export const unrealCatalogModels = async (
+  opencodeRunner?: (args: string[]) => Promise<string>,
+  opencodeDataHome?: string,
+  opencodeAllowlist?: string[],
+  cli: 'opencode' | 'unreal-agent' = 'opencode',
+): Promise<ModelChoice[]> => {
+  const label = cli === 'unreal-agent' ? 'Unreal Agent' : 'opencode'
+  const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
+  const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
+  const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
+  if (scoped.length) return scoped.map((entry) => ({ ...entry, cli, name: entry.name.replace(/^.*? · /, `${label} · `) }))
+  // A set allowlist that matches nothing offers no choice rather than falling
+  // back outside the allowed providers.
+  if (allow) return []
+  return [{ cli, name: `${label} · client default`, efforts: [] as string[] }]
 }
 
 // Optional deployment-scoped restriction of the OpenCode catalog to named
