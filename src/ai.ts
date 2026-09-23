@@ -163,14 +163,14 @@ export const readModels = async (home = homedir(), available = installed, codexH
   // Other adapters expose the authenticated client's default, not a guessed catalog.
   for (const cli of ['claude', 'agy'])
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
-  if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, opencodeAllowlist))
+  const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
+  if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, allow))
   // These clients have separate provider configuration. OpenCode's catalog
   // cannot establish which models either client can execute.
   for (const cli of ['unreal-agent', 'pi'])
-    if (await available(cli)) models.push({ cli, name: `${cli === 'pi' ? 'Pi' : 'Unreal Agent'} · client default`, efforts: [] })
+    if (!allow && await available(cli)) models.push({ cli, name: `${cli === 'pi' ? 'Pi' : 'Unreal Agent'} · client default`, efforts: [] })
   const curated = await readCuratedModels(curationDir)
   if (!curated.length) return models
-  const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
   const scoped: ModelChoice[] = []
   for (const entry of curated) {
     if (!(await available(entry.cli))) continue

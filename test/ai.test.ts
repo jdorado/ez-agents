@@ -550,5 +550,6 @@ test('curated models respect installed clients and provider scope', async () => 
     const catalog = await readModels(undefined, async (cli) => cli === 'pi', undefined as never,
       async () => { throw new Error('no OpenCode catalog') }, undefined, ['opencode-go'], control)
     assert.deepEqual(catalog.filter(entry => entry.model).map(entry => entry.model), ['opencode-go/allowed'])
+    assert.equal(catalog.some(entry => entry.cli === 'pi' && !entry.model), false)
   } finally { await rm(control, { recursive: true, force: true }) }
 })
