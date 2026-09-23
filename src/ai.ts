@@ -12,11 +12,14 @@ export type AiPreset = { id: string; name: string; cli: string; provider?: strin
 export type ExecutionChoice = { sessionId: string; preset: AiPreset }
 export type ModelChoice = { cli: string; provider?: string; model?: string; name: string; efforts: string[] }
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
+const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'pi']
+const nativeEffort = (cli: string, effort: string) =>
+  cli === 'pi' ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) : true
 export const isPreset = (p: unknown): p is AiPreset => {
   if (!p || typeof p !== 'object') return false
   const v = p as AiPreset
   return safe(v.id) && typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 80 &&
-    ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy'].includes(v.cli) &&
+    knownClis.includes(v.cli) &&
     (v.provider === undefined || safe(v.provider)) && (v.model === undefined || safe(v.model)) && (v.effort === undefined || safe(v.effort))
 }
 export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
@@ -87,7 +90,41 @@ export const readOpencodeModels = async (run?: (args: string[]) => Promise<strin
   return []
 }
 
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[]): Promise<ModelChoice[]> => {
+// User-curated entries live in the agent's own setup (control/ai-models.json),
+// never in the repo. They pin models the native catalogs may not currently
+// serve (e.g. paid tiers) and merge ahead of discovered entries, so selection
+// validation accepts them.
+export const readCuratedModels = async (controlDir?: string): Promise<ModelChoice[]> => {
+  if (!controlDir) return []
+  const curated: ModelChoice[] = []
+  const seen = new Set<string>()
+  try {
+    const raw = JSON.parse(await readFile(join(controlDir, 'ai-models.json'), 'utf8'))
+    if (!Array.isArray(raw)) return []
+    for (const candidate of raw) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+      const entry = candidate as Record<string, unknown>
+      if (typeof entry.cli !== 'string' || !knownClis.includes(entry.cli)) continue
+      if (entry.provider !== undefined && !safe(entry.provider)) continue
+      if (entry.model !== undefined && !safe(entry.model)) continue
+      const key = `${entry.cli}‖${entry.provider ?? ''}‖${entry.model ?? ''}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      curated.push({
+        cli: entry.cli,
+        ...(entry.provider !== undefined ? { provider: entry.provider as string } : {}),
+        ...(entry.model !== undefined ? { model: entry.model as string } : {}),
+        name: (typeof entry.name === 'string' && entry.name ? entry.name : String(entry.model ?? entry.cli)).slice(0, 80),
+        efforts: (Array.isArray(entry.efforts) ? entry.efforts : [])
+          .filter((effort): effort is string => safe(effort))
+          .filter((effort) => allowedEffort(effort, typeof entry.model === 'string' ? entry.model : undefined, entry.cli as string) && nativeEffort(entry.cli as string, effort)),
+      })
+    }
+  } catch { return [] }
+  return curated
+}
+
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[], curationDir?: string): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -123,16 +160,37 @@ export const readModels = async (home = homedir(), available = installed, codexH
   // Other adapters expose the authenticated client's default, not a guessed catalog.
   for (const cli of ['claude', 'agy'])
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
-  if (await available('opencode')) {
-    const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
-    const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
-    const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
-    if (scoped.length) models.push(...scoped)
-    // A set allowlist that matches nothing offers no OpenCode choice rather
-    // than falling back to the client default outside the allowed providers.
-    else if (!allow) models.push({ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] })
+  const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
+  if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, allow))
+  // Pi has separate provider configuration. OpenCode's catalog cannot
+  // establish which models Pi can execute.
+  if (!allow && await available('pi')) models.push({ cli: 'pi', name: 'Pi · client default', efforts: [] })
+  const curated = await readCuratedModels(curationDir)
+  if (!curated.length) return models
+  const scoped: ModelChoice[] = []
+  for (const entry of curated) {
+    if (!(await available(entry.cli))) continue
+    if (['opencode', 'pi'].includes(entry.cli) && allow &&
+        (entry.model === undefined || !allow.includes(entry.model.split('/')[0]))) continue
+    scoped.push(entry)
   }
-  return models
+  const key = (m: { cli: string; provider?: string; model?: string }) => `${m.cli}‖${m.provider ?? ''}‖${m.model ?? ''}`
+  const curatedKeys = new Set(scoped.map(key))
+  return [...scoped, ...models.filter((m) => !curatedKeys.has(key(m)))]
+}
+export const opencodeCatalogModels = async (
+  opencodeRunner?: (args: string[]) => Promise<string>,
+  opencodeDataHome?: string,
+  opencodeAllowlist?: string[],
+): Promise<ModelChoice[]> => {
+  const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
+  const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
+  const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
+  if (scoped.length) return scoped
+  // A set allowlist that matches nothing offers no choice rather than falling
+  // back outside the allowed providers.
+  if (allow) return []
+  return [{ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] }]
 }
 
 // Optional deployment-scoped restriction of the OpenCode catalog to named

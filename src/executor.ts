@@ -103,7 +103,6 @@ export const resolveHostCommand = (command: string, pathValue = process.env.PATH
   }
   throw new Error(`Native CLI ${command} is not executable on the host PATH`)
 }
-
 export type CliAdapter = {
   name: string
   command: string
@@ -210,6 +209,30 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       return args
     },
   },
+  pi: {
+    name: 'pi',
+    command: 'pi',
+    description: 'Pi coding agent',
+    buildArgs: (opts, _promptFile, promptText) => {
+      if (!opts.controlDir) throw new Error('Pi runs require a bound control directory for sessions')
+      if (opts.effort && !['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) throw new Error('Invalid Pi thinking level')
+      const args = ['-p', '--mode', 'json', '--session-dir', path.join(opts.controlDir, 'cli', 'pi', 'sessions')]
+      // Owner-provisioned delivery skill (control/cli/pi/skills/ez-delivery).
+      // Loaded by path, never by prompt text, so the model cannot miss it.
+      try {
+        const skill = path.join(opts.controlDir, 'cli', 'pi', 'skills', 'ez-delivery', 'SKILL.md')
+        accessSync(skill, fsConstants.R_OK)
+        args.push('--skill', path.dirname(skill))
+      } catch { /* runs without the skill exactly as before */ }
+      // Bind Pi to this conversation, not the most recently used session in
+      // the shared directory. --session-id creates or resumes that exact ID.
+      if (opts.sessionId) args.push('--session-id', opts.sessionId)
+      if (opts.model) args.push('--model', opts.model)
+      if (opts.effort) args.push('--thinking', opts.effort)
+      args.push('--', promptText)
+      return args
+    },
+  },
   'codex-gui': {
     name: 'codex-gui',
     command: 'codex',
@@ -271,6 +294,15 @@ export const opencodeDataHome = (controlDir: string): string | undefined => {
   try {
     accessSync(path.join(controlDir, 'cli', 'opencode', 'auth.json'), fsConstants.R_OK)
     return path.join(controlDir, 'cli')
+  } catch { return undefined }
+}
+
+// Pi resolves its provider/model catalog from an agent dir (settings.json,
+// auth.json). Only a path is ever returned, never a secret.
+export const piAgentDir = (controlDir: string): string | undefined => {
+  try {
+    accessSync(path.join(controlDir, 'cli', 'pi', 'agent', 'auth.json'), fsConstants.R_OK)
+    return path.join(controlDir, 'cli', 'pi', 'agent')
   } catch { return undefined }
 }
 
@@ -382,6 +414,14 @@ export const startExecutorJob = async (
     // runtime with the provider error, never with a guessed credential.
     const dataHome = opencodeDataHome(options.controlDir)
     if (dataHome) environment.XDG_DATA_HOME = dataHome
+  }
+  if (!host && !gui && key === 'pi') {
+    // Point Pi at the agent-bound config dir (cli/pi/agent/auth.json) when
+    // the owner provisioned it. Without a binding Pi falls back to the relay
+    // home config. Fail closed at runtime with the provider error, never with
+    // a guessed credential.
+    const agentDir = piAgentDir(options.controlDir)
+    if (agentDir) environment.PI_CODING_AGENT_DIR = agentDir
   }
   if (denies.length) {
     const profile = path.join(outputDirectory, 'workspace.sb')

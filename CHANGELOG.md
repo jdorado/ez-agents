@@ -7,7 +7,7 @@
   installed `opencode` CLI with the whitelisted executor environment, so only
   models it can actually run are offered; variants pass through verbatim as
   `run --variant` on every platform. Restricted messaging tasks stay on the
-  audited Codex. The relay image now ships pinned OpenCode 1.18.29 for
+  audited Codex. The relay image now ships pinned OpenCode 1.18.32 for
   isolated agents; host-capable agents reuse the host installation.
 - Provision authenticated OpenCode providers per agent through
   `control/cli/opencode/auth.json`: isolated runs resolve it via an
@@ -17,6 +17,13 @@
   unlisted providers, including the free tier, can no longer be selected.
   Isolated relays read it from their environment; host transports take
   `opencodeProviders` on the agent's host binding instead.
+- Allow unbound plugins to run through the isolated broker when a different
+  installed plugin declares a host network binding; bound plugins still fail
+  closed on an isolated deployment.
+- Add a Pi native executor with the exact conversation session ID. It offers
+  its native default when no provider scope is set. Owner-curated model choices
+  require Pi's own provider credentials and are filtered by scope. The relay
+  image installs pinned Pi 0.87.1.
 
 ## 0.1.0-beta.36
 

@@ -105,6 +105,7 @@ const printStatus = (status: { active: string; items: ExecutorStatus[] }): void 
   console.log('            pnpm run setup agy')
   console.log('            pnpm run setup grok')
   console.log('            pnpm run setup opencode')
+  console.log('            pnpm run setup pi')
   console.log('            pnpm run setup codex-gui\n')
 }
 

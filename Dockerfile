@@ -9,15 +9,21 @@ COPY . .
 FROM dependencies AS test
 RUN pnpm verify
 FROM dependencies AS runtime
-# Keep this pin aligned with TASK_CODEX_VERSION. Isolated agents run this CLI
-# in the relay; do not bind-mount the operator's ~/.codex.
+# Isolated agents run this CLI in the relay; do not bind-mount the
+# operator's ~/.codex. Pin the reviewed CLI for repeatable release images.
 ARG CODEX_CLI_VERSION=0.153.4
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} && command -v codex
 # Isolated agents run the selected CLI in the relay; host-capable agents reuse
 # the host installation instead. OpenCode carries no task-runner pin because
 # restricted messaging tasks stay on the audited Codex above.
-ARG OPENCODE_CLI_VERSION=1.18.29
+# Pin the reviewed CLI for repeatable release images.
+ARG OPENCODE_CLI_VERSION=1.18.32
 RUN npm install -g opencode-ai@${OPENCODE_CLI_VERSION} && command -v opencode && opencode --version
+# Isolated agents select pi from the relay menu; the binary must resolve on
+# the relay PATH just like codex/opencode above.
+# Pin the reviewed CLI for repeatable release images.
+ARG PI_CLI_VERSION=0.87.1
+RUN npm install -g @earendil-works/pi-coding-agent@${PI_CLI_VERSION} && command -v pi
 RUN chmod +x docker/entrypoint.sh bin/ez bin/ezenciel-agents* && mkdir -p /state/control /state/home /workspace && chown node:node /state/control /state/home /workspace
 RUN node -e 'for (const [name, target] of Object.entries(require("./package.json").bin)) require("node:fs").symlinkSync("/app/" + target, "/usr/local/bin/" + name); require("node:fs").symlinkSync("/app/bin/ez", "/usr/local/bin/ez")'
 # Build identity for relay status (package version stays release-owned).
