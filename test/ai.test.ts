@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, chatPreset, readModels, isPreset, readOpencodeModels, readCuratedModels, validateSelection, opencodeProviderAllowlist, unrealCatalogModels } from '../src/ai.js'
+import { initialPreset, chatPreset, readModels, isPreset, readOpencodeModels, readCuratedModels, validateSelection, opencodeProviderAllowlist, opencodeCatalogModels } from '../src/ai.js'
 import { createAiMenu } from '../src/menu.js'
 import { EXECUTOR_REGISTRY, nativeSessionId } from '../src/executor.js'
 import { InboxStore } from '../src/inbox.js'
@@ -460,43 +460,33 @@ test('opencode model and variant selections validate against the installed catal
     /installed client catalog/)
 })
 
-test('unreal-agent mirrors the opencode catalog and validates model plus effort', async () => {
+test('unreal-agent does not borrow an unrelated OpenCode catalog', async () => {
   const runner = async () => [
     'opencode-go/muse-spark-1.3-contributor',
     JSON.stringify({ id: 'muse-spark-1.3-contributor', providerID: 'opencode-go', name: 'Muse Spark 1.3 Contributor', variants: { high: {}, xhigh: {} } }),
   ].join('\n')
   const catalog = await readModels(undefined, async (cli) => cli === 'unreal-agent', undefined as never, runner)
-  assert.deepEqual(catalog, [{
-    cli: 'unreal-agent', model: 'opencode-go/muse-spark-1.3-contributor',
-    name: 'Unreal Agent · opencode-go/muse-spark-1.3-contributor', efforts: ['high', 'xhigh'],
-  }])
+  assert.deepEqual(catalog, [{ cli: 'unreal-agent', name: 'Unreal Agent · client default', efforts: [] }])
   assert.equal(isPreset({ id: 'x', name: 'Unreal', cli: 'unreal-agent' }), true)
-  await validateSelection(
-    { id: 'choice', name: 'Spark', cli: 'unreal-agent', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' },
-    catalog, async (cli) => cli === 'unreal-agent')
+  await validateSelection({ id: 'choice', name: 'Default', cli: 'unreal-agent' }, catalog, async (cli) => cli === 'unreal-agent')
   await assert.rejects(
     validateSelection(
       { id: 'bad', name: 'Bad', cli: 'unreal-agent', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'max' },
       catalog, async (cli) => cli === 'unreal-agent'),
     /installed client catalog/)
-  assert.deepEqual(await unrealCatalogModels(async () => { throw new Error('unavailable') }, undefined, undefined, 'unreal-agent'),
-    [{ cli: 'unreal-agent', name: 'Unreal Agent · client default', efforts: [] }])
+  assert.deepEqual(await opencodeCatalogModels(async () => { throw new Error('unavailable') }),
+    [{ cli: 'opencode', name: 'opencode · client default', efforts: [] }])
 })
 
-test('pi mirrors the opencode catalog and validates model plus effort', async () => {
+test('pi does not borrow an unrelated OpenCode catalog', async () => {
   const runner = async () => [
     'opencode-go/muse-spark-1.3-contributor',
     JSON.stringify({ id: 'muse-spark-1.3-contributor', providerID: 'opencode-go', name: 'Muse Spark 1.3 Contributor', variants: { high: {}, xhigh: {} } }),
   ].join('\n')
   const catalog = await readModels(undefined, async (cli) => cli === 'pi', undefined as never, runner)
-  assert.deepEqual(catalog, [{
-    cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor',
-    name: 'Pi · opencode-go/muse-spark-1.3-contributor', efforts: ['high', 'xhigh'],
-  }])
+  assert.deepEqual(catalog, [{ cli: 'pi', name: 'Pi · client default', efforts: [] }])
   assert.equal(isPreset({ id: 'x', name: 'Pi', cli: 'pi' }), true)
-  await validateSelection(
-    { id: 'choice', name: 'Spark', cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' },
-    catalog, async (cli) => cli === 'pi')
+  await validateSelection({ id: 'choice', name: 'Default', cli: 'pi' }, catalog, async (cli) => cli === 'pi')
   await assert.rejects(
     validateSelection(
       { id: 'bad', name: 'Bad', cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'max' },
@@ -546,4 +536,19 @@ test('model catalog merges user-curated entries ahead of discovered ones', async
     await rm(control, { recursive: true, force: true })
     await rm(home, { recursive: true, force: true })
   }
+})
+
+test('curated models respect installed clients and provider scope', async () => {
+  const control = await mkdtemp(join(tmpdir(), 'ez-catalog-scope-'))
+  try {
+    await writeFile(join(control, 'ai-models.json'), JSON.stringify([
+      { cli: 'pi', model: 'opencode-go/allowed', efforts: ['xhigh'] },
+      { cli: 'pi', model: 'other/blocked' },
+      { cli: 'opencode', model: 'other/blocked' },
+      { cli: 'unreal-agent', model: 'opencode-go/uninstalled' },
+    ]))
+    const catalog = await readModels(undefined, async (cli) => cli === 'pi', undefined as never,
+      async () => { throw new Error('no OpenCode catalog') }, undefined, ['opencode-go'], control)
+    assert.deepEqual(catalog.filter(entry => entry.model).map(entry => entry.model), ['opencode-go/allowed'])
+  } finally { await rm(control, { recursive: true, force: true }) }
 })
