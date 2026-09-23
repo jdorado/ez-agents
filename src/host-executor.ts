@@ -36,7 +36,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const additionalWorkspaces = new Map<HostBinding, string[]>()
   const catalog = async (agent: HostBinding) => {
     const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'),
-      undefined, undefined, validateOpencodeProviders(agent.opencodeProviders))
+      undefined, undefined, validateOpencodeProviders(agent.opencodeProviders), agent.controlDir)
     const providers = (agent.codexProviders ?? []).map(validateCodexProvider)
     const declared = providers.flatMap(provider => provider.models.map(model => {
       const native = discovered.find(candidate => candidate.cli === 'codex' && !candidate.provider && candidate.model === model)

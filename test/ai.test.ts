@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, chatPreset, readModels, isPreset, readOpencodeModels, validateSelection, opencodeProviderAllowlist, unrealCatalogModels } from '../src/ai.js'
+import { initialPreset, chatPreset, readModels, isPreset, readOpencodeModels, readCuratedModels, validateSelection, opencodeProviderAllowlist, unrealCatalogModels } from '../src/ai.js'
 import { createAiMenu } from '../src/menu.js'
 import { EXECUTOR_REGISTRY, nativeSessionId } from '../src/executor.js'
 import { InboxStore } from '../src/inbox.js'
@@ -502,4 +502,48 @@ test('pi mirrors the opencode catalog and validates model plus effort', async ()
       { id: 'bad', name: 'Bad', cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'max' },
       catalog, async (cli) => cli === 'pi'),
     /installed client catalog/)
+})
+
+test('model catalog merges user-curated entries ahead of discovered ones', async () => {
+  const control = await mkdtemp(join(tmpdir(), 'ez-catalog-curated-'))
+  const home = await mkdtemp(join(tmpdir(), 'ez-catalog-curated-home-'))
+  try {
+    await mkdir(join(home, '.codex'))
+    await writeFile(join(home, '.codex/models_cache.json'), JSON.stringify({ models: [
+      { slug: 'fixture-model', display_name: 'Fixture', visibility: 'list',
+        supported_reasoning_levels: [{ effort: 'medium' }] },
+    ] }))
+    await writeFile(join(control, 'ai-models.json'), JSON.stringify([
+      { cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', name: 'Pi · Muse Spark 1.3', efforts: ['xhigh'] },
+      { cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', name: 'Dupe', efforts: [] },
+      { cli: 'codex', model: 'fixture-model', name: 'Curated Fixture', efforts: ['medium'] },
+      { cli: 'nope', model: 'x' },
+      'not-an-entry',
+    ]))
+    const installedOnly = async (cli: string) => cli === 'codex' || cli === 'pi'
+    const noRunner = async (_args: string[]): Promise<string> => { throw new Error('no native CLI in test') }
+    const catalog = await readModels(home, installedOnly, join(home, '.codex'),
+      noRunner, undefined, undefined, control)
+    assert.deepEqual(catalog.filter((m) => m.cli === 'pi'), [
+      { cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', name: 'Pi · Muse Spark 1.3', efforts: ['xhigh'] },
+      { cli: 'pi', name: 'Pi · client default', efforts: [] },
+    ])
+    // Curated entries win over the same discovered id and validate for selection.
+    assert.deepEqual(catalog.filter((m) => m.cli === 'codex'), [
+      { cli: 'codex', model: 'fixture-model', name: 'Curated Fixture', efforts: ['medium'] },
+    ])
+    await validateSelection(
+      { id: 'choice', name: 'Spark', cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', effort: 'xhigh' },
+      catalog, async (cli) => cli === 'pi')
+    // Missing or malformed curation files fall back to discovery alone.
+    assert.deepEqual(await readCuratedModels(join(control, 'missing-dir')), [])
+    await writeFile(join(control, 'ai-models.json'), 'not json')
+    assert.deepEqual(await readModels(home, async (cli) => cli === 'codex', join(home, '.codex'),
+      noRunner, undefined, undefined, control), [
+      { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium'] },
+    ])
+  } finally {
+    await rm(control, { recursive: true, force: true })
+    await rm(home, { recursive: true, force: true })
+  }
 })
