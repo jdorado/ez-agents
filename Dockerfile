@@ -11,7 +11,7 @@ RUN pnpm verify
 FROM dependencies AS runtime
 # Isolated agents run this CLI in the relay; do not bind-mount the
 # operator's ~/.codex. Pin the reviewed CLI for repeatable release images.
-ARG CODEX_CLI_VERSION=0.156.1
+ARG CODEX_CLI_VERSION=0.153.4
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} && command -v codex
 # Isolated agents run the selected CLI in the relay; host-capable agents reuse
 # the host installation instead. OpenCode carries no task-runner pin because
