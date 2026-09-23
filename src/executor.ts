@@ -262,6 +262,18 @@ export const validateCodexProviderEnvironmentKey = (value: unknown): string => {
 
 export const resolveExecutor = (name?: string): CliAdapter => EXECUTOR_REGISTRY[executorKey(name)]
 
+// Agent-bound OpenCode credentials live at cli/opencode/auth.json, mirroring
+// the Codex binding. Returns the XDG data home (cli/) only when that binding
+// exists; otherwise the host login (host transport) or the unauthenticated
+// free tier (isolated relay) applies. Only a path is ever returned, never a
+// secret.
+export const opencodeDataHome = (controlDir: string): string | undefined => {
+  try {
+    accessSync(path.join(controlDir, 'cli', 'opencode', 'auth.json'), fsConstants.R_OK)
+    return path.join(controlDir, 'cli')
+  } catch { return undefined }
+}
+
 export const grokInvocation = (
   options: Pick<ExecutorOptions, 'workspace' | 'isResume'>,
   promptFile: string,
@@ -362,6 +374,14 @@ export const startExecutorJob = async (
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
     environment.CODEX_HOME = home
+  }
+  if (!host && !gui && key === 'opencode') {
+    // Point OpenCode at the agent-bound data home (cli/opencode/auth.json)
+    // when the owner provisioned it. Host runs keep the installer login;
+    // without a binding the CLI falls back to its free tier. Fail closed at
+    // runtime with the provider error, never with a guessed credential.
+    const dataHome = opencodeDataHome(options.controlDir)
+    if (dataHome) environment.XDG_DATA_HOME = dataHome
   }
   if (denies.length) {
     const profile = path.join(outputDirectory, 'workspace.sb')

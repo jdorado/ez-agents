@@ -1,9 +1,11 @@
 import { assertEffort, allowedEffort } from './model-policy.js'
 import { access, readFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { homedir } from 'node:os'
 import { join, delimiter } from 'node:path'
-import { executorKey, resolveExecutor } from './executor.js'
+import { executorEnvironment, executorKey, resolveExecutor } from './executor.js'
 import { desktopCodexPath } from './desktop-bridge.js'
 
 export type AiPreset = { id: string; name: string; cli: string; provider?: string; model?: string; effort?: string }
@@ -45,7 +47,47 @@ export const installed = async (cli: string): Promise<boolean> => {
 
 // Read only metadata from native client catalogs. Never import prompts, credentials,
 // provider configuration, or model instructions into relay context.
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex')): Promise<ModelChoice[]> => {
+// The optional runner injects `opencode models` output in tests; production
+// spawns the installed CLI with the whitelisted executor environment.
+export const readOpencodeModels = async (run?: (args: string[]) => Promise<string>, dataHome?: string): Promise<ModelChoice[]> => {
+  const exec = run ?? (async (args: string[]) =>
+    (await promisify(execFile)('opencode', args, { env: { ...executorEnvironment(), ...(dataHome ? { XDG_DATA_HOME: dataHome } : {}) }, timeout: 8000, maxBuffer: 4 * 1024 * 1024 })).stdout)
+  const record = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  try {
+    const stdout = await exec(['models', '--verbose'])
+    // Verbose output alternates a `provider/model` identifier line with its
+    // pretty-printed JSON metadata (name, variants). Split on identifier lines
+    // so variant keys can be projected as selectable efforts.
+    const segments = stdout.split(/^([A-Za-z0-9_.\-]+\/[A-Za-z0-9_./:~\-]+)$/m)
+    const entries: ModelChoice[] = []
+    for (let index = 1; index + 1 < segments.length; index += 2) {
+      const id = segments[index].trim()
+      if (!safe(id)) continue
+      let meta: Record<string, unknown>
+      try { meta = record(JSON.parse(segments[index + 1])) } catch { continue }
+      const friendly = typeof meta.name === 'string' ? meta.name.trim() : ''
+      const efforts = Object.keys(record(meta.variants))
+        .filter((effort) => safe(effort) && allowedEffort(effort, id, 'opencode'))
+      entries.push({ cli: 'opencode', model: id,
+        name: (friendly ? `${friendly} · ${id}` : id).slice(0, 80), efforts })
+    }
+    if (entries.length) return entries
+  } catch { /* fall through to the plain list, then the client default */ }
+  try {
+    const stdout = await exec(['models'])
+    const entries: ModelChoice[] = []
+    for (const line of stdout.split(/\r?\n/)) {
+      const id = line.trim()
+      if (!id || !safe(id)) continue
+      entries.push({ cli: 'opencode', model: id, name: id.slice(0, 80), efforts: [] })
+    }
+    if (entries.length) return entries
+  } catch { /* unavailable metadata stays client default */ }
+  return []
+}
+
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[]): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -79,9 +121,35 @@ export const readModels = async (home = homedir(), available = installed, codexH
     models.push(...(desktop.length ? desktop : [{ cli: 'codex-gui', name: 'codex-gui · desktop', efforts: [] }]))
   }
   // Other adapters expose the authenticated client's default, not a guessed catalog.
-  for (const cli of ['claude', 'opencode', 'agy'])
+  for (const cli of ['claude', 'agy'])
     if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
+  if (await available('opencode')) {
+    const discovered = await readOpencodeModels(opencodeRunner, opencodeDataHome)
+    const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
+    const scoped = allow ? discovered.filter((m) => m.model && allow.includes(m.model.split('/')[0])) : discovered
+    if (scoped.length) models.push(...scoped)
+    // A set allowlist that matches nothing offers no OpenCode choice rather
+    // than falling back to the client default outside the allowed providers.
+    else if (!allow) models.push({ cli: 'opencode', name: 'opencode · client default', efforts: [] as string[] })
+  }
   return models
+}
+
+// Optional deployment-scoped restriction of the OpenCode catalog to named
+// providers (e.g. EZ_OPENCODE_PROVIDERS=opencode-go). Unset means unfiltered.
+// Reads process env directly like OPENCODE_MODEL; malformed values fail fast
+// so /ai reports the misconfiguration instead of a silently wrong list.
+const providerId = (p: unknown): p is string => typeof p === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(p)
+export const validateOpencodeProviders = (value: unknown): string[] | undefined => {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || !value.length || value.length > 16 || new Set(value).size !== value.length || value.some((p) => !providerId(p)))
+    throw new Error('opencode provider allowlist must be one to sixteen unique provider IDs')
+  return value as string[]
+}
+export const opencodeProviderAllowlist = (env: NodeJS.ProcessEnv = process.env): string[] | undefined => {
+  const raw = env.EZ_OPENCODE_PROVIDERS?.trim()
+  if (!raw) return undefined
+  return validateOpencodeProviders([...new Set(raw.split(',').map((p) => p.trim()).filter(Boolean))])
 }
 
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {

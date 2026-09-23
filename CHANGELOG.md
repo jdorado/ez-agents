@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- List installed OpenCode models with their provider variants as selectable
+  efforts in Choose AI, chat and scheduled tasks. The relay spawns the
+  installed `opencode` CLI with the whitelisted executor environment, so only
+  models it can actually run are offered; variants pass through verbatim as
+  `run --variant` on every platform. Restricted messaging tasks stay on the
+  audited Codex. The relay image now ships pinned OpenCode 1.18.29 for
+  isolated agents; host-capable agents reuse the host installation.
+- Provision authenticated OpenCode providers per agent through
+  `control/cli/opencode/auth.json`: isolated runs resolve it via an
+  agent-bound data home, so paid models list and run; host runs keep the
+  installer login and the free tier stays the fallback.
+- Scope the OpenCode catalog with `EZ_OPENCODE_PROVIDERS` (e.g. Go only):
+  unlisted providers, including the free tier, can no longer be selected.
+  Isolated relays read it from their environment; host transports take
+  `opencodeProviders` on the agent's host binding instead.
+
 ## 0.1.0-beta.36
 
 - Move relay run/outbox/inbox bookkeeping into relay memory behind the control

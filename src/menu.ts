@@ -30,14 +30,14 @@ const matchesModel = (preset: AiPreset, model: ModelChoice) =>
 // Short-lived opaque button IDs: no model names or executable arguments from callbacks.
 // These are operational settings, not a second conversational/agent loop.
 export const createAiMenu = (control: ControlStore, cli: string, catalog = readModels, workspace = process.cwd(), codexHome?: string,
-  isInstalled = installed) => {
+  isInstalled = installed, opencodeDataHome?: string) => {
   const initial = chatPreset(cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   if (host) catalog = async () => JSON.parse(await readFile(path.join(process.env.EZ_CONTROL_DIR!, 'host-executor/models.json'),'utf8'))
   // Local execution runs Codex with CODEX_HOME set to the agent-bound control
   // directory, but the default catalog probed the process home instead. Bind it
   // to the same agent-bound home so /ai lists the models Codex can actually run.
-  else if (codexHome && catalog === readModels) catalog = () => readModels(undefined, isInstalled, codexHome)
+  else if (codexHome && catalog === readModels) catalog = () => readModels(undefined, isInstalled, codexHome, undefined, opencodeDataHome)
   const refresh = async () => control.syncClientPresets(initial, host ? [] : await discoverDefaults(workspace, { codexHome }))
   const validate = async (preset: AiPreset) => {
     assertEffort(preset.effort, preset.model, preset.cli)

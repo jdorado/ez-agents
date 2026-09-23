@@ -13,6 +13,11 @@ FROM dependencies AS runtime
 # in the relay; do not bind-mount the operator's ~/.codex.
 ARG CODEX_CLI_VERSION=0.153.4
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} && command -v codex
+# Isolated agents run the selected CLI in the relay; host-capable agents reuse
+# the host installation instead. OpenCode carries no task-runner pin because
+# restricted messaging tasks stay on the audited Codex above.
+ARG OPENCODE_CLI_VERSION=1.18.29
+RUN npm install -g opencode-ai@${OPENCODE_CLI_VERSION} && command -v opencode && opencode --version
 RUN chmod +x docker/entrypoint.sh bin/ez bin/ezenciel-agents* && mkdir -p /state/control /state/home /workspace && chown node:node /state/control /state/home /workspace
 RUN node -e 'for (const [name, target] of Object.entries(require("./package.json").bin)) require("node:fs").symlinkSync("/app/" + target, "/usr/local/bin/" + name); require("node:fs").symlinkSync("/app/bin/ez", "/usr/local/bin/ez")'
 # Build identity for relay status (package version stays release-owned).
