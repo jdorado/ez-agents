@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, unrealModelId, validateCodexProvider } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, unrealModelId, validateCodexProvider } from '../src/executor.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
@@ -223,6 +223,41 @@ test('opencode jobs use the agent-bound data home only when its auth binding exi
     if(prior.path===undefined)delete process.env.PATH;else process.env.PATH=prior.path
     if(prior.telegram===undefined)delete process.env.TELEGRAM_BOT_TOKEN;else process.env.TELEGRAM_BOT_TOKEN=prior.telegram
     if(prior.transport===undefined)delete process.env.EZ_EXECUTOR_TRANSPORT;else process.env.EZ_EXECUTOR_TRANSPORT=prior.transport
+  }
+})
+
+test('pi jobs use the agent-bound config dir only when its auth binding exists', async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'ez-pi-auth-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const bin=path.join(root,'bin');await mkdir(bin)
+  await writeFile(path.join(bin,'pi'),`#!${process.execPath}\nconst fs=require('fs');fs.writeFileSync(${JSON.stringify(path.join(root,'observed.json'))},JSON.stringify({args:process.argv.slice(2),agentDir:process.env.PI_CODING_AGENT_DIR,telegram:process.env.TELEGRAM_BOT_TOKEN}));`,{mode:0o755})
+  assert.equal(piAgentDir(root),undefined)
+  await mkdir(path.join(root,'cli','pi','agent'),{recursive:true})
+  assert.equal(piAgentDir(root),undefined)
+  await writeFile(path.join(root,'cli','pi','agent','auth.json'),'{}',{mode:0o600})
+  assert.equal(piAgentDir(root),path.join(root,'cli','pi','agent'))
+  const prior={path:process.env.PATH,telegram:process.env.TELEGRAM_BOT_TOKEN,transport:process.env.EZ_EXECUTOR_TRANSPORT,agentDir:process.env.PI_CODING_AGENT_DIR}
+  const launch=async(runId:string)=>{
+    await ownerRun(root,runId)
+    process.env.PATH=bin+path.delimiter+prior.path;process.env.TELEGRAM_BOT_TOKEN='relay-secret';delete process.env.EZ_EXECUTOR_TRANSPORT;delete process.env.PI_CODING_AGENT_DIR
+    const job=await startExecutorJob(['hello'],{workspace:root,controlDir:root,binDir:bin,runId,timeoutMs:0,cli:'pi',model:'opencode-go/muse-spark-1.3-contributor',effort:'xhigh'})
+    assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0);await job.cleanup()
+    return JSON.parse(await readFile(path.join(root,'observed.json'),'utf8'))
+  }
+  try {
+    const bound=await launch('r_pibound')
+    assert.equal(bound.agentDir,path.join(root,'cli','pi','agent'))
+    assert.equal(bound.telegram,undefined)
+    assert.equal(bound.args[bound.args.indexOf('--model')+1],'opencode-go/muse-spark-1.3-contributor')
+    assert.equal(bound.args[bound.args.indexOf('--thinking')+1],'xhigh')
+    await rm(path.join(root,'cli','pi','agent','auth.json'))
+    const free=await launch('r_pifree')
+    assert.equal(free.agentDir,undefined)
+    assert.equal(free.telegram,undefined)
+  } finally {
+    if(prior.path===undefined)delete process.env.PATH;else process.env.PATH=prior.path
+    if(prior.telegram===undefined)delete process.env.TELEGRAM_BOT_TOKEN;else process.env.TELEGRAM_BOT_TOKEN=prior.telegram
+    if(prior.transport===undefined)delete process.env.EZ_EXECUTOR_TRANSPORT;else process.env.EZ_EXECUTOR_TRANSPORT=prior.transport
+    if(prior.agentDir===undefined)delete process.env.PI_CODING_AGENT_DIR;else process.env.PI_CODING_AGENT_DIR=prior.agentDir
   }
 })
 

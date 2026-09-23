@@ -313,6 +313,15 @@ export const opencodeDataHome = (controlDir: string): string | undefined => {
   } catch { return undefined }
 }
 
+// Pi resolves its provider/model catalog from an agent dir (settings.json,
+// auth.json). Only a path is ever returned, never a secret.
+export const piAgentDir = (controlDir: string): string | undefined => {
+  try {
+    accessSync(path.join(controlDir, 'cli', 'pi', 'agent', 'auth.json'), fsConstants.R_OK)
+    return path.join(controlDir, 'cli', 'pi', 'agent')
+  } catch { return undefined }
+}
+
 export const grokInvocation = (
   options: Pick<ExecutorOptions, 'workspace' | 'isResume'>,
   promptFile: string,
@@ -421,6 +430,14 @@ export const startExecutorJob = async (
     // runtime with the provider error, never with a guessed credential.
     const dataHome = opencodeDataHome(options.controlDir)
     if (dataHome) environment.XDG_DATA_HOME = dataHome
+  }
+  if (!host && !gui && key === 'pi') {
+    // Point Pi at the agent-bound config dir (cli/pi/agent/auth.json) when
+    // the owner provisioned it. Without a binding Pi falls back to the relay
+    // home config. Fail closed at runtime with the provider error, never with
+    // a guessed credential.
+    const agentDir = piAgentDir(options.controlDir)
+    if (agentDir) environment.PI_CODING_AGENT_DIR = agentDir
   }
   if (denies.length) {
     const profile = path.join(outputDirectory, 'workspace.sb')
