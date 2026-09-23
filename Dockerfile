@@ -9,21 +9,26 @@ COPY . .
 FROM dependencies AS test
 RUN pnpm verify
 FROM dependencies AS runtime
-# Keep this pin aligned with TASK_CODEX_VERSION. Isolated agents run this CLI
-# in the relay; do not bind-mount the operator's ~/.codex.
-ARG CODEX_CLI_VERSION=0.153.4
+# Isolated agents run this CLI in the relay; do not bind-mount the
+# operator's ~/.codex. Tracks npm `latest` so rebuilds pick up new models.
+ARG CODEX_CLI_VERSION=latest
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} && command -v codex
 # Isolated agents run the selected CLI in the relay; host-capable agents reuse
 # the host installation instead. OpenCode carries no task-runner pin because
 # restricted messaging tasks stay on the audited Codex above.
-ARG OPENCODE_CLI_VERSION=1.18.29
+# Tracks npm `latest` so rebuilds pick up new models/efforts.
+ARG OPENCODE_CLI_VERSION=latest
 RUN npm install -g opencode-ai@${OPENCODE_CLI_VERSION} && command -v opencode && opencode --version
 # Isolated agents select pi from the relay menu; the binary must resolve on
 # the relay PATH just like codex/opencode above.
-ARG PI_CLI_VERSION=0.87.1
+# Tracks npm `latest`.
+ARG PI_CLI_VERSION=latest
 RUN npm install -g @earendil-works/pi-coding-agent@${PI_CLI_VERSION} && command -v pi
 # Isolated agents select unreal-agent from the relay menu; fetch the pinned
 # upstream linux binary (verified against the release SHA256SUMS).
+# Pinned: upstream asset names embed the version, so `latest` cannot be
+# expressed as a static URL (already at latest upstream, v0.1.1). Bump with
+# the URL below when the next release lands.
 ARG UNREAL_AGENT_VERSION=0.1.1
 RUN set -eu; arch="$(dpkg --print-architecture)"; \
   curl -fsSL -o /tmp/unreal-agent-runner.tar.gz "https://github.com/unreallabsai/unreal-agent/releases/download/v${UNREAL_AGENT_VERSION}/unreal-agent-runner_${UNREAL_AGENT_VERSION}_linux_${arch}.tar.gz"; \
