@@ -9,7 +9,7 @@ import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
 import { startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
-import { readModels, validateSelection, validateOpencodeProviders } from './ai.js'
+import { readModels, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
 import { taskWorkspace } from './task-workspace.js'
 import { packageVersion } from './version.js'
@@ -20,9 +20,39 @@ export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;
 export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]>; codexProviders?: CodexProviderBinding[]; opencodeProviders?: string[] }
 export type HostInstallation = { cli: string; isolation?: IsolationClass; agents: HostBinding[] }
 
+// A transient native-catalog blip (e.g. `opencode models` timeout under an
+// allowlist) reads as an empty fresh catalog. Prefer it when non-empty;
+// otherwise keep the last-good disk catalog so one blip does not fail a run.
+export const selectValidationCatalog = (fresh: ModelChoice[], cached: ModelChoice[] | undefined): ModelChoice[] =>
+  fresh.length ? fresh : cached?.length ? cached : fresh
+
+export const readCachedModels = async (agent: HostBinding): Promise<ModelChoice[] | undefined> => {
+  try {
+    const raw = JSON.parse(await readFile(path.join(agent.controlDir, 'host-executor/models.json'), 'utf8'))
+    if (!Array.isArray(raw)) return undefined
+    return raw as ModelChoice[]
+  } catch { return undefined }
+}
+
+// Periodic refresh body, extracted for testing. Throws on failure; the
+// caller keeps the last-good disk catalog and the host alive.
+export const refreshAgentCatalog = async (agent: HostBinding,
+  readFresh: (agent: HostBinding) => Promise<ModelChoice[]>,
+  seen: Map<HostBinding, string>): Promise<void> => {
+  const catalogModels = await readFresh(agent)
+  const models = JSON.stringify(catalogModels)
+  if (seen.get(agent) === models) return
+  await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
+  const file = path.join(agent.controlDir, 'host-executor/models.json')
+  await writeFile(file + '.tmp', models, { mode: 0o600 })
+  await rename(file + '.tmp', file)
+  seen.set(agent, models)
+}
+
 const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth
 
-export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {
+export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob,
+  readCatalog?: (agent: HostBinding) => Promise<ModelChoice[]>) => {
   if (installation.isolation !== undefined) parseIsolationClass(installation.isolation)
   if (installation.isolation === 'isolated') throw new Error('Isolated agents run the native CLI in the relay; do not start host transport')
   resolveExecutor(installation.cli)
@@ -46,6 +76,25 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     const isReplacedByProvider = (model: {cli:string; model?:string}) =>
       model.model !== undefined && declaredModels.has(model.model) && model.cli === 'codex'
     return [...discovered.filter(model => !isReplacedByProvider(model)), ...declared]
+  }
+  const freshCatalog = readCatalog ?? catalog
+  const beat = async (agent: HostBinding) => {
+    const directory = path.join(agent.controlDir, 'host-executor')
+    await writeFile(path.join(directory, 'heartbeat.tmp'), JSON.stringify({ at: Date.now(), pid: process.pid, version: packageVersion, platform: process.platform, arch: process.arch, plugins: await installedPluginVersions(agent.toolsHome) }), { mode: 0o600 })
+    await rename(path.join(directory, 'heartbeat.tmp'), path.join(directory, 'heartbeat.json'))
+  }
+  // Cross-CLI runs validate against a fresh catalog; on a transient blip
+  // (throw or empty under an allowlist) fall back to the last-good disk
+  // catalog instead of failing the run. A genuinely empty catalog with no
+  // cache still fails closed via validateSelection.
+  const validationCatalog = async (agent: HostBinding): Promise<ModelChoice[]> => {
+    try {
+      return selectValidationCatalog(await freshCatalog(agent), await readCachedModels(agent))
+    } catch (error) {
+      const cached = await readCachedModels(agent)
+      if (cached?.length) return cached
+      throw error
+    }
   }
   try {
     for (const agent of installation.agents) {
@@ -102,22 +151,21 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     while (!signal.aborted) {
       const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
       if(parent) { try { process.kill(parent,0) } catch { break } }
+      // Heartbeats first: a slow catalog refresh must never starve the
+      // 15s relay-side offline check and cancel in-flight runs.
+      for (const agent of installation.agents) await beat(agent)
       if(Date.now()-catalogAt>30000){
-        for(const agent of installation.agents){
-          const catalogModels = await catalog(agent)
-          const models=JSON.stringify(catalogModels)
-          if(catalogSeen.get(agent)===models)continue
-          await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
-          const file=path.join(agent.controlDir,'host-executor/models.json')
-          await writeFile(file+'.tmp',models,{mode:0o600});await rename(file+'.tmp',file)
-          catalogSeen.set(agent,models)
-        }
         catalogAt=Date.now()
+        for(const agent of installation.agents){
+          try {
+            await refreshAgentCatalog(agent, freshCatalog, catalogSeen)
+          } catch (error) {
+            console.error('Host catalog refresh failed, keeping last-good models', error instanceof Error ? error.message : error)
+          }
+        }
       }
       for (const agent of installation.agents) {
         const directory=path.join(agent.controlDir,'host-executor')
-        await writeFile(path.join(directory,'heartbeat.tmp'),JSON.stringify({at:Date.now(),pid:process.pid,version:packageVersion,platform:process.platform,arch:process.arch,plugins:await installedPluginVersions(agent.toolsHome)}),{mode:0o600})
-        await rename(path.join(directory,'heartbeat.tmp'),path.join(directory,'heartbeat.json'))
         for (const file of await readdir(directory)) {
           if (!file.endsWith('.request.json') || !isHostRunId(file.slice(0,-13))) continue
           const id=file.slice(0,-13)
@@ -163,7 +211,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               if (provider && model && !provider.models.includes(model)) throw new Error('Selected model is not declared for this Codex provider')
               if (!provider && model && (agent.codexProviders ?? []).some(binding=>binding.models.includes(model)))
                 throw new Error('Selected Codex provider is required for this model')
-              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},await catalog(agent))
+              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},await validationCatalog(agent))
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.controlDir,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
