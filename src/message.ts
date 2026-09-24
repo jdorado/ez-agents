@@ -13,8 +13,8 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
   console.log(
     'Usage: ezenciel-agents-message [--text-file <path> | --text <text>] [--document <path>] [--voice <text>] [--reply-to <id>]',
   )
-  console.log('History: ezenciel-agents-message history [--limit 1..50] [--message-id ID] (read-only, bound Telegram chat, across sessions)')
-  console.log("Authenticated channel: sends go directly to the paired owner's Telegram chat. receipt OUTBOX_ID reads delivery status; sends return queued ID then Telegram delivery receipt or unknown outcome. Never resend an uncertain operation.")
+  console.log('History: ezenciel-agents-message history [--limit 1..50] [--message-id ID] (read-only; current application binding and scope, or bound Telegram chat). --message-id is Telegram-only.')
+  console.log('Authenticated run: sends use its bound channel (application inbox or paired Telegram chat). Delivery receipts confirm that destination; uncertain sends must not be retried without readback.')
   console.log('Text: --text decodes \\n as a newline and \\\\ as a literal backslash; --text-file preserves file content.')
   process.exit(0)
 }

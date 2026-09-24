@@ -10,6 +10,9 @@ import { serveTestLedger } from './helpers/ledger.js'
 import { deliveredMessages } from '../src/message-history.js'
 import { RunStore } from '../src/runs.js'
 import { ControlStore } from '../src/control-state.js'
+import { ownerId, ownerEpoch } from '../src/control-state.js'
+import { ApplicationBindings } from '../src/application-channel.js'
+import { randomBytes } from 'node:crypto'
 
 async function fixture(t: test.TestContext) {
   const dir = await mkdtemp(join(tmpdir(), 'ez-history-'))
@@ -116,4 +119,48 @@ test('CLI flushes complete long reports and rejects send options in history mode
   await assert.rejects(promisify(execFile)(process.execPath, [...cli, '--text', 'do not send'], { env }), /Unknown option/)
   // History reads never create outbox state on disk.
   await assert.rejects(stat(join(dir, 'outbox')))
+})
+
+test('application history reads only delivered literal text in its current binding and scope', async t => {
+  const { dir, runs } = await fixture(t)
+  const owner = (await new ControlStore(dir, 1000).status()).owner!
+  const bindings = new ApplicationBindings(dir)
+  const first = (await bindings.register('first', randomBytes(32).toString('base64url'), owner))!
+  const second = (await bindings.register('second', randomBytes(32).toString('base64url'), owner))!
+  const create = async (id: string, bindingId: string, scope: string) => {
+    const run = await runs.create({ id, ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner),
+      texts: ['test'], application: { bindingId, scope, requestId: id } })
+    await runs.patch(id, { status: 'running' })
+    return run
+  }
+  const earlier = await create('r_app_earlier', first.bindingId, 'book')
+  const current = await create('r_app_current', first.bindingId, 'book')
+  const otherScope = await create('r_app_other_scope', first.bindingId, 'private')
+  const otherBinding = await create('r_app_other_binding', second.bindingId, 'book')
+  const deliver = async (runId: string, text: string) => {
+    const item = await runs.enqueueMessage(runId, text)
+    await runs.claimOutbox(item.id)
+    await runs.markOutboxSent(item.id)
+    return item
+  }
+  const literal = 'Book is $1,234; path C:\\reports\\$raw'
+  const firstItem = await deliver(earlier.id, literal)
+  await runs.patch(earlier.id, { status: 'completed' })
+  await deliver(otherScope.id, 'other scope secret')
+  await deliver(otherBinding.id, 'other binding secret')
+  await deliver('tg_1', 'Telegram secret')
+  await runs.enqueueMessage(current.id, 'queued is not delivered')
+  const env = { ...process.env, EZ_CONTROL_DIR: dir, EZ_RUN_ID: current.id }
+  const { stdout } = await promisify(execFile)(process.execPath, ['bin/ezenciel-agents-message.mjs', 'history'], { env })
+  const result = JSON.parse(stdout)
+  assert.equal(result.scope, 'book')
+  assert.deepEqual(result.messages.map((message: { id: string; text: string }) => ({ id: message.id, text: message.text })),
+    [{ id: firstItem.id, text: literal }])
+  assert.equal(result.hasMore, false)
+  await assert.rejects(promisify(execFile)(process.execPath,
+    ['bin/ezenciel-agents-message.mjs', 'history', '--message-id', '1'], { env }), /Telegram history/)
+  await bindings.register('first', null, owner)
+  await assert.rejects(deliveredMessages(dir, current.id), /revoked/)
+  await new ControlStore(dir, 1000).revokeOwner()
+  await assert.rejects(deliveredMessages(dir, otherBinding.id), /owner-mismatch|revoked/)
 })
