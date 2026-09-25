@@ -141,12 +141,14 @@ test('speech renders only a completed bound reply and rechecks authority after g
   assert.equal(audio.headers.get('cache-control'), 'no-store')
   assert.equal(await audio.text(), 'audio-fixture')
   assert.deepEqual(spoken, ['Keep the movement controlled.'])
-  revoke = true
-  assert.notEqual((await request(firstToken)).status, 200)
-  revoke = false
-  await channel.bindings.register('first', firstToken, owned)
-  await channel.bindings.register('second', secondToken, owned, false, true)
   reassign = true
+  const beforeReassign = spoken.length
+  assert.notEqual((await request(firstToken)).status, 200)
+  assert.equal(spoken.length, beforeReassign + 1)
+  reassign = false
+  await channel.bindings.register('second', secondToken, owned, false, true)
+  await channel.bindings.register('first', firstToken, owned, false, true)
+  revoke = true
   assert.notEqual((await request(firstToken)).status, 200)
 })
 
