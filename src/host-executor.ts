@@ -9,7 +9,7 @@ import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
 import { startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
-import { readModels, validateSelection, validateOpencodeProviders } from './ai.js'
+import { readModels, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
 import { taskWorkspace } from './task-workspace.js'
 import { packageVersion } from './version.js'
@@ -20,9 +20,27 @@ export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;
 export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]>; codexProviders?: CodexProviderBinding[]; opencodeProviders?: string[] }
 export type HostInstallation = { cli: string; isolation?: IsolationClass; agents: HostBinding[] }
 
+// Periodic refresh body, extracted for testing. Throws on failure; the
+// caller keeps the last-good disk catalog and the host alive.
+export const refreshAgentCatalog = async (agent: HostBinding,
+  readFresh: (agent: HostBinding) => Promise<ModelChoice[]>,
+  seen: Map<HostBinding, string>): Promise<void> => {
+  const catalogModels = await readFresh(agent)
+  // Empty discovery is not an authoritative deletion of the installed catalog.
+  if (!catalogModels.length) return
+  const models = JSON.stringify(catalogModels)
+  if (seen.get(agent) === models) return
+  await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
+  const file = path.join(agent.controlDir, 'host-executor/models.json')
+  await writeFile(file + '.tmp', models, { mode: 0o600 })
+  await rename(file + '.tmp', file)
+  seen.set(agent, models)
+}
+
 const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth
 
-export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob) => {
+export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob,
+  readCatalog?: (agent: HostBinding) => Promise<ModelChoice[]>) => {
   if (installation.isolation !== undefined) parseIsolationClass(installation.isolation)
   if (installation.isolation === 'isolated') throw new Error('Isolated agents run the native CLI in the relay; do not start host transport')
   resolveExecutor(installation.cli)
@@ -31,6 +49,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     throw new Error('Each agent requires a separate workspace and control directory')
   const active = new Map<string, ChildProcess>()
   const tasks = new Set<Promise<void>>()
+  let catalogRefresh: Promise<void> | undefined
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
   const additionalWorkspaces = new Map<HostBinding, string[]>()
@@ -46,6 +65,12 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     const isReplacedByProvider = (model: {cli:string; model?:string}) =>
       model.model !== undefined && declaredModels.has(model.model) && model.cli === 'codex'
     return [...discovered.filter(model => !isReplacedByProvider(model)), ...declared]
+  }
+  const freshCatalog = readCatalog ?? catalog
+  const beat = async (agent: HostBinding) => {
+    const directory = path.join(agent.controlDir, 'host-executor')
+    await writeFile(path.join(directory, 'heartbeat.tmp'), JSON.stringify({ at: Date.now(), pid: process.pid, version: packageVersion, platform: process.platform, arch: process.arch, plugins: await installedPluginVersions(agent.toolsHome) }), { mode: 0o600 })
+    await rename(path.join(directory, 'heartbeat.tmp'), path.join(directory, 'heartbeat.json'))
   }
   try {
     for (const agent of installation.agents) {
@@ -79,7 +104,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid)}),{mode:0o600,flag:'wx'})
       locks.push(lock)
-      const models = await catalog(agent)
+      const models = await freshCatalog(agent)
       await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
       const modelsFile=path.join(directory,'models.json')
       await writeFile(modelsFile+'.tmp',JSON.stringify(models),{mode:0o600});await rename(modelsFile+'.tmp',modelsFile)
@@ -102,22 +127,23 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     while (!signal.aborted) {
       const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
       if(parent) { try { process.kill(parent,0) } catch { break } }
-      if(Date.now()-catalogAt>30000){
-        for(const agent of installation.agents){
-          const catalogModels = await catalog(agent)
-          const models=JSON.stringify(catalogModels)
-          if(catalogSeen.get(agent)===models)continue
-          await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
-          const file=path.join(agent.controlDir,'host-executor/models.json')
-          await writeFile(file+'.tmp',models,{mode:0o600});await rename(file+'.tmp',file)
-          catalogSeen.set(agent,models)
-        }
+      // Keep transport liveness independent of native catalog I/O.
+      for (const agent of installation.agents) await beat(agent)
+      if(!catalogRefresh && Date.now()-catalogAt>30000){
         catalogAt=Date.now()
+        catalogRefresh=(async()=>{
+          for(const agent of installation.agents){
+            if(signal.aborted)break
+            try {
+              await refreshAgentCatalog(agent, freshCatalog, catalogSeen)
+            } catch (error) {
+              console.error('Host catalog refresh failed, keeping last-good models', error instanceof Error ? error.message : error)
+            }
+          }
+        })().finally(()=>{catalogRefresh=undefined})
       }
       for (const agent of installation.agents) {
         const directory=path.join(agent.controlDir,'host-executor')
-        await writeFile(path.join(directory,'heartbeat.tmp'),JSON.stringify({at:Date.now(),pid:process.pid,version:packageVersion,platform:process.platform,arch:process.arch,plugins:await installedPluginVersions(agent.toolsHome)}),{mode:0o600})
-        await rename(path.join(directory,'heartbeat.tmp'),path.join(directory,'heartbeat.json'))
         for (const file of await readdir(directory)) {
           if (!file.endsWith('.request.json') || !isHostRunId(file.slice(0,-13))) continue
           const id=file.slice(0,-13)
@@ -203,6 +229,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   } finally {
     for(const child of active.values())terminateJob(child)
     await Promise.allSettled(tasks)
+    await catalogRefresh
     for(const lock of locks)await rm(lock,{force:true})
   }
 }
