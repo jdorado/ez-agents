@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-beta.39
+
+- Render completed, binding-scoped application replies as WAV speech with
+  configurable English and Spanish voices, while retaining Ogg/Opus for Telegram.
+  Recheck the original application binding after synthesis and report depleted
+  speech credits without provider details.
+- Preserve live delivery sockets during upgrade backups and restart Linux host
+  services after a successful core replacement.
+
 ## 0.1.0-beta.38
 
 - Remove the retired Antigravity CLI integration and its unused engine paths.
