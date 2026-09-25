@@ -78,7 +78,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     isolation,
     codexSandbox: codexSandbox === 'external' ? 'external' : undefined,
     codexAutoCompactTokens: !env.EZ_CODEX_AUTO_COMPACT_TOKENS?.trim() ? undefined : positiveInteger(env.EZ_CODEX_AUTO_COMPACT_TOKENS, 'EZ_CODEX_AUTO_COMPACT_TOKENS'),
-    executorCli: env.EZ_EXECUTOR_CLI?.trim() || 'agy',
+    executorCli: env.EZ_EXECUTOR_CLI?.trim() || 'codex',
     applicationPort: env.EZ_APPLICATION_PORT ? positiveInteger(env.EZ_APPLICATION_PORT, 'EZ_APPLICATION_PORT') : undefined,
     applicationHost: env.EZ_APPLICATION_HOST?.trim() || '127.0.0.1',
     channelBackendUrl: env.EZ_CHANNEL_BACKEND_URL?.trim(),

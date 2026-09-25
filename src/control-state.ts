@@ -483,8 +483,6 @@ export class ControlStore {
       if (state.activeSession?.sessionId === sessionId) return state.activeSession
       const session = state.sessions?.find(s => s.sessionId === sessionId)
       if (!session || session.archived || (session.applicationScope && !session.telegramShared)) throw new Error('Conversation unavailable. Open /chats again.')
-      if (session.cli === 'agy')
-        throw new Error('Antigravity only resumes its latest conversation; selecting an older session is not supported.')
       const ai = state.ai
       // Older sessions did not record their model. Reuse a known preset for the
       // same CLI; never resume an engine ID through a different client.
@@ -684,7 +682,6 @@ export class ControlStore {
         return { sessionId: previous.sessionId, preset: previous.preset }
       }
       const preset = requested ?? state.ai.presets.find(item => item.id === state.ai!.selectedId)!
-      if (preset.cli === 'agy') throw new Error('Application scopes require an engine with explicit session selection')
       const session: SessionState = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset, applicationScope: scope }
       state.sessions.push(session)
       activate(session)
@@ -707,7 +704,7 @@ export class ControlStore {
       if (previous && (previous.telegramShared || previous === state.activeSession))
         throw new Error('Application scope is shared; use shared controls')
       const nextPreset = preset ?? state.ai?.presets.find(item => item.id === state.ai!.defaultId)
-      if (!nextPreset || !isPreset(nextPreset) || nextPreset.cli === 'agy') throw new Error('Invalid application AI selection')
+      if (!nextPreset || !isPreset(nextPreset)) throw new Error('Invalid application AI selection')
       if (preset && previous?.cli === preset.cli) {
         previous.preset = persistedPreset(preset)
         await this.writeState(state)

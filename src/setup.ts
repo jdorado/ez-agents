@@ -37,7 +37,7 @@ export const readActiveExecutor = async (envFilePath: string): Promise<string> =
   } catch {
     // env file doesn't exist yet
   }
-  return process.env.EZ_EXECUTOR_CLI?.trim() || 'agy'
+  return process.env.EZ_EXECUTOR_CLI?.trim() || 'codex'
 }
 
 export const setExecutorInEnv = async (envFilePath: string, cliName: string): Promise<void> => {
@@ -102,7 +102,7 @@ const printStatus = (status: { active: string; items: ExecutorStatus[] }): void 
   console.log('\nTo switch executor:')
   console.log('  pnpm run setup <executor-name>')
   console.log('  Examples: pnpm run setup claude')
-  console.log('            pnpm run setup agy')
+  console.log('            pnpm run setup codex')
   console.log('            pnpm run setup grok')
   console.log('            pnpm run setup opencode')
   console.log('            pnpm run setup pi')
