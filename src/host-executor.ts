@@ -163,7 +163,10 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               if (provider && model && !provider.models.includes(model)) throw new Error('Selected model is not declared for this Codex provider')
               if (!provider && model && (agent.codexProviders ?? []).some(binding=>binding.models.includes(model)))
                 throw new Error('Selected Codex provider is required for this model')
-              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},await catalog(agent))
+              // Admission and execution must use the same catalog snapshot. A
+              // transient native-client probe failure must not reject a model
+              // that the host just advertised to the relay and application.
+              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.controlDir,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,

@@ -117,6 +117,9 @@ test('host execution resolves a declared provider from the bound agent, not a la
       try { await readFile(path.join(directory, 'heartbeat.json')); break }
       catch { await new Promise(resolve => setTimeout(resolve, 20)) }
     }
+    // The selected model was advertised at startup. A later catalog probe
+    // can fail while the client remains able to execute the selected model.
+    await rm(path.join(controlDir, 'cli', 'codex', 'models_cache.json'))
     await writeFile(path.join(directory, 'r_provider.request.json'), JSON.stringify({
       texts: ['hello'], options: {cli: 'codex', provider: 'openrouter', model: provider.models[0], effort: 'max'},
     }))
@@ -241,10 +244,14 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     switched.stdin.end(JSON.stringify({texts:['Explicit CLI change'],options:executionDefaults('claude',{cli:'claude',timeoutMs:5000,effort:undefined})}))
     assert.equal(await new Promise(resolve=>switched.once('close',resolve)),0)
     assert.ok(JSON.parse(switchedOutput).args.includes('--print'))
-    // The bound cache may advertise a model absent from the host's cache.
+    // The host's published catalog can gain a model after its first probe.
     const codexHome=path.join(agents[0].controlDir,'cli','codex')
     await mkdir(codexHome,{recursive:true})
     await writeFile(path.join(codexHome,'models_cache.json'),JSON.stringify({models:[{slug:'agent-only-fixture',visibility:'list',display_name:'Agent model',supported_reasoning_levels:[]}]}))
+    const catalogFile=path.join(agents[0].controlDir,'host-executor','models.json')
+    const advertised=JSON.parse(await readFile(catalogFile,'utf8'))
+    advertised.push({cli:'codex',model:'agent-only-fixture',name:'Agent model',efforts:[]})
+    await writeFile(catalogFile,JSON.stringify(advertised))
     await ownerRun(agents[0].controlDir,'tg_6293307')
     const bound=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),agents[0].controlDir,'tg_6293307'],{stdio:['pipe','pipe','pipe']})
     let boundOutput='',boundError=''
