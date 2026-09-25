@@ -11,6 +11,7 @@ import { MAX_INCOMING_ATTACHMENT_BYTES, stageChatAttachment } from './files.js'
 import { assertEffort } from './model-policy.js'
 import { ApprovalStore } from './approval.js'
 import { Tasks } from './tasks.js'
+import { SpeechCreditsDepletedError } from './audio.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const applicationScope = (bindingId: string, scope: string) => hash(JSON.stringify([bindingId, scope]))
@@ -74,6 +75,7 @@ export class ApplicationChannel {
     controlDir: string; workspace?: string; initial: AiPreset
     wake: () => void
     cancel: (id: string) => Promise<void>
+    speech?: (text: string, language: 'en' | 'es') => Promise<{ buffer: Buffer; mimeType: string }>
     createTelegramPairing?: (bindingId: string, owner: Owner) => Promise<{ connected: true } | { connected: false; url: string; expiresAt: string }>
     telegramAvailable?: () => boolean
     aiControls?: {
@@ -384,6 +386,31 @@ export class ApplicationChannel {
         if (!validApplicationOrigin(application)) throw new Error('Invalid application admission')
         const admitted = await this.runs.attachTelegramApplication(target.id, application)
         send(200, { id: admitted.id, scope, status: admitted.status }); return
+      }
+      const speechMatch = path.match(/^\/v1\/runs\/(r_(?:app|schedule)_[a-f0-9]{64})\/speech$/)
+      if (speechMatch && request.method === 'POST') {
+        const chunks: Buffer[] = []; let size = 0
+        for await (const chunk of request) { size += chunk.length; if (size > 128) throw new Error('Invalid speech request'); chunks.push(chunk) }
+        const input = Buffer.concat(chunks).toString('utf8').trim()
+        const language = input ? (JSON.parse(input) as { language?: unknown }).language : 'en'
+        if (language !== 'en' && language !== 'es') { send(400, { error: 'Invalid speech language' }); return }
+        const snapshot = await this.snapshot(binding.bindingId, speechMatch[1])
+        if (snapshot.status !== 'completed') { send(409, { error: 'Speech requires a completed reply' }); return }
+        const text = snapshot.messages.at(-1)?.text?.trim()
+        if (!text || text.length > 8000) { send(400, { error: 'Speech requires a reply of 1–8000 characters' }); return }
+        if (!this.options.speech) { send(503, { error: 'Speech is not configured' }); return }
+        let audio: { buffer: Buffer; mimeType: string }
+        try { audio = await this.options.speech(text, language) }
+        catch (error) {
+          if (error instanceof SpeechCreditsDepletedError) { send(503, { error: 'Speech credits are depleted', code: 'speech_credits_depleted' }); return }
+          send(502, { error: 'Speech generation failed' }); return
+        }
+        // A binding can be revoked while the provider is generating audio.
+        const currentBinding = await this.bindings.authenticate(request.headers.authorization!.slice(7))
+        if (currentBinding.bindingId !== binding.bindingId) throw new Error('Application authority revoked')
+        await this.snapshot(binding.bindingId, speechMatch[1])
+        response.writeHead(200, { 'content-type': audio.mimeType, 'cache-control': 'no-store' })
+        response.end(audio.buffer); return
       }
       const match = path.match(/^\/v1\/runs\/(r_(?:app|schedule)_[a-f0-9]{64})(\/cancel)?$/)
       if (match && ((!match[2] && request.method === 'GET') || (match[2] && request.method === 'POST'))) {

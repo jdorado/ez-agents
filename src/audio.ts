@@ -7,6 +7,10 @@ export type AudioOptions = {
   voice?: string
 }
 
+export class SpeechCreditsDepletedError extends Error {
+  constructor() { super('Gemini speech credits are depleted') }
+}
+
 export const pcmToWav = (pcm: Buffer, sampleRate = 24000, channels = 1): Buffer => {
   const header = Buffer.alloc(44)
   const byteRate = sampleRate * channels * 2
@@ -135,7 +139,7 @@ export const transcribeAudio = async (
 
 export const synthesizeSpeech = async (
   text: string,
-  options: AudioOptions = {},
+  options: AudioOptions & { format?: 'wav' | 'ogg' } = {},
 ): Promise<{ buffer: Buffer; mimeType: string }> => {
   const trimmed = text.trim()
   if (!trimmed) throw new Error('Cannot synthesize speech for empty text')
@@ -143,7 +147,7 @@ export const synthesizeSpeech = async (
   const geminiKey = (options.geminiApiKey ?? process.env.GEMINI_API_KEY)?.trim()
   if (geminiKey) {
     const url =
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent'
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent'
     const voiceName = options.voice || 'Kore'
     const response = await fetch(url, {
       method: 'POST',
@@ -153,14 +157,15 @@ export const synthesizeSpeech = async (
         contents: [{ parts: [{ text: trimmed }] }],
         generationConfig: {
           responseModalities: ['AUDIO'],
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+          responseFormat: { audio: { mimeType: 'AUDIO_L16', sampleRate: 24000 } },
+          speechConfig: { voiceConfig: { voice: voiceName } },
         },
       }),
     })
 
     if (!response.ok) {
-      const err = await response.text().catch(() => '')
-      throw new Error(`Gemini speech synthesis error ${response.status}: ${err}`)
+      if (response.status === 402) throw new SpeechCreditsDepletedError()
+      throw new Error(`Gemini speech synthesis error ${response.status}`)
     }
 
     const payload = (await response.json()) as any
@@ -173,6 +178,9 @@ export const synthesizeSpeech = async (
       throw new Error(`Gemini returned no audio data (${candidate?.finishReason || 'no candidate'})`)
 
     const rawPcm = Buffer.from(inline.data, 'base64')
+    if (!/^audio\/l16(?:;|$)/i.test(inline.mimeType) || !rawPcm.length || rawPcm.length % 2)
+      throw new Error('Gemini returned an unsupported speech format')
+    if (options.format === 'wav') return { buffer: pcmToWav(rawPcm), mimeType: 'audio/wav' }
     const encoded = await encodeOggOpus(rawPcm, 24000, 1)
     return {
       buffer: encoded,
