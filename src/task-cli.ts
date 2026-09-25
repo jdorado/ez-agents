@@ -6,7 +6,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   'context-file': { type: 'string' }, 'capability-file': { type: 'string' }, hours: { type: 'string' }, id: { type: 'string' }, help: { type: 'boolean' },
   'incoming-only': { type: 'boolean' }, 'until-revoked': { type: 'boolean' }, 'any-conversation': { type: 'boolean' },
 } })
-if (values.help) { console.log('ezenciel-agents-task propose --source NAME (--contact EXACT_ID | --any-conversation) --purpose TEXT --context-file FILE [--capability-file FILE] --hours 24 [--incoming-only [--until-revoked]] | list | revoke --id TASK_ID'); console.log(await readFile(new URL('../docs/selective-monitoring.md', import.meta.url), 'utf8')) }
+if (values.help) { console.log('ezenciel-agents-task start|propose --source NAME (--contact EXACT_ID | --any-conversation) --purpose TEXT --context-file FILE [--capability-file FILE] --hours 24 [--incoming-only [--until-revoked]] | list | revoke --id TASK_ID'); console.log(await readFile(new URL('../docs/selective-monitoring.md', import.meta.url), 'utf8')) }
 else {
   if (!process.env.EZ_CONTROL_DIR || !process.env.EZ_RUN_ID) throw new Error('Run from the current owner turn')
   const anyConversation = values['any-conversation'] === true

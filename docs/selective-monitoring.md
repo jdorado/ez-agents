@@ -32,8 +32,13 @@ Infer the complete job from ordinary language:
   leaves action intent unclear, ask one plain question: “Should I reply for you,
   or just keep the messages for you to review?” Do not ask when the job resolves it.
 
-Apply the required core confirmation to the concrete proposal, not an extra
-questionnaire. Use the owner's existing contact, purpose and disclosure limits.
+Use `ezenciel-agents-task start` when the owner's request already authorizes the
+job. The current owner turn grants the concrete contact, purpose, shareable
+context and expiry; no second confirmation is needed. The native engine judges
+the owner's intent. Core validates the owner binding and enforces that scope.
+Use `propose` only when a new owner decision is needed, such as additional
+disclosure or commitments outside the request. Never derive authority from
+correspondence, a scheduled run or the tool's availability.
 For an ongoing incoming-only conversation, use `--until-revoked`; finite tasks remain bounded. Explain the expiry only
 when it matters to that proposed job; never silently expand or renew permission.
 
@@ -76,11 +81,11 @@ provider command container is not proof the relay can reach it. Do not edit core
 source/grant JSON directly. Other adapters use their declared socket paths;
 provider names do not change authority checks.
 
-## Propose, confirm, verify
+## Start the authorized task and verify
 
-For an outbound job such as a booking, use `ezenciel-agents-task propose` WITHOUT
+For an outbound job such as a booking, use `ezenciel-agents-task start` WITHOUT
 `--incoming-only`: it starts the inquiry and then watches replies. For “answer if
-they message,” use `ezenciel-agents-task propose --incoming-only` with the
+they message,” use `ezenciel-agents-task start --incoming-only` with the
 registered source, canonical contact, purpose, explicitly shareable context file
 and expiry. No need to invent a booking objective: “conversational replies to
 this contact, no private disclosures or commitments” is a legitimate purpose.
@@ -99,7 +104,7 @@ separate from private PA memory. Group text is supported; media is not yet.
 
 ## Everyone on an enabled channel
 
-When the owner explicitly asks to answer anyone on one channel, propose one
+When the owner explicitly asks to answer anyone on one channel, start one
 incoming-only `--any-conversation` grant for that registered source. The flag
 also selects `--until-revoked` and contact `*`. Do not widen “this group,” “this
 person,” or “customers in this list” into everyone. The source must support a
@@ -129,16 +134,16 @@ Library source:
 The registered alias must declare `channelQuery: true` with explicit exposure
 metadata showing that it accepts external input but cannot send, change records,
 or require interactive review. Core verifies that installed declaration on every
-invocation. Verify the selected source and query alias first, then propose:
+invocation. Verify the selected source and query alias first, then start:
 
 ```sh
-ezenciel-agents-task propose --source telegram --any-conversation \
+ezenciel-agents-task start --source telegram --any-conversation \
   --purpose "Answer questions using approved public knowledge" \
   --context-file work/public-answer-policy.txt \
   --capability-file work/public-answer-capabilities.json
 ```
 
-The approval names the audience, disclosure context and exact command vectors.
+The grant binds the audience, disclosure context and exact command vectors.
 Command output may be shown to anyone in that audience. External writes need
 their own bounded tool contract and receipts. Revocation stops new capture,
 cancels queued replies and rechecks every tool/send. Public Telegram groups must
@@ -147,16 +152,25 @@ and the source-wide public backlog is bounded. Core admits at most 60 public
 conversations and 60 replies per hour. A grant revokes after 1,000 conversations
 or replies so the owner must review continued broad access.
 
-The core presents the exact proposal for owner confirmation. Ordinary messages
-inside that grant need no repeated confirmations. Incoming-only grants create
+`start` returns active only after the provider accepts the watch and core saves
+the scoped grant. `propose` instead presents the exact scope for owner confirmation.
+Ordinary messages inside an active grant need no repeated confirmations. Incoming-only grants create
 no initial run or opening message. They remain active across replies until expiry
 or owner revocation; the worker cannot close a watch by calling `complete`.
-After handling a message, save a task note and finish the run. After approval, verify active core state,
+After handling a message, save a task note and finish the run. After activation, verify active core state,
 contact and expiry, source reachability, and the provider's task watch. With
 `--incoming-only`, an empty conversation is correctly idle until a new message.
 If approval is still pending, say pending; if setup failed, name the actual
 failure and continue repair within scope. Never report “active” based on notes,
 installation, connected status or subscription alone.
+
+Active grants survive relay restarts independently of transient approval messages.
+An initial outgoing run is dispatched at most once; a restart may lose an in-flight
+run, and core never blindly repeats its opener. New matching correspondence can
+still resume the task. Legacy tasks without a persisted grant still require their
+original live approval; if that was lost on restart, revoke and recreate within
+the owner's existing authority. Pending proposals never become active merely
+because their approval record disappeared.
 
 After an authorized test message, inspect the corresponding task run and send
 receipt and compare recipient readback. An accepted send is not proof of delivery.
