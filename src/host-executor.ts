@@ -40,6 +40,8 @@ export const refreshAgentCatalog = async (agent: HostBinding,
   readFresh: (agent: HostBinding) => Promise<ModelChoice[]>,
   seen: Map<HostBinding, string>): Promise<void> => {
   const catalogModels = await readFresh(agent)
+  // Empty discovery is not an authoritative deletion of the installed catalog.
+  if (!catalogModels.length) return
   const models = JSON.stringify(catalogModels)
   if (seen.get(agent) === models) return
   await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(catalogModels)
@@ -61,6 +63,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     throw new Error('Each agent requires a separate workspace and control directory')
   const active = new Map<string, ChildProcess>()
   const tasks = new Set<Promise<void>>()
+  let catalogRefresh: Promise<void> | undefined
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
   const additionalWorkspaces = new Map<HostBinding, string[]>()
@@ -128,7 +131,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid)}),{mode:0o600,flag:'wx'})
       locks.push(lock)
-      const models = await catalog(agent)
+      const models = selectValidationCatalog(await freshCatalog(agent), await readCachedModels(agent))
       await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
       const modelsFile=path.join(directory,'models.json')
       await writeFile(modelsFile+'.tmp',JSON.stringify(models),{mode:0o600});await rename(modelsFile+'.tmp',modelsFile)
@@ -151,18 +154,20 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     while (!signal.aborted) {
       const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
       if(parent) { try { process.kill(parent,0) } catch { break } }
-      // Heartbeats first: a slow catalog refresh must never starve the
-      // 15s relay-side offline check and cancel in-flight runs.
+      // Keep transport liveness independent of native catalog I/O.
       for (const agent of installation.agents) await beat(agent)
-      if(Date.now()-catalogAt>30000){
+      if(!catalogRefresh && Date.now()-catalogAt>30000){
         catalogAt=Date.now()
-        for(const agent of installation.agents){
-          try {
-            await refreshAgentCatalog(agent, freshCatalog, catalogSeen)
-          } catch (error) {
-            console.error('Host catalog refresh failed, keeping last-good models', error instanceof Error ? error.message : error)
+        catalogRefresh=(async()=>{
+          for(const agent of installation.agents){
+            if(signal.aborted)break
+            try {
+              await refreshAgentCatalog(agent, freshCatalog, catalogSeen)
+            } catch (error) {
+              console.error('Host catalog refresh failed, keeping last-good models', error instanceof Error ? error.message : error)
+            }
           }
-        }
+        })().finally(()=>{catalogRefresh=undefined})
       }
       for (const agent of installation.agents) {
         const directory=path.join(agent.controlDir,'host-executor')
@@ -248,6 +253,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   } finally {
     for(const child of active.values())terminateJob(child)
     await Promise.allSettled(tasks)
+    await catalogRefresh
     for(const lock of locks)await rm(lock,{force:true})
   }
 }

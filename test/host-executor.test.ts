@@ -166,6 +166,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     await writeFile(binary,`#!${process.execPath}\nif(process.env.EZ_RUN_ID==='r_hold')setInterval(()=>{},1000);console.log(JSON.stringify({cwd:process.cwd(),home:process.env.HOME,token:process.env.TELEGRAM_BOT_TOKEN,control:process.env.EZ_CONTROL_DIR,run:process.env.EZ_RUN_ID,repair:process.env.EZ_REPAIR_ENABLED,args:process.argv.slice(2)}));\n`,{mode:0o700})
     await writeFile(path.join(root,'claude'),await readFile(binary),{mode:0o700})
     await writeFile(path.join(root,'codex'),await readFile(binary),{mode:0o700})
+    await writeFile(path.join(root,'opencode'),'#!/bin/sh\nexit 0\n',{mode:0o700})
     process.env.PATH=root+path.delimiter+oldPath
     EXECUTOR_REGISTRY.grok.command=binary
     EXECUTOR_REGISTRY.grok.buildArgs=(opts,file,prompt)=>[...EXECUTOR_REGISTRY.codex.buildArgs(opts,file,prompt).slice(0,-1),prompt]
@@ -396,6 +397,73 @@ test('refresh blip throws so the caller keeps last-good models instead of crashi
     assert.deepEqual(JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')),lastGood)
     assert.equal(seen.has(agent),false)
   } finally {await rm(root,{recursive:true,force:true})}
+})
+
+test('empty refresh preserves the last-good catalog and a later nonempty refresh replaces it',async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'ez-host-empty-refresh-'))
+  const directory=path.join(root,'host-executor')
+  try {
+    await mkdir(directory)
+    const agent={name:'test',workspace:root,controlDir:root,binDir:root}
+    const lastGood=[{cli:'codex',model:'cached-model',name:'Cached',efforts:[]}]
+    const fresh=[{cli:'codex',model:'new-model',name:'New',efforts:[]}]
+    await writeFile(path.join(directory,'models.json'),JSON.stringify(lastGood))
+    const seen=new Map([[agent,JSON.stringify(lastGood)]])
+    await refreshAgentCatalog(agent,async()=>[],seen)
+    assert.deepEqual(await readCachedModels(agent),lastGood)
+    assert.equal(seen.get(agent),JSON.stringify(lastGood))
+    await refreshAgentCatalog(agent,async()=>fresh,seen)
+    assert.deepEqual(await readCachedModels(agent),fresh)
+    assert.equal(seen.get(agent),JSON.stringify(fresh))
+  } finally {await rm(root,{recursive:true,force:true})}
+})
+
+test('slow catalog refresh keeps heartbeats live and active client completes without cancellation', {timeout:70000}, async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'ez-host-slow-refresh-'))
+  const directory=path.join(root,'host-executor')
+  const abort=new AbortController()
+  let server:Promise<void>|undefined
+  let client:ReturnType<typeof spawn>|undefined
+  let closed:Promise<number|null>|undefined
+  let releaseRefresh!:()=>void
+  let startedRefresh!:()=>void
+  const blocked=new Promise<void>(resolve=>{releaseRefresh=resolve})
+  const refreshing=new Promise<void>(resolve=>{startedRefresh=resolve})
+  let calls=0
+  let finishRun: (()=>void) | undefined
+  try {
+    await mkdir(directory)
+    await ownerRun(root,'r_slow_catalog')
+    server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace:root,controlDir:root,binDir:root}]},abort.signal,async()=>{
+      const child=spawn(process.execPath,['-e','process.stdin.resume();process.stdin.once("data",()=>process.exit(0))'])
+      finishRun=()=>{child.stdin!.end('done')}
+      return {child,cleanup:async()=>{},stdout:''}
+    },async()=>{
+      if(++calls>1){startedRefresh();await blocked}
+      return [{cli:'grok',name:'Grok',efforts:[]}]
+    })
+    for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+    client=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),root,'r_slow_catalog'],{stdio:['pipe','pipe','pipe']})
+    closed=new Promise(resolve=>client!.once('close',resolve))
+    let stderr='';client.stderr!.on('data',chunk=>stderr+=chunk);client.stdout!.resume()
+    client.stdin!.end(JSON.stringify({texts:['test'],options:{cli:'grok'}}))
+    await refreshing
+    // Exceed the real relay client's 15s offline threshold while discovery hangs.
+    await new Promise(resolve=>setTimeout(resolve,16500))
+    const heartbeat=JSON.parse(await readFile(path.join(directory,'heartbeat.json'),'utf8'))
+    assert.ok(Date.now()-heartbeat.at<5000,'heartbeat stopped during catalog I/O')
+    assert.equal(client.exitCode,null,stderr)
+    await assert.rejects(readFile(path.join(directory,'r_slow_catalog.cancel')),{code:'ENOENT'})
+    assert.equal(calls,2,'catalog refresh must not overlap itself')
+    assert.ok(finishRun,'the native run must have started')
+    finishRun()
+    assert.equal(await closed,0,stderr)
+    releaseRefresh()
+  } finally {
+    releaseRefresh();abort.abort()
+    if(client?.exitCode===null && client.signalCode===null)client.kill()
+    await closed;await server;await rm(root,{recursive:true,force:true})
+  }
 })
 
 test('cross-CLI run falls back to cached catalog instead of failing on an empty fresh read',async()=>{
