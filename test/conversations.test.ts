@@ -66,7 +66,7 @@ test('titles are bounded and rename is durable; malformed IDs and unsupported me
   await assert.rejects(store.listSessions(), /unsupported shape/)
 }))
 
-test('legacy sessions retain IDs; unbound and latest-only engines cannot resume a different context', async () => fixture(async (store, dir) => {
+test('legacy sessions retain IDs; unbound sessions cannot resume a different context', async () => fixture(async (store, dir) => {
   const legacy = await store.ensureActiveSession()
   await store.markSessionStarted(legacy.sessionId)
   await store.captureChoice(initialPreset('grok'))
@@ -74,11 +74,5 @@ test('legacy sessions retain IDs; unbound and latest-only engines cannot resume 
   await assert.rejects(store.switchSession(legacy.sessionId), /binding/)
   assert.match(sessionTitle((await store.listSessions()).find(s => s.sessionId === legacy.sessionId)!), /Conversation /)
   await store.archiveSession(legacy.sessionId, true)
-  const agy = { id: 'agy-test', name: 'AGY', cli: 'agy' }
-  await store.savePreset(agy)
-  await store.selectPreset(agy.id, (await store.getActiveSession())!.sessionId, true)
-  const old = await store.captureChoice(agy)
-  await store.markSessionStarted(old.sessionId)
-  await store.resetSession()
-  await assert.rejects(store.switchSession(old.sessionId), /latest conversation/)
+
 }))

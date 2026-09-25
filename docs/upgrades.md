@@ -245,7 +245,7 @@ The package-owned locator is the managed `<!-- ez tools -->` block: the bound
 generated on read. Plugin registry init and update binding refresh that locator.
 Malformed markers and symlinks fail visibly rather than overwriting personal work.
 
-Codex, agy, Grok and OpenCode discover workspace instructions natively. Claude
+Codex, Grok and OpenCode discover workspace instructions natively. Claude
 receives the native `--append-system-prompt-file` binding to `AGENTS.md`, alongside
 its own normal instructions. Fresh and resumed owner input is literal; ez does
 not surround it with policies, tool recipes, repair instructions or history.
