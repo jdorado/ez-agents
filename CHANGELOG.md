@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.38
+
+- Remove the retired Antigravity CLI integration and its unused engine paths.
+- Add scoped application delivery history readback so an authorized application
+  can retrieve its own messages and delivery receipts.
+- Validate host execution against its advertised model catalog and keep host
+  heartbeats responsive during background catalog refresh.
+
 ## 0.1.0-beta.37
 
 - List installed OpenCode models with their provider variants as selectable
