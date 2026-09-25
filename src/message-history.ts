@@ -13,7 +13,25 @@ export async function deliveredMessages(controlDir: string, runId: string, optio
   if (options.messageId !== undefined && (!Number.isSafeInteger(options.messageId) || options.messageId < 1))
     throw new Error('Message ID must be a positive integer')
   const caller = await requireOwnerExecution(controlDir, runId)
-  if (caller.application || caller.delivery) throw new Error('History requires a Telegram owner run')
+  const application = caller.application ?? caller.delivery
+  if (application) {
+    if (options.messageId !== undefined) throw new Error('Message ID filter is only available for Telegram history')
+    const owner = (await new ControlStore(controlDir, 900_000).status()).owner
+    const runs = new Map((await new RunStore(controlDir).list()).filter(run => {
+      const origin = run.application ?? run.delivery
+      return origin?.bindingId === application.bindingId && origin.scope === application.scope &&
+        !run.external && !run.taskId && ownsRun(owner, run)
+    }).map(run => [run.id, run]))
+    const messages = sentOutbox(controlDir).flatMap(item => {
+      const run = item.runId === undefined ? undefined : runs.get(item.runId)
+      return run && (!item.type || item.type === 'message') && typeof item.text === 'string'
+        ? [{ runId: run.id, id: item.id, text: item.text, createdAt: item.createdAt }]
+        : []
+    })
+    messages.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    return { scope: application.scope, messages: messages.slice(-limit), hasMore: messages.length > limit,
+      note: 'Delivered messages in the current application binding and scope; relay history is bounded and resets on restart.' }
+  }
   const owner = (await new ControlStore(controlDir, 900_000).status()).owner
   if (!ownsRun(owner, caller)) throw new Error('Owner binding changed')
   const pairedAt = Date.parse(owner!.pairedAt)

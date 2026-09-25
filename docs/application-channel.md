@@ -131,6 +131,14 @@ not that a human read it. Failure adds a generic `error`; detailed logs remain
 local to core. Cancellation uses the existing child termination boundary and may
 return `running` until the process exits.
 
+Inside an active native application run, `ezenciel-agents-message history
+--limit 8` reads delivered text from this same inbox for the run's immutable
+application binding and scope, including earlier runs in that scope. It cannot
+read another binding, scope, or Telegram chat. The Telegram numeric
+`--message-id` filter is unavailable for application runs. This reads the same
+bounded relay delivery state as the application inbox; both disappear on relay
+restart and add no persistent message record.
+
 `requestId` and `scope` accept 1–200 ASCII letters, digits, `_:.-`. Text is at most
 16,000 characters. Context is an optional JSON object (48 KiB); the complete HTTP
 body is bounded to 64 KiB. Unknown input fields are rejected. Use a stable job ID:
