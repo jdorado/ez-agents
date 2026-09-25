@@ -21,7 +21,7 @@ test('host restart replaces a lock whose PID was reused by another process',asyn
   try {
     await mkdir(workspace);await mkdir(directory,{recursive:true})
     await writeFile(path.join(directory,'worker.lock'),JSON.stringify({pid:process.pid,started:'reused-pid'}))
-    server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal)
+    server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal,undefined,async()=>[])
     for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     await readFile(path.join(directory,'heartbeat.json'))
     const lock=JSON.parse(await readFile(path.join(directory,'worker.lock'),'utf8'))
@@ -72,7 +72,7 @@ test('host restart clears dead native lease only after proving previous CLI stop
     await assert.rejects(serveHostExecutor(installation,abort.signal),/Previous host CLI is still running/);
     await readFile(path.join(toolsHome,'workspace-writer.lock'));
     await writeFile(path.join(directory,'r_old.process.json'),JSON.stringify({pid:deadPid}));
-    server=serveHostExecutor(installation,abort.signal);
+    server=serveHostExecutor(installation,abort.signal,undefined,async()=>[]);
     for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     await readFile(path.join(directory,'heartbeat.json'));
     await assert.rejects(readFile(path.join(toolsHome,'workspace-writer.lock')),{code:'ENOENT'});
@@ -103,6 +103,7 @@ test('host execution resolves a declared provider from the bound agent, not a la
     await mkdir(fakeBin, {recursive: true})
     await mkdir(path.join(controlDir, 'cli', 'codex'), {recursive: true})
     await writeFile(path.join(fakeBin, 'codex'), '#!/bin/sh\nexit 0\n', {mode: 0o700})
+    await writeFile(path.join(fakeBin, 'opencode'), '#!/bin/sh\nexit 0\n', {mode: 0o700})
     await writeFile(path.join(controlDir, 'cli', 'codex', 'models_cache.json'), JSON.stringify({models: [
       {slug: provider.models[0], visibility: 'list', display_name: 'DeepSeek V4.1 Flash', supported_reasoning_levels: [{effort: 'max'}]},
     ]}))
