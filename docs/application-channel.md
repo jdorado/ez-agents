@@ -10,6 +10,20 @@ Run admission, status and inbox receipts include the immutable `preset` captured
 for that run so an application can label delivered messages with the engine choice
 that actually produced them.
 
+## Speech playback
+
+`POST /v1/runs/<id>/speech` renders the last delivered text reply of a completed
+application run as `audio/wav` (24 kHz mono). It uses the same binding/owner
+authorization as run readback, rechecked after synthesis, and accepts no client
+text or provider credentials. Replies are limited to 8,000 characters. An
+unfinished run returns 409, missing speech configuration 503, and provider
+failure 502. Audio responses have `Cache-Control: no-store`.
+
+Configure `GEMINI_API_KEY` on the relay. The existing speech renderer uses
+`gemini-3.8-flash-lite-tts`; Telegram still receives Ogg Opus. Applications should
+retain the returned audio for local replay; each POST generates fresh audio.
+Speech is a rendering operation and does not start another agent turn.
+
 ## Shared runtime controls
 
 Register with `--share-owner` (the existing `--share-telegram` spelling is an

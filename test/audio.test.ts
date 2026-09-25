@@ -14,8 +14,12 @@ test('speech provider failure stays a failure, never a text or WAV success', asy
 
 test('speech finds audio beyond the first response part and keeps credentials out of URLs', async (t) => {
   t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    assert.match(url, /gemini-3\.8-flash-lite-tts:generateContent$/)
     assert.equal(url.includes('fixture-key'), false)
     assert.equal(new Headers(options.headers).get('x-goog-api-key'), 'fixture-key')
+    const config = JSON.parse(String(options.body)).generationConfig
+    assert.deepEqual(config.responseFormat, { audio: { mimeType: 'AUDIO_L16', sampleRate: 24000 } })
+    assert.deepEqual(config.speechConfig.voiceConfig, { voice: 'Kore' })
     return new Response(
       JSON.stringify({
         candidates: [
@@ -39,6 +43,10 @@ test('speech finds audio beyond the first response part and keeps credentials ou
   const speech = await synthesizeSpeech('Fixture', { geminiApiKey: 'fixture-key' })
   assert.equal(speech.mimeType, 'audio/ogg')
   assert.equal(speech.buffer.subarray(0, 4).toString(), 'OggS')
+  const wav = await synthesizeSpeech('Fixture', { geminiApiKey: 'fixture-key', format: 'wav' })
+  assert.equal(wav.mimeType, 'audio/wav')
+  assert.equal(wav.buffer.subarray(0, 4).toString(), 'RIFF')
+  assert.equal(wav.buffer.length, 24044)
 })
 
 test('pcmToWav generates a valid 44-byte WAV header', () => {

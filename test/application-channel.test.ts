@@ -100,6 +100,47 @@ test('HTTP auth, idempotency, origin/context isolation, revocation and persisted
   assert.equal((await request('/v1/runs',secondToken,input)).status,401)
 })
 
+test('speech renders only a completed bound reply and rechecks authority after generation', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-app-speech-'))
+  const owned = await owner(root), runs = new RunStore(root)
+  const firstToken = token(), secondToken = token()
+  const spoken: string[] = []
+  let revoke = false
+  const channel = new ApplicationChannel({
+    controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {},
+    speech: async text => {
+      spoken.push(text)
+      if (revoke) await channel.bindings.register('first', null, owned)
+      return { buffer: Buffer.from('audio-fixture'), mimeType: 'audio/wav' }
+    },
+  })
+  t.after(async () => { await channel.stop(); await rm(root, { recursive: true, force: true }) })
+  const first = (await channel.bindings.register('first', firstToken, owned))!
+  await channel.bindings.register('second', secondToken, owned)
+  const run = await channel.submit(first.bindingId, { requestId: 'speech', scope: 'exercise', text: 'Explain this' })
+  const address = await channel.listen(0) as { port: number }
+  const request = (bearer: string) => fetch(`http://127.0.0.1:${address.port}/v1/runs/${run.id}/speech`, {
+    method: 'POST', headers: { Authorization: `Bearer ${bearer}` },
+  })
+  assert.equal((await request(secondToken)).status, 404)
+  assert.equal((await request(firstToken)).status, 409)
+  assert.deepEqual(spoken, [])
+  for (const text of ['Progress', 'Keep the movement controlled.']) {
+    const item = await runs.enqueueMessage(run.id, text)
+    await runs.claimOutbox(item.id)
+    await channel.deliver(run, item)
+  }
+  await runs.patch(run.id, { status: 'completed' })
+  const audio = await request(firstToken)
+  assert.equal(audio.status, 200)
+  assert.equal(audio.headers.get('content-type'), 'audio/wav')
+  assert.equal(audio.headers.get('cache-control'), 'no-store')
+  assert.equal(await audio.text(), 'audio-fixture')
+  assert.deepEqual(spoken, ['Keep the movement controlled.'])
+  revoke = true
+  assert.notEqual((await request(firstToken)).status, 200)
+})
+
 test('owner replacement invalidates binding and client secrets never enter native environment',async t=>{
   const root=await mkdtemp(join(tmpdir(),'ez-app-owner-'))
   t.after(()=>rm(root,{recursive:true,force:true}))

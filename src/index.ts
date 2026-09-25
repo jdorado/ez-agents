@@ -103,6 +103,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const applicationChannel = new ApplicationChannel({
     controlDir: config.controlDir, workspace: config.workspace, initial: aiMenu.initial,
     aiControls: aiMenu,
+    speech: config.geminiApiKey ? text => synthesizeSpeech(text, { geminiApiKey: config.geminiApiKey, format: 'wav' }) : undefined,
     wake: () => { void drainSources().catch(error => console.error('Application queue unavailable', safeError(error))) },
     createTelegramPairing: async (bindingId, owner) => {
       const username = bot?.botInfo?.username
