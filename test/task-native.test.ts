@@ -11,7 +11,6 @@ import { Tasks } from '../src/tasks.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { EventSources } from '../src/event-sources.js'
 import { ControlStore } from '../src/control-state.js'
-import { ApprovalStore } from '../src/approval.js'
 import { RunStore } from '../src/runs.js'
 import { taskRequests } from '../src/task-rpc.js'
 
@@ -34,9 +33,8 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   await ownerRun(root, 'owner')
   await new EventSources(root).register('fixture', `${root}/p.sock`, (await new ControlStore(root, 900000).status()).owner!)
   const tasks = new Tasks(root), drain = taskRequests(tasks)
-  const proposal: any = await tasks.ownerCall('owner', 'propose', { sourceId: 'fixture', conversationId: 'contact-a', purpose: 'Book dinner without payment', context: 'Two people at 7pm', hours: 1 })
-  await new ApprovalStore(root).recordDecision(proposal.id, 'approved', 101)
-  await tasks.decide(proposal.id)
+  const proposal: any = await tasks.ownerCall('owner', 'start', { sourceId: 'fixture', conversationId: 'contact-a', purpose: 'Book dinner without payment', context: 'Two people at 7pm', hours: 1 })
+  assert.equal(proposal.state, 'active')
   const runs = new RunStore(root), run = (await runs.list()).find(r => r.taskId)!
   await runs.patch(run.id, { status: 'running' })
   const sequence = [

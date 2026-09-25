@@ -22,6 +22,7 @@ export type Task = {
   sourceId: string; bindingId: string; accountId: string; conversationId: string
   purpose: string; context: string; createdAt: number; expiresAt: number
   state: 'pending' | 'active' | 'revoked' | 'completed'
+  grant?: string; initialRunDispatched?: true
   notes: string[]; operations: Record<string, { text: string; attachmentId?:string; state: 'uncertain' | 'accepted'; receipt?: unknown }>
   capabilityOperations?: Record<string, { capabilityId: string; inputHash: string; lease: string; attachment?:TaskAttachment; state: 'authorized' | 'completed' }>
   publicBudget?: PublicBudget
@@ -59,6 +60,8 @@ export class Tasks {
         !bounded(task.accountId, 200) || !bounded(task.conversationId, 200) || !bounded(task.purpose, 1000) ||
         !bounded(task.context, 6000) || !Number.isFinite(task.createdAt) || !Number.isFinite(task.expiresAt) ||
         !['pending', 'active', 'revoked', 'completed'].includes(task.state) || !Array.isArray(task.notes) ||
+        (task.grant !== undefined && (typeof task.grant !== 'string' || !/^[a-f0-9]{64}$/.test(task.grant))) ||
+        (task.initialRunDispatched !== undefined && task.initialRunDispatched !== true) ||
         !task.operations || typeof task.operations !== 'object' || (task.capabilityOperations !== undefined && (!task.capabilityOperations || typeof task.capabilityOperations !== 'object')) ||
         (task.anyConversation && !validPublicBudget(task.publicBudget)) || !task.owner) throw new Error('Invalid task record')
       return task
@@ -91,11 +94,7 @@ export class Tasks {
       !ownsRun(task.owner, run))
       throw new Error('Task is inactive or expired')
     const owner = (await new ControlStore(this.controlDir, 900000).status()).owner
-    const approval = await new ApprovalStore(this.controlDir).getDecision(task.id)
-    const approvedByOwner = approval?.version === 2
-      ? approval.decidedOwnerId === ownerId(task.owner) && approval.decidedOwnerEpoch === ownerEpoch(task.owner)
-      : !!owner && ownsRun(owner,{telegramUserId:approval?.decidedBy!,chatId:task.owner.telegramChatId})
-    if (!sameOwner(task.owner, owner) || approval?.decision !== 'approved' || !approvedByOwner || approval.runId !== task.runId || approval.prompt !== this.prompt(task))
+    if (!sameOwner(task.owner, owner) || (task.grant ? task.grant !== this.scopeHash(task) : !await this.approved(task)))
       throw new Error('Task approval is no longer valid')
     if (checkProvider) await this.source(task)
     if (run.external && checkProvider) {
@@ -106,6 +105,34 @@ export class Tasks {
         throw new Error('Task correspondence no longer matches')
     }
     return task
+  }
+  // Persist only the bounded grant, not transient approval/outbox state. Bind every
+  // immutable authority field so later scope changes cannot reuse an old grant.
+  private scopeHash(task: Task) {
+    return createHash('sha256').update(JSON.stringify([
+      task.id, task.runId, task.owner, task.sourceId, task.bindingId, task.accountId,
+      task.conversationId, task.purpose, task.context, task.createdAt, task.expiresAt,
+      task.waitForIncoming, task.untilRevoked, task.anyConversation, task.capabilities,
+    ])).digest('hex')
+  }
+  private async approved(task: Task) {
+    const approval = await new ApprovalStore(this.controlDir).getDecision(task.id)
+    const approvedByOwner = approval?.version === 2
+      ? approval.decidedOwnerId === ownerId(task.owner) && approval.decidedOwnerEpoch === ownerEpoch(task.owner)
+      : ownsRun(task.owner,{telegramUserId:approval?.decidedBy!,chatId:task.owner.telegramChatId})
+    return approval?.decision === 'approved' && approvedByOwner && approval.runId === task.runId && approval.prompt === this.prompt(task)
+  }
+  private async dispatchInitial(task: Task) {
+    if (task.waitForIncoming || task.initialRunDispatched) return
+    // Runs are intentionally memory-only. Do not replay an opener after restart,
+    // when its delivery may be unknown; subsequent inbound events still resume.
+    task.initialRunDispatched = true
+    await this.save(task)
+    await new RunStore(this.controlDir).create({
+      id: `event_${createHash('sha256').update(task.id).digest('hex')}`, taskId: task.id,
+      ownerId: ownerId(task.owner), ownerEpoch: ownerEpoch(task.owner),
+      chatId: task.owner.telegramChatId, telegramUserId: task.owner.telegramUserId, texts: [],
+    })
   }
   async match(sourceId: string, bindingId: string, events: SourceEvent[]) {
     if (!events.length || new Set(events.map(event => event.conversationId)).size !== 1) return
@@ -137,19 +164,23 @@ export class Tasks {
       const task = await this.get(id)
       if (!task) return false
       if (task.state === 'revoked' && task.unwatchPending) { await this.unwatch(task); return true }
-      const approval = await new ApprovalStore(this.controlDir).getDecision(id)
-      if (!approval || approval.runId !== task.runId || approval.prompt !== this.prompt(task)) throw new Error('Task approval mismatch')
-      if (task.state === 'pending' && approval.decision !== 'pending') {
-        task.state = approval.decision === 'approved' ? 'active' : 'revoked'
-        if (task.state === 'active') {
-          const source = await this.source(task)
-          await sourceCall(source.socketPath, 'task-watch', { accountId: task.accountId, conversationId: task.conversationId, expiresAt: task.expiresAt })
+      if (!['pending', 'active'].includes(task.state) || task.expiresAt <= Date.now()) return false
+      if (!task.grant) {
+        const approval = await new ApprovalStore(this.controlDir).getDecision(id)
+        if (!approval || approval.runId !== task.runId || approval.prompt !== this.prompt(task)) throw new Error('Task approval mismatch')
+        if (approval.decision === 'pending') return true
+        if (approval.decision === 'denied') {
+          task.state = 'revoked'; await this.save(task); return true
         }
+        if (!await this.approved(task)) throw new Error('Task approval is no longer valid')
+        const source = await this.source(task)
+        await sourceCall(source.socketPath, 'task-watch', { accountId: task.accountId, conversationId: task.conversationId, expiresAt: task.expiresAt })
+        if (task.state === 'active' && !task.waitForIncoming) task.initialRunDispatched = true
+        task.state = 'active'; task.grant = this.scopeHash(task)
         await this.save(task)
       }
-      if (task.state === 'active' && !task.waitForIncoming && task.expiresAt > Date.now()) await new RunStore(this.controlDir).create({
-        id: `event_${createHash('sha256').update(task.id).digest('hex')}`, taskId: task.id, chatId: task.owner.telegramChatId, telegramUserId: task.owner.telegramUserId, texts: [],
-      })
+      if (task.grant !== this.scopeHash(task)) throw new Error('Task grant scope changed')
+      await this.dispatchInitial(task)
       return true
     })
   }
@@ -182,7 +213,7 @@ export class Tasks {
         if(task.unwatchPending) await this.unwatch(task)
         return { id: task.id, state: task.state }
       }
-      if (command !== 'propose') throw new Error('Unknown owner task command')
+      if (command !== 'start' && command !== 'propose') throw new Error('Unknown owner task command')
       if (args.waitForIncoming !== undefined && typeof args.waitForIncoming !== 'boolean') throw new Error('Invalid incoming-only option')
       if (args.untilRevoked !== undefined && (typeof args.untilRevoked !== 'boolean' || (args.untilRevoked && args.waitForIncoming !== true))) throw new Error('Persistent permission requires incoming-only mode')
       if (args.anyConversation !== undefined && typeof args.anyConversation !== 'boolean') throw new Error('Invalid any-conversation option')
@@ -207,6 +238,13 @@ export class Tasks {
       const task: Task = { version: args.anyConversation ? 4 : args.untilRevoked ? 3 : args.waitForIncoming ? 2 : 1, ...(args.untilRevoked ? {untilRevoked:true as const} : {}), ...(args.waitForIncoming ? { waitForIncoming: true as const } : {}), ...(args.anyConversation ? {anyConversation:true as const,publicBudget:{windowStartedAt:Date.now(),runs:0,responses:0,totalRuns:0,totalResponses:0}} : {}), ...(capabilities ? {capabilities} : {}), id: `task_${randomUUID().replaceAll('-', '')}`, runId, owner, sourceId: source.id,
         bindingId: source.bindingId, accountId: head.accountId, conversationId: args.conversationId, purpose: args.purpose,
         context: args.context, createdAt: Date.now(), expiresAt: args.untilRevoked ? 8640000000000000 : Date.now() + args.hours * 3600000, state: 'pending', notes: [], operations: {} }
+      if (command === 'start') {
+        await sourceCall(source.socketPath, 'task-watch', { accountId: task.accountId, conversationId: task.conversationId, expiresAt: task.expiresAt })
+        task.state = 'active'; task.grant = this.scopeHash(task)
+        await this.save(task)
+        await this.dispatchInitial(task)
+        return { id: task.id, state: task.state }
+      }
       if (this.prompt(task).length > 3500) throw new Error('Proposal is too long for owner review; shorten the shared context')
       await this.save(task)
       await new ApprovalStore(this.controlDir).requestApproval(task.id, this.prompt(task), runId)

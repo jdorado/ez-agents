@@ -6,14 +6,16 @@ import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { Tasks } from '../src/tasks.js'
 import { EventSources, type SourceEvent } from '../src/event-sources.js'
-import { ControlStore } from '../src/control-state.js'
+import { ControlStore, ownerId, ownerEpoch } from '../src/control-state.js'
 import { ApprovalStore } from '../src/approval.js'
 import { RunStore } from '../src/runs.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { taskCall, taskRequests } from '../src/task-rpc.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, channelOwner = false) {
   const dir = await mkdtemp('/tmp/ez-task-test-'), socket = join(dir, 's.sock')
   let accountId = 'account-a', events: SourceEvent[] = [], uncertain = false
   const sends: any[] = [], watches: any[] = []
@@ -27,7 +29,12 @@ async function fixture(t: test.TestContext) {
     res.end(JSON.stringify({ ok: true, data }))
   })
   await new Promise<void>(resolve => server.listen(socket, resolve))
-  await ownerRun(dir, 'owner')
+  if (channelOwner) {
+    const owner = await new ControlStore(dir, 900000).registerOwner('verified-account')
+    const runs = new RunStore(dir)
+    await runs.create({ id: 'owner', ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner), texts: ['Own this conversation'] })
+    await runs.patch('owner', { status: 'running' })
+  } else await ownerRun(dir, 'owner')
   const control = new ControlStore(dir, 900000), sources = new EventSources(dir), runs = new RunStore(dir), tasks = new Tasks(dir)
   await sources.register('generic', socket, (await control.status()).owner!)
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); await rm(dir, { recursive: true, force: true }) })
@@ -73,6 +80,103 @@ test('channel-neutral owner confirmation activates the same core task grant',asy
   const task=await f.tasks.get(p.id)
   assert.equal(task?.state,'active')
   assert.equal((await new ApprovalStore(f.dir).getDecision(p.id))?.version,2)
+})
+test('an authorized owner starts a scoped task immediately without a second approval', async t => {
+  const f = await fixture(t, true)
+  const result: any = await f.tasks.ownerCall('owner', 'start', {
+    sourceId: 'generic', conversationId: 'contact-a', purpose: 'Request a fixed quote and follow up',
+    context: 'Text only. Do not approve work or share files.', hours: 24,
+  })
+  assert.equal(result.state, 'active')
+  assert.equal(await new ApprovalStore(f.dir).getDecision(result.id), null)
+  assert.equal((await f.runs.pendingOutbox()).filter(item => item.type === 'approval').length, 0)
+  assert.equal(f.watches.length, 1)
+  const task = (await f.tasks.get(result.id))!
+  const run = await f.runs.patch(`event_${createHash('sha256').update(task.id).digest('hex')}`, { status: 'running' })
+  await f.tasks.workerCall(run.id, 'send', { text: 'What is your fixed quote?', key: 'quote' })
+  assert.equal(f.sends[0].conversationId, 'contact-a')
+  await assert.rejects(f.tasks.ownerCall(run.id, 'start', {}), /blocked/)
+  const outsider = await f.runs.create({ id: 'event_outsider', chatId: 101, telegramUserId: 101, texts: [], external: { sourceId: 'generic', bindingId: task.bindingId, eventIds: ['other'] } })
+  await f.runs.patch(outsider.id, { status: 'running' })
+  await assert.rejects(f.tasks.ownerCall(outsider.id, 'start', {}), /blocked/)
+  await f.runs.patch('owner', { scheduled: { taskId: 'schedule', jobId: 'job' } } as any)
+  await assert.rejects(f.tasks.ownerCall('owner', 'start', {}), /current owner message/)
+})
+
+test('active grants survive a real process restart without replaying the opener or relying on approval memory', async t => {
+  for (const command of ['start', 'propose']) await t.test(command, async t => {
+    const f = await fixture(t)
+    const result: any = await f.tasks.ownerCall('owner', command, {
+      sourceId: 'generic', conversationId: 'contact-a', purpose: 'Get a quote', context: 'No commitments', hours: 1,
+    })
+    if (command === 'propose') {
+      await new ApprovalStore(f.dir).recordDecision(result.id, 'approved', 101)
+      await f.tasks.decide(result.id)
+    }
+    const task = (await f.tasks.get(result.id))!
+    const row = { id: 'reply', conversationId: 'contact-a', receivedAt: Date.now(), text: 'We can quote tomorrow' }
+    f.rows([row])
+    const run = await f.runs.create({ id: 'event_restart_reply', taskId: task.id, chatId: 101, telegramUserId: 101, texts: [], external: { sourceId: 'generic', bindingId: task.bindingId, eventIds: [row.id] } })
+    const script = `
+      import assert from 'node:assert/strict';
+      import { Tasks } from './src/tasks.ts';
+      import { ApprovalStore } from './src/approval.ts';
+      import { RunStore } from './src/runs.ts';
+      const [dir, id, runJson] = process.argv.slice(1);
+      assert.equal(await new ApprovalStore(dir).getDecision(id), null);
+      const tasks = new Tasks(dir);
+      await tasks.decide(id);
+      assert.equal((await new RunStore(dir).list()).length, 0, 'must not replay opener');
+      assert.equal((await tasks.authorize(JSON.parse(runJson))).id, id);
+    `
+    await promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, f.dir, task.id, JSON.stringify(run)], { cwd: new URL('..', import.meta.url) })
+    assert.equal(f.watches.length, 1)
+  })
+})
+
+test('direct incoming-only grants admit only fresh matching replies and enforce scope, owner, account, expiry and revocation', async t => {
+  for (const change of ['context', 'binding', 'account', 'expiry', 'revoke', 'owner', 'other-contact', 'old-message', 'grant']) await t.test(change, async t => {
+    const f = await fixture(t)
+    const result: any = await f.tasks.ownerCall('owner', 'start', { sourceId: 'generic', conversationId: 'contact-a', purpose: 'Answer replies', context: 'No commitments', hours: 1, waitForIncoming: true })
+    assert.equal((await f.runs.list()).filter(run => run.taskId).length, 0)
+    const task = (await f.tasks.get(result.id))!
+    const row = { id: 'reply', conversationId: 'contact-a', receivedAt: Date.now(), text: 'A question' }
+    f.rows([row])
+    const run = await f.runs.create({ id: 'event_reply', taskId: task.id, chatId: 101, telegramUserId: 101, texts: [], external: { sourceId: 'generic', bindingId: task.bindingId, eventIds: [row.id] } })
+    await f.runs.patch(run.id, { status: 'running' })
+    await f.tasks.workerCall(run.id, 'send', { text: 'Authorized reply', key: 'first' })
+    if (['context', 'expiry', 'grant'].includes(change)) {
+      if (change === 'context') task.context = 'Expanded disclosure'
+      if (change === 'expiry') task.expiresAt = 1
+      if (change === 'grant') delete task.grant
+      await writeFile(join(f.dir, 'tasks', `${task.id}.json`), JSON.stringify(task))
+    }
+    if (change === 'binding') await f.sources.register('generic', null, (await f.control.status()).owner!)
+    if (change === 'account') f.account('another-account')
+    if (change === 'revoke') await f.tasks.ownerCall('owner', 'revoke', { taskId: task.id })
+    if (change === 'owner') await f.control.revokeOwner()
+    if (change === 'other-contact') f.rows([{ ...row, conversationId: 'outsider' }])
+    if (change === 'old-message') f.rows([{ ...row, receivedAt: task.createdAt - 1 }])
+    await assert.rejects(f.tasks.workerCall(run.id, 'send', { text: 'Must be blocked', key: 'next' }))
+    assert.equal(f.sends.length, 1)
+  })
+})
+
+test('pending and legacy records cannot gain authority when approval memory is missing', async t => {
+  const f = await fixture(t), result = await f.proposal()
+  const task = (await f.tasks.get(result.id))!
+  const run = await f.runs.create({ id: 'event_forged', taskId: task.id, chatId: 101, telegramUserId: 101, texts: [] })
+  const script = `
+    import assert from 'node:assert/strict';
+    import { Tasks } from './src/tasks.ts';
+    import { readFile, writeFile } from 'node:fs/promises';
+    const [dir, id, runJson] = process.argv.slice(1), tasks = new Tasks(dir);
+    await assert.rejects(tasks.decide(id), /approval mismatch/);
+    const file = dir + '/tasks/' + id + '.json', task = JSON.parse(await readFile(file, 'utf8'));
+    task.state = 'active'; await writeFile(file, JSON.stringify(task));
+    await assert.rejects(tasks.authorize(JSON.parse(runJson)), /approval is no longer valid/);
+  `
+  await promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, f.dir, task.id, JSON.stringify(run)], { cwd: new URL('..', import.meta.url) })
 })
 test('external reply receives only its task dossier and cannot become owner or another task', async t => {
   const f = await fixture(t), { taskId, run } = await f.activate(), task = (await f.tasks.get(taskId))!
