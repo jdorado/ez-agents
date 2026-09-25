@@ -406,7 +406,8 @@ export class ApplicationChannel {
           send(502, { error: 'Speech generation failed' }); return
         }
         // A binding can be revoked while the provider is generating audio.
-        await this.bindings.authenticate(request.headers.authorization!.slice(7))
+        const currentBinding = await this.bindings.authenticate(request.headers.authorization!.slice(7))
+        if (currentBinding.bindingId !== binding.bindingId) throw new Error('Application authority revoked')
         await this.snapshot(binding.bindingId, speechMatch[1])
         response.writeHead(200, { 'content-type': audio.mimeType, 'cache-control': 'no-store' })
         response.end(audio.buffer); return

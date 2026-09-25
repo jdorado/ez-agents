@@ -105,12 +105,16 @@ test('speech renders only a completed bound reply and rechecks authority after g
   const owned = await owner(root), runs = new RunStore(root)
   const firstToken = token(), secondToken = token()
   const spoken: string[] = []
-  let revoke = false
+  let revoke = false, reassign = false
   const channel = new ApplicationChannel({
     controlDir: root, initial: initialPreset('codex'), wake: () => {}, cancel: async () => {},
     speech: async text => {
       spoken.push(text)
       if (revoke) await channel.bindings.register('first', null, owned)
+      if (reassign) {
+        await channel.bindings.register('first', token(), owned, false, true)
+        await channel.bindings.register('second', firstToken, owned, false, true)
+      }
       return { buffer: Buffer.from('audio-fixture'), mimeType: 'audio/wav' }
     },
   })
@@ -138,6 +142,11 @@ test('speech renders only a completed bound reply and rechecks authority after g
   assert.equal(await audio.text(), 'audio-fixture')
   assert.deepEqual(spoken, ['Keep the movement controlled.'])
   revoke = true
+  assert.notEqual((await request(firstToken)).status, 200)
+  revoke = false
+  await channel.bindings.register('first', firstToken, owned)
+  await channel.bindings.register('second', secondToken, owned, false, true)
+  reassign = true
   assert.notEqual((await request(firstToken)).status, 200)
 })
 
