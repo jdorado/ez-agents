@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { atomic, locked } from '../plugins/manager.mjs';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
-import { state, read, jobs, jobPath, check, missing, cleanupStaleBackups } from './control.mjs';
+import { state, read, jobs, jobPath, check, prepare, submit, missing, cleanupStaleBackups } from './control.mjs';
 import { perform, environment } from './runtime.mjs';
 
 const reservedProviderKeys=new Set(['HOME','LANG','LC_ALL','LOGNAME','PATH','SHELL','TERM','TMPDIR','USER','CODEX_HOME','NODE_OPTIONS']);
@@ -27,6 +27,22 @@ export async function idle(control) {
   // cross-process view of active work. A down relay cannot own a run.
   const status=await callDeliverySocket(path.join(control,'delivery.sock'),{op:'status'},2000).catch(()=>null);
   return !status||status.running===0;
+}
+export async function queueAutomatic(home,available) {
+  const existing=await jobs(home);
+  if(existing.some(job=>['queued','applying','recovery-required'].includes(job.status)))return null;
+  for(const candidate of available) {
+    if(!candidate.newer||!candidate.policy?.automatic||!candidate.available)continue;
+    // A failed release needs a newer version or an explicit owner retry.
+    if(existing.some(job=>job.target===candidate.target&&job.version===candidate.available&&['failed','rolled-back'].includes(job.status)))continue;
+    try {
+      const job=await prepare(home,candidate.target,{release:candidate.available});
+      return await submit(home,job.id,true);
+    }catch {
+      console.error(`Automatic update of ${candidate.target} failed; inspect ez updates check/status.`);
+    }
+  }
+  return null;
 }
 export async function supervise(deployment,signal,{discover=check}={}) {
   const host=await read(path.join(deployment,'host-executor.json'));
@@ -96,12 +112,16 @@ export async function supervise(deployment,signal,{discover=check}={}) {
           const latest=await read(path.join(jobPath(home,pending.id),'job.json'));
           if(latest.status==='queued'){latest.status='failed';latest.error=error.message;await atomic(path.join(jobPath(home,pending.id),'job.json'),latest);}else throw error;
         } finally {await fs.rm(pause,{force:true});}
-        if(result?.status==='completed'&&pending.target==='main')return;
+        if(result?.status==='completed') {
+          if(pending.target==='main')return;
+          nextCheck=0;
+        }
       }
       if(Date.now()>=nextCheck) {
         nextCheck=Date.now()+6*60*60*1000;
         try {
           const results=await discover(home);await atomic(path.join(directory,'available.json'),results);
+          await queueAutomatic(home,results);
         } catch {
           // Discovery is optional; its failure must not terminate the host.
           // Do not expose registry response bodies or credentials in logs.

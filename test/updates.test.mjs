@@ -13,7 +13,7 @@ import { perform, environment, packageManager, backupStateDirectory } from '../s
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
-import { providerEnvironment } from '../src/updates/supervisor.mjs';
+import { providerEnvironment, queueAutomatic } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
 
 test('main upgrade backup omits a live plugin socket and keeps private files',async t=>{
@@ -440,6 +440,29 @@ test('npm candidates verify exact version and integrity; automatic policy is enf
  await assert.rejects(perform(f.home,await read(path.join(jobPath(f.home,job.id),'job.json')),r),/policy/);assert.equal(r.calls.length,0);
  pkg.dist.integrity='sha512-bad';await assert.rejects(prepare(f.home,'main',{release:'0.1.1'}),/integrity/);
  pkg.version='0.1.2';await assert.rejects(prepare(f.home,'main',{release:'0.1.1'}),/version mismatch/);
+});
+
+test('supervisor queues an eligible release once and preserves manual and failed-version gates',async t=>{
+ const f=await fixture(t),data=await fs.readFile(await f.pack());
+ const {createHash}=await import('node:crypto');
+ const pkg={name:'@ez-test/example',version:'0.1.1',dist:{tarball:'https://registry.npmjs.org/@ez-test/example/-/example-0.1.1.tgz',integrity:'sha512-'+createHash('sha512').update(data).digest('base64')}};
+ const original=globalThis.fetch;
+ globalThis.fetch=async url=>new Response(String(url).endsWith('.tgz')?data:JSON.stringify(String(url).endsWith('/0.1.1')?pkg:{name:pkg.name,'dist-tags':{latest:pkg.version},versions:{[pkg.version]:pkg}}));
+ t.after(()=>globalThis.fetch=original);
+ await atomic(path.join(f.home,'updates/supervisor.json'),{at:Date.now()});
+ await command(f.home,['policy','main','manual']);
+ assert.equal(await queueAutomatic(f.home,await command(f.home,['check'])),null);
+ assert.deepEqual(await jobs(f.home),[]);
+ await command(f.home,['policy','main','beta']);
+ const queued=await queueAutomatic(f.home,await command(f.home,['check']));
+ assert.equal(queued.status,'queued');assert.equal(queued.automatic,true);
+ assert.equal(queued.origin.type,'npm');assert.equal(queued.sha256,digest(data));
+ assert.equal(await queueAutomatic(f.home,await command(f.home,['check'])),null);
+ assert.equal((await jobs(f.home)).length,1);
+ queued.status='failed';await atomic(path.join(jobPath(f.home,queued.id),'job.json'),queued);
+ assert.equal(await queueAutomatic(f.home,await command(f.home,['check'])),null);
+ assert.equal((await jobs(f.home)).length,1);
+ await assert.rejects(fs.readFile(path.join(f.agent.controlDir,'update-attention.json')),error=>error.code==='ENOENT');
 });
 
 test('update discovery follows latest while preserving legacy beta and stable-only policies',async t=>{

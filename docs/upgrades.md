@@ -12,12 +12,13 @@ automatic channel for core and plugins without a saved policy. Existing explicit
 stable or manual policies are preserved. The owner may select either per target.
 The main target and installed plugins version independently.
 
-The agent owns release review, policy decisions and communication. The host
-supervisor owns interruption-safe replacement. There is one host service per
-agent, not a second agent or an additional updater daemon. Its replaceable child
-runs the normal CLI transport. It checks npm every six hours while running and
-records automatic-channel changes; discovery never wakes the agent or injects
-wrapper state into a session. Updates stay owner-invoked through `ez updates`.
+The owner chooses the saved update policy. The host supervisor owns
+interruption-safe replacement. There is one host service per agent, not a second
+agent or an additional updater daemon. Its replaceable child runs the normal CLI
+transport. It checks npm every six hours while running and queues one eligible
+release at a time when the policy is automatic. Discovery and replacement never
+wake the agent or inject wrapper state into a session. Manual policies retain
+owner-invoked updates through `ez updates`.
 Checks use the installed scoped npm identity; failures are
 visible in `updates check` and private `tools/updates/available.json`. Plugins marked
 `private: true` in their package metadata are reported as local-source updates
@@ -265,5 +266,7 @@ execution authority.
 
 Update discovery runs independently of active host work. A discovery failure is
 logged locally and retried at the next regular six-hour check; it does not stop
-the host or create a repair task. Inspect `ez updates check` for target diagnostics.
+the host or create a repair task. An automatically failed or rolled-back version
+is not retried until a newer version appears or the owner explicitly retries.
+Inspect `ez updates check` and `ez updates status` for target diagnostics.
 Actual update transactions retain their existing admission, drain and rollback rules.
