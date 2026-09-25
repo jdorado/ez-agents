@@ -1229,7 +1229,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (!shuttingDown) throw new Error('Telegram polling stopped unexpectedly')
         } catch (error) {
           if (shuttingDown) break
-          const transient = error instanceof HttpError || (error instanceof GrammyError && (error.error_code === 429 || error.error_code >= 500))
+          const conflict = error instanceof GrammyError && error.error_code === 409
+          const transient = conflict || error instanceof HttpError || (error instanceof GrammyError && (error.error_code === 429 || error.error_code >= 500))
           console.error(transient ? 'Telegram transport interrupted; retrying' : 'Telegram polling stopped; repair configuration and restart the relay. Existing work remains active', safeError(error))
           await new Promise<void>((resolve) => {
             let timer: ReturnType<typeof setTimeout> | undefined
@@ -1238,7 +1239,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               if (wakePollRetry === wake) wakePollRetry = undefined
               resolve()
             }
-            if (transient) timer = setTimeout(wake, 5000)
+            if (transient) timer = setTimeout(wake, conflict ? 30_000 : 5000)
             wakePollRetry = wake
           })
         }

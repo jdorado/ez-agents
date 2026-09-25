@@ -171,7 +171,7 @@ test('a fresh relay initializes its bot identity before polling', async () => {
  assert.equal(relay.bot.isRunning(),false)
 })
 
-for (const cleanupFails of [false,true]) test(`polling conflict preserves work until an explicit shutdown (cleanup fails: ${cleanupFails})`, async t => {
+for (const cleanupFails of [false,true]) test(`polling conflict preserves work while waiting to retry (cleanup fails: ${cleanupFails})`, async t => {
  const dir=await mkdtemp(join(tmpdir(),'ez-polling-conflict-')),control=new ControlStore(dir,1000),runs=new RunStore(dir)
  await seedWorkspace(dir)
  let release!:()=>void,entered!:()=>void,releaseDelivery!:()=>void,sending!:()=>void,child:ReturnType<typeof spawn>|undefined,polls=0
@@ -208,7 +208,7 @@ for (const cleanupFails of [false,true]) test(`polling conflict preserves work u
   const start=relay.start().finally(()=>{finished=true})
   await until(async()=>polls===1)
   if(!cleanupFails)await new Promise(resolve=>setTimeout(resolve,5200))
-  assert.equal(polls,1,'permanent conflict must not restart after the old five-second retry interval')
+  assert.equal(polls,1,'a conflict must wait longer than the standard five-second retry')
   assert.equal(sourceStops,0,'a polling conflict must not stop the relay')
   assert.equal((await runs.get('tg_92'))?.status,'running')
   assert.ok(child && child.exitCode===null && child.signalCode===null)
@@ -226,13 +226,39 @@ for (const cleanupFails of [false,true]) test(`polling conflict preserves work u
   assert.equal(relay.stop(),stopping,'finished shutdown remains idempotent')
   assert.equal(sourceStops,1)
   assert.deepEqual((sentOutbox(dir).find(entry=>entry.id===item.id)?.receipt as {messageIds:number[]}).messageIds,[1])
-  assert.equal(polls,1,'a conflict must not start another polling loop before the retry delay')
+  assert.equal(polls,1,'shutdown must cancel the pending conflict retry')
   assert.equal(relay.bot.isRunning(),false)
   assert.ok(child && (child.exitCode!==null || child.signalCode!==null))
   assert.notEqual((await runs.get('tg_92'))?.status,'running')
   await assert.rejects(readFile(join(dir,'control-state.lock')), {code:'ENOENT'})
   assert.equal((await control.status()).owner?.telegramUserId,101)
  } finally {release();releaseDelivery();child?.kill();await relay.stop().catch(()=>{});await rm(dir,{recursive:true,force:true})}
+})
+
+test('Telegram polling resumes after a competing poller releases the bot',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-polling-recovery-'))
+ await seedWorkspace(dir)
+ const realSetTimeout=globalThis.setTimeout
+ t.mock.method(globalThis,'setTimeout',((callback:()=>void,delay:number,...args:unknown[])=>
+  realSetTimeout(callback,delay===30_000?20:delay,...args)) as typeof setTimeout)
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async()=>{throw Error('No executor expected')})
+ let polls=0
+ relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
+ relay.bot.api.config.use(async(_prev,method,_payload,signal)=>{
+  if(method==='getUpdates'){
+   polls++
+   if(polls===1)return {ok:false,error_code:409,description:'Conflict: another getUpdates request'} as any
+   if(signal && !signal.aborted)await new Promise<void>(resolve=>signal.addEventListener('abort',()=>resolve(),{once:true}))
+   return {ok:true,result:[]} as any
+  }
+  if(method==='getMe')return {ok:true,result:{id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'}} as any
+  return {ok:true,result:true} as any
+ })
+ const started=relay.start()
+ try{
+  await until(async()=>polls===2)
+  assert.equal(relay.bot.isRunning(),true)
+ }finally{await relay.stop();await started;await rm(dir,{recursive:true,force:true})}
 })
 
 for (const intake of [true,false]) test(`relay shutdown terminates an in-flight ${intake?'intake':'scheduled'} launch`, async () => {
