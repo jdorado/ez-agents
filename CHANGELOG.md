@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.40
+
+- Apply eligible npm releases under each agent's saved automatic update policy
+  through the existing guarded updater. Queue one update at a time, preserve
+  manual policies, and wait for a newer version after a failed automatic update.
+
 ## 0.1.0-beta.39
 
 - Render completed, binding-scoped application replies as WAV speech with
