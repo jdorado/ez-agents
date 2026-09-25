@@ -31,13 +31,13 @@ if(args[0]==='app-server'){
  }
  if(q.method==='thread/goal/get')send({id:q.id,result:{goal:null}});
  });
-}else capture(args.includes('--prompt-file')?fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'):args.some(a=>a.startsWith('--print='))?args.find(a=>a.startsWith('--print=')).slice(8):args.includes('--print')||(args[0]==='exec'&&args.at(-1)==='-')?fs.readFileSync(0,'utf8'):args.at(-1));
+}else capture(args.includes('--prompt-file')?fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'):args.includes('--print')||(args[0]==='exec'&&args.at(-1)==='-')?fs.readFileSync(0,'utf8'):args.at(-1));
 `
- for(const name of ['codex','grok','agy','claude','opencode'])await writeFile(path.join(bin,name),fixture,{mode:0o700})
+ for(const name of ['codex','grok','claude','opencode'])await writeFile(path.join(bin,name),fixture,{mode:0o700})
  const previous={PATH:process.env.PATH,TELEGRAM_BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,EZ_EXECUTOR_TRANSPORT:process.env.EZ_EXECUTOR_TRANSPORT}
  process.env.PATH=bin+path.delimiter+process.env.PATH;process.env.TELEGRAM_BOT_TOKEN='do-not-inherit';delete process.env.EZ_EXECUTOR_TRANSPORT
  try {
-  for(const cli of ['codex','grok','agy','claude','opencode'])for(const isResume of [false,true])for(const text of ['  /goal audit list of files and give me a simple list with filenames\n','--help','-','resume']) {
+  for(const cli of ['codex','grok','claude','opencode'])for(const isResume of [false,true])for(const text of ['  /goal audit list of files and give me a simple list with filenames\n','--help','-','resume']) {
    const runId='r_'+cli+'_'+String(isResume)+'_'+Buffer.from(text).toString('hex').slice(0,20)
    await ownerRun(controlDir,runId)
    const job=await startExecutorJob([text],{workspace,controlDir,binDir:bin,cli,runId,timeoutMs:5000,isResume,sessionId:'native-existing',repairEnabled:false})
@@ -51,7 +51,6 @@ if(args[0]==='app-server'){
    }
    if(['codex','claude'].includes(cli))assert.ok(!captured.args.includes('--help'))
    if(cli==='opencode')assert.equal(captured.args.at(-2),'--')
-   if(cli==='agy')assert.ok(captured.args.includes('--print='+text))
    if(cli==='claude')assert.ok(!captured.args.includes('--append-system-prompt-file'))
   }
   for(const [runId,texts] of [['r_schedule_literal',['/goal audit list of files and give me a simple list with filenames']],['r_batch',['first\nline','  second  ']]] as const) {

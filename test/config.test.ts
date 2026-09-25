@@ -23,9 +23,9 @@ test('rejects malformed timeouts', () => {
   assert.throws(() => loadConfig({ TELEGRAM_BOT_TOKEN: '110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY', EZ_PAIRING_TTL_SECONDS: 'bad' }), /positive integer/)
 })
 
-test('loads executor CLI configuration with agy fallback', () => {
+test('loads executor CLI configuration with codex fallback', () => {
   const defaultConfig = loadConfig({ TELEGRAM_BOT_TOKEN: '110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY' })
-  assert.equal(defaultConfig.executorCli, 'agy')
+  assert.equal(defaultConfig.executorCli, 'codex')
 
   const customConfig = loadConfig({ TELEGRAM_BOT_TOKEN: '110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY', EZ_EXECUTOR_CLI: 'claude' })
   assert.equal(customConfig.executorCli, 'claude')

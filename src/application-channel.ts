@@ -206,7 +206,7 @@ export class ApplicationChannel {
     }
     if (value.action==='model') {
       const model = (await controls.catalog()).find(item=>item.cli===value.cli && item.provider===value.provider && item.model===value.model)
-      if (!model || model.cli==='agy' || (value.effort!==undefined && (typeof value.effort!=='string' || !model.efforts.includes(value.effort)))) throw new Error('Invalid application model selection')
+      if (!model || (value.effort!==undefined && (typeof value.effort!=='string' || !model.efforts.includes(value.effort)))) throw new Error('Invalid application model selection')
       preset = await controls.saveSelection(model,value.effort as string|undefined,guard)
     }
     await control.changeApplicationSession(hashedScope,guard,preset)
