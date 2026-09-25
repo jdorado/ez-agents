@@ -5,15 +5,29 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
 import { spawn, execFile } from 'node:child_process';
+import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
-import { perform, environment, packageManager } from '../src/updates/runtime.mjs';
+import { perform, environment, packageManager, backupStateDirectory } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
 import { providerEnvironment } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
+
+test('main upgrade backup omits a live plugin socket and keeps private files',async t=>{
+ const root=await fs.mkdtemp('/tmp/ez-upgrade-socket-');
+ t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const source=path.join(root,'control'),destination=path.join(root,'backup');
+ await fs.mkdir(source);await fs.writeFile(path.join(source,'state.json'),'private state');
+ const socket=path.join(source,'plugin-broker.sock'),server=createServer();
+ await new Promise((resolve,reject)=>server.once('error',reject).listen(socket,resolve));
+ t.after(()=>new Promise(resolve=>server.close(resolve)));
+ await backupStateDirectory(source,destination);
+ assert.equal(await fs.readFile(path.join(destination,'state.json'),'utf8'),'private state');
+ assert.deepEqual(await fs.readdir(destination),['state.json']);
+});
 
 test('supervisor forwards only provider keys declared by the agent installation',()=>{
  const host={agents:[{codexProviders:[{envKey:'OPENROUTER_API_KEY'}]}]};

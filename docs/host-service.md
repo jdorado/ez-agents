@@ -24,7 +24,7 @@ Environment=EZ_DEPLOYMENT_DIR=/absolute/private/agents/family
 Environment=PATH=/absolute/node/bin:/absolute/package-manager/bin:/absolute/cli/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=-%h/.config/ez/family-provider.env
 ExecStart=/absolute/ez-package/package/bin/ezenciel-agents-host
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]

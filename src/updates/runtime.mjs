@@ -31,6 +31,9 @@ export function execute(command,args,options={}) {
 export async function textAtomic(file,text) {
   const tmp=file+'.update.tmp';await fs.writeFile(tmp,text,{mode:0o600});await fs.rename(tmp,file);
 }
+export async function backupStateDirectory(source,destination) {
+  await fs.cp(source,destination,{recursive:true,filter:async entry=>!(await fs.lstat(entry)).isSocket()});
+}
 export const pluginArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
 export async function packageManager(root,run=execute) {
   const {packageManager:required}=await read(path.join(root,'package.json'));
@@ -116,7 +119,7 @@ export async function perform(home,job,hooks) {
       job.rollback={env:envValue(oldEnv,'EZ_RELAY_IMAGE',oldImage),packageRoot:config.packageRoot};await save();
       await run('docker',[...relayArgs(config),'stop','relay']);await hooks.stopHost();
       const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
-      for(const name of ['mind','control'])await fs.cp(path.join(config.deploymentDir,name),path.join(backup,name),{recursive:true});
+      for(const name of ['mind','control'])await backupStateDirectory(path.join(config.deploymentDir,name),path.join(backup,name));
       for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
       let env=oldEnv.split(job.previousRoot+path.sep).join(root+path.sep);env=envValue(env,'EZ_RELAY_IMAGE',image);
       await textAtomic(envFile,env);
