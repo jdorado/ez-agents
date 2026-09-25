@@ -468,7 +468,8 @@ test('pi does not borrow an unrelated OpenCode catalog', async () => {
   const catalog = await readModels(undefined, async (cli) => cli === 'pi', undefined as never, runner)
   assert.deepEqual(catalog, [{ cli: 'pi', name: 'Pi · client default', efforts: [] }])
   assert.equal(isPreset({ id: 'x', name: 'Pi', cli: 'pi' }), true)
-  assert.equal(isPreset({ id: 'x', name: 'Unavailable', cli: 'unreal-agent' }), false)
+  for (const cli of ['unreal-agent', 'antigravity', 'agy'])
+    assert.equal(isPreset({ id: 'x', name: 'Unavailable', cli }), false)
   await validateSelection({ id: 'choice', name: 'Default', cli: 'pi' }, catalog, async (cli) => cli === 'pi')
   await assert.rejects(
     validateSelection(
