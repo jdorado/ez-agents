@@ -25,6 +25,8 @@ export type Config = ControlConfig & {
   applicationPort?: number
   applicationHost?: string
   geminiApiKey?: string
+  speechVoiceEn?: string
+  speechVoiceEs?: string
   openaiApiKey?: string
 }
 
@@ -84,6 +86,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     channelBackendUrl: env.EZ_CHANNEL_BACKEND_URL?.trim(),
     channelBackendToken: env.EZ_CHANNEL_BACKEND_TOKEN?.trim(),
     geminiApiKey: env.GEMINI_API_KEY?.trim(),
+    speechVoiceEn: env.EZ_SPEECH_VOICE_EN?.trim(),
+    speechVoiceEs: env.EZ_SPEECH_VOICE_ES?.trim(),
     openaiApiKey: env.OPENAI_API_KEY?.trim(),
   }
 }

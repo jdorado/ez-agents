@@ -7,6 +7,10 @@ export type AudioOptions = {
   voice?: string
 }
 
+export class SpeechCreditsDepletedError extends Error {
+  constructor() { super('Gemini speech credits are depleted') }
+}
+
 export const pcmToWav = (pcm: Buffer, sampleRate = 24000, channels = 1): Buffer => {
   const header = Buffer.alloc(44)
   const byteRate = sampleRate * channels * 2
@@ -160,6 +164,7 @@ export const synthesizeSpeech = async (
     })
 
     if (!response.ok) {
+      if (response.status === 402) throw new SpeechCreditsDepletedError()
       throw new Error(`Gemini speech synthesis error ${response.status}`)
     }
 

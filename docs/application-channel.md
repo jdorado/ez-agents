@@ -17,11 +17,15 @@ application run as `audio/wav` (24 kHz mono). It uses the same binding/owner
 authorization as run readback, rechecked after synthesis, and accepts no client
 text or provider credentials. Replies are limited to 8,000 characters. An
 unfinished run returns 409, missing speech configuration 503, and provider
-failure 502. Audio responses have `Cache-Control: no-store`.
+failure 502. Depleted Gemini credits return 503 with
+`code: speech_credits_depleted`. Audio responses have `Cache-Control: no-store`.
 
 Configure `GEMINI_API_KEY` on the relay. The existing speech renderer uses
 `gemini-3.8-flash-lite-tts`; Telegram still receives Ogg Opus. Applications should
-retain the returned audio for local replay; each POST generates fresh audio.
+send `{"language":"en"}` or `{"language":"es"}` to select
+`EZ_SPEECH_VOICE_EN` or `EZ_SPEECH_VOICE_ES` (both default to Kore). Telegram
+voice notes use the English voice setting. Applications should retain the returned
+audio for local replay; each POST generates fresh audio.
 Speech is a rendering operation and does not start another agent turn.
 
 ## Shared runtime controls

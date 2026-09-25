@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { pcmToWav, encodeOggOpus, transcribeAudio, synthesizeSpeech } from '../src/audio.js'
+import { pcmToWav, encodeOggOpus, transcribeAudio, synthesizeSpeech, SpeechCreditsDepletedError } from '../src/audio.js'
+
+test('speech reports depleted credits without exposing provider details', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response('', { status: 402 }))
+  await assert.rejects(synthesizeSpeech('Fixture', { geminiApiKey: 'fixture-key' }), SpeechCreditsDepletedError)
+})
 
 test('speech provider failure stays a failure, never a text or WAV success', async (t) => {
   t.mock.method(
@@ -13,13 +18,15 @@ test('speech provider failure stays a failure, never a text or WAV success', asy
 })
 
 test('speech finds audio beyond the first response part and keeps credentials out of URLs', async (t) => {
+  let calls = 0
   t.mock.method(globalThis, 'fetch', async (url: string, options: RequestInit) => {
+    calls += 1
     assert.match(url, /gemini-3\.8-flash-lite-tts:generateContent$/)
     assert.equal(url.includes('fixture-key'), false)
     assert.equal(new Headers(options.headers).get('x-goog-api-key'), 'fixture-key')
     const config = JSON.parse(String(options.body)).generationConfig
     assert.deepEqual(config.responseFormat, { audio: { mimeType: 'AUDIO_L16', sampleRate: 24000 } })
-    assert.deepEqual(config.speechConfig.voiceConfig, { voice: 'Kore' })
+    assert.deepEqual(config.speechConfig.voiceConfig, { voice: calls === 3 ? 'voice_r3yhwvxvihxg' : 'Kore' })
     return new Response(
       JSON.stringify({
         candidates: [
@@ -47,6 +54,7 @@ test('speech finds audio beyond the first response part and keeps credentials ou
   assert.equal(wav.mimeType, 'audio/wav')
   assert.equal(wav.buffer.subarray(0, 4).toString(), 'RIFF')
   assert.equal(wav.buffer.length, 24044)
+  await synthesizeSpeech('Fixture', { geminiApiKey: 'fixture-key', voice: 'voice_r3yhwvxvihxg', format: 'wav' })
 })
 
 test('pcmToWav generates a valid 44-byte WAV header', () => {

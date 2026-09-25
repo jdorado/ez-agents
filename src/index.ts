@@ -103,7 +103,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const applicationChannel = new ApplicationChannel({
     controlDir: config.controlDir, workspace: config.workspace, initial: aiMenu.initial,
     aiControls: aiMenu,
-    speech: config.geminiApiKey ? text => synthesizeSpeech(text, { geminiApiKey: config.geminiApiKey, format: 'wav' }) : undefined,
+    speech: config.geminiApiKey ? (text, language) => synthesizeSpeech(text, {
+      geminiApiKey: config.geminiApiKey,
+      voice: language === 'es' ? config.speechVoiceEs : config.speechVoiceEn,
+      format: 'wav',
+    }) : undefined,
     wake: () => { void drainSources().catch(error => console.error('Application queue unavailable', safeError(error))) },
     createTelegramPairing: async (bindingId, owner) => {
       const username = bot?.botInfo?.username
@@ -582,6 +586,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             const { buffer } = await synthesizeSpeech(item.voiceText, {
               geminiApiKey: config.geminiApiKey,
               openaiApiKey: config.openaiApiKey,
+              voice: config.speechVoiceEn,
             })
             await paceSend()
             await authorizeChannelDelivery()
