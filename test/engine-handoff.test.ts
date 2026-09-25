@@ -31,7 +31,7 @@ if(args[0]==='app-server'){
  }
  if(q.method==='thread/goal/get')send({id:q.id,result:{goal:null}});
  });
-}else capture(args.includes('--prompt-file')?fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'):args.some(a=>a.startsWith('--print='))?args.find(a=>a.startsWith('--print=')).slice(8):args.includes('--print')||(args[0]==='exec'&&args.at(-1)==='-')?fs.readFileSync(0,'utf8'):args.at(-1));
+}else capture(args.includes('--prompt-file')?fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'):args.includes('--print')||(args[0]==='exec'&&args.at(-1)==='-')?fs.readFileSync(0,'utf8'):args.at(-1));
 `
  for(const name of ['codex','grok','claude','opencode'])await writeFile(path.join(bin,name),fixture,{mode:0o700})
  const previous={PATH:process.env.PATH,TELEGRAM_BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,EZ_EXECUTOR_TRANSPORT:process.env.EZ_EXECUTOR_TRANSPORT}
