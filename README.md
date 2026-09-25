@@ -291,7 +291,6 @@ Existing conversations without a title show their first saved message and date w
 available. Empty routing placeholders are omitted from history; + New conversation
 is the create action. Back updates the current menu without creating a conversation. Use /rename for a custom name. Older
 records without a saved model reuse a known choice for their original CLI.
-Antigravity's latest-only resume cannot switch back to an older conversation.
 The list covers sessions already tracked by this Ez agent; it does not import
 unrelated GUI/CLI history. Application-backed channels keep session controls in
 the connected application. Shared workspace files still persist across topics.

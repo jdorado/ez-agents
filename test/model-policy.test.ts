@@ -12,7 +12,7 @@ import { runCodexSession } from '../src/codex-session.js'
 import { runDesktopTurn } from '../src/desktop-bridge.js'
 
 test('engine defaults stay omitted and explicit native settings survive every adapter', async () => {
- for(const cli of ['codex','codex-gui','grok','claude','opencode','agy']) {
+ for(const cli of ['codex','codex-gui','grok','claude','opencode']) {
   assert.deepEqual(executionDefaults(cli,{}),{})
   const preset={id:'chosen',name:'Chosen',cli,model:'native-model',effort:'ultra'}
   assert.deepEqual(executionDefaults(cli,preset),preset)
@@ -41,7 +41,7 @@ test('invalid setting syntax never mutates a saved choice', async () => {
 test('non-Codex catalog defaults survive executor normalization and host revalidation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-adapter-defaults-'))
   try {
-    const available = async (cli: string) => ['claude', 'opencode', 'agy'].includes(cli)
+    const available = async (cli: string) => ['claude', 'opencode'].includes(cli)
     const catalog = await readModels(dir, available)
     for (const choice of catalog) {
       const preset = {id:'selected', name:choice.name, cli:choice.cli, model:choice.model}

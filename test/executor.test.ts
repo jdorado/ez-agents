@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, antigravityInvocation, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
@@ -97,14 +97,6 @@ test('the Grok invocation is headless, workspace-scoped, and token-free', () => 
   assert.equal(invocation.args.includes('TELEGRAM_BOT_TOKEN'), false)
 })
 
-test('the antigravity invocation is headless, skips permissions, and uses print mode', () => {
-  const invocation = antigravityInvocation('test prompt')
-  assert.equal(invocation.command, 'agy')
-  assert.deepEqual(invocation.args, [
-    '--dangerously-skip-permissions', '--print=test prompt',
-  ])
-})
-
 test('the opencode invocation is headless, auto-approves, and sets model and workspace', () => {
   const invocation = opencodeInvocation('test prompt', { workspace: '/tmp/test-ws' })
   assert.equal(invocation.command, 'opencode')
@@ -119,16 +111,15 @@ test('the opencode invocation is headless, auto-approves, and sets model and wor
 })
 
 test('resolveExecutor correctly maps keys and aliases', () => {
-  assert.equal(resolveExecutor('agy').command, 'agy')
-  assert.equal(resolveExecutor('antigravity').command, 'agy')
   assert.equal(resolveExecutor('claude').command, 'claude')
   assert.equal(resolveExecutor('grok').command, 'grok')
   assert.equal(resolveExecutor('opencode').command, 'opencode')
   assert.equal(resolveExecutor('oc').command, 'opencode')
-  assert.throws(() => resolveExecutor('unreal-agent'), /Unsupported executor CLI/)
+  for (const cli of ['unreal-agent', 'antigravity', 'agy'])
+    assert.throws(() => resolveExecutor(cli), /Unsupported executor CLI/)
   assert.equal(resolveExecutor('codex-gui').name, 'codex-gui')
   assert.notEqual(resolveExecutor('codex-gui').name, resolveExecutor('codex').name)
-  assert.equal(resolveExecutor(undefined).command, 'agy')
+  assert.equal(resolveExecutor(undefined).command, 'codex')
   assert.throws(() => resolveExecutor('claude-spark'), /Unsupported executor CLI "claude-spark"/)
   assert.throws(() => resolveExecutor('spark'), /Unsupported executor CLI "spark"/)
   assert.throws(() => resolveExecutor('nonexistent'), /Unsupported executor CLI "nonexistent"/)

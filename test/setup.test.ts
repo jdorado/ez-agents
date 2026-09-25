@@ -13,11 +13,11 @@ test('findExecutableInPath locates existing binary and returns null for nonexist
   assert.equal(missing, null)
 })
 
-test('readActiveExecutor extracts EZ_EXECUTOR_CLI or defaults to agy', async () => {
+test('readActiveExecutor extracts EZ_EXECUTOR_CLI or defaults to codex', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'ez-setup-test-'))
   try {
     const envPath = path.join(dir, '.env')
-    assert.equal(await readActiveExecutor(envPath), 'agy')
+    assert.equal(await readActiveExecutor(envPath), 'codex')
 
     await writeFile(envPath, 'EZ_EXECUTOR_CLI=claude\n', 'utf8')
     assert.equal(await readActiveExecutor(envPath), 'claude')
@@ -37,10 +37,10 @@ test('setExecutorInEnv updates or adds EZ_EXECUTOR_CLI without altering other en
     assert.match(content, /TELEGRAM_BOT_TOKEN=token123/)
     assert.match(content, /EZ_EXECUTOR_CLI=claude/)
 
-    await setExecutorInEnv(envPath, 'antigravity')
+    await setExecutorInEnv(envPath, 'codex')
     content = await readFile(envPath, 'utf8')
     assert.match(content, /TELEGRAM_BOT_TOKEN=token123/)
-    assert.match(content, /EZ_EXECUTOR_CLI=antigravity/)
+    assert.match(content, /EZ_EXECUTOR_CLI=codex/)
     assert.ok(!content.includes('claude'))
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -59,9 +59,9 @@ test('getExecutorsStatus returns all executors and sets isActive correctly', asy
     assert.ok(claudeItem)
     assert.equal(claudeItem.isActive, true)
 
-    const agyItem = status.items.find((item) => item.id === 'agy')
-    assert.ok(agyItem)
-    assert.equal(agyItem.isActive, false)
+    const codexItem = status.items.find((item) => item.id === 'codex')
+    assert.ok(codexItem)
+    assert.equal(codexItem.isActive, false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

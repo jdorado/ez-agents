@@ -20,20 +20,6 @@ export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;
 export type HostBinding = { name: string; workspace: string; controlDir: string; binDir: string; toolsHome?: string; sharedWorkspace?: string; additionalWorkspaces?: string[]; pluginNetworkBindings?: Record<string, PluginNetworkRoute>; pluginFolderRoots?: Record<string,string[]>; codexProviders?: CodexProviderBinding[]; opencodeProviders?: string[] }
 export type HostInstallation = { cli: string; isolation?: IsolationClass; agents: HostBinding[] }
 
-// A transient native-catalog blip (e.g. `opencode models` timeout under an
-// allowlist) reads as an empty fresh catalog. Prefer it when non-empty;
-// otherwise keep the last-good disk catalog so one blip does not fail a run.
-export const selectValidationCatalog = (fresh: ModelChoice[], cached: ModelChoice[] | undefined): ModelChoice[] =>
-  fresh.length ? fresh : cached?.length ? cached : fresh
-
-export const readCachedModels = async (agent: HostBinding): Promise<ModelChoice[] | undefined> => {
-  try {
-    const raw = JSON.parse(await readFile(path.join(agent.controlDir, 'host-executor/models.json'), 'utf8'))
-    if (!Array.isArray(raw)) return undefined
-    return raw as ModelChoice[]
-  } catch { return undefined }
-}
-
 // Periodic refresh body, extracted for testing. Throws on failure; the
 // caller keeps the last-good disk catalog and the host alive.
 export const refreshAgentCatalog = async (agent: HostBinding,
@@ -86,19 +72,6 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     await writeFile(path.join(directory, 'heartbeat.tmp'), JSON.stringify({ at: Date.now(), pid: process.pid, version: packageVersion, platform: process.platform, arch: process.arch, plugins: await installedPluginVersions(agent.toolsHome) }), { mode: 0o600 })
     await rename(path.join(directory, 'heartbeat.tmp'), path.join(directory, 'heartbeat.json'))
   }
-  // Cross-CLI runs validate against a fresh catalog; on a transient blip
-  // (throw or empty under an allowlist) fall back to the last-good disk
-  // catalog instead of failing the run. A genuinely empty catalog with no
-  // cache still fails closed via validateSelection.
-  const validationCatalog = async (agent: HostBinding): Promise<ModelChoice[]> => {
-    try {
-      return selectValidationCatalog(await freshCatalog(agent), await readCachedModels(agent))
-    } catch (error) {
-      const cached = await readCachedModels(agent)
-      if (cached?.length) return cached
-      throw error
-    }
-  }
   try {
     for (const agent of installation.agents) {
       if (![agent.workspace,agent.controlDir,agent.binDir].every(path.isAbsolute)) throw new Error('Host bindings require absolute paths')
@@ -131,7 +104,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid)}),{mode:0o600,flag:'wx'})
       locks.push(lock)
-      const models = selectValidationCatalog(await freshCatalog(agent), await readCachedModels(agent))
+      const models = await freshCatalog(agent)
       await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
       const modelsFile=path.join(directory,'models.json')
       await writeFile(modelsFile+'.tmp',JSON.stringify(models),{mode:0o600});await rename(modelsFile+'.tmp',modelsFile)
@@ -216,7 +189,10 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               if (provider && model && !provider.models.includes(model)) throw new Error('Selected model is not declared for this Codex provider')
               if (!provider && model && (agent.codexProviders ?? []).some(binding=>binding.models.includes(model)))
                 throw new Error('Selected Codex provider is required for this model')
-              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},await validationCatalog(agent))
+              // Admission and execution must use the same catalog snapshot. A
+              // transient native-client probe failure must not reject a model
+              // that the host just advertised to the relay and application.
+              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
               const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.controlDir,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,

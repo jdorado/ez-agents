@@ -155,8 +155,7 @@ application must not infer or auto-submit consent.
 
 Each application binding plus scope gets an existing core session. Its first run
 captures the selected engine/preset; later runs resume that same native session.
-Application sessions are excluded from the Telegram session selector. Engines
-that only resume an implicit latest session (`agy`) cannot serve isolated scopes.
+Application sessions are excluded from the Telegram session selector.
 
 Before cutting over an existing application, stop its old runner, copy its native
 transcripts into the ordinary engine's private state, and import each authoritative

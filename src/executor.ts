@@ -143,17 +143,6 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       return args
     },
   },
-  agy: {
-    name: 'antigravity',
-    command: 'agy',
-    description: 'Google Antigravity CLI (default)',
-    buildArgs: (opts, _promptFile, promptText) => {
-      const args: string[] = []
-      if (opts.isResume) args.push('-c')
-      args.push('--dangerously-skip-permissions', `--print=${promptText}`)
-      return args
-    },
-  },
   claude: {
     name: 'claude',
     command: 'claude',
@@ -242,13 +231,12 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
 }
 
 export const EXECUTOR_ALIASES: Record<string, string> = {
-  antigravity: 'agy',
   'claude-code': 'claude',
   oc: 'opencode',
 }
 
 export const executorKey = (name?: string): string => {
-  const normalized = (name ?? 'agy').trim().toLowerCase()
+  const normalized = (name ?? 'codex').trim().toLowerCase()
   const resolvedKey = EXECUTOR_ALIASES[normalized] ?? normalized
   if (!EXECUTOR_REGISTRY[resolvedKey]) {
     const supported = [...Object.keys(EXECUTOR_REGISTRY), ...Object.keys(EXECUTOR_ALIASES)].join(', ')
@@ -312,14 +300,6 @@ export const grokInvocation = (
 ): { command: string; args: string[] } => ({
   command: EXECUTOR_REGISTRY.grok.command,
   args: EXECUTOR_REGISTRY.grok.buildArgs(options, promptFile, ''),
-})
-
-export const antigravityInvocation = (
-  prompt: string,
-  options: Pick<ExecutorOptions, 'isResume'> = {},
-): { command: string; args: string[] } => ({
-  command: EXECUTOR_REGISTRY.agy.command,
-  args: EXECUTOR_REGISTRY.agy.buildArgs({ workspace: '', ...options }, '', prompt),
 })
 
 export const opencodeInvocation = (

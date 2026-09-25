@@ -12,7 +12,7 @@ export type AiPreset = { id: string; name: string; cli: string; provider?: strin
 export type ExecutionChoice = { sessionId: string; preset: AiPreset }
 export type ModelChoice = { cli: string; provider?: string; model?: string; name: string; efforts: string[] }
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
-const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'agy', 'pi']
+const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'pi']
 const nativeEffort = (cli: string, effort: string) =>
   cli === 'pi' ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) : true
 export const isPreset = (p: unknown): p is AiPreset => {
@@ -158,8 +158,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
     models.push(...(desktop.length ? desktop : [{ cli: 'codex-gui', name: 'codex-gui · desktop', efforts: [] }]))
   }
   // Other adapters expose the authenticated client's default, not a guessed catalog.
-  for (const cli of ['claude', 'agy'])
-    if (await available(cli)) models.push({ cli, name: `${cli} · client default`, efforts: [] })
+  if (await available('claude')) models.push({ cli: 'claude', name: 'claude · client default', efforts: [] })
   const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
   if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, allow))
   // Pi has separate provider configuration. OpenCode's catalog cannot
@@ -213,7 +212,7 @@ export const opencodeProviderAllowlist = (env: NodeJS.ProcessEnv = process.env):
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {
   assertEffort(p.effort, p.model, p.cli)
   if (!isPreset(p) || !(await available(p.cli))) throw new Error('This CLI is not installed.')
-  if (!p.provider && !p.model && !p.effort && p.cli !== 'agy') return
+  if (!p.provider && !p.model && !p.effort) return
   const model = catalog.find((m) => m.cli === p.cli && m.provider === p.provider && m.model === p.model)
   if (!model || (p.effort && !model.efforts.includes(p.effort)))
     throw new Error('This model/effort is not in the installed client catalog. Refresh the client and try again; no fallback was selected.')

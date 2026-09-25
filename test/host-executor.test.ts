@@ -4,7 +4,7 @@ import test from 'node:test'
 import { mkdtemp, mkdir, readFile, writeFile, rm, realpath, symlink } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
-import { serveHostExecutor, selectValidationCatalog, readCachedModels, refreshAgentCatalog } from '../src/host-executor.js'
+import { serveHostExecutor, refreshAgentCatalog } from '../src/host-executor.js'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { isHostRunId } from '../src/host-executor-protocol.js'
@@ -118,6 +118,9 @@ test('host execution resolves a declared provider from the bound agent, not a la
       try { await readFile(path.join(directory, 'heartbeat.json')); break }
       catch { await new Promise(resolve => setTimeout(resolve, 20)) }
     }
+    // The selected model was advertised at startup. A later catalog probe
+    // can fail while the client remains able to execute the selected model.
+    await rm(path.join(controlDir, 'cli', 'codex', 'models_cache.json'))
     await writeFile(path.join(directory, 'r_provider.request.json'), JSON.stringify({
       texts: ['hello'], options: {cli: 'codex', provider: 'openrouter', model: provider.models[0], effort: 'max'},
     }))
@@ -243,10 +246,14 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     switched.stdin.end(JSON.stringify({texts:['Explicit CLI change'],options:executionDefaults('claude',{cli:'claude',timeoutMs:5000,effort:undefined})}))
     assert.equal(await new Promise(resolve=>switched.once('close',resolve)),0)
     assert.ok(JSON.parse(switchedOutput).args.includes('--print'))
-    // The bound cache may advertise a model absent from the host's cache.
+    // The host's published catalog can gain a model after its first probe.
     const codexHome=path.join(agents[0].controlDir,'cli','codex')
     await mkdir(codexHome,{recursive:true})
     await writeFile(path.join(codexHome,'models_cache.json'),JSON.stringify({models:[{slug:'agent-only-fixture',visibility:'list',display_name:'Agent model',supported_reasoning_levels:[]}]}))
+    const catalogFile=path.join(agents[0].controlDir,'host-executor','models.json')
+    const advertised=JSON.parse(await readFile(catalogFile,'utf8'))
+    advertised.push({cli:'codex',model:'agent-only-fixture',name:'Agent model',efforts:[]})
+    await writeFile(catalogFile,JSON.stringify(advertised))
     await ownerRun(agents[0].controlDir,'tg_6293307')
     const bound=spawn(process.execPath,['--import',fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs',import.meta.url)),fileURLToPath(new URL('../src/host-executor-client.ts',import.meta.url)),agents[0].controlDir,'tg_6293307'],{stdio:['pipe','pipe','pipe']})
     let boundOutput='',boundError=''
@@ -363,28 +370,6 @@ test('host rejects a plugin registry bound to another workspace',async()=>{
   } finally {await rm(root,{recursive:true,force:true})}
 })
 
-test('validation prefers fresh catalog but falls back to last-good disk on a blip',()=>{
-  const fresh=[{cli:'opencode',model:'opencode-go/muse-spark-1.3-contributor',name:'Muse Spark',efforts:['xhigh']}]
-  const cached=[{cli:'opencode',model:'opencode-go/muse-spark-1.3-contributor',name:'Muse Spark',efforts:['xhigh']}]
-  assert.deepEqual(selectValidationCatalog(fresh,cached),fresh)
-  assert.deepEqual(selectValidationCatalog([],cached),cached)
-  assert.deepEqual(selectValidationCatalog([],[]),[])
-  assert.deepEqual(selectValidationCatalog([],undefined),[])
-})
-
-test('readCachedModels round-trips disk and returns undefined when missing',async()=>{
-  const root=await mkdtemp(path.join(tmpdir(),'ez-host-cached-'))
-  const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),directory=path.join(controlDir,'host-executor')
-  try {
-    await mkdir(workspace,{recursive:true});await mkdir(directory,{recursive:true})
-    const agent={name:'test',workspace,controlDir,binDir:root}
-    assert.equal(await readCachedModels(agent),undefined)
-    const models=[{cli:'codex',model:'cached-model',name:'Cached',efforts:[]}]
-    await writeFile(path.join(directory,'models.json'),JSON.stringify(models))
-    assert.deepEqual(await readCachedModels(agent),models)
-  } finally {await rm(root,{recursive:true,force:true})}
-})
-
 test('refresh blip throws so the caller keeps last-good models instead of crashing',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'ez-host-refresh-blip-'))
   const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),directory=path.join(controlDir,'host-executor')
@@ -411,10 +396,10 @@ test('empty refresh preserves the last-good catalog and a later nonempty refresh
     await writeFile(path.join(directory,'models.json'),JSON.stringify(lastGood))
     const seen=new Map([[agent,JSON.stringify(lastGood)]])
     await refreshAgentCatalog(agent,async()=>[],seen)
-    assert.deepEqual(await readCachedModels(agent),lastGood)
+    assert.deepEqual(JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')),lastGood)
     assert.equal(seen.get(agent),JSON.stringify(lastGood))
     await refreshAgentCatalog(agent,async()=>fresh,seen)
-    assert.deepEqual(await readCachedModels(agent),fresh)
+    assert.deepEqual(JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')),fresh)
     assert.equal(seen.get(agent),JSON.stringify(fresh))
   } finally {await rm(root,{recursive:true,force:true})}
 })
@@ -467,8 +452,8 @@ test('slow catalog refresh keeps heartbeats live and active client completes wit
   }
 })
 
-test('cross-CLI run falls back to cached catalog instead of failing on an empty fresh read',async()=>{
-  const root=await mkdtemp(path.join(tmpdir(),'ez-host-validation-fallback-'))
+test('cross-CLI admission uses the advertised catalog without another discovery probe',async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'ez-host-advertised-'))
   const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),directory=path.join(controlDir,'host-executor')
   const abort=new AbortController();let server:Promise<void>|undefined
   const previousPath=process.env.PATH
@@ -478,27 +463,46 @@ test('cross-CLI run falls back to cached catalog instead of failing on an empty 
     await writeFile(path.join(fakeBin,'codex'),'#!/bin/sh\nexit 0\n',{mode:0o700})
     process.env.PATH=`${fakeBin}${path.delimiter}${previousPath ?? ''}`
     const installation={cli:'grok' as const,agents:[{name:'test',workspace,controlDir,binDir:fakeBin}]}
+    const advertised=[{cli:'codex',model:'cached-model',name:'Cached',efforts:[]}]
+    let reads=0
     server=serveHostExecutor(installation,abort.signal,async()=>{
       const child=spawn(process.execPath,['-e','process.exit(0)'])
       return {child,cleanup:async()=>{},stdout:''}
-    },async()=>[])
+    },async()=>{if(++reads>1)throw new Error('unexpected discovery during admission');return advertised})
     for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
     await readFile(path.join(directory,'heartbeat.json'))
-    const cached=[{cli:'codex',model:'cached-model',name:'Cached',efforts:[]}]
-    await writeFile(path.join(directory,'models.json'),JSON.stringify(cached))
-    await ownerRun(controlDir,'r_cached_fallback')
-    await writeFile(path.join(directory,'r_cached_fallback.request.json'),JSON.stringify({
+    await ownerRun(controlDir,'r_advertised')
+    await writeFile(path.join(directory,'r_advertised.request.json'),JSON.stringify({
       texts:['hello'],options:{cli:'codex',model:'cached-model'},
     }))
     let events=''
     for(let n=0;n<200;n++){
-      try{events=await readFile(path.join(directory,'r_cached_fallback.events'),'utf8');if(events.includes('"stream":"exit"'))break}catch{}
+      try{events=await readFile(path.join(directory,'r_advertised.events'),'utf8');if(events.includes('"stream":"exit"'))break}catch{}
       await new Promise(r=>setTimeout(r,20))
     }
     assert.match(events,/"stream":"exit","code":0/)
+    assert.equal(reads,1)
   } finally {
     abort.abort();await server
     if(previousPath===undefined)delete process.env.PATH;else process.env.PATH=previousPath
     await rm(root,{recursive:true,force:true})
   }
+})
+
+test('startup replaces prior catalog after provider policy changes even when discovery is empty',async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),'ez-host-policy-reset-'))
+  const directory=path.join(root,'host-executor')
+  const abort=new AbortController();let server:Promise<void>|undefined
+  try {
+    await mkdir(directory)
+    await writeFile(path.join(directory,'models.json'),JSON.stringify([
+      {cli:'opencode',model:'old-provider/model',name:'Old provider',efforts:[]},
+    ]))
+    server=serveHostExecutor({cli:'grok',agents:[{
+      name:'test',workspace:root,controlDir:root,binDir:root,opencodeProviders:['allowed-provider'],
+    }]},abort.signal,undefined,async()=>[])
+    for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+    await readFile(path.join(directory,'heartbeat.json'))
+    assert.deepEqual(JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')),[])
+  } finally {abort.abort();await server;await rm(root,{recursive:true,force:true})}
 })
