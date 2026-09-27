@@ -1,13 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile, readFile, stat, symlink, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { Scheduler, scheduledRunId } from '../src/scheduler.js'
 import { RunStore } from '../src/runs.js'
 import { nextOccurrence, validateTrigger, type Trigger } from '../src/schedule-time.js'
-import { taskWorkspace } from '../src/task-workspace.js'
 
 const next=(t:Trigger,after:string)=>{
  const at=nextOccurrence(validateTrigger(t),Date.parse(after));return at===null ? null : new Date(at).toISOString()
@@ -76,19 +75,6 @@ test('pause, edit, removal, owner revocation, corrupt records and traversal fail
  await assert.rejects(f.scheduler.cancel('../bad'))
  await f.scheduler.cancel(run.id);assert.equal(await f.scheduler.cancelled(run.id),true)
 })
-test('task workspaces are distinct and cannot escape through symlinks',async t=>{
- const f=await fixture(t)
- await writeFile(join(f.dir,'private.md'),'Owner context')
- const first=await taskWorkspace(f.dir,'r_one'),second=await taskWorkspace(f.dir,'r_two')
- assert.notEqual(first,second)
- await assert.rejects(readFile(join(first,'private.md'),'utf8'),{code:'ENOENT'})
- await assert.rejects(readFile(join(first,'AGENTS.md'),'utf8'),{code:'ENOENT'})
- await assert.rejects(taskWorkspace(f.dir,'../escape'))
- const other=join(f.dir,'other');await mkdir(other)
- await symlink(other,join(f.dir,'work/tasks/r_link'))
- await assert.rejects(taskWorkspace(f.dir,'r_link'))
-})
-
 test('startup quarantines an interrupted spawn before PID persistence; explicit edit releases its schedule',async t=>{
  const f=await fixture(t),s=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start:new Date(f.now).toISOString()}})
  await f.scheduler.tick(f.owner,f.runs,f.now)

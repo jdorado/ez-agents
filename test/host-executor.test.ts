@@ -284,18 +284,23 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       assert.match(output, /"stream":"exit","code":0/)
       return output.trim().split('\n').map(line=>JSON.parse(line))
     }
-    // A running scheduled engine does not reserve either its agent or its
-    // shared workspace, including another binding through a filesystem alias.
-    const [,,chatEvents]=await Promise.all([completed(directory,'r_schedule_queued'),completed(otherDirectory,'r_other_shared'),completed(directory,'tg_42')])
-    const chat=JSON.parse(chatEvents.filter(e=>e.stream==='stdout').map(e=>e.text).join(''))
-    assert.match(chat.args.at(-1),/^Chat while scheduled work runs/)
-    assert.match(chat.args.at(-1),/ezenciel-agents-message/)
+    // Another agent remains independent; this agent's queued schedule and chat
+    // wait behind its active owner schedule in the same mind.
+    await completed(otherDirectory,'r_other_shared')
+    assert.ok(await readFile(path.join(directory,'r_schedule_queued.request.json')))
+    assert.ok(await readFile(path.join(directory,'tg_42.request.json')))
     assert.doesNotMatch(await readFile(path.join(directory,'r_hold.events'),'utf8'),/"stream":"exit"/)
     await readFile(path.join(directory,'r_hold.running.json'))
     await writeFile(path.join(directory,'r_hold.cancel'),'')
     let heldOutput=''
     for(let n=0;n<200;n++){heldOutput=await readFile(path.join(directory,'r_hold.events'),'utf8');if(heldOutput.includes('"stream":"exit"'))break;await new Promise(r=>setTimeout(r,20))}
     assert.match(heldOutput, /"stream":"exit","code":1/)
+    const [scheduleEvents,chatEvents]=await Promise.all([completed(directory,'r_schedule_queued'),completed(directory,'tg_42')])
+    const scheduled=JSON.parse(scheduleEvents.filter(e=>e.stream==='stdout').map(e=>e.text).join(''))
+    const chat=JSON.parse(chatEvents.filter(e=>e.stream==='stdout').map(e=>e.text).join(''))
+    assert.equal(scheduled.cwd,await realpath(agents[0].workspace))
+    assert.match(chat.args.at(-1),/^Chat while scheduled work runs/)
+    assert.match(chat.args.at(-1),/ezenciel-agents-message/)
   } finally {
     abort.abort();await server
     EXECUTOR_REGISTRY.grok.command=old

@@ -11,11 +11,12 @@ import { RunStore } from '../src/runs.js'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let n=0;n<250;n++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Host probe timed out')}
 const stdout=(events:string) => events.trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)).filter(event=>event.stream==='stdout').map(event=>event.text).join('')
-test('host transport reserves separate task and main lanes, pins directories, and cancels only its target',async()=>{
+test('host transport serializes owner schedules and chat in the bound mind',async()=>{
  const root=await mkdtemp(join(tmpdir(),'ez-scheduler-host-')),workspace=join(root,'agent'),controlDir=join(root,'control')
  await mkdir(workspace);await mkdir(controlDir)
+ await writeFile(join(workspace,'AGENTS.md'),'bound-owner-instructions')
  const script=join(root,'fixture.mjs')
- await writeFile(script,`console.log(JSON.stringify({cwd:process.cwd(),token:process.env.TELEGRAM_BOT_TOKEN,run:process.env.EZ_RUN_ID}));if(process.env.EZ_RUN_ID.startsWith('r_schedule_'))setInterval(()=>{},1000);`)
+ await writeFile(script,`import {readFileSync} from 'node:fs';console.log(JSON.stringify({cwd:process.cwd(),agents:readFileSync('AGENTS.md','utf8'),token:process.env.TELEGRAM_BOT_TOKEN,run:process.env.EZ_RUN_ID}));if(process.env.EZ_RUN_ID.startsWith('r_schedule_'))setInterval(()=>{},1000);`)
  const old={...EXECUTOR_REGISTRY.grok},token=process.env.TELEGRAM_BOT_TOKEN
  EXECUTOR_REGISTRY.grok.command=process.execPath;EXECUTOR_REGISTRY.grok.buildArgs=()=>[script]
  process.env.TELEGRAM_BOT_TOKEN='never-in-child'
@@ -31,21 +32,29 @@ test('host transport reserves separate task and main lanes, pins directories, an
   await submit(id)
   await until(async()=>Boolean(await exists(id+'.process.json')))
   await submit('tg_1')
-  await until(async()=>(await exists('tg_1.events')).includes('"stream":"exit","code":0'))
+  await new Promise(resolve=>setTimeout(resolve,300))
+  assert.ok(await exists('tg_1.request.json'))
+  assert.equal(await exists('tg_1.events'),'')
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
   const scheduled=JSON.parse(stdout(await exists(id+'.events')))
-  const main=JSON.parse(stdout(await exists('tg_1.events')))
-  assert.equal(scheduled.cwd,await realpath(join(controlDir,'work/tasks',id)));assert.equal(main.cwd,await realpath(workspace))
-  assert.equal(scheduled.token,undefined);assert.equal(main.token,undefined)
+  assert.equal(scheduled.cwd,await realpath(workspace))
+  assert.equal(scheduled.agents,'bound-owner-instructions')
+  assert.equal(scheduled.token,undefined)
   // An unknown scheduled run must not unwind the shared host service.
   await submit('r_schedule_corrupt')
   await until(async()=>(await exists('r_schedule_corrupt.events')).includes('"stream":"exit","code":1'))
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
   await ownerRun(controlDir,'tg_2')
   await submit('tg_2')
-  await until(async()=>(await exists('tg_2.events')).includes('"stream":"exit","code":0'))
+  assert.ok(await exists('tg_2.request.json'))
   await writeFile(join(dir,id+'.cancel'),'')
   await until(async()=>(await exists(id+'.events')).includes('"stream":"exit"'))
+  await until(async()=>(await exists('tg_1.events')).includes('"stream":"exit","code":0'))
+  await until(async()=>(await exists('tg_2.events')).includes('"stream":"exit","code":0'))
+  const main=JSON.parse(stdout(await exists('tg_1.events')))
+  assert.equal(main.cwd,await realpath(workspace))
+  assert.equal(main.agents,'bound-owner-instructions')
+  assert.equal(main.token,undefined)
  }finally{
   abort.abort();await server
   Object.assign(EXECUTOR_REGISTRY.grok,old)

@@ -327,6 +327,6 @@ main/plugin replacement. See [upgrade setup, tools and recovery](docs/upgrades.m
 
 The core `ezenciel-agents-schedule` CLI accepts instruction text for one-off dates,
 intervals and timezone-aware cron schedules. `create --now` delegates a task to a
-separate CLI session so the owner conversation remains available. Long work has
+separate CLI session queued with owner turns in the bound workspace. Long work has
 no production wall-clock timeout; goals and subagents remain native executor
 features. See [scheduling, recovery and QA](docs/scheduling.md).
