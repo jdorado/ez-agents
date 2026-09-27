@@ -11,7 +11,7 @@ import { initialPreset, isPreset } from './ai.js'
 import { executionOverrides } from './model-policy.js'
 import { holdsSchedule, Scheduler } from './scheduler.js'
 import { ownsRun } from './identity.js'
-import { nextOccurrence, type Trigger } from './schedule-time.js'
+import { type Trigger } from './schedule-time.js'
 
 async function main() {
   const { values:v, positionals:[action='list',id] } = parseArgs({allowPositionals:true,options:{
@@ -69,7 +69,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const held=(await runs.listBestEffort()).filter(r=>holdsSchedule(s,r))
     const interruptedRunIds=held.filter(r=>r.interrupted).map(r=>r.id)
     const failedReviewRunIds=held.filter(r=>!r.interrupted).map(r=>r.id)
-    const next=s.enabled && !held.length ? nextOccurrence(s.trigger,Date.now()) : null
+    const next=s.enabled && !held.length ? await scheduler.pendingOccurrence(s) : null
     return {...s,interruptedRunIds,failedReviewRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString(),
       ...(held.length ? {recovery:'Inspect the failed run and explicitly edit this schedule to resume; pause/resume does not clear the stop.'} : {})}
   }

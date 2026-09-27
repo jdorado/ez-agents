@@ -21,6 +21,10 @@ ezenciel-agents-schedule cancel RUN_ID
 
 Use `--text-file` for longer instructions. `edit ID` replaces the complete schedule
 with a new revision; use the same trigger/name/text flags as `create`.
+An edit keeps a future pending occurrence when its trigger is unchanged;
+otherwise the edited rule begins at its next future occurrence. Editing does
+not replay missed work from an old start date. Use `--now` to request a new
+one-time run explicitly. `show` reports the pending occurrence used by dispatch.
 Intervals use `--every-seconds` (minimum 60), optional `--start`, and optional
 `--until`. Cron also supports start/end bounds. All absolute timestamps require
 an explicit offset. `--now` starts on the next relay tick, not synchronously.
