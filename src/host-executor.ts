@@ -11,7 +11,6 @@ import { startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider,
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
 import { readModels, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
-import { taskWorkspace } from './task-workspace.js'
 import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
 import { processSnapshot } from './process-tree.js'
@@ -52,6 +51,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   let catalogRefresh: Promise<void> | undefined
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
+  const activeWorkspaces = new Set<HostBinding>()
   const additionalWorkspaces = new Map<HostBinding, string[]>()
   const catalog = async (agent: HostBinding) => {
     const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'),
@@ -158,11 +158,13 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           }
           const sharedWorkspace=sharedWorkspaces.get(agent)
           const base=path.join(directory,id)
-          const releaseWorkspace = !run?.scheduled && agent.toolsHome
+          if (activeWorkspaces.has(agent)) continue
+          const releaseWorkspace = agent.toolsHome
             ? await (await import('./plugins/workspace-lease.mjs')).workspaceLease(agent.toolsHome,{kind:'native',runId:id}) : undefined
-          if (!run?.scheduled && agent.toolsHome && !releaseWorkspace) continue
+          if (agent.toolsHome && !releaseWorkspace) continue
+          activeWorkspaces.add(agent)
           try { await rename(base+'.request.json',base+'.running.json') }
-          catch (error) { await releaseWorkspace?.(); throw error }
+          catch (error) { activeWorkspaces.delete(agent); await releaseWorkspace?.(); throw error }
           const task=(async()=>{
             let job: Awaited<ReturnType<typeof startExecutorJob>> | undefined
             let cancellation: ReturnType<typeof setInterval> | undefined
@@ -193,7 +195,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               // transient native-client probe failure must not reject a model
               // that the host just advertised to the relay and application.
               if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
-              const options:ExecutorOptions={workspace:run?.scheduled ? await taskWorkspace(agent.controlDir,id) : agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
+              const options:ExecutorOptions={workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                 runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                 sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
                 promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled)}
@@ -218,7 +220,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await rm(base+'.process.json',{force:true})
               await rm(base+'.cancel',{force:true})
               active.delete(base)
-              await releaseWorkspace?.()
+              try { await releaseWorkspace?.() } finally { activeWorkspaces.delete(agent) }
             }
           })()
           tasks.add(task); void task.finally(()=>tasks.delete(task))

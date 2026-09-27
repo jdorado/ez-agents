@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.41
+
+- Run owner-scheduled tasks from the bound agent workspace so native instructions
+  and relative context are available, while serializing writes with owner turns.
+
 ## 0.1.0-beta.40
 
 - Apply eligible npm releases under each agent's saved automatic update policy

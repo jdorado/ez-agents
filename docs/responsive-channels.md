@@ -3,11 +3,12 @@
 Owner input passes unchanged to the selected engine. The agent decides when to
 delegate or schedule long work to remain available. ez queues foreground input
 while a foreground run is active; it does not create a separate busy-reply agent.
-Independent scheduled task directories retain deterministic writer isolation.
+Owner-scheduled turns use the bound mind workspace under the same single-writer
+limit as foreground turns.
 
-Background tasks receive literal task text. Their directories contain no generated
-role instructions or copied identity files; native workspace instructions and
-existing Markdown provide context. The agent chooses what to read and when to use
+Background tasks receive literal task text. Their native sessions contain no
+generated role instructions or copied identity files; native workspace instructions
+and existing Markdown provide context. The agent chooses what to read and when to use
 the message CLI. Native final text is not automatically delivered to Telegram.
 
 Restricted correspondence receives a typed activation event and scoped tools.

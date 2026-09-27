@@ -12,7 +12,6 @@ import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
 import { ownedScheduledTasks, scheduledTaskDetailText, scheduledTasksText } from './scheduled-tasks.js'
-import { taskWorkspace } from './task-workspace.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
 import {removeTaskAttachments} from './task-attachments.js'
 import { dirname, join, basename } from 'node:path'
@@ -206,7 +205,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         return
       }
       if (run.scheduled && !(await scheduler.get(run.scheduled.id)).enabled) return
-      if (run.scheduled ? background.size >= 4 : activeChild) return
+      // Owner turns and schedules write the same mind. Keep one native writer.
+      if (activeChild || background.size) return
       let texts = run.texts
       if (run.external) {
         // Availability failures leave durable queued work for a later check.
@@ -240,7 +240,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           : await control.executionSession(started.execution!)
         const selected = run.taskId ? (started.execution?.preset.cli === 'codex' ? started.execution.preset : initialPreset('codex')) : started.execution!.preset
         const { child, cleanup } = await launch(texts, {
-          workspace: run.scheduled ? await taskWorkspace(config.controlDir,run.id) : config.workspace,
+          workspace: config.workspace,
           timeoutMs: config.executorTimeoutMs,
           repairEnabled: config.repairEnabled,
           runId: started.id,
@@ -319,7 +319,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               }
             })
             console.info('run ended', { run_id: started.id, code })
-            const next = await runs.nextQueued(false)
+            const next = await runs.nextQueued()
             if (next && !shuttingDown) await startJob(next)
           })().catch((error) => console.error('Run completion failed', error.message))
         })
@@ -336,7 +336,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         if (bot && !run.application && !run.delivery && run.chatId !== undefined) await sendChat(run.chatId, `Run ${run.id} failed to start. Check the local relay log.`)
         setImmediate(() => {
           void runs
-            .nextQueued(false)
+            .nextQueued()
             .then((next) => next && startJob(next))
             .catch(console.error)
         })
@@ -571,7 +571,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             ])
             console.info('run reaction sent', { run_id: item.runId, emoji })
           } else if (item.type === 'document' && item.documentPath) {
-            const docPath = await workspaceFile(origin?.scheduled ? await taskWorkspace(config.controlDir,origin.id) : config.workspace, item.documentPath)
+            const docPath = await workspaceFile(config.workspace, item.documentPath)
             await paceSend()
             await authorizeChannelDelivery()
             attemptedDelivery = true
@@ -1206,7 +1206,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       const currentRunning = await runs.running(false)
       if (!currentRunning) {
-        const pendingRun = await runs.nextQueued(false)
+        const pendingRun = await runs.nextQueued()
         if (pendingRun) {
           console.info('Processing queued run on startup:', pendingRun.id)
           void startJob(pendingRun)
