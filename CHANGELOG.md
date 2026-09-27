@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.42
+
+- Keep recurring schedule edits at their next pending or future occurrence, so
+  an old start date cannot replay historical work. Schedule readback now shows
+  the same pending cursor used by dispatch.
+
 ## 0.1.0-beta.41
 
 - Run owner-scheduled tasks from the bound agent workspace so native instructions

@@ -75,7 +75,7 @@ export class Scheduler {
     }
     return result
   }
-  private async pendingOccurrence(s: Schedule): Promise<number | null> {
+  async pendingOccurrence(s: Schedule): Promise<number | null> {
     try {
       const saved = JSON.parse(await readFile(join(this.dir,`${s.id}.${s.revision}.cursor`),'utf8'))
       if (saved.next !== null && !Number.isFinite(saved.next)) throw new Error('Invalid schedule cursor')
@@ -114,7 +114,23 @@ export class Scheduler {
     if (!input.name || !input.text?.trim() || !isExecutionChoice(execution)) throw new Error('Schedule needs name, text and an AI selection')
     assertEffort(execution.preset.effort, execution.preset.model, execution.preset.cli)
     const s: Schedule = {...input, execution, trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
-    if (nextOccurrence(s.trigger,Date.now()-1) === null) throw new Error('Schedule has no future occurrence within eight years')
+    const now = Date.now()
+    let next = nextOccurrence(s.trigger,now-1)
+    if (next === null) throw new Error('Schedule has no future occurrence within eight years')
+    if (!exclusive) {
+      let previous: Schedule | null = null
+      try { previous = await this.get(s.id) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      if (previous) {
+        if (sameOwner(previous.owner,s.owner) && JSON.stringify(previous.trigger) === JSON.stringify(s.trigger)) {
+          const pending = await this.pendingOccurrence(previous)
+          if (pending !== null && pending >= now) next = pending
+        }
+        // Publish the cursor first so a crash cannot expose a new revision with
+        // a missing cursor that falls back to the trigger's historical start.
+        await atomic(join(this.dir,`${s.id}.${s.revision}.cursor`),{next})
+      }
+    }
     await atomic(join(this.dir,s.id+'.json'),s,exclusive)
     return s
   }
