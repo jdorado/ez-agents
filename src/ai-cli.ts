@@ -7,13 +7,22 @@ import { ControlStore } from './control-state.js'
 
 const {values,positionals}=parseArgs({allowPositionals:true,options:{help:{type:'boolean'},cli:{type:'string'},provider:{type:'string'},model:{type:'string'},effort:{type:'string'}}})
 if(values.help){
-  console.log('Usage: ezenciel-agents-ai list | select --cli <installed-cli> [--provider <provider>] [--model <model>] [--effort <effort>]\nChoose only values returned by list. Selection affects subsequent messages; queued work and the installation default are unchanged.')
+  console.log('Usage: ezenciel-agents-ai list | select --cli <installed-cli> [--provider <provider>] [--model <model>] [--effort <effort>] | default\nChoose only values returned by list. Selection affects subsequent messages; default makes the selected AI the choice for new conversations. Queued work is unchanged.')
   process.exit(0)
 }
 if (!process.env.EZ_CONTROL_DIR) throw new Error('Use this agent’s bound control directory')
 const catalog=await readFile(join(process.env.EZ_CONTROL_DIR,'host-executor','models.json'),'utf8')
   .then(text=>JSON.parse(text)).catch(()=>readModels(undefined,undefined,join(process.env.EZ_CONTROL_DIR!,'cli','codex'),undefined,undefined,undefined,process.env.EZ_CONTROL_DIR))
 if(positionals[0]==='list')console.log(JSON.stringify(catalog))
+else if(positionals[0]==='default'){
+  const control=new ControlStore(process.env.EZ_CONTROL_DIR,900000)
+  const state=await control.status()
+  const selected=state.ai?.presets.find(p=>p.id===state.ai?.selectedId)
+  if(!selected)throw new Error('No selected AI')
+  await validateSelection(selected,catalog)
+  await control.defaultPreset(selected.id)
+  console.log(JSON.stringify({default:selected,applies:'new conversations; current and queued work unchanged'}))
+}
 else if(positionals[0]==='select'){
   const preset:AiPreset={id:randomBytes(8).toString('hex'),name:[values.provider,values.model||values.cli,values.effort].filter(Boolean).join(' · '),cli:values.cli||'',provider:values.provider,model:values.model,effort:values.effort}
   await validateSelection(preset,catalog)
@@ -26,4 +35,4 @@ else if(positionals[0]==='select'){
   const current=state.ai.presets.find(p=>p.id===state.ai!.selectedId)!
   await control.selectPreset(selected.id,state.activeSession?.sessionId??null,current.cli!==selected.cli||presetProvider(current)!==presetProvider(selected)||Boolean(state.activeSession&&!state.activeSession.cli))
   console.log(JSON.stringify({selected,defaultUnchanged:true,applies:'subsequent messages; queued work keeps its captured choice'}))
-}else throw new Error('Use list or select --cli <installed-cli> [--provider <provider>] [--model <model>] [--effort <effort>]')
+}else throw new Error('Use list, select --cli <installed-cli> [--provider <provider>] [--model <model>] [--effort <effort>], or default')

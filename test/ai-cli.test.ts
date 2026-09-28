@@ -23,8 +23,13 @@ test('explicit CLI/model selection preserves installation default and rejects un
   const state=await store.status();assert.equal(state.ai?.defaultId,'initial')
   assert.equal(state.ai?.presets.find(p=>p.id===state.ai?.selectedId)?.cli,'codex')
   assert.equal(state.activeSession?.cli,'codex')
+  const setDefault=spawnSync(process.execPath,[bin,'default'],{env,encoding:'utf8'})
+  assert.equal(setDefault.status,0,setDefault.stderr)
+  const updated=await store.status()
+  assert.equal(updated.ai?.defaultId,updated.ai?.selectedId)
+  assert.equal(updated.activeSession?.sessionId,state.activeSession?.sessionId)
   assert.notEqual(call('unavailable').status,0)
-  assert.deepEqual(await store.status(),state)
+  assert.deepEqual(await store.status(),updated)
  }finally{await rm(root,{recursive:true,force:true})}
 })
 
