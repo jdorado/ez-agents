@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { InlineKeyboard, type Context } from 'grammy'
 import { ControlStore, type ControlGuard } from './control-state.js'
-import { chatPreset, installed, persistedPreset, presetLabel, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
+import { chatPreset, installed, persistedPreset, presetLabel, presetProvider, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 
 export const mainCommands = [
@@ -64,7 +64,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const state = (await control.status()).ai
     if (!state) throw new Error('AI settings not initialized')
     const current = state.presets.find((p) => p.id === state.selectedId)!
-    const fresh = current.cli !== preset.cli || current.provider !== preset.provider || Boolean(session && !session.cli)
+    const fresh = current.cli !== preset.cli || presetProvider(current) !== presetProvider(preset) || Boolean(session && !session.cli)
     if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Refresh available AIs before trying again.')
     return { preset, fresh }
   }
@@ -72,12 +72,13 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const session = await control.getActiveSession()
     const { fresh } = await select(preset, session?.sessionId ?? null)
     await ctx.reply(`${preset.name}\n${presetLabel(preset)}\n${fresh
-      ? 'CLI changed: fresh conversation. Files kept; queued work unchanged.'
-      : 'Selected for this conversation. Queued work unchanged.'}`)
+      ? 'Client or provider changed: fresh conversation. Files kept; queued work unchanged.'
+      : 'Saved for this conversation. History kept; queued work unchanged.'}`)
   }
   const list = async (ctx: Context) => {
     const models = await catalog()
     const state = await control.aiState(initial)
+    const selected = state.presets.find((preset) => preset.id === state.selectedId)!
     const keyboard = new InlineKeyboard()
     if (models.length) {
       const recent = (state.recentIds ?? [])
@@ -99,8 +100,8 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       await list(next)
     })
     await ctx.reply(models.length
-      ? 'Choose AI\nUse a recent choice or select an installed client, then choose its model and reasoning level.'
-      : 'Choose AI\nNo client catalog available. Showing the current client setup only.', { reply_markup: keyboard })
+      ? `Choose AI\nCurrent: ${presetLabel(selected)}\nSaved per conversation. Select a client, model and reasoning level; changing client or provider starts a new conversation.`
+      : `Choose AI\nCurrent: ${presetLabel(selected)}\nNo client catalog available. Showing the current client setup only.`, { reply_markup: keyboard })
   }
   const available = async (ctx: Context, cli: string, page = 0, listed?: ModelChoice[]) => {
     const models = (listed ?? await catalog()).filter((model) => model.cli === cli)

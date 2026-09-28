@@ -11,7 +11,7 @@ import { InboxStore } from '../src/inbox.js'
 import { executionDefaults } from '../src/model-policy.js'
 import type { Update } from 'grammy/types'
 
-test('same-client model switch does not resume the previous native thread', async () => {
+test('same-client model and default changes preserve history; provider changes require a fresh conversation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-model-switch-'))
   try {
     const store = new ControlStore(dir, 1000)
@@ -28,34 +28,59 @@ test('same-client model switch does not resume the previous native thread', asyn
     await store.savePreset(luna)
     await store.selectPreset(luna.id, started.sessionId, false)
     const next = await store.captureChoice(initialPreset('codex'))
-    assert.notEqual(next.sessionId, started.sessionId)
+    assert.equal(next.sessionId, started.sessionId)
     assert.equal(next.preset.model, luna.model)
-    assert.equal((await store.executionSession(next)).hasStarted, false)
-    assert.equal((await store.executionSession(next)).nativeSessionId, undefined)
+    assert.equal((await store.executionSession(next)).hasStarted, true)
+    assert.equal((await store.executionSession(next)).nativeSessionId, 'native-deepseek')
     assert.equal((await store.executionSession(started)).nativeSessionId, 'native-deepseek')
-    await store.saveNativeSession(next.sessionId, 'native-luna')
+    assert.equal(started.preset.model, deepseek.model)
     const clientDefault = initialPreset('codex')
     await store.savePreset(clientDefault)
     await store.selectPreset(clientDefault.id, next.sessionId, false)
     const defaultChoice = await store.captureChoice(clientDefault)
-    assert.notEqual(defaultChoice.sessionId, next.sessionId)
+    assert.equal(defaultChoice.sessionId, next.sessionId)
     assert.equal(defaultChoice.preset.model, undefined)
-    await store.saveNativeSession(defaultChoice.sessionId, 'native-default')
+    assert.equal((await store.executionSession(defaultChoice)).nativeSessionId, 'native-deepseek')
     await store.selectPreset(deepseek.id, defaultChoice.sessionId, false)
     const explicitAgain = await store.captureChoice(clientDefault)
-    assert.notEqual(explicitAgain.sessionId, defaultChoice.sessionId)
+    assert.equal(explicitAgain.sessionId, defaultChoice.sessionId)
     assert.equal(explicitAgain.preset.model, deepseek.model)
-    await store.saveNativeSession(explicitAgain.sessionId, 'native-explicit')
     const openrouter = { ...deepseek, id: 'openrouter-deepseek', name: 'OpenRouter DeepSeek', provider: 'openrouter' }
     await store.savePreset(openrouter)
-    await store.selectPreset(openrouter.id, explicitAgain.sessionId, false)
+    assert.equal(await store.selectPreset(openrouter.id, explicitAgain.sessionId, false), false)
+    await store.selectPreset(openrouter.id, explicitAgain.sessionId, true)
     const providerChoice = await store.captureChoice(clientDefault)
     assert.notEqual(providerChoice.sessionId, explicitAgain.sessionId)
     assert.equal(providerChoice.preset.provider, 'openrouter')
     const args = EXECUTOR_REGISTRY.codex.buildArgs({
-      workspace: dir, isResume: false, sessionId: next.sessionId,
+      workspace: dir, isResume: true, sessionId: (await store.executionSession(next)).nativeSessionId,
+      model: next.preset.model, effort: next.preset.effort,
     }, '', '')
-    assert.equal(args.includes('resume'), false)
+    assert.equal(args[args.indexOf('resume') + 1], 'native-deepseek')
+    assert.equal(args[args.indexOf('--model') + 1], luna.model)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('OpenCode keeps same-provider models together and separates providers encoded in model IDs', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-provider-switch-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    const first = { id: 'first', name: 'First', cli: 'opencode', model: 'opencode-go/first' }
+    const second = { ...first, id: 'second', name: 'Second', model: 'opencode-go/second' }
+    const other = { ...first, id: 'other', name: 'Other', model: 'openrouter/other' }
+    const choice = await store.captureChoice(first)
+    await store.saveNativeSession(choice.sessionId, 'ses_original')
+    const menu = createAiMenu(store, 'opencode', async () => [first, second, other].map(p => ({ ...p, efforts: [] })), dir, undefined, async () => true)
+    await store.savePreset(second)
+    assert.equal((await menu.select(second, choice.sessionId)).fresh, false)
+    assert.equal((await store.captureChoice(first)).sessionId, choice.sessionId)
+    await store.savePreset(other)
+    assert.equal(await store.selectPreset(other.id, choice.sessionId), false)
+    assert.equal((await menu.select(other, choice.sessionId)).fresh, true)
+    const next = await store.captureChoice(first)
+    assert.notEqual(next.sessionId, choice.sessionId)
+    assert.equal((await store.executionSession(next)).nativeSessionId, undefined)
+    assert.equal((await store.executionSession(choice)).nativeSessionId, 'ses_original')
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
@@ -181,7 +206,7 @@ test('Choose AI lists recent choices and installed clients before model and effo
       },
     })
     await menu.list(context() as never)
-    assert.match(replies.at(-1)!.text, /recent choice|installed client/i)
+    assert.match(replies.at(-1)!.text, /Current: codex · fixture-model · medium/)
     assert.deepEqual(replies.at(-1)!.buttons.map((button) => button.text), [
       '✓ Recent · codex · Recent', 'claude', 'codex', 'codex-gui (desktop)', 'Refresh available AIs',
     ])
@@ -200,7 +225,7 @@ test('Choose AI lists recent choices and installed clients before model and effo
     assert.deepEqual({ cli: selected.cli, model: selected.model, effort: selected.effort }, {
       cli: 'codex', model: 'fixture-model', effort: 'high',
     })
-    assert.match(replies.at(-1)!.text, /Selected for this conversation/)
+    assert.match(replies.at(-1)!.text, /Saved for this conversation. History kept/)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 

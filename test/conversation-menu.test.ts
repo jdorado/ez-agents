@@ -32,6 +32,8 @@ test('empty placeholders stay out of history and Back edits one panel without cr
       await menu.handle({...ctx, callbackQuery:{data, message:{message_id:1}}} as unknown as Context)
     }
     await click(`chat:open:${choice.sessionId}`)
+    assert.match(text, /AI: grok · client default · default effort/)
+    assert.ok(keyboard!.inline_keyboard.flat().some(b => 'callback_data' in b && b.callback_data === 'menu:ai'))
     const before = await control.status()
     for (let n = 0; n < 5; n++) { await click('chat:list:0:0'); await click(`chat:open:${choice.sessionId}`) }
     assert.deepEqual(await control.status(), before)
