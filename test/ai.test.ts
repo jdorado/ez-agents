@@ -61,6 +61,29 @@ test('same-client model and default changes preserve history; provider changes r
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
+test('OpenCode keeps same-provider models together and separates providers encoded in model IDs', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-provider-switch-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    const first = { id: 'first', name: 'First', cli: 'opencode', model: 'opencode-go/first' }
+    const second = { ...first, id: 'second', name: 'Second', model: 'opencode-go/second' }
+    const other = { ...first, id: 'other', name: 'Other', model: 'openrouter/other' }
+    const choice = await store.captureChoice(first)
+    await store.saveNativeSession(choice.sessionId, 'ses_original')
+    const menu = createAiMenu(store, 'opencode', async () => [first, second, other].map(p => ({ ...p, efforts: [] })), dir, undefined, async () => true)
+    await store.savePreset(second)
+    assert.equal((await menu.select(second, choice.sessionId)).fresh, false)
+    assert.equal((await store.captureChoice(first)).sessionId, choice.sessionId)
+    await store.savePreset(other)
+    assert.equal(await store.selectPreset(other.id, choice.sessionId), false)
+    assert.equal((await menu.select(other, choice.sessionId)).fresh, true)
+    const next = await store.captureChoice(first)
+    assert.notEqual(next.sessionId, choice.sessionId)
+    assert.equal((await store.executionSession(next)).nativeSessionId, undefined)
+    assert.equal((await store.executionSession(choice)).nativeSessionId, 'ses_original')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
 test('AI choices pin model, effort and session; defaults and CLI switches do not reroute old work', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-'))
   try {

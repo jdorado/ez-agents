@@ -27,6 +27,8 @@ export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
   return Boolean(c && /^[0-9a-f-]{36}$/i.test(c.sessionId) && isPreset(c.preset))
 }
 export const presetLabel = (p: AiPreset) => `${p.cli}${p.provider ? ` (${p.provider})` : ''} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
+// OpenCode encodes its provider in the native provider/model identifier.
+export const presetProvider = (p: AiPreset) => p.cli === 'opencode' ? p.model?.split('/')[0] : p.provider
 // The seed delegates model selection to the native client. Project its resolved
 // settings for status without pinning future conversations to that snapshot.
 export const statusPreset = (preset: AiPreset, discovered: AiPreset[]): AiPreset =>

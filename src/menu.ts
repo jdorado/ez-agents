@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { InlineKeyboard, type Context } from 'grammy'
 import { ControlStore, type ControlGuard } from './control-state.js'
-import { chatPreset, installed, persistedPreset, presetLabel, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
+import { chatPreset, installed, persistedPreset, presetLabel, presetProvider, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 
 export const mainCommands = [
@@ -64,7 +64,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const state = (await control.status()).ai
     if (!state) throw new Error('AI settings not initialized')
     const current = state.presets.find((p) => p.id === state.selectedId)!
-    const fresh = current.cli !== preset.cli || current.provider !== preset.provider || Boolean(session && !session.cli)
+    const fresh = current.cli !== preset.cli || presetProvider(current) !== presetProvider(preset) || Boolean(session && !session.cli)
     if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Refresh available AIs before trying again.')
     return { preset, fresh }
   }

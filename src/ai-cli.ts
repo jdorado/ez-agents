@@ -2,7 +2,7 @@ import { parseArgs } from 'node:util'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { readModels, validateSelection, type AiPreset } from './ai.js'
+import { readModels, presetProvider, validateSelection, type AiPreset } from './ai.js'
 import { ControlStore } from './control-state.js'
 
 const {values,positionals}=parseArgs({allowPositionals:true,options:{help:{type:'boolean'},cli:{type:'string'},provider:{type:'string'},model:{type:'string'},effort:{type:'string'}}})
@@ -24,6 +24,6 @@ else if(positionals[0]==='select'){
   const selected=existing||preset
   if(!existing)await control.savePreset(selected)
   const current=state.ai.presets.find(p=>p.id===state.ai!.selectedId)!
-  await control.selectPreset(selected.id,state.activeSession?.sessionId??null,current.cli!==selected.cli||current.provider!==selected.provider||Boolean(state.activeSession&&!state.activeSession.cli))
+  await control.selectPreset(selected.id,state.activeSession?.sessionId??null,current.cli!==selected.cli||presetProvider(current)!==presetProvider(selected)||Boolean(state.activeSession&&!state.activeSession.cli))
   console.log(JSON.stringify({selected,defaultUnchanged:true,applies:'subsequent messages; queued work keeps its captured choice'}))
 }else throw new Error('Use list or select --cli <installed-cli> [--provider <provider>] [--model <model>] [--effort <effort>]')

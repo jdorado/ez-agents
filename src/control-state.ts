@@ -2,7 +2,7 @@ import { assertEffort } from './model-policy.js'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { isPreset, persistedPreset, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
+import { isPreset, persistedPreset, presetProvider, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
 
 export type Owner = {
   id?: string
@@ -625,7 +625,7 @@ export class ControlStore {
     const session = settled.activeSession
     if (settledPreset && session && (session.cli || session.hasStarted) &&
       !(session.cli === settledPreset.cli && session.hasStarted && session.preset &&
-        session.preset.provider !== settledPreset.provider) &&
+        presetProvider(session.preset) !== presetProvider(settledPreset)) &&
       (session.cli !== settledPreset.cli || JSON.stringify(session.preset) === JSON.stringify(settledPreset)) &&
       Boolean(session.title || session.hasStarted || !title?.trim()))
       return { sessionId: session.sessionId, preset: settledPreset }
@@ -640,7 +640,7 @@ export class ControlStore {
         // A provider change starts a separate native context. Model and effort
         // changes are native turn settings within the existing conversation.
         if (state.activeSession.hasStarted && previous &&
-            previous.provider !== preset.provider) {
+            presetProvider(previous) !== presetProvider(preset)) {
           ;(state.sessions ??= []).push(state.activeSession)
           state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset }
         } else {
@@ -772,7 +772,7 @@ export class ControlStore {
       assertEffort(preset.effort, preset.model, preset.cli)
       if ((state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Menu expired. Open Choose AI again.')
       const current = ai.presets.find((p) => p.id === ai.selectedId)!
-      if (state.activeSession && (current.cli !== preset.cli || current.provider !== preset.provider || !state.activeSession.cli) && !fresh) return false
+      if (state.activeSession && (current.cli !== preset.cli || presetProvider(current) !== presetProvider(preset) || !state.activeSession.cli) && !fresh) return false
       if (fresh || !state.activeSession) {
         rememberPreset(state)
         if (state.activeSession) (state.sessions ??= []).push(state.activeSession)
@@ -781,7 +781,7 @@ export class ControlStore {
       ai.selectedId = id
       // Persist the conversation's choice now, even if the owner switches chats
       // or restarts before sending another message. Queued choices are snapshots.
-      if (state.activeSession.cli === preset.cli && state.activeSession.preset?.provider === preset.provider)
+      if (state.activeSession.cli === preset.cli && (!state.activeSession.preset || presetProvider(state.activeSession.preset) === presetProvider(preset)))
         state.activeSession.preset = persistedPreset(preset)
       ai.recentIds = [id, ...(ai.recentIds ?? []).filter((recentId) => recentId !== id)].slice(0, 3)
       await this.writeState(state)
