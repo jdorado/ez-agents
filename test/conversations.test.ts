@@ -13,6 +13,32 @@ const fixture = async (work: (store: ControlStore, dir: string) => Promise<void>
   finally { await rm(dir, { recursive: true, force: true }) }
 }
 
+test('named conversations remember model and effort immediately across switches and restart', async () => fixture(async (store, dir) => {
+  const astra = { id: 'astra', name: 'Astra Medium', cli: 'codex', model: 'gpt-6-astra', effort: 'medium' }
+  const sol = { id: 'sol', name: 'Sol High', cli: 'codex', model: 'gpt-6-sol', effort: 'high' }
+  const first = await store.captureChoice(astra, 'Research')
+  await store.saveNativeSession(first.sessionId, 'native_research')
+  await store.resetSession()
+  const second = await store.captureChoice(astra, 'Writing')
+  await store.saveNativeSession(second.sessionId, 'native_writing')
+  await store.savePreset(sol)
+  await store.selectPreset(sol.id, second.sessionId)
+  // No message is needed to save the new choice.
+  assert.deepEqual((await store.getActiveSession())!.preset, sol)
+  const restarted = new ControlStore(dir, 1000)
+  await restarted.switchSession(first.sessionId)
+  assert.deepEqual(await restarted.captureChoice(astra), first)
+  await restarted.switchSession(second.sessionId)
+  assert.deepEqual(await restarted.captureChoice(astra), { sessionId: second.sessionId, preset: sol })
+  await restarted.selectPreset(astra.id, second.sessionId)
+  assert.equal((await restarted.getActiveSession())!.title, 'Writing')
+  assert.equal((await restarted.getActiveSession())!.nativeSessionId, 'native_writing')
+  assert.equal((await restarted.listSessions()).length, 2)
+  // Work admitted before the selection keeps its original choice and binding.
+  assert.deepEqual(second.preset, astra)
+  assert.equal((await restarted.executionSession(second)).nativeSessionId, 'native_writing')
+}))
+
 test('switching after restart restores native context and model while queued choices stay pinned', async () => fixture(async (store, dir) => {
   const first = await store.captureChoice(initialPreset('codex'), 'Client launch')
   await store.saveNativeSession(first.sessionId, 'native_first')

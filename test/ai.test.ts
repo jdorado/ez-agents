@@ -11,7 +11,7 @@ import { InboxStore } from '../src/inbox.js'
 import { executionDefaults } from '../src/model-policy.js'
 import type { Update } from 'grammy/types'
 
-test('same-client model switch does not resume the previous native thread', async () => {
+test('same-client model and default changes preserve history; provider changes require a fresh conversation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-model-switch-'))
   try {
     const store = new ControlStore(dir, 1000)
@@ -28,34 +28,36 @@ test('same-client model switch does not resume the previous native thread', asyn
     await store.savePreset(luna)
     await store.selectPreset(luna.id, started.sessionId, false)
     const next = await store.captureChoice(initialPreset('codex'))
-    assert.notEqual(next.sessionId, started.sessionId)
+    assert.equal(next.sessionId, started.sessionId)
     assert.equal(next.preset.model, luna.model)
-    assert.equal((await store.executionSession(next)).hasStarted, false)
-    assert.equal((await store.executionSession(next)).nativeSessionId, undefined)
+    assert.equal((await store.executionSession(next)).hasStarted, true)
+    assert.equal((await store.executionSession(next)).nativeSessionId, 'native-deepseek')
     assert.equal((await store.executionSession(started)).nativeSessionId, 'native-deepseek')
-    await store.saveNativeSession(next.sessionId, 'native-luna')
+    assert.equal(started.preset.model, deepseek.model)
     const clientDefault = initialPreset('codex')
     await store.savePreset(clientDefault)
     await store.selectPreset(clientDefault.id, next.sessionId, false)
     const defaultChoice = await store.captureChoice(clientDefault)
-    assert.notEqual(defaultChoice.sessionId, next.sessionId)
+    assert.equal(defaultChoice.sessionId, next.sessionId)
     assert.equal(defaultChoice.preset.model, undefined)
-    await store.saveNativeSession(defaultChoice.sessionId, 'native-default')
+    assert.equal((await store.executionSession(defaultChoice)).nativeSessionId, 'native-deepseek')
     await store.selectPreset(deepseek.id, defaultChoice.sessionId, false)
     const explicitAgain = await store.captureChoice(clientDefault)
-    assert.notEqual(explicitAgain.sessionId, defaultChoice.sessionId)
+    assert.equal(explicitAgain.sessionId, defaultChoice.sessionId)
     assert.equal(explicitAgain.preset.model, deepseek.model)
-    await store.saveNativeSession(explicitAgain.sessionId, 'native-explicit')
     const openrouter = { ...deepseek, id: 'openrouter-deepseek', name: 'OpenRouter DeepSeek', provider: 'openrouter' }
     await store.savePreset(openrouter)
-    await store.selectPreset(openrouter.id, explicitAgain.sessionId, false)
+    assert.equal(await store.selectPreset(openrouter.id, explicitAgain.sessionId, false), false)
+    await store.selectPreset(openrouter.id, explicitAgain.sessionId, true)
     const providerChoice = await store.captureChoice(clientDefault)
     assert.notEqual(providerChoice.sessionId, explicitAgain.sessionId)
     assert.equal(providerChoice.preset.provider, 'openrouter')
     const args = EXECUTOR_REGISTRY.codex.buildArgs({
-      workspace: dir, isResume: false, sessionId: next.sessionId,
+      workspace: dir, isResume: true, sessionId: (await store.executionSession(next)).nativeSessionId,
+      model: next.preset.model, effort: next.preset.effort,
     }, '', '')
-    assert.equal(args.includes('resume'), false)
+    assert.equal(args[args.indexOf('resume') + 1], 'native-deepseek')
+    assert.equal(args[args.indexOf('--model') + 1], luna.model)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
@@ -181,7 +183,7 @@ test('Choose AI lists recent choices and installed clients before model and effo
       },
     })
     await menu.list(context() as never)
-    assert.match(replies.at(-1)!.text, /recent choice|installed client/i)
+    assert.match(replies.at(-1)!.text, /Current: codex · fixture-model · medium/)
     assert.deepEqual(replies.at(-1)!.buttons.map((button) => button.text), [
       '✓ Recent · codex · Recent', 'claude', 'codex', 'codex-gui (desktop)', 'Refresh available AIs',
     ])
@@ -200,7 +202,7 @@ test('Choose AI lists recent choices and installed clients before model and effo
     assert.deepEqual({ cli: selected.cli, model: selected.model, effort: selected.effort }, {
       cli: 'codex', model: 'fixture-model', effort: 'high',
     })
-    assert.match(replies.at(-1)!.text, /Selected for this conversation/)
+    assert.match(replies.at(-1)!.text, /Saved for this conversation. History kept/)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 

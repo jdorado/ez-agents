@@ -7,10 +7,13 @@ No provider SDK, model fallback, history migration, or second execution loop.
 At intake each journal entry receives an immutable preset and conversation ID.
 Batches cannot cross that boundary. The run copies that choice and invokes the
 native adapter with its exact model/effort. A later menu change cannot reroute it.
-Old conversation metadata is retained only so accepted work can finish; selecting
-a different CLI never restores that CLI's old history. Selecting a different provider
-or model on the same client does not resume the previous selection's native thread; the next
-admitted turn starts a new native conversation.
+Each named conversation saves its model and reasoning level. Switching back through
+`/chats` restores that choice and the exact native session, including after restart.
+`/ai` shows the current choice and saves changes immediately. Changing model or
+reasoning level on the same client and provider preserves the conversation's name
+and native history; subsequent turns pass the new settings to the native engine.
+Changing client or provider starts a separate native conversation. Old bindings
+remain available so accepted work can finish and owners can reopen their chats.
 
 Grok/Claude accept caller-selected native UUIDs. Codex/OpenCode generate IDs, so
 the adapter reads only their typed JSONL session metadata; stdout never becomes a

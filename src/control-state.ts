@@ -615,7 +615,7 @@ export class ControlStore {
     // Hot path (every inbound message and every source tick): when the pinned
     // session already matches the selected preset, return it with zero
     // control/ writes and without taking the lock. Any divergence (missing
-    // session, CLI/provider/model change, untitled fresh session) falls
+    // session, choice change, untitled fresh session) falls
     // through to the serializing slow path. A concurrent control edit inside
     // the microsecond unlocked window fails closed downstream (the execution
     // session lookup rejects a stale pin; the batch can be retried).
@@ -625,7 +625,7 @@ export class ControlStore {
     const session = settled.activeSession
     if (settledPreset && session && (session.cli || session.hasStarted) &&
       !(session.cli === settledPreset.cli && session.hasStarted && session.preset &&
-        (session.preset.provider !== settledPreset.provider || session.preset.model !== settledPreset.model)) &&
+        session.preset.provider !== settledPreset.provider) &&
       (session.cli !== settledPreset.cli || JSON.stringify(session.preset) === JSON.stringify(settledPreset)) &&
       Boolean(session.title || session.hasStarted || !title?.trim()))
       return { sessionId: session.sessionId, preset: settledPreset }
@@ -637,10 +637,10 @@ export class ControlStore {
       if (!state.activeSession.cli && !state.activeSession.hasStarted) state.activeSession.cli = preset.cli
       if (state.activeSession.cli === preset.cli) {
         const previous = state.activeSession.preset
-        // Same CLI, different provider/model: web/Telegram must not resume the old native thread.
-        // Undefined is the native client default and is a distinct selection.
+        // A provider change starts a separate native context. Model and effort
+        // changes are native turn settings within the existing conversation.
         if (state.activeSession.hasStarted && previous &&
-            (previous.provider !== preset.provider || previous.model !== preset.model)) {
+            previous.provider !== preset.provider) {
           ;(state.sessions ??= []).push(state.activeSession)
           state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset }
         } else {
@@ -772,13 +772,17 @@ export class ControlStore {
       assertEffort(preset.effort, preset.model, preset.cli)
       if ((state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Menu expired. Open Choose AI again.')
       const current = ai.presets.find((p) => p.id === ai.selectedId)!
-      if (state.activeSession && (current.cli !== preset.cli || !state.activeSession.cli) && !fresh) return false
+      if (state.activeSession && (current.cli !== preset.cli || current.provider !== preset.provider || !state.activeSession.cli) && !fresh) return false
       if (fresh || !state.activeSession) {
         rememberPreset(state)
         if (state.activeSession) (state.sessions ??= []).push(state.activeSession)
-        state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
+        state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset: persistedPreset(preset) }
       }
       ai.selectedId = id
+      // Persist the conversation's choice now, even if the owner switches chats
+      // or restarts before sending another message. Queued choices are snapshots.
+      if (state.activeSession.cli === preset.cli && state.activeSession.preset?.provider === preset.provider)
+        state.activeSession.preset = persistedPreset(preset)
       ai.recentIds = [id, ...(ai.recentIds ?? []).filter((recentId) => recentId !== id)].slice(0, 3)
       await this.writeState(state)
       return true
