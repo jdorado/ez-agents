@@ -96,12 +96,12 @@ test('root preparation leaves private plugin updates readable by the installer',
  const script=`const fs=require('fs');fs.readFileSync(${JSON.stringify(path.join(dir,'job.json'))});fs.readFileSync(${JSON.stringify(path.join(dir,'candidate.tgz'))});`;
  await exec('setpriv',['--reuid=20001','--regid=20002','--clear-groups','--no-new-privs',process.execPath,'-e',script]);
 });
-function runtime(f,{fail,stopped=false}={}) {
+function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'}}={}) {
  const calls=[];let failed=false;
  const execute=async(command,args,opts)=>{
   calls.push([command,...args]);if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
-  if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:{CODEX_CLI_VERSION:'0.156.1'}}}}});
+  if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
   if(args.includes('ps'))return stopped?'':'container-id';
   if(args[0]==='inspect')return 'sha256:'+'a'.repeat(64);
   if(args[0]==='volume'&&args[1]==='ls')return 'existing';
@@ -280,6 +280,17 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  assert.equal(build[build.indexOf('--build-arg')+1],'CODEX_CLI_VERSION=0.156.1');
  const status=await command(f.home,['status']);assert(!JSON.stringify(status).includes('private-test-token'));assert(!('rollback'in status.jobs[0]));
  assert.equal((await fs.stat(path.join(jobPath(f.home,job.id),'job.json'))).mode&0o777,0o600);
+});
+test('the same archive with different deployment CLI pins gets distinct image bindings',async t=>{
+ const tags=[],hashes=[];
+ for(const pin of ['0.153.4','0.156.1']) {
+  const f=await fixture(t),job=await queued(f),r=runtime(f,{buildArgs:{CODEX_CLI_VERSION:pin}});
+  assert.equal((await perform(f.home,job,r)).status,'completed');
+  const build=r.calls.find(c=>c[0]==='docker'&&c[1]==='build'),tag=build[build.indexOf('-t')+1];
+  assert.match(await fs.readFile(path.join(f.config.deploymentDir,'docker.env'),'utf8'),new RegExp(tag));
+  tags.push(tag);hashes.push(job.sha256);
+ }
+ assert.equal(hashes[0],hashes[1]);assert.notEqual(tags[0],tags[1]);
 });
 test('update cleanup keeps the newest backup per target and ignores unfinished jobs',async t=>{
  const f=await fixture(t),older='11111111-1111-1111-1111-111111111111',latest='22222222-2222-2222-2222-222222222222',queued='33333333-3333-3333-3333-333333333333',rolledBack='44444444-4444-4444-4444-444444444444';

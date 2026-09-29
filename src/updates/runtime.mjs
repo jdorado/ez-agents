@@ -109,16 +109,17 @@ export async function perform(home,job,hooks) {
       await run(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'bin/ezenciel-agents.mjs'),'--version'],{cwd:root});
       try { await replaceGuidance(root, config.workspace, run); }
       catch(error) { console.error(`Workspace guidance replacement failed; upgrade continues: ${error.message}`); }
-      const image=`ez-upgrade-${job.sha256.slice(0,24)}`;
       // Preserve operator-owned native CLI pins from the effective deployment.
       // Building only the package defaults silently downgrades those clients.
       const deployment=JSON.parse(await run('docker',[...relayArgs(config),'config','--format','json'],{stdoutOnly:true}));
       const args=deployment.services?.relay?.build?.args||{};
       if(typeof args!=='object'||Array.isArray(args))throw Error('Invalid relay build arguments');
-      const buildArgs=Object.entries(args).flatMap(([key,value])=>{
+      const buildArgs=Object.keys(args).sort().flatMap(key=>{
+        const value=args[key];
         if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)||typeof value!=='string'||value.includes('\0'))throw Error('Unresolved relay build argument');
         return ['--build-arg',`${key}=${value}`];
       });
+      const image=`ez-upgrade-${digest(JSON.stringify([job.sha256,buildArgs])).slice(0,24)}`;
       await run('docker',['build','--target','runtime',...buildArgs,'-t',image,root]);
       const envFile=path.join(config.deploymentDir,'docker.env'),oldEnv=await fs.readFile(envFile,'utf8');
       const cid=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
