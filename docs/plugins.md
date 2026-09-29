@@ -30,6 +30,12 @@ needed. Finish owner pairing and verify an actual Telegram agent reply first.
 Init creates a private registry and `tools/bin/ez`, adds a
 managed AGENTS.md registry locator, and binds the matching host executor to that bin
 folder. Native binaries are linked through; an existing `ez` collision fails.
+The bound `ez --help` lists installed native scheduling and delivery helpers
+under `native`, with literal `argv` entries for their help. These are existing
+native executables, not plugin aliases; discovery does not grant authority.
+Standalone registries omit helpers they do not have installed. The managed
+workspace locator remains unchanged: core help discovers native controls and
+`tools list --details` discovers registered plugins.
 Run before starting the host executor. For an already running installation,
 place a symlink to the returned launcher in that agent's existing private bin
 directory and set that binding's `toolsHome` to the absolute registry directory.
