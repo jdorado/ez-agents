@@ -79,9 +79,11 @@ export const createAgent = async (options: {
       EZ_AGENT_WORKSPACE: join(deploymentDir, 'mind'),
       EZ_CONTROL_DIR: join(deploymentDir, 'control'),
       EZ_TOOLS_HOME: join(deploymentDir, 'tools'),
-      EZ_PLUGIN_BROKER_SOCKET: join(deploymentDir, 'control', 'plugin-broker.sock'),
-      EZ_PLUGIN_BROKER_HOST_CONFIG: join(deploymentDir, 'host-executor.json'),
-      ...(isolation === 'isolated' ? { COMPOSE_PROFILES: 'isolated' } : {}),
+      ...(isolation === 'isolated' ? {
+        EZ_PLUGIN_BROKER_SOCKET: join(deploymentDir, 'control', 'plugin-broker.sock'),
+        EZ_PLUGIN_BROKER_HOST_CONFIG: join(deploymentDir, 'host-executor.json'),
+        COMPOSE_PROFILES: 'isolated',
+      } : {}),
       EZ_WHATSAPP_IPC_VOLUME: `${project}-whatsapp-ipc`,
       EZ_WHATSAPP_CLIENT_VOLUME: `${project}-whatsapp-client`,
     }
