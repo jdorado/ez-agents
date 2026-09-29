@@ -92,6 +92,10 @@ their ownership. The relay drops all capabilities before loading its secrets.
 It retains distinct real/effective UIDs; `no_new_privs` is applied to the native
 executor after normalizing those IDs. Applying it earlier can cause Linux
 security modules to discard the relay's effective UID during exec.
+Private native credentials and skills are checked using that effective UID;
+`access(2)` checks the distinct real UID and can incorrectly hide a valid binding.
+Runtime updates preserve explicit relay build arguments from the operator's
+Compose deployment, including native CLI version pins.
 New private broker directories and update archives inherit the installer's
 ownership. Existing installations need the reviewed deployment migration in
 [application-channel.md](application-channel.md#reviewed-deployment-migration)
@@ -177,6 +181,9 @@ Read the installed skill from the registry before onboarding; do not re-pair
 an already connected account. Monitoring and sends require their own authority.
 
 ### Isolated plugin commands
+
+The image pins modern Docker Compose, including its standalone executable, so
+existing operator-created volumes retain their data and driver bindings.
 
 The relay-side `ez` client sends only declared aliases, literal argument arrays,
 bounded stdin, and the active run ID to the broker. The broker re-reads owner
