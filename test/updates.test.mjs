@@ -95,6 +95,7 @@ function runtime(f,{fail,stopped=false}={}) {
  const execute=async(command,args,opts)=>{
   calls.push([command,...args]);if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
+  if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:{CODEX_CLI_VERSION:'0.156.1'}}}}});
   if(args.includes('ps'))return stopped?'':'container-id';
   if(args[0]==='inspect')return 'sha256:'+'a'.repeat(64);
   if(args[0]==='volume'&&args[1]==='ls')return 'existing';
@@ -269,6 +270,8 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.notEqual(await fs.readFile(path.join(active,'bin/example.mjs'),'utf8'),'tampered');
  assert(r.calls.findIndex(c=>c.includes('build'))<r.calls.findIndex(c=>c[0]==='stopHost'));
+ const build=r.calls.find(c=>c[0]==='docker'&&c[1]==='build');
+ assert.equal(build[build.indexOf('--build-arg')+1],'CODEX_CLI_VERSION=0.156.1');
  const status=await command(f.home,['status']);assert(!JSON.stringify(status).includes('private-test-token'));assert(!('rollback'in status.jobs[0]));
  assert.equal((await fs.stat(path.join(jobPath(f.home,job.id),'job.json'))).mode&0o777,0o600);
 });
@@ -410,7 +413,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await fs.rm(path.join(f.source,'node_modules'),{recursive:true});
  const log=path.join(f.root,'commands.jsonl');
  await fs.writeFile(path.join(fake,provider),`#!${process.execPath}\nif(${JSON.stringify(provider)}==='corepack'&&process.argv[2]!=='pnpm@10.30.3')throw Error('Unpinned manager');if(process.argv.includes('--version')){console.log('10.30.3');process.exit(0)}const fs=require('fs');fs.mkdirSync('node_modules/tsx/dist',{recursive:true});fs.writeFileSync('node_modules/tsx/dist/loader.mjs','');`,{mode:0o755});
- await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nconst fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a.includes('ps'))console.log('cid');if(a[0]==='inspect')console.log('sha256:'+'a'.repeat(64));`,{mode:0o755});
+ await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nconst fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a.includes('config'))console.log(JSON.stringify({services:{relay:{build:{args:{}}}}}));if(a.includes('ps'))console.log('cid');if(a[0]==='inspect')console.log('sha256:'+'a'.repeat(64));`,{mode:0o755});
  const wrapper=path.join(f.root,'supervisor.mjs'),module=new URL('../src/updates/supervisor.mjs',import.meta.url).href;
  await fs.writeFile(wrapper,`import {supervise} from ${JSON.stringify(module)};const a=new AbortController();process.on('SIGTERM',()=>a.abort());await supervise(${JSON.stringify(f.config.deploymentDir)},a.signal,{discover:async()=>{${provider==='pnpm' ? "throw Error('Synthetic discovery failure')" : 'return []'}}});`);
  const start=()=>{const p=spawn(process.execPath,[wrapper],{env:{...process.env,PATH:fake},stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);return {p,output:()=>output};};
