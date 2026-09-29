@@ -117,15 +117,19 @@ try {
   assert.ok(brokerReady,run(['logs',broker]).stderr);
   const prepare = run(['exec',broker,'node','--input-type=module','-e',`
     import fs from 'node:fs/promises';
-    import {createHash} from 'node:crypto';
-    import {privateDir,atomic,prepareCommand} from '/app/src/plugins/manager.mjs';
-    const home='/qa/home',base=home+'/packages/sample';
-    await privateDir(base);
-    const record={revision:'sha256:'+'a'.repeat(64),source:base+'/source',
-      project:'ezp-'+createHash('sha256').update(home).digest('hex').slice(0,16)+'-sample',compose:base+'/compose.json',
-      manifest:{id:'sample',commands:{sample:{args:[]}}},
-      deployment:{schemaVersion:1,services:{sample:{image:'test@sha256:'+'b'.repeat(64),healthcheck:['true'],volumes:{}}},commands:{sample:{service:'sample',argv:['true']}}}};
-    await atomic(home+'/registry.json',{schemaVersion:1,owner:home,plugins:{sample:record},commands:{sample:'sample'}});
+    import {snapshot,install,prepareCommand} from '/app/src/plugins/manager.mjs';
+    const home='/qa/home',source='/qa/source';
+    await fs.mkdir(source);
+    const manifest={schemaVersion:1,id:'sample',version:'0.1.0',description:'Synthetic',commands:{sample:{executable:'client.mjs',args:[]}},skills:['SKILL.md']};
+    const deployment={schemaVersion:1,services:{sample:{buildTarget:'runtime',volumes:{},healthcheck:['node','--version']}},commands:{sample:{service:'sample',argv:['node','/app/client.mjs']}}};
+    for(const [name,value] of Object.entries({'package.json':JSON.stringify({files:['client.mjs','SKILL.md']}),'ez-plugin.json':JSON.stringify(manifest),'ez-deployment.json':JSON.stringify(deployment),'Dockerfile':'FROM scratch AS runtime','.dockerignore':'','client.mjs':'','SKILL.md':'Synthetic'}))await fs.writeFile(source+'/'+name,value);
+    // Only the Docker build effect is stubbed; real installation and private
+    // filesystem operations execute with the production broker capabilities.
+    await fs.writeFile('/qa/docker','#!/bin/sh\\nexit 0\\n',{mode:0o755});
+    process.env.PATH='/qa:'+process.env.PATH;
+    delete process.env.EZ_DOCKER_COMPOSE;
+    const pkg=await snapshot(source),config=JSON.parse(await fs.readFile(home+'/config.json'));
+    await install(home,config,'sample',source,pkg.revision);
     const command=await prepareCommand(home,'sample',[],{invocation:true,environment:{}});
     await command.release();
   `]);

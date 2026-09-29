@@ -558,7 +558,6 @@ export async function install(home,config,name,source,revision) {
     const stage=path.join(base,`.stage-${randomUUID()}`);await privateDir(stage);
     try {
       for(const [relative,file] of p.files) {const dest=path.join(stage,relative);await fs.mkdir(path.dirname(dest),{recursive:true,mode:0o755});await fs.writeFile(dest,file.data,{mode:file.mode,flag:'wx'});}
-      await fs.chmod(stage,0o755);
       // A previously interrupted install may leave a snapshot. Never silently replace it.
       try { await fs.rename(stage,target); } catch(error) {
         if(!['EEXIST','ENOTEMPTY'].includes(error.code)) throw error;
