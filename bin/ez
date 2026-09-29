@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { createConnection } from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { installedNativeHelp } from '../src/plugins/native-tasks.mjs';
 
 const MAX_STDIN_BYTES = 1024 * 1024;
 const RUN_ID = /^[A-Za-z0-9_-]{1,160}$/;
@@ -86,7 +88,7 @@ const manager = async args => {
 const main = async () => {
   const args = process.argv.slice(2);
   if (!args.length || args[0] === '--help' || args[0] === '-h') {
-    process.stdout.write('Use `ez tools list` to discover installed plugins, then `ez <alias> ...` for a declared command.\n');
+    process.stdout.write(JSON.stringify({commands:['tools list [--details]','<registered CLI> ...'],native:await installedNativeHelp(fileURLToPath(new URL('.',import.meta.url)))})+'\n');
     return;
   }
   const stdin = ['plugins', 'tools', 'updates', 'status'].includes(args[0]) ? '' : await readStdin();

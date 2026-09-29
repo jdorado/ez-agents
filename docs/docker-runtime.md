@@ -22,6 +22,8 @@ on the same CLI. Each agent gets its own purpose and native conversation IDs.
 `isolated` sets `EZ_EXECUTOR_TRANSPORT=local` and runs the native CLI in the
 relay. `host-capable` sets `host` and reuses the installer UID; unlabeled
 existing host transports stay host-capable so they are not flipped.
+Only isolated deployments configure the plugin-broker socket and Compose profile;
+host-capable deployments use their bound host transport and registry.
 
 On Docker Desktop/OrbStack the control volume's Unix socket is not connectable
 from the macOS host, so a host-capable agent also publishes an authenticated

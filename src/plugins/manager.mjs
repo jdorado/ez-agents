@@ -1,5 +1,6 @@
 import { sharedService, attachShared } from './shared.mjs';
 import { exposure, commandExposure } from './exposure.mjs';
+import { installedNativeHelp } from './native-tasks.mjs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -519,7 +520,14 @@ export async function init(home,workspace,catalogFile,hostConfig,standalone=fals
         await fs.access(target,fs.constants.X_OK);
         await fs.symlink(target,path.join(bin,name));
       }
-      for(const file of await fs.readdir(agent.binDir)) {if(file==='ez') throw Error('Existing ez binding collision');if(Object.hasOwn(manifest.bin,file))continue;await fs.symlink(path.join(agent.binDir,file),path.join(bin,file));}
+      for(const file of await fs.readdir(agent.binDir)) {
+        if(file==='ez') {
+          if(await fs.realpath(path.join(agent.binDir,file))!==await fs.realpath(new URL('../../bin/ez',import.meta.url)))throw Error('Existing ez binding collision');
+          continue;
+        }
+        if(Object.hasOwn(manifest.bin,file))continue;
+        await fs.symlink(path.join(agent.binDir,file),path.join(bin,file));
+      }
       agent.binDir=bin;agent.toolsHome=home;await atomic(hostConfig,host);
     }
   });
@@ -583,7 +591,7 @@ export async function main(args) {
     return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1),{publish:port,serve:true});
   }
   if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],native:await installedNativeHelp(path.join(home,'bin')),foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');

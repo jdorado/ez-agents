@@ -343,6 +343,39 @@ test('host install exposes runnable public commands without source aliases',asyn
  assert.match(result.stdout,/Usage: ezenciel-agents-message/);
  const application=await exec(path.join(f.home,'bin','ezenciel-agents-application'),['--help'],{env:{...process.env,PATH:path.dirname(process.execPath)+path.delimiter+process.env.PATH}});
  assert.match(application.stdout,/--token-file/);
+ const help=JSON.parse((await f.call('--help')).stdout);
+ const scheduler=help.native.find(item=>item.argv[0].endsWith('/ezenciel-agents-schedule'));
+ assert.deepEqual(scheduler.argv,[path.join(await fs.realpath(f.home),'bin','ezenciel-agents-schedule'),'--help']);
+ const discovered=await exec(scheduler.argv[0],scheduler.argv.slice(1),{env:f.env});
+ assert.match(discovered.stdout,/list \| runs \| show ID/);
+ assert.ok(help.native.some(item=>item.argv[0].endsWith('/ezenciel-agents-message')));
+ await fs.unlink(scheduler.argv[0]);
+ assert.equal(JSON.parse((await f.call('--help')).stdout).native.some(item=>item.argv[0]===scheduler.argv[0]),false);
+});
+test('host onboarding accepts the creator package bin but rejects unrelated ez collisions',async t=>{
+ for(const packaged of [true,false]) {
+  const f=await fixture(t),config=path.join(f.root,'host.json'),native=packaged?await fs.realpath(new URL('../bin',import.meta.url)):path.join(f.root,'native');
+  if(!packaged){await fs.mkdir(native);await fs.writeFile(path.join(native,'ez'),'unrelated');}
+  await fs.writeFile(config,JSON.stringify({cli:'codex',agents:[{name:'demo',workspace:f.workspace,binDir:native}]}));
+  if(!packaged){await assert.rejects(init(f.home,f.workspace,undefined,config),/Existing ez binding collision/);continue;}
+  await init(f.home,f.workspace,undefined,config);
+  assert.equal((await fs.lstat(path.join(f.home,'bin','ez'))).isSymbolicLink(),false);
+  assert.ok(JSON.parse((await f.call('--help')).stdout).native.some(item=>item.argv[0].endsWith('/ezenciel-agents-schedule')));
+ }
+});
+test('standalone help does not advertise uninstalled native controls',async t=>{
+ const f=await fixture(t);await init(f.home,f.workspace);
+ assert.deepEqual(JSON.parse((await f.call('--help')).stdout).native,[]);
+});
+test('isolated help discovers runnable native controls without a broker or run',async()=>{
+ const client=new URL('../bin/ez',import.meta.url).pathname;
+ const env={PATH:process.env.PATH};
+ const help=JSON.parse((await exec(process.execPath,[client,'--help'],{env})).stdout);
+ const scheduler=help.native.find(item=>item.argv[0].endsWith('/ezenciel-agents-schedule'));
+ assert.ok(scheduler);
+ const result=await exec(scheduler.argv[0],scheduler.argv.slice(1),{env});
+ assert.match(result.stdout,/list \| runs \| show ID/);
+ await assert.rejects(exec(process.execPath,[client,'tools','list'],{env}),/EZ_RUN_ID is required/);
 });
 test('copying another agent registry is rejected before any Docker operation',async t=>{
  const f=await fixture(t),other=path.join(f.root,'other');await init(f.home,f.workspace);await init(other,f.workspace);
