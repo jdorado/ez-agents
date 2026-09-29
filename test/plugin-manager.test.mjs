@@ -352,6 +352,17 @@ test('host install exposes runnable public commands without source aliases',asyn
  await fs.unlink(scheduler.argv[0]);
  assert.equal(JSON.parse((await f.call('--help')).stdout).native.some(item=>item.argv[0]===scheduler.argv[0]),false);
 });
+test('host onboarding accepts the creator package bin but rejects unrelated ez collisions',async t=>{
+ for(const packaged of [true,false]) {
+  const f=await fixture(t),config=path.join(f.root,'host.json'),native=packaged?await fs.realpath(new URL('../bin',import.meta.url)):path.join(f.root,'native');
+  if(!packaged){await fs.mkdir(native);await fs.writeFile(path.join(native,'ez'),'unrelated');}
+  await fs.writeFile(config,JSON.stringify({cli:'codex',agents:[{name:'demo',workspace:f.workspace,binDir:native}]}));
+  if(!packaged){await assert.rejects(init(f.home,f.workspace,undefined,config),/Existing ez binding collision/);continue;}
+  await init(f.home,f.workspace,undefined,config);
+  assert.equal((await fs.lstat(path.join(f.home,'bin','ez'))).isSymbolicLink(),false);
+  assert.ok(JSON.parse((await f.call('--help')).stdout).native.some(item=>item.argv[0].endsWith('/ezenciel-agents-schedule')));
+ }
+});
 test('standalone help does not advertise uninstalled native controls',async t=>{
  const f=await fixture(t);await init(f.home,f.workspace);
  assert.deepEqual(JSON.parse((await f.call('--help')).stdout).native,[]);

@@ -29,7 +29,8 @@ initial main onboarding; no sibling repository, broker or provider account is
 needed. Finish owner pairing and verify an actual Telegram agent reply first.
 Init creates a private registry and `tools/bin/ez`, adds a
 managed AGENTS.md registry locator, and binds the matching host executor to that bin
-folder. Native binaries are linked through; an existing `ez` collision fails.
+folder. Native binaries are linked through; the package's own `bin/ez` is replaced
+by that bound launcher, while an unrelated existing `ez` collision fails.
 Both host-bound and isolated `ez --help` list installed native scheduling and delivery helpers
 under `native`, with literal `argv` entries for their help. These are existing
 native executables, not plugin aliases; discovery does not grant authority.

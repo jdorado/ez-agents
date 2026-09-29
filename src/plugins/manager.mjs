@@ -520,7 +520,14 @@ export async function init(home,workspace,catalogFile,hostConfig,standalone=fals
         await fs.access(target,fs.constants.X_OK);
         await fs.symlink(target,path.join(bin,name));
       }
-      for(const file of await fs.readdir(agent.binDir)) {if(file==='ez') throw Error('Existing ez binding collision');if(Object.hasOwn(manifest.bin,file))continue;await fs.symlink(path.join(agent.binDir,file),path.join(bin,file));}
+      for(const file of await fs.readdir(agent.binDir)) {
+        if(file==='ez') {
+          if(await fs.realpath(path.join(agent.binDir,file))!==await fs.realpath(new URL('../../bin/ez',import.meta.url)))throw Error('Existing ez binding collision');
+          continue;
+        }
+        if(Object.hasOwn(manifest.bin,file))continue;
+        await fs.symlink(path.join(agent.binDir,file),path.join(bin,file));
+      }
       agent.binDir=bin;agent.toolsHome=home;await atomic(hostConfig,host);
     }
   });
