@@ -6,6 +6,11 @@ an immutable candidate in the PA's local tools directory. The agent reads its
 manifest and uses `ez updates prepare main --file ...` and `apply` on the owner's
 request. Automatic public update policy stays unchanged.
 
+For isolated agents, the operator prepares main-runtime archives through the
+host-bound launcher outside the agent. The isolated agent may apply that prepared
+job; its broker rejects agent-supplied main-runtime archives. Plugin candidates
+retain the workspace-scoped preparation flow below.
+
 Commit, push and open a PR first — then stage only from that PR's exact commit. The staging script refuses dirty checkouts, so uncommitted work can never become a candidate. If QA finds issues, fix forward in the same PR (or a new PR) and stage a new versioned candidate; never leave a QA-only copy lingering outside the PR:
 
 ```sh
