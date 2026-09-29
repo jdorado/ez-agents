@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { readRequest } from './read-request.js'
+import { executorEnvironment, executorInvocation } from './executor.js'
 
 export type AudioOptions = {
   geminiApiKey?: string
@@ -33,7 +34,7 @@ export const pcmToWav = (pcm: Buffer, sampleRate = 24000, channels = 1): Buffer 
 
 export const encodeOggOpus = (pcm: Buffer, sampleRate = 24000, channels = 1): Promise<Buffer> => {
   return new Promise((resolve, reject) => {
-    const child = spawn(
+    const invocation = executorInvocation(
       'ffmpeg',
       [
         '-f',
@@ -52,8 +53,9 @@ export const encodeOggOpus = (pcm: Buffer, sampleRate = 24000, channels = 1): Pr
         'ogg',
         '-',
       ],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
     )
+    const child = spawn(invocation.command, invocation.args,
+      { env: executorEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] })
 
     const output: Buffer[] = []
     let error = ''

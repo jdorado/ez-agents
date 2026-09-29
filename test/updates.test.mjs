@@ -75,6 +75,21 @@ async function fixture(t,kind='main') {
  const pack=async()=>{const entries=[];async function walk(dir,prefix=''){for(const e of await fs.readdir(dir,{withFileTypes:true})){const rel=prefix+e.name;if(e.isDirectory())await walk(path.join(dir,e.name),rel+'/');else entries.push(['package/'+rel,await fs.readFile(path.join(dir,e.name))]);}}await walk(source);const file=path.join(root,'candidate.tgz');await fs.writeFile(file,tar(entries));return file;};
  return {root,home,old,source,agent,config,record,target,pack};
 }
+test('root preparation leaves private plugin updates readable by the installer', {
+ skip:process.platform!=='linux'||process.geteuid?.()!==0,
+},async t=>{
+ const f=await fixture(t,'plugin');
+ await fs.rm(path.join(f.home,'updates'),{recursive:true});
+ await fs.chmod(f.root,0o755);
+ await fs.chown(f.home,20001,20002);
+ const job=await prepare(f.home,f.target,{file:await f.pack()});
+ const dir=jobPath(f.home,job.id);
+ for(const file of [path.join(f.home,'updates'),dir,path.join(dir,'job.json'),path.join(dir,'candidate.tgz')]) {
+  const stat=await fs.stat(file);assert.equal(stat.uid,20001);assert.equal(stat.gid,20002);
+ }
+ const script=`const fs=require('fs');fs.readFileSync(${JSON.stringify(path.join(dir,'job.json'))});fs.readFileSync(${JSON.stringify(path.join(dir,'candidate.tgz'))});`;
+ await exec('setpriv',['--reuid=20001','--regid=20002','--clear-groups','--no-new-privs',process.execPath,'-e',script]);
+});
 function runtime(f,{fail,stopped=false}={}) {
  const calls=[];let failed=false;
  const execute=async(command,args,opts)=>{

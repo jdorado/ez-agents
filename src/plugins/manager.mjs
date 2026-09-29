@@ -18,7 +18,16 @@ const emit = value => console.log(JSON.stringify(value));
 const keys = (object, allowed) => { if(!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).some(k=>!allowed.includes(k))) throw Error('Invalid or unknown descriptor fields'); };
 const strings = value => { if(!Array.isArray(value) || value.some(x=>typeof x!=='string' || x.includes('\0'))) throw Error('Expected literal string arguments'); return value; };
 const containerPath = value => { if(typeof value!=='string' || !value.startsWith('/') || value.includes('..') || /[\0\n\r:$]/.test(value) || value.startsWith('/var/run') || value.startsWith('/proc') || value.startsWith('/sys')) throw Error('Invalid container path'); return value; };
-const privateDir = async dir => fs.mkdir(dir,{recursive:true,mode:0o700});
+export async function privateDir(dir) {
+  const created=await fs.mkdir(dir,{recursive:true,mode:0o700});
+  if(!created)return;
+  // A root broker must leave new private directories with the installer's
+  // ownership, just as atomic files are. Do not change existing directories.
+  let current=created;await stewardOwned(current);
+  for(const part of path.relative(created,dir).split(path.sep).filter(Boolean)) {
+    current=path.join(current,part);await stewardOwned(current);
+  }
+}
 export async function atomic(file, value) {
   const tmp = `${file}.${randomUUID()}.tmp`;
   await fs.writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});

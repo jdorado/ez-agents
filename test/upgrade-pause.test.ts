@@ -62,7 +62,7 @@ test('Linux relay real/effective UID regression (Docker test target)', {
   delete env.NODE_TEST_CONTEXT // Run an independent test runner, not the parent's IPC protocol.
   const result = spawnSync('setpriv', [
     '--ruid=1001', '--euid=1000', '--regid=1000', '--clear-groups',
-    '--bounding-set=-all', '--no-new-privs', process.execPath, '--import', 'tsx',
+    '--bounding-set=-all', process.execPath, '--import', 'tsx',
     '--test', fileURLToPath(import.meta.url),
   ], { encoding: 'utf8', timeout: 15000, env })
   assert.equal(result.status, 0, result.stdout + result.stderr)

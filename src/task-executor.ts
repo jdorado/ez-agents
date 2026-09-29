@@ -7,7 +7,7 @@ import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readRun } from './delivery-socket.js'
 import { Tasks } from './tasks.js'
-import { executorEnvironment, terminateJob, type ExecutorOptions } from './executor.js'
+import { executorEnvironment, executorInvocation, terminateJob, type ExecutorOptions } from './executor.js'
 
 // This adapter is deliberately version-pinned: a new native tool default needs
 // a fresh tool-inventory audit before external correspondence can use it.
@@ -45,13 +45,15 @@ export async function startTaskExecutor(options: ExecutorOptions) {
   const toolNames = [...(task.anyConversation ? ['context','send'] : ['context','send','note','report','complete']),...capabilityNames]
   if (capabilityNames.length && !options.toolsHome) throw new Error('Channel capabilities require an installed tool registry')
   const environment = executorEnvironment()
-  const version = await promisify(execFile)('codex', ['--version'], { env: environment })
+  const versionInvocation = executorInvocation('codex', ['--version'])
+  const version = await promisify(execFile)(versionInvocation.command, versionInvocation.args, { env: environment })
   if (version.stdout.trim() !== `codex-cli ${TASK_CODEX_VERSION}`) throw new Error(`Restricted tasks require audited Codex ${TASK_CODEX_VERSION}`)
   const temporary = await mkdtemp(join(tmpdir(), 'ez-task-'))
   try {
     const directory = join(temporary, 'workspace'), home = join(temporary, 'home')
     await mkdir(directory, { mode: 0o700 }); await mkdir(home, { mode: 0o700 })
-    const catalog = await promisify(execFile)('codex', ['debug', 'models', '--bundled'], { env: environment, maxBuffer: 4 * 1024 * 1024 })
+    const catalogInvocation = executorInvocation('codex', ['debug', 'models', '--bundled'])
+    const catalog = await promisify(execFile)(catalogInvocation.command, catalogInvocation.args, { env: environment, maxBuffer: 4 * 1024 * 1024 })
     await writeFile(join(temporary, 'models.json'), JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))), { mode: 0o600 })
     const auth = process.env.EZ_ISOLATION === 'isolated'
       ? join(options.controlDir, 'cli', 'codex', 'auth.json')
@@ -60,7 +62,8 @@ export async function startTaskExecutor(options: ExecutorOptions) {
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
       fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId, options.toolsHome ?? '', JSON.stringify(task.capabilities ?? [])]
     const prompt = JSON.stringify({event: run.external ? 'correspondence_received' : 'task_activated', taskId: run.taskId})
-    const child = spawn('codex', taskArguments(directory, broker, prompt, toolNames, options), {
+    const invocation = executorInvocation('codex', taskArguments(directory, broker, prompt, toolNames, options))
+    const child = spawn(invocation.command, invocation.args, {
       cwd: directory, env: { ...environment, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     })
     await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })

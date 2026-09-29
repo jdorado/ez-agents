@@ -86,6 +86,18 @@ only service allowed to launch plugin containers. The relay never receives the
 Docker socket or a tools registry mount. Host-capable agents keep the existing
 host executor path instead.
 
+The trusted broker has only `DAC_OVERRIDE` and `CHOWN` in addition to its
+Docker socket, so it can read private installer-owned registry files and preserve
+their ownership. The relay drops all capabilities before loading its secrets.
+It retains distinct real/effective UIDs; `no_new_privs` is applied to the native
+executor after normalizing those IDs. Applying it earlier can cause Linux
+security modules to discard the relay's effective UID during exec.
+New private broker directories and update archives inherit the installer's
+ownership. Existing installations need the reviewed deployment migration in
+[application-channel.md](application-channel.md#reviewed-deployment-migration)
+for this Compose capability change; ordinary updates retain their compatibility
+guard. Preserve the existing runtime UID/GID and private state during migration.
+
 ## Operate and verify
 
 Root-started containers default to executor UID/GID `1000:1000` and relay real

@@ -6,14 +6,16 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { installed, type AiPreset } from './ai.js'
-import { executorEnvironment } from './executor.js'
+import { executorEnvironment, executorInvocation } from './executor.js'
 
 const record = (v: unknown): Record<string, unknown> =>
   v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {}
 const value = (v: unknown): string | undefined =>
   typeof v === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(v) ? v : undefined
-const command = async (cli: string, args: string[], cwd: string): Promise<string> =>
-  (await promisify(execFile)(cli, args, { cwd, env: executorEnvironment(), timeout: 8000, maxBuffer: 2 * 1024 * 1024 })).stdout
+const command = async (cli: string, args: string[], cwd: string): Promise<string> => {
+  const invocation = executorInvocation(cli, args)
+  return (await promisify(execFile)(invocation.command, invocation.args, { cwd, env: executorEnvironment(), timeout: 8000, maxBuffer: 2 * 1024 * 1024 })).stdout
+}
 
 export const resolvedCodexDefaults = (configValue: unknown, catalogValue: unknown): Record<string, unknown> => {
   const config = record(configValue)
@@ -32,7 +34,8 @@ export const resolvedCodexDefaults = (configValue: unknown, catalogValue: unknow
 
 // Native config/read resolves Codex's layers; do not reimplement TOML or start a turn.
 export const codexDefaults = (cwd: string, codexHome?: string, nativeFallback = false): Promise<Record<string, unknown>> => new Promise((resolve) => {
-  const child = spawn('codex', ['app-server'], { cwd,
+  const invocation = executorInvocation('codex', ['app-server'])
+  const child = spawn(invocation.command, invocation.args, { cwd,
     env: { ...executorEnvironment(), ...(codexHome ? { CODEX_HOME: codexHome } : {}) }, stdio: ['pipe', 'pipe', 'ignore'] })
   const lines = createInterface({ input: child.stdout })
   let done = false

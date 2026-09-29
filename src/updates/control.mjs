@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parseEnv } from 'node:util';
-import { atomic, locked, snapshot } from '../plugins/manager.mjs';
+import { atomic, locked, snapshot, privateDir, stewardOwned } from '../plugins/manager.mjs';
 import { digest, extract, newer, compatible, version, releaseContract, registryVersion, registryCandidate, download } from './artifact.mjs';
 
 export const read = async file => JSON.parse(await fs.readFile(file,'utf8'));
@@ -129,17 +129,19 @@ export async function eligibility(home,target,root,automatic) {
 }
 export async function prepare(home,target,{file,release}) {
   targetId(target);if(Boolean(file)===Boolean(release))throw Error('Supply one --file tarball or --version exact-version');
-  const {directory}=await state(home);await fs.mkdir(directory,{recursive:true,mode:0o700});
+  const {directory}=await state(home);await privateDir(directory);
   const old=await installed(home,target);
   let data,origin;
   if(file){data=await fs.readFile(file);origin={type:'local'};}
   else {version(release);const pkg=await registryVersion(old.pkg.name,release);data=await download(pkg);origin={type:'npm',name:pkg.name,version:pkg.version,integrity:pkg.dist.integrity};}
-  const id=randomUUID(),dir=path.join(directory,id),root=path.join(dir,'package');await fs.mkdir(dir,{mode:0o700});
+  const id=randomUUID(),dir=path.join(directory,id),root=path.join(dir,'package');await privateDir(dir);
   try {
     await extract(data,root);
+    await stewardOwned(root);
     const next=await eligibility(home,target,root,false);
     if(origin.type==='npm'&&next.pkg.version!==origin.version)throw Error('Artifact version differs from registry metadata');
     await fs.writeFile(path.join(dir,'candidate.tgz'),data,{mode:0o600,flag:'wx'});
+    await stewardOwned(path.join(dir,'candidate.tgz'));
     const job={id,target,source:root,releaseNotes:path.join(root,'CHANGELOG.md'),status:'prepared',version:next.pkg.version,previousVersion:next.old.pkg.version,previousRoot:next.old.root,sha256:digest(data),origin,...(next.deploymentMigration?{deploymentMigration:next.deploymentMigration}:{}),createdAt:new Date().toISOString()};
     await atomic(path.join(dir,'job.json'),job);return job;
   } catch(error){await fs.rm(dir,{recursive:true,force:true});throw error;}
