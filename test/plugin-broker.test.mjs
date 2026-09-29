@@ -147,6 +147,7 @@ test('broker rejects foreign agent bindings and unsafe management or request fie
   const candidate = path.join(source, 'candidate.tgz');
   await fs.writeFile(candidate, 'candidate');
   await assert.doesNotReject(validateBrokerRequest({ version: 1, id: randomUUID(), operation: 'manager', runId: 'r_broker', args: ['updates', 'prepare', 'sample', '--file', candidate] }, f.workspace));
+  await assert.rejects(validateBrokerRequest({ version: 1, id: randomUUID(), operation: 'manager', runId: 'r_broker', args: ['updates', 'prepare', 'main', '--file', candidate] }, f.workspace), /operator preparation/);
   await assert.rejects(validateBrokerRequest({ version: 1, id: randomUUID(), operation: 'manager', runId: 'r_broker', args: ['updates', 'prepare', 'sample', '--file', '/tmp/candidate.tgz'] }, f.workspace), /agent workspace/);
   await assert.rejects(validateBrokerRequest({ version: 1, id: randomUUID(), operation: 'manager', runId: 'r_broker', args: ['updates', 'prepare', 'sample', '--version', '1.0.1'] }, f.workspace), /not allowed/);
   await assert.rejects(validateBrokerRequest({ version: 1, id: randomUUID(), operation: 'invoke', runId: 'r_broker', alias: 'sample', revision, capability: 'short', args: [] }), /capability/);

@@ -178,8 +178,10 @@ Source-based `plugins inspect`, `catalog-add`, and `install` management calls ar
 accepted only for an existing path inside that agent's mounted workspace, with a
 literal SHA-256 revision where the command requires one. The same management
 surface permits data-preserving `plugins uninstall` and local candidate
-`updates prepare/apply/recover`; candidate archives must also be inside the
-workspace. Public update discovery stays with the host supervisor because the
+plugin `updates prepare/apply/recover`; plugin candidate archives must also be inside the
+workspace. Local main-runtime archives require operator preparation outside the
+agent, because the runtime contains the privileged broker. The agent can apply
+an operator-prepared candidate. Public update discovery stays with the host supervisor because the
 broker has no network. The broker never turns an arbitrary host path into a
 plugin mount.
 
