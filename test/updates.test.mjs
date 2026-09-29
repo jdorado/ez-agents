@@ -9,12 +9,18 @@ import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
-import { perform, environment, packageManager, backupStateDirectory } from '../src/updates/runtime.mjs';
+import { perform, environment, packageManager, backupStateDirectory, execute } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
 import { providerEnvironment, queueAutomatic } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
+
+test('structured runtime output excludes warnings but failures retain diagnostics',async()=>{
+ const script="process.stderr.write('Compose warning\\n');process.stdout.write(JSON.stringify({services:{}}));";
+ assert.deepEqual(JSON.parse(await execute(process.execPath,['-e',script],{stdoutOnly:true})),{services:{}});
+ await assert.rejects(execute(process.execPath,['-e',script+'process.exitCode=1'],{stdoutOnly:true}),/Compose warning/);
+});
 
 test('main upgrade backup omits a live plugin socket and keeps private files',async t=>{
  const root=await fs.mkdtemp('/tmp/ez-upgrade-socket-');
