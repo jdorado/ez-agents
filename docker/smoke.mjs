@@ -9,6 +9,8 @@ const holder = `ez-main-lock-qa-${process.pid}`;
 const volume = `${holder}-control`;
 const application = `${holder}-application`;
 const privateVolume = `${holder}-private`;
+const boundProject = `${holder}-bound`;
+const boundVolume = `${boundProject}_data`;
 const broker = `${holder}-broker`;
 const marker = 'qa-private-secret-never-in-executor';
 writeFileSync(join(dir, 'relay.env'), `TELEGRAM_BOT_TOKEN=${marker}\n`, { mode: 0o600 });
@@ -92,6 +94,21 @@ try {
     }
   `]);
   assert.equal(seed.status,0,seed.stderr);
+  // Compose must reuse an existing operator-owned bind volume without
+  // recreating it or rejecting its driver options (legacy Compose v1 did).
+  const mountpoint = run(['volume','inspect','--format','{{.Mountpoint}}',privateVolume]).stdout.trim();
+  assert.ok(mountpoint.startsWith('/'));
+  const bind = run(['volume','create','--driver','local','--opt','type=none','--opt','o=bind','--opt',`device=${mountpoint}`,boundVolume]);
+  assert.equal(bind.status,0,bind.stderr);
+  const boundConfig = {services:{probe:{image,network_mode:'none',entrypoint:['node','-e',
+    `const fs=require('fs'),assert=require('assert/strict');assert.equal(JSON.parse(fs.readFileSync('/state/host-executor.json')).isolation,'isolated');console.log('bound-volume-preserved');`],
+    volumes:['data:/state:ro']}},volumes:{data:{}}};
+  const reused = spawnSync('docker',['run','--rm','-i','--network','none','-v','/var/run/docker.sock:/var/run/docker.sock',
+    '--entrypoint','docker-compose',image,'--project-name',boundProject,'--file','-','run','--rm','--no-deps','probe'],
+    {encoding:'utf8',timeout:60000,input:JSON.stringify(boundConfig)});
+  assert.equal(reused.status,0,reused.stderr);
+  assert.match(reused.stdout,/bound-volume-preserved/);
+  assert.equal(run(['volume','inspect','--format','{{index .Options "device"}}',boundVolume]).stdout.trim(),mountpoint);
   const privateState = run(['run','--rm','-v',`${privateVolume}:/qa`,
     '-e','EZ_CONTROL_DIR=/qa/control','-e','EZ_RUNTIME_UID=20001','-e','EZ_RUNTIME_GID=20002','-e','EZ_RELAY_UID=20003',
     image,'owner','status']);
@@ -182,4 +199,4 @@ try {
   }
   assert.equal(released,0,'a dead relay must release the delivery socket');
   console.log('Docker smoke passed: direct non-root application help/start/health/stop, inherited private descriptor, non-root executor, isolated Codex on PATH, private secret isolation, literal argv, exit code, no Docker socket, live delivery-socket guard and crash release.');
-} finally { run(['rm','-f',holder,application,broker]); run(['volume','rm',volume,privateVolume]); rmSync(dir, {recursive:true, force:true}); }
+} finally { run(['rm','-f',holder,application,broker]); run(['volume','rm',boundVolume,volume,privateVolume]); rmSync(dir, {recursive:true, force:true}); }

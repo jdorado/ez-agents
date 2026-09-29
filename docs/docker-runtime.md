@@ -182,6 +182,9 @@ an already connected account. Monitoring and sends require their own authority.
 
 ### Isolated plugin commands
 
+The image pins modern Docker Compose, including its standalone executable, so
+existing operator-created volumes retain their data and driver bindings.
+
 The relay-side `ez` client sends only declared aliases, literal argument arrays,
 bounded stdin, and the active run ID to the broker. The broker re-reads owner
 authority and the registry before every call, pins the discovered revision, and
