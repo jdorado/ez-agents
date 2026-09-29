@@ -288,7 +288,17 @@ test('isolated broker allows unbound plugins when another plugin has host bindin
   const c=await compose(config,record,{},f.home);
   assert.equal(c.version,'3.8');assert.equal(c.networks,undefined);
   await fs.writeFile(hostConfig,JSON.stringify({cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir:control,binDir:path.join(f.root,'bin'),toolsHome:f.home,pluginNetworkBindings:{sample:{revisions:[p.revision],bindings:[{service:'sample',network:'sample_default'}]}}}]}));
-  await assert.rejects(compose(config,record,{},f.home),/Isolated broker cannot use host network bindings/);
+  const bound=await compose(config,record,{},f.home);
+  const [network]=Object.entries(bound.networks).filter(([name])=>name!=='default');
+  assert.deepEqual(network[1],{external:true,name:'sample_default'});
+  assert.deepEqual(bound.services.sample.networks,['default',network[0]]);
+  const host=JSON.parse(await fs.readFile(hostConfig,'utf8'));
+  host.agents[0].pluginNetworkBindings.sample.revisions=['sha256:'+'f'.repeat(64)];
+  await fs.writeFile(hostConfig,JSON.stringify(host));
+  await assert.rejects(compose(config,record,{},f.home),/not pinned to the reviewed plugin revision/);
+  host.isolation='host-capable';
+  await fs.writeFile(hostConfig,JSON.stringify(host));
+  await assert.rejects(compose(config,record,{},f.home),/requires an isolated host binding/);
  } finally {
   if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
  }

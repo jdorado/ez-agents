@@ -281,11 +281,12 @@ export async function hostNetworkBindings(config, record, home) {
     throw Error('Invalid host network bindings');
   const route = configured?.[record.manifest?.id];
   if (route === undefined) return [];
-  if (process.env.EZ_DOCKER_COMPOSE === 'standalone') {
-    throw Error('Isolated broker cannot use host network bindings');
-  }
-  if (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
-      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir))
+  const isolated = process.env.EZ_DOCKER_COMPOSE === 'standalone';
+  if (isolated && host.isolation !== 'isolated') throw Error('Isolated broker requires an isolated host binding');
+  // Like folder grants, network grants use the exact mounted identities. The
+  // broker does not receive the host deployment's convenience symlinks.
+  if (!isolated && (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
+      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir)))
     throw Error('Invalid host network binding deployment');
   keys(route, ['revisions', 'bindings']);
   const trusted = await snapshot(record.source);
