@@ -1,6 +1,6 @@
 import { sharedService, attachShared } from './shared.mjs';
 import { exposure, commandExposure } from './exposure.mjs';
-import { nativeCommands } from './native-tasks.mjs';
+import { installedNativeHelp } from './native-tasks.mjs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,18 +15,6 @@ const dockerNetwork = value => { if(typeof value !== 'string' || !/^[A-Za-z0-9][
 const hash = data => createHash('sha256').update(data).digest('hex');
 const json = async file => JSON.parse(await fs.readFile(file,'utf8'));
 const emit = value => console.log(JSON.stringify(value));
-async function installedNativeHelp(home) {
-  const commands=[];
-  for(const {command,description} of nativeCommands()) {
-    const executable=path.join(home,'bin',`ezenciel-agents-${command}`);
-    try {await fs.access(executable,fs.constants.X_OK);} catch(error) {
-      if(['ENOENT','EACCES'].includes(error.code))continue;
-      throw error;
-    }
-    commands.push({description,argv:[executable,'--help']});
-  }
-  return commands;
-}
 const keys = (object, allowed) => { if(!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).some(k=>!allowed.includes(k))) throw Error('Invalid or unknown descriptor fields'); };
 const strings = value => { if(!Array.isArray(value) || value.some(x=>typeof x!=='string' || x.includes('\0'))) throw Error('Expected literal string arguments'); return value; };
 const containerPath = value => { if(typeof value!=='string' || !value.startsWith('/') || value.includes('..') || /[\0\n\r:$]/.test(value) || value.startsWith('/var/run') || value.startsWith('/proc') || value.startsWith('/sys')) throw Error('Invalid container path'); return value; };
@@ -596,7 +584,7 @@ export async function main(args) {
     return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1),{publish:port,serve:true});
   }
   if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],native:await installedNativeHelp(home),foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],native:await installedNativeHelp(path.join(home,'bin')),foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');

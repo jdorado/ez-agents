@@ -356,6 +356,16 @@ test('standalone help does not advertise uninstalled native controls',async t=>{
  const f=await fixture(t);await init(f.home,f.workspace);
  assert.deepEqual(JSON.parse((await f.call('--help')).stdout).native,[]);
 });
+test('isolated help discovers runnable native controls without a broker or run',async()=>{
+ const client=new URL('../bin/ez',import.meta.url).pathname;
+ const env={PATH:process.env.PATH};
+ const help=JSON.parse((await exec(process.execPath,[client,'--help'],{env})).stdout);
+ const scheduler=help.native.find(item=>item.argv[0].endsWith('/ezenciel-agents-schedule'));
+ assert.ok(scheduler);
+ const result=await exec(scheduler.argv[0],scheduler.argv.slice(1),{env});
+ assert.match(result.stdout,/list \| runs \| show ID/);
+ await assert.rejects(exec(process.execPath,[client,'tools','list'],{env}),/EZ_RUN_ID is required/);
+});
 test('copying another agent registry is rejected before any Docker operation',async t=>{
  const f=await fixture(t),other=path.join(f.root,'other');await init(f.home,f.workspace);await init(other,f.workspace);
  await fs.copyFile(path.join(f.home,'registry.json'),path.join(other,'registry.json'));

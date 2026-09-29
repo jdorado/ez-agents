@@ -9,6 +9,19 @@ export const nativeCommands=()=>[
   {command:'message',description:"Send text, voice or a workspace document to the paired owner's Telegram chat and wait for its Telegram delivery receipt. Read --help.",limitations:['History requires a native run; inline text only.']},
 ];
 
+export async function installedNativeHelp(binDirectory) {
+  const commands=[];
+  for(const {command,description} of nativeCommands()) {
+    const executable=path.join(binDirectory,`ezenciel-agents-${command}`);
+    try {await fs.access(executable,fs.constants.X_OK);} catch(error) {
+      if(['ENOENT','EACCES'].includes(error.code))continue;
+      throw error;
+    }
+    commands.push({description,argv:[executable,'--help']});
+  }
+  return commands;
+}
+
 export async function nativeTaskBinding(home,environment=process.env) {
   home=await fs.realpath(home);
   const config=JSON.parse(await fs.readFile(path.join(home,'config.json'),'utf8'));
