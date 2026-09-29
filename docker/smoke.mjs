@@ -8,6 +8,8 @@ const dir = mkdtempSync(join(tmpdir(), 'ez-docker-qa-'));
 const holder = `ez-main-lock-qa-${process.pid}`;
 const volume = `${holder}-control`;
 const application = `${holder}-application`;
+const privateVolume = `${holder}-private`;
+const broker = `${holder}-broker`;
 const marker = 'qa-private-secret-never-in-executor';
 writeFileSync(join(dir, 'relay.env'), `TELEGRAM_BOT_TOKEN=${marker}\n`, { mode: 0o600 });
 writeFileSync(join(dir, 'purpose.md'), 'Verify the packaged Ez runtime.\n', { mode: 0o644 });
@@ -48,6 +50,7 @@ try {
     assert.throws(() => fs.openSync('/proc/'+process.ppid+'/mem', 'r'), {code:'EACCES'});
     assert.throws(() => fs.readFileSync('/run/secrets/relay_env'), {code:'EACCES'});
     assert.equal(fs.existsSync('/var/run/docker.sock'), false);
+    assert.match(fs.readFileSync('/proc/self/status','utf8'), /^NoNewPrivs:\\s+1$/m);
     for (const pid of ['1', String(process.ppid)]) {
       try { assert.ok(!fs.readFileSync('/proc/'+pid+'/environ','utf8').includes('${marker}')); }
       catch (e) { if (e.code !== 'EACCES') throw e; }
@@ -70,6 +73,77 @@ try {
     '--mount',`type=bind,src=${join(dir,'relay.env')},dst=/run/secrets/relay_env,readonly`,image,'exec','node','-e',customProbe]);
   assert.equal(custom.status,0,custom.stderr);
   assert.equal(JSON.parse(custom.stdout).uid,20001);
+  // Real Linux ownership, including pre-existing mode-600 control/registry
+  // files. Host bind mounts on desktop Docker can mask these failures.
+  const seed = run(['run','--rm','-v',`${privateVolume}:/qa`,'--entrypoint','node',image,'-e',`
+    const fs=require('fs');
+    for(const name of ['home','control','mind']) {
+      fs.mkdirSync('/qa/'+name,{recursive:true,mode:0o700});
+      fs.chownSync('/qa/'+name,20001,20002);
+    }
+    const files={
+      '/qa/control/control-state.json':{version:1,owner:null,pending:[]},
+      '/qa/home/config.json':{schemaVersion:1,workspace:'/qa/mind',hostConfig:'/qa/host-executor.json'},
+      '/qa/home/registry.json':{schemaVersion:1,owner:'/qa/home',plugins:{},commands:{}},
+      '/qa/host-executor.json':{isolation:'isolated',agents:[{name:'qa',toolsHome:'/qa/home',workspace:'/qa/mind',controlDir:'/qa/control'}]},
+    };
+    for(const [file,value] of Object.entries(files)) {
+      fs.writeFileSync(file,JSON.stringify(value),{mode:0o600});fs.chownSync(file,20001,20002);
+    }
+  `]);
+  assert.equal(seed.status,0,seed.stderr);
+  const privateState = run(['run','--rm','-v',`${privateVolume}:/qa`,
+    '-e','EZ_CONTROL_DIR=/qa/control','-e','EZ_RUNTIME_UID=20001','-e','EZ_RUNTIME_GID=20002','-e','EZ_RELAY_UID=20003',
+    image,'owner','status']);
+  assert.equal(privateState.status,0,privateState.stderr);
+  assert.equal(JSON.parse(privateState.stdout).owner,null);
+  const brokerStarted = run(['run','-d','--name',broker,'--user','0:0','--cap-drop','ALL',
+    '--cap-add','DAC_OVERRIDE','--cap-add','CHOWN','--security-opt','no-new-privileges','--network','none',
+    '-v',`${privateVolume}:/qa`,'--entrypoint','node',image,'--import','/app/node_modules/tsx/dist/loader.mjs',
+    '/app/src/plugin-broker.mjs','--home','/qa/home','--workspace','/qa/mind','--control-dir','/qa/control',
+    '--socket','/qa/control/plugin-broker.sock','--host-config','/qa/host-executor.json']);
+  assert.equal(brokerStarted.status,0,brokerStarted.stderr);
+  let brokerReady=false;
+  for(let n=0;n<30;n++) {
+    const check=run(['exec','--user','20001:20002',broker,'node','-e',`
+      const fs=require('fs'),assert=require('assert/strict');
+      assert.ok(fs.statSync('/qa/control/plugin-broker.sock').isSocket());
+      const file='/qa/control/plugin-broker-plugins.json';
+      assert.equal(fs.statSync(file).uid,20001);assert.deepEqual(JSON.parse(fs.readFileSync(file)).plugins,[]);
+    `]);
+    if(check.status===0){brokerReady=true;break;}
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  assert.ok(brokerReady,run(['logs',broker]).stderr);
+  const prepare = run(['exec',broker,'node','--input-type=module','-e',`
+    import fs from 'node:fs/promises';
+    import {snapshot,install,prepareCommand} from '/app/src/plugins/manager.mjs';
+    const home='/qa/home',source='/qa/source';
+    await fs.mkdir(source);
+    const manifest={schemaVersion:1,id:'sample',version:'0.1.0',description:'Synthetic',commands:{sample:{executable:'client.mjs',args:[]}},skills:['SKILL.md']};
+    const deployment={schemaVersion:1,services:{sample:{buildTarget:'runtime',volumes:{},healthcheck:['node','--version']}},commands:{sample:{service:'sample',argv:['node','/app/client.mjs']}}};
+    for(const [name,value] of Object.entries({'package.json':JSON.stringify({files:['client.mjs','SKILL.md']}),'ez-plugin.json':JSON.stringify(manifest),'ez-deployment.json':JSON.stringify(deployment),'Dockerfile':'FROM scratch AS runtime','.dockerignore':'','client.mjs':'','SKILL.md':'Synthetic'}))await fs.writeFile(source+'/'+name,value);
+    // Only the Docker build effect is stubbed; real installation and private
+    // filesystem operations execute with the production broker capabilities.
+    await fs.writeFile('/qa/docker','#!/bin/sh\\nexit 0\\n',{mode:0o755});
+    process.env.PATH='/qa:'+process.env.PATH;
+    delete process.env.EZ_DOCKER_COMPOSE;
+    const pkg=await snapshot(source),config=JSON.parse(await fs.readFile(home+'/config.json'));
+    await install(home,config,'sample',source,pkg.revision);
+    const command=await prepareCommand(home,'sample',[],{invocation:true,environment:{}});
+    await command.release();
+  `]);
+  assert.equal(prepare.status,0,prepare.stderr);
+  const steward = run(['exec','--user','20001:20002',broker,'node','-e',`
+    const fs=require('fs'),assert=require('assert/strict');
+    for(const dir of ['packages','packages/sample','command-invocations']) {
+      const stat=fs.statSync('/qa/home/'+dir);
+      assert.equal(stat.uid,20001);assert.equal(stat.gid,20002);assert.equal(stat.mode&511,448);
+      fs.readdirSync('/qa/home/'+dir);
+    }
+    fs.readFileSync('/qa/home/packages/sample/compose.json');
+  `]);
+  assert.equal(steward.status,0,steward.stderr);
   const failed = run(['run','--rm',image,'exec','node','-e','process.exit(23)']);
   assert.equal(failed.status, 23, failed.stderr);
   // The live delivery socket is the single-relay guard (it replaced the kernel
@@ -108,4 +182,4 @@ try {
   }
   assert.equal(released,0,'a dead relay must release the delivery socket');
   console.log('Docker smoke passed: direct non-root application help/start/health/stop, inherited private descriptor, non-root executor, isolated Codex on PATH, private secret isolation, literal argv, exit code, no Docker socket, live delivery-socket guard and crash release.');
-} finally { run(['rm','-f',holder,application]); run(['volume','rm',volume]); rmSync(dir, {recursive:true, force:true}); }
+} finally { run(['rm','-f',holder,application,broker]); run(['volume','rm',volume,privateVolume]); rmSync(dir, {recursive:true, force:true}); }

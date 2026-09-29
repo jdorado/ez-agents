@@ -315,7 +315,7 @@ export const opencodeInvocation = (
 export const executorInvocation = (command: string, args: string[]) => {
   const uid = process.geteuid?.()
   return process.platform === 'linux' && uid !== undefined && process.getuid?.() !== uid
-    ? { command: 'setpriv', args: [`--ruid=${uid}`, `--euid=${uid}`, '--', command, ...args] }
+    ? { command: 'setpriv', args: [`--ruid=${uid}`, `--euid=${uid}`, '--no-new-privs', '--', command, ...args] }
     : { command, args }
 }
 

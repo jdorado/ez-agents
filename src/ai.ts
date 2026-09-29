@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { homedir } from 'node:os'
 import { join, delimiter } from 'node:path'
-import { executorEnvironment, executorKey, resolveExecutor } from './executor.js'
+import { executorEnvironment, executorInvocation, executorKey, resolveExecutor } from './executor.js'
 import { desktopCodexPath } from './desktop-bridge.js'
 
 export type AiPreset = { id: string; name: string; cli: string; provider?: string; model?: string; effort?: string }
@@ -55,8 +55,10 @@ export const installed = async (cli: string): Promise<boolean> => {
 // The optional runner injects `opencode models` output in tests; production
 // spawns the installed CLI with the whitelisted executor environment.
 export const readOpencodeModels = async (run?: (args: string[]) => Promise<string>, dataHome?: string): Promise<ModelChoice[]> => {
-  const exec = run ?? (async (args: string[]) =>
-    (await promisify(execFile)('opencode', args, { env: { ...executorEnvironment(), ...(dataHome ? { XDG_DATA_HOME: dataHome } : {}) }, timeout: 8000, maxBuffer: 4 * 1024 * 1024 })).stdout)
+  const exec = run ?? (async (args: string[]) => {
+    const invocation = executorInvocation('opencode', args)
+    return (await promisify(execFile)(invocation.command, invocation.args, { env: { ...executorEnvironment(), ...(dataHome ? { XDG_DATA_HOME: dataHome } : {}) }, timeout: 8000, maxBuffer: 4 * 1024 * 1024 })).stdout
+  })
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
   try {
