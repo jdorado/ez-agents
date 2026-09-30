@@ -77,6 +77,56 @@ export async function invokeExternalRead(binding, alias, revision) {
   }
 }
 
+// Narrow persistence adapter: reviewed Library CLI, one environment-derived new
+// smoke note. Caller input never supplies a path, argv, revision or expected hash.
+export async function invokeExternalSmokeNote(binding, grant, environment, operation, input) {
+  if (typeof environment !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(environment) || !['read', 'write'].includes(operation) ||
+      !input || typeof input.requestId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(input.requestId) ||
+      Object.keys(input).some(key => !['requestId', ...(operation === 'write' ? ['text'] : [])].includes(key)) ||
+      (operation === 'write' && (typeof input.text !== 'string' || !input.text.trim() || Buffer.byteLength(input.text) > 1024 || input.text.includes('\0'))))
+    throw Error('Invalid smoke note input');
+  validateRevision(grant.revision);
+  if (typeof grant.library !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(grant.library)) throw Error('Invalid Library name');
+  const relative = `notes/ez-external-smoke/${environment}.md`;
+  const key = `external-smoke-${environment}-${input.requestId}`;
+  const release = await invokeLease(binding.home);
+  try {
+    const config = await json(path.join(binding.home, 'config.json'));
+    if (await fs.realpath(config.workspace) !== binding.workspace) throw Error('Environment binding changed');
+    const selected = recordForAlias(await registry(binding.home), 'library');
+    const deployed = selected.record.deployment.commands.library;
+    if (selected.plugin !== 'library' || selected.record.revision !== grant.revision ||
+        selected.command.executable !== 'bin/ez-library.mjs' || selected.command.args.length ||
+        JSON.stringify(deployed.argv) !== JSON.stringify(['node', '/app/bin/ez-library.mjs']) || (deployed.suffix?.length ?? 0))
+      throw Error('Smoke Library contract changed');
+    const invoke = async (args, stdin) => {
+      const command = await prepareCommand(binding.home, 'library', args, { revision: grant.revision, invocation: true, environment: {} });
+      try {
+        const result = await dockerRun(command.argv, { container: command.container, capture: true, stdin,
+          timeoutMs: 30_000, maxBytes: 16_384 });
+        if (result.code !== 0) throw Error('Smoke operation failed or uncertain; reconcile using the same requestId');
+        return result.stdout;
+      } finally { await command.release?.(); }
+    };
+    const decode = text => { const value = JSON.parse(text); if (value.ok !== true || !value.data) throw Error('Invalid Library receipt'); return value.data; };
+    if (operation === 'write') {
+      const result = decode(await invoke(['put', '--library', grant.library, '--path', relative, '--expected', 'new', '--key', key], input.text));
+      const sha256 = createHash('sha256').update(input.text).digest('hex');
+      if (result.path !== relative || result.expected !== 'new' || result.state !== 'stored' || result.sha256 !== sha256 ||
+          result.bytes !== Buffer.byteLength(input.text)) throw Error('Smoke write readback differs');
+      return { path: relative, requestId: input.requestId, sha256, bytes: result.bytes, state: 'stored', replay: result.replay === true };
+    }
+    const receipt = decode(await invoke(['operation', '--library', grant.library, '--key', key]));
+    if (receipt.path !== relative || receipt.kind !== 'file' || receipt.expected !== 'new' || receipt.state !== 'stored' ||
+        !Number.isSafeInteger(receipt.bytes) || receipt.bytes > 1024 || receipt.bytes < 1 || !/^[a-f0-9]{64}$/.test(receipt.sha256))
+      throw Error('Smoke note unavailable or changed');
+    const text = await invoke(['get', '--library', grant.library, '--path', relative, '--raw']);
+    if (Buffer.byteLength(text) !== receipt.bytes || createHash('sha256').update(text).digest('hex') !== receipt.sha256)
+      throw Error('Smoke note readback differs');
+    return { path: relative, requestId: input.requestId, text, sha256: receipt.sha256, bytes: receipt.bytes, state: 'stored' };
+  } finally { await release(); }
+}
+
 const validateManagerArgs = async (value, workspace) => {
   const args = validateArgs(value);
   if (!args.length) throw Error('Missing broker management command');

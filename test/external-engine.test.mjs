@@ -170,3 +170,107 @@ test('packaged CLI help and missing policy need no credentials or model', async 
     assert.equal(error.stdout, ''); assert.equal(error.stderr.trim(), 'EXTERNAL_ENGINE_UNAVAILABLE'); return true;
   });
 });
+
+async function smokeFixture(t) {
+  const f = await fixture(t, false);
+  const library = structuredClone(f.record);
+  library.manifest.id = 'library';
+  library.manifest.commands = { library: { executable: 'bin/ez-library.mjs', args: [], exposure: {
+    receivesExternalContent: true, sendsExternally: true, changesRecords: true, requiresReview: true } } };
+  library.deployment.commands = { library: { service: 'sample', argv: ['node', '/app/bin/ez-library.mjs'] } };
+  library.project = `ezp-${hash(f.home).slice(0,16)}-library`;
+  library.compose = path.join(f.home, 'packages', 'library', 'compose.json');
+  library.source = path.join(f.home, 'packages', 'library', revision.slice(7));
+  await fs.mkdir(library.source, { recursive: true });
+  f.registry.commands.library = 'library'; f.registry.plugins.library = library;
+  await f.saveRegistry();
+  f.grant.smokeNote = { revision, library: 'default' }; await f.saveGrant();
+  const fake = path.join(f.root, 'fake'); await fs.mkdir(fake);
+  const state = path.join(f.root, 'provider.json'), trace = path.join(f.root, 'argv.jsonl');
+  await fs.writeFile(path.join(fake, 'docker'), `#!${process.execPath}
+const fs=require('node:fs'),crypto=require('node:crypto');
+const args=process.argv.slice(2);if(!args.includes('run'))process.exit(0);
+const cli=args.slice(args.indexOf('/app/bin/ez-library.mjs')+1);
+fs.appendFileSync(${JSON.stringify(trace)},JSON.stringify(cli)+'\\n');
+if(process.env.EZ_RUN_ID||process.env.TELEGRAM_BOT_TOKEN)process.exit(9);
+const opts=Object.fromEntries(cli.slice(1).filter((_,i)=>i%2===0).map((k,i)=>[k,cli[2+i*2]]));
+const file=${JSON.stringify(state)},input=fs.readFileSync(0,'utf8');
+let state=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):null;
+if(fs.existsSync(${JSON.stringify(path.join(f.root, 'reject'))}))process.exit(4);
+const emit=data=>process.stdout.write(JSON.stringify({ok:true,data}));
+if(opts['--library']!=='default')process.exit(8);
+if(cli[0]==='put'){
+ if(opts['--path']!=='notes/ez-external-smoke/sample-env.md'||opts['--expected']!=='new')process.exit(8);
+ const sha256=crypto.createHash('sha256').update(input).digest('hex');
+ if(state&&(state.key!==opts['--key']||state.sha256!==sha256))process.exit(3);
+ const replay=!!state;state={kind:'file',path:opts['--path'],expected:'new',key:opts['--key'],sha256,bytes:Buffer.byteLength(input),text:input,state:'stored'};
+ fs.writeFileSync(file,JSON.stringify(state));emit({...state,replay});
+}else if(cli[0]==='operation'){
+ if(!state||state.key!==opts['--key'])process.exit(4);emit(state);
+}else if(cli[0]==='get'){
+ if(!state||state.path!==opts['--path']||!cli.includes('--raw'))process.exit(4);process.stdout.write(state.text);
+}else process.exit(8);
+`, { mode: 0o700 });
+  const previous = process.env.PATH; process.env.PATH = fake + path.delimiter + previous;
+  t.after(() => { process.env.PATH = previous; });
+  return { ...f, library, state, trace, engine: await openExternalEnvironment(f.file) };
+}
+const smokeId = 'dba332d4-d8a1-477e-bcb9-69894f28111f';
+test('explicit smoke grant writes one new Library note, reads durable receipt/bytes and rejects overwrite', async t => {
+  const f = await smokeFixture(t);
+  const listed = await f.engine.listTools();
+  assert.deepEqual(listed.map(tool => tool.name), ['environment_bootstrap','smoke_note_write','smoke_note_read']);
+  assert.equal(listed[1].annotations.readOnlyHint, false);
+  const input = { requestId: smokeId, text: 'External environment persistence smoke. Café.' };
+  const write = await f.engine.callTool('smoke_note_write', input);
+  assert.equal(write.data.state, 'stored'); assert.equal(write.data.replay, false);
+  assert.equal(write.receipt.pluginRevision, revision);
+  const replay = await f.engine.callTool('smoke_note_write', input);
+  assert.equal(replay.data.replay, true);
+  const restarted = await openExternalEnvironment(f.file);
+  const read = await restarted.callTool('smoke_note_read', { requestId: smokeId });
+  assert.equal(read.data.text, input.text); assert.equal(read.data.sha256, write.data.sha256);
+  assert.equal(read.data.path, 'notes/ez-external-smoke/sample-env.md');
+  await assert.rejects(restarted.callTool('smoke_note_write', { ...input, text: 'replacement' }), /failed or uncertain/);
+  await assert.rejects(restarted.callTool('smoke_note_write', { ...input, requestId: 'affffddd-d8a1-477e-bcb9-69894f28111f' }), /failed or uncertain/);
+  const vectors = (await fs.readFile(f.trace, 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.equal(vectors.every(args => ['put','get','operation'].includes(args[0])), true);
+  assert.equal(vectors.filter(args => args[0] === 'put').every(args => args.includes('new')), true);
+  assert.equal(vectors.some(args => args.includes('/etc/passwd')), false);
+});
+
+test('smoke authority rejects forged paths, broad commands, malformed input, stale pins and changed readback', async t => {
+  const f = await smokeFixture(t);
+  for (const input of [ { requestId: smokeId, text: 'ok', path: '../profile.md' }, { requestId: smokeId, text: 'ok', args: ['remove'] },
+    { requestId: '../other', text: 'ok' }, { requestId: smokeId, text: 'é'.repeat(513) }, { requestId: smokeId, text: '\0' },
+    { requestId: smokeId, text: '' } ]) await assert.rejects(f.engine.callTool('smoke_note_write', input), /INVALID_ARGUMENTS/);
+  await assert.rejects(f.engine.callTool('smoke_note_read', { requestId: smokeId, path: 'profile.md' }), /INVALID_ARGUMENTS/);
+  await f.engine.callTool('smoke_note_write', { requestId: smokeId, text: 'safe smoke' });
+  const state = JSON.parse(await fs.readFile(f.state)); state.text = 'changed outside'; await fs.writeFile(f.state, JSON.stringify(state));
+  await assert.rejects(f.engine.callTool('smoke_note_read', { requestId: smokeId }), /readback differs/);
+  f.library.revision = 'sha256:' + 'b'.repeat(64); await f.saveRegistry();
+  await assert.rejects(f.engine.callTool('smoke_note_write', { requestId: smokeId, text: 'safe smoke' }), /TOOL_UNAVAILABLE/);
+  await assert.rejects(fs.stat(path.join(f.home, 'workspace-writer.lock')), { code: 'ENOENT' });
+});
+
+test('provider unsafe-path/busy failures never fall back to filesystem writes or leak errors', async t => {
+  const f = await smokeFixture(t);
+  await fs.writeFile(path.join(f.root, 'reject'), 'simulate Library symlink or writer-lock denial');
+  const response = await rpc(f.engine, [...init, call('smoke_note_write', { requestId: smokeId, text: 'safe smoke' })]);
+  assert.equal(response[1].result.isError, true);
+  assert.equal(response[1].result.content[0].text, 'EXTERNAL_OPERATION_UNCONFIRMED');
+  await assert.rejects(fs.stat(f.state), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(path.join(f.home, 'workspace-writer.lock')), { code: 'ENOENT' });
+  const noGrant = await fixture(t, false), engine = await openExternalEnvironment(noGrant.file);
+  await assert.rejects(engine.callTool('smoke_note_write', { requestId: smokeId, text: 'safe smoke' }), /UNKNOWN_TOOL/);
+});
+
+test('smoke grant cannot choose a path or bypass revocation and native workspace ownership', async t => {
+  const f = await smokeFixture(t), release = await workspaceLease(f.home, { kind: 'native' });
+  try { await assert.rejects(f.engine.callTool('smoke_note_write', { requestId: smokeId, text: 'safe smoke' }), /busy/); }
+  finally { await release(); }
+  await assert.rejects(fs.stat(f.state), { code: 'ENOENT' });
+  f.grant.smokeNote.path = 'profile.md'; await f.saveGrant();
+  await assert.rejects(f.engine.callTool('smoke_note_write', { requestId: smokeId, text: 'safe smoke' }), /BINDING_CHANGED/);
+  await assert.rejects(openExternalEnvironment(f.file), /INVALID_BINDING/);
+});

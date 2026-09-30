@@ -315,7 +315,7 @@ without authorization. Local registry rehearsal uses `pnpm publish:local`.
 
 - [Contributing](CONTRIBUTING.md) and [releasing](docs/releasing.md)
 - [Plugin author guide](docs/plugin-guide.md)
-- [External engine: read-only MCP environment interface](docs/external-engine.md)
+- [External engine: scoped MCP environment interface](docs/external-engine.md)
 - [First plugin and extension contract](docs/plugins.md)
 - [License and dependency notices](THIRD_PARTY_NOTICES.md)
 

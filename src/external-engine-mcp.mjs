@@ -1,4 +1,4 @@
-import { openExternalEnvironment, ExternalEngineError } from './external-engine.mjs';
+import { openExternalEnvironment, ExternalEngineError, externalRuntime } from './external-engine.mjs';
 import { StringDecoder } from 'node:string_decoder';
 import { once } from 'node:events';
 
@@ -36,7 +36,7 @@ export async function serveExternalEngine(input, output, engine) {
         if (request.method === 'initialize' && !initialized) {
           initialized = true;
           result = { protocolVersion: versions.includes(request.params?.protocolVersion) ? request.params.protocolVersion : versions[0],
-            capabilities: { tools: {} }, serverInfo: { name: 'ez-external-engine', version: '1' } };
+            capabilities: { tools: {} }, serverInfo: { name: 'ez-external-engine', version: externalRuntime.version } };
         } else if (request.method === 'ping') result = {};
         else if (!ready) throw new ExternalEngineError('NOT_INITIALIZED');
         else if (request.method === 'tools/list') {
@@ -52,7 +52,8 @@ export async function serveExternalEngine(input, output, engine) {
             const value = await engine.callTool(params.name, Object.hasOwn(params, 'arguments') ? params.arguments : {});
             result = { content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError: false };
           } catch (error) {
-            const code = error instanceof ExternalEngineError ? error.code : 'EXTERNAL_READ_FAILED';
+            const code = error instanceof ExternalEngineError ? error.code :
+              params.name === 'smoke_note_write' ? 'EXTERNAL_OPERATION_UNCONFIRMED' : 'EXTERNAL_READ_FAILED';
             result = { isError: true, content: [{ type: 'text', text: code }] };
           }
         } else throw new ExternalEngineError('UNSUPPORTED_METHOD');
@@ -68,7 +69,7 @@ export async function serveExternalEngine(input, output, engine) {
 
 export async function main(args) {
   if (args.length === 1 && args[0] === '--help') {
-    console.log('ezenciel-agents-external-engine --binding /absolute/host-owned/grant.json\nRead-only stdio MCP. Empty exposure by default; no model, relay, writes or remote authentication setup.');
+    console.log('ezenciel-agents-external-engine --binding /absolute/host-owned/grant.json\nRead-only stdio MCP by default. Optional explicitly granted new smoke note via Library; no model, relay or remote authentication setup.');
     return;
   }
   if (args.length !== 2 || args[0] !== '--binding') throw new ExternalEngineError('INVALID_BINDING');
