@@ -48,6 +48,11 @@ At minimum, provide:
 - `ez-plugin.json` with the stable plugin id, matching version, commands, and
   skill paths. Declare command exposure for external content, external sends,
   record changes, and requested review.
+  A dedicated parameterless JSON read alias may additionally declare
+  `externalRead: true` with explicit `changesRecords: false` and
+  `requiresReview: false`. This only makes it eligible for a separately approved,
+  revision-pinned [external engine grant](external-engine.md); it does not expose
+  the alias automatically. The product owns output sanitization and provider scope.
 - `ez-deployment.json` when the plugin has managed services, volumes,
   healthchecks, exports, or deployment dependencies.
 - A skill such as `skills/<plugin>/SKILL.md` covering required inputs, private
@@ -199,4 +204,3 @@ hash.
 
 For contribution, security, and removal details, follow the links above and the
 plugin's own `CONTRIBUTING.md`, `SECURITY.md`, and README.
-

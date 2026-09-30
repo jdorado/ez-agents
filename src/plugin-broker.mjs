@@ -5,6 +5,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareCommand, registry, run as dockerRun, stewardOwned } from './plugins/manager.mjs';
+import { invokeLease } from './plugins/workspace-lease.mjs';
 
 const MAX_FRAME = 4 * 1024 * 1024;
 const MAX_ARGS = 100;
@@ -53,6 +54,28 @@ const recordForAlias = (r, alias) => {
   validateRevision(record.revision);
   return { plugin, record, command };
 };
+
+// External engines execute a reviewed, parameterless read alias, never a native
+// model run. The caller supplies a host-approved exact environment binding.
+export async function invokeExternalRead(binding, alias, revision) {
+  const release = await invokeLease(binding.home);
+  let command;
+  try {
+    const config = await json(path.join(binding.home, 'config.json'));
+    if (await fs.realpath(config.workspace) !== binding.workspace) throw Error('External environment binding changed');
+    const selected = recordForAlias(await registry(binding.home), alias);
+    if (selected.record.revision !== revision || selected.command.externalRead !== true ||
+        selected.command.exposure?.changesRecords !== false || selected.command.exposure?.requiresReview !== false)
+      throw Error('External read is not approved at the pinned revision');
+    command = await prepareCommand(binding.home, alias, [], { revision, invocation: true, environment: {} });
+    const result = await dockerRun(command.argv, { container: command.container, capture: true,
+      timeoutMs: 30_000, maxBytes: 131_072 });
+    if (result.code !== 0) throw Error('External read failed');
+    return JSON.parse(result.stdout);
+  } finally {
+    try { await command?.release?.(); } finally { await release(); }
+  }
+}
 
 const validateManagerArgs = async (value, workspace) => {
   const args = validateArgs(value);
