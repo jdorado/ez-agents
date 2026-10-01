@@ -556,3 +556,20 @@ test('private plugins retain explicit local-file preparation and application gua
  const submitted=await submit(f.home,job.id,false);assert.equal(submitted.status,'queued');
  const result=await perform(f.home,submitted,runtime(f));assert.equal(result.status,'completed');
 });
+
+for(const mode of ['exact','wrong-image','unhealthy']) test(`recovery reuses only a healthy retained pinned relay: ${mode}`,async t=>{
+ const f=await fixture(t),job=await queued(f),r=runtime(f);await perform(f.home,job,r);
+ const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
+ const calls=[],execute=async(command,args,options)=>{
+  calls.push([command,...args]);
+  if(args.includes('ps'))return 'b'.repeat(64);
+  if(args[0]==='inspect'&&args.includes('{{json .}}'))return JSON.stringify({Image:'sha256:'+(mode==='wrong-image'?'c':'a').repeat(64),State:{Running:true,Health:{Status:mode==='unhealthy'?'unhealthy':'healthy'}}});
+  if(mode==='exact'&&args.includes('up'))throw Error('Pinned image index no longer exists');
+  return r.execute(command,args,options);
+ };
+ const result=await perform(f.home,interrupted,{...r,execute});
+ assert.equal(result.status,'rolled-back');
+ assert.equal(calls.some(c=>c.includes('up')),mode!=='exact');
+ assert.equal(calls.some(c=>c.includes('stop')),mode!=='exact');
+ assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
+});

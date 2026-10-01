@@ -172,11 +172,21 @@ export async function recover(home,job,hooks) {
   try {
     if(job.rollback) {
       if(job.target==='main') {
-        await run('docker',[...relayArgs(config),'stop','relay']);await hooks.stopHost();
+        // Keep a healthy instance of the exact pinned image when a failed
+        // activation retained it, even if Docker has removed its image index.
+        const pinned=parseEnv(job.rollback.env).EZ_RELAY_IMAGE;
+        const retained=await (async()=>{
+          const id=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
+          if(!/^[a-f0-9]{12,64}$/i.test(id))return false;
+          const current=JSON.parse(await run('docker',['inspect','--format','{{json .}}',id]));
+          return /^sha256:[a-f0-9]{64}$/.test(pinned||'')&&current.Image===pinned&&current.State?.Running===true&&current.State?.Health?.Status==='healthy';
+        })().catch(()=>false);
+        if(!retained)await run('docker',[...relayArgs(config),'stop','relay']);
+        await hooks.stopHost();
         await textAtomic(path.join(config.deploymentDir,'docker.env'),job.rollback.env);
         await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),job.rollback.packageRoot);
         await hooks.startHost(job.rollback.packageRoot);
-        await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build',...(await relayServices(config))]);
+        if(!retained)await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build',...(await relayServices(config))]);
       } else {
         const b=job.rollback;
         await run('docker',[...pluginArgs(b.record),'stop']);
