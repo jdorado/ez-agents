@@ -9,13 +9,17 @@ marking it internal does not confer owner authority.
 ## Messaging v1
 
 The owner asks the agent to contact one person for a bounded purpose. The owner
-agent prepares a proposal with `ezenciel-agents-task propose`: registered source,
+agent uses `ezenciel-agents-task start`: registered source,
 exact canonical contact, purpose, explicitly shareable context, and expiry (up to
-72 hours). Telegram displays that exact proposal for approval. The core binds it
+72 hours). A current authenticated owner turn can start work already authorized
+by that request, without another approval click. The native engine interprets
+the request; core does not infer authority from keywords. `propose` remains for
+scope needing a new owner decision. Scheduled and external runs cannot use either.
+The core binds the grant
 to the verified owner, current source registration, and connected account. The
 owner does not edit JSON. The agent uses `list` and `revoke` when asked.
 
-After approval the relay starts a restricted task, including the initial outgoing
+After activation the relay starts a restricted task, including the initial outgoing
 message. Incoming-only tasks instead wait for new correspondence and never create
 an opening run. Their task records use version 2 so older task readers fail closed. Matching new correspondence resumes that task in a fresh native session.
 Other contacts remain blocked unless an owner-approved any-conversation grant is
@@ -24,6 +28,13 @@ there are no payments, attachments, extra recipients, plugin installation,
 settings changes, or access to owner memory. A contact can have one active or
 pending task at a time. Completed, revoked, expired, replaced-source, and changed-
 account grants cannot dispatch further messages.
+
+Activated grants persist in the protected task record with a digest of all
+immutable scope fields. Transient approval requests are not the continuing
+authority store. Owner replacement, scope mutation, expiry and revocation still
+invalidate authorization. The initial dispatch marker also persists: relay
+restart does not replay an uncertain opener. Pending or legacy records without
+a grant need their original live approval and are never auto-authorized.
 
 The worker receives only the approved dossier, its notes, its operation receipts,
 and rechecked correspondence for its contact. All dossier contents may be shared
@@ -55,7 +66,7 @@ exact registered `ez` command plus fixed arguments ending in literal
 `-- {input}`. The restricted broker replaces only `{input}` with the
 correspondent's string; the model cannot select a command, prepend flags, choose
 a recipient, access a shell or change the fixed arguments. The full command
-vector and disclosure scope appear in the immutable owner approval. Core rechecks
+vector and disclosure scope are bound by the immutable owner grant. Core rechecks
 the grant immediately before and after invocation and before every reply. The
 installed alias must declare `channelQuery: true` and explicitly declare that it
 accepts external input without external sends, record changes, or interactive
