@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-beta.44
+
+- Let isolated native agents read declared installed plugin skills through the
+  existing authorized broker. Discovery supplies literal skill-read commands,
+  so tools such as EzStudy work without copying package instructions into the
+  agent workspace or rebuilding native context.
+- Keep skill reads bound to the installed revision and active authorized run;
+  reject undeclared paths, traversal, symlinks and oversized files.
+
 ## 0.1.0-beta.43
 
 - Keep model and reasoning settings with each named conversation and preserve
