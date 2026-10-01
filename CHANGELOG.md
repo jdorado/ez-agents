@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Keep owner chat responsive while a scheduled native turn runs. Foreground
+  turns and scheduled turns each stay serial, with separate native sessions.
+  Host workspace invocations remain excluded until both streams finish.
+
 ## 0.1.0-beta.44
 
 - Let isolated native agents read declared installed plugin skills through the

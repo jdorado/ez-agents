@@ -205,8 +205,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         return
       }
       if (run.scheduled && !(await scheduler.get(run.scheduled.id)).enabled) return
-      // Owner turns and schedules write the same mind. Keep one native writer.
-      if (activeChild || background.size) return
+      // A long scheduled turn must not occupy the owner's chat stream.
+      // Each stream remains serial, with separate native sessions.
+      if (run.scheduled ? background.size > 0 : activeChild !== null) return
       let texts = run.texts
       if (run.external) {
         // Availability failures leave durable queued work for a later check.

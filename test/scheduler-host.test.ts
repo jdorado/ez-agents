@@ -11,7 +11,7 @@ import { RunStore } from '../src/runs.js'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let n=0;n<250;n++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Host probe timed out')}
 const stdout=(events:string) => events.trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)).filter(event=>event.stream==='stdout').map(event=>event.text).join('')
-test('host transport serializes owner schedules and chat in the bound mind',async()=>{
+test('host transport keeps chat responsive beside a schedule in the bound mind',async()=>{
  const root=await mkdtemp(join(tmpdir(),'ez-scheduler-host-')),workspace=join(root,'agent'),controlDir=join(root,'control')
  await mkdir(workspace);await mkdir(controlDir)
  await writeFile(join(workspace,'AGENTS.md'),'bound-owner-instructions')
@@ -32,9 +32,7 @@ test('host transport serializes owner schedules and chat in the bound mind',asyn
   await submit(id)
   await until(async()=>Boolean(await exists(id+'.process.json')))
   await submit('tg_1')
-  await new Promise(resolve=>setTimeout(resolve,300))
-  assert.ok(await exists('tg_1.request.json'))
-  assert.equal(await exists('tg_1.events'),'')
+  await until(async()=>(await exists('tg_1.events')).includes('"stream":"exit","code":0'))
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
   await until(async()=>(await exists(id+'.events')).includes('"stream":"stdout"'))
   const scheduled=JSON.parse(stdout(await exists(id+'.events')))
@@ -47,7 +45,8 @@ test('host transport serializes owner schedules and chat in the bound mind',asyn
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
   await ownerRun(controlDir,'tg_2')
   await submit('tg_2')
-  assert.ok(await exists('tg_2.request.json'))
+  await until(async()=>(await exists('tg_2.events')).includes('"stream":"exit","code":0'))
+  assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
   await writeFile(join(dir,id+'.cancel'),'')
   await until(async()=>(await exists(id+'.events')).includes('"stream":"exit"'))
   await until(async()=>(await exists('tg_1.events')).includes('"stream":"exit","code":0'))
