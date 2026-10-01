@@ -64,8 +64,9 @@ environment. Calls have a 30-second timeout and 256 KiB combined output limit;
 connection frames are limited to 1 MiB. Connection closure aborts pending calls
 and removes their exact command containers. There is no automatic retry.
 
-Arbitrary calls take the same fail-fast workspace lease as non-scheduled native
-jobs. Native work stays pending while a call runs; calls refuse pending/running
+Arbitrary calls take the same fail-fast workspace lease as native jobs. Host
+foreground and scheduled turns share that lease until both finish. Native work
+stays pending while a call runs; calls refuse pending/running
 native work. Ordinary CLI calls inside an admitted native job do not reacquire
 the lease. Isolated scheduled work keeps its existing workspace behavior. A stale
 native `workspace-writer.lock` is recovered at host startup only after its host

@@ -44,7 +44,50 @@ test('a wrapper-shaped run id has no maintenance treatment and a stale notice is
  }finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
 })
 
-test('owner chat queues behind a scheduled CLI in the same workspace; targeted cancellation',async()=>{
+test('Slack application replies beside a schedule and keeps both streams serial',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-slack-scheduled-')),runs=new RunStore(dir),scheduler=new Scheduler(dir),control=new ControlStore(dir,1000)
+ const children=new Map<string,ReturnType<typeof spawn>>()
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async(_texts,options)=>{
+  const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:process.platform!=='win32'})
+  children.set(options.runId,child);await once(child,'spawn')
+  if(!options.runId.startsWith('r_schedule_'))await runs.enqueueMessage(options.runId,'Slack reply')
+  return {child,cleanup:async()=>{},stdout:''}
+ })
+ try{
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset('grok'))
+  const due=Date.now()+10000
+  for(const id of ['first','second'])await scheduler.save({id,name:id,text:'Long work',trigger:{at:new Date(due).toISOString()},enabled:true,owner,execution})
+  await scheduler.tick(owner,runs,due);await relay.drainSources()
+  const scheduled=(await runs.list()).filter(run=>run.scheduled)
+  assert.deepEqual(scheduled.map(run=>run.status),['running','queued'])
+  const binding=(await relay.applicationChannel.bindings.register('slack','s'.repeat(48),owner))!
+  const scope='slack:T_FIXTURE:C_FIXTURE'
+  const first=await relay.applicationChannel.submit(binding.bindingId,{requestId:'event-1',scope,text:'Top twenty'})
+  await until(async()=>children.has(first.id));await relay.drainOutbox()
+  assert.equal((await relay.applicationChannel.snapshot(binding.bindingId,first.id)).messages[0].text,'Slack reply')
+  assert.equal((await runs.get(scheduled[0].id))?.status,'running')
+  const second=await relay.applicationChannel.submit(binding.bindingId,{requestId:'event-2',scope,text:'Next question'})
+  await relay.drainSources()
+  assert.equal((await runs.get(second.id))?.status,'queued')
+  assert.equal(children.size,2)
+  // Revoking the channel stops only its foreground work; background authority
+  // and the original one-occurrence-per-schedule limit remain intact.
+  await relay.applicationChannel.bindings.register('slack',null,owner)
+  await relay.drainSources()
+  await until(async()=> (await runs.get(first.id))?.status==='cancelled')
+  await relay.drainSources()
+  assert.equal((await runs.get(second.id))?.status,'cancelled')
+  assert.equal((await runs.get(scheduled[0].id))?.status,'running')
+  assert.equal((await runs.get(scheduled[1].id))?.status,'queued')
+ }finally{
+  await relay.stop()
+  await until(async()=>!(await runs.list()).some(run=>run.status==='running'))
+  await rm(dir,{recursive:true,force:true})
+ }
+})
+
+test('owner chat replies while a scheduled CLI keeps running; targeted cancellation',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-scheduler-relay-')), children:ReturnType<typeof spawn>[]=[]
  const runs=new RunStore(dir),scheduler=new Scheduler(dir),control=new ControlStore(dir,1000)
  const replies:string[]=[], workspaces:string[]=[]
@@ -67,19 +110,18 @@ test('owner chat queues behind a scheduled CLI in the same workspace; targeted c
   const [background]=await runs.list()
   assert.equal(background.status,'running')
   const update:Update={update_id:123,message:{message_id:123,date:0,text:'What is 17 × 19?',from:{id:101,is_bot:false,first_name:'Fixture'},chat:{id:101,type:'private',first_name:'Fixture'}}}
-  await relay.bot.handleUpdate(update);await relay.drainInbox(true);await relay.drainOutbox()
-  assert.ok(!replies.includes('323'))
+  await relay.bot.handleUpdate(update);await relay.drainInbox(true)
+  await until(async()=>children.length===2)
+  await relay.drainOutbox()
+  assert.ok(replies.includes('323'))
   assert.equal((await runs.get(background.id))?.status,'running')
   assert.equal(children[0].exitCode,null)
-  assert.deepEqual(workspaces,[dir])
+  assert.deepEqual(workspaces,[dir,dir])
   // Pausing future dispatch doesn't kill active work; cancelling this run does.
   await scheduler.enable('slow',false);await relay.drainSources()
   assert.equal(children[0].exitCode,null)
   await scheduler.cancel(background.id);await relay.drainSources()
   await until(async()=> (await runs.get(background.id))?.status==='cancelled')
-  await until(async()=>children.length===2)
-  await relay.drainOutbox()
-  assert.ok(replies.includes('323'))
   assert.deepEqual(workspaces,[dir,dir])
   assert.equal((await runs.list()).filter(r=>r.scheduled).length,1)
  }finally{

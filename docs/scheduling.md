@@ -49,10 +49,14 @@ No identity files or role instructions are generated. Existing workspace Markdow
 provides context, including native `AGENTS.md` discovery and relative links; the
 engine chooses what to read. Per-run native state stays under `control/`.
 
-One writer runs in the agent workspace: owner schedules and foreground turns
-queue behind each other. Foreground inputs queue while another turn runs;
-ez does not create another reply agent. The agent can delegate or schedule long
-work and return to chat. It decides when to send through the message CLI.
+One foreground turn and one owner-scheduled turn can run at the same time.
+Foreground inputs queue behind foreground work; scheduled turns queue behind
+scheduled work. A long scheduled goal therefore does not block chat. Both streams
+use the existing admission and executor path, with separate native sessions.
+They share the agent-owned Markdown workspace: the agent coordinates shared file
+updates, and plugins enforce canonical record-write guards. The host keeps plugin
+workspace invocations excluded until both native turns finish.
+The agent decides when to send through the message CLI.
 A recurring schedule has at most one pending or active occurrence. Shared
 provider resources still need writer coordination. The former four background
 slots are no longer used for owner schedules.

@@ -51,7 +51,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   let catalogRefresh: Promise<void> | undefined
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
-  const activeWorkspaces = new Set<HostBinding>()
+  const activeWorkspaces = new Map<HostBinding, { lanes: Set<boolean>; release?: () => Promise<void> }>()
   const additionalWorkspaces = new Map<HostBinding, string[]>()
   const catalog = async (agent: HostBinding) => {
     const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'),
@@ -158,13 +158,27 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           }
           const sharedWorkspace=sharedWorkspaces.get(agent)
           const base=path.join(directory,id)
-          if (activeWorkspaces.has(agent)) continue
-          const releaseWorkspace = agent.toolsHome
-            ? await (await import('./plugins/workspace-lease.mjs')).workspaceLease(agent.toolsHome,{kind:'native',runId:id}) : undefined
-          if (agent.toolsHome && !releaseWorkspace) continue
-          activeWorkspaces.add(agent)
+          const scheduled = Boolean(run?.scheduled)
+          let workspace = activeWorkspaces.get(agent)
+          if (workspace?.lanes.has(scheduled)) continue
+          if (!workspace) {
+            const release = agent.toolsHome
+              ? await (await import('./plugins/workspace-lease.mjs')).workspaceLease(agent.toolsHome,{kind:'native',runId:id}) : undefined
+            if (agent.toolsHome && !release) continue
+            workspace = { lanes: new Set(), release }
+            activeWorkspaces.set(agent, workspace)
+          }
+          workspace.lanes.add(scheduled)
+          // Keep plugin workspace invocations excluded until both streams finish.
+          const releaseWorkspace = async () => {
+            workspace.lanes.delete(scheduled)
+            if (!workspace.lanes.size) {
+              activeWorkspaces.delete(agent)
+              await workspace.release?.()
+            }
+          }
           try { await rename(base+'.request.json',base+'.running.json') }
-          catch (error) { activeWorkspaces.delete(agent); await releaseWorkspace?.(); throw error }
+          catch (error) { await releaseWorkspace(); throw error }
           const task=(async()=>{
             let job: Awaited<ReturnType<typeof startExecutorJob>> | undefined
             let cancellation: ReturnType<typeof setInterval> | undefined
@@ -220,7 +234,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await rm(base+'.process.json',{force:true})
               await rm(base+'.cancel',{force:true})
               active.delete(base)
-              try { await releaseWorkspace?.() } finally { activeWorkspaces.delete(agent) }
+              await releaseWorkspace()
             }
           })()
           tasks.add(task); void task.finally(()=>tasks.delete(task))

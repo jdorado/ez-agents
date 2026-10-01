@@ -235,7 +235,7 @@ export class RunStore {
 
   async nextQueued(background?: boolean): Promise<RunRecord | undefined> {
     const queued = [...runsFor(this.controlDir).values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).filter((run) => run.status === 'queued' && (background === undefined || Boolean(run.scheduled) === background))
-    return queued.find(run => !run.taskId) ?? queued[0]
+    return queued.find(run => !run.taskId && !run.scheduled) ?? queued.find(run => !run.taskId) ?? queued[0]
   }
 
   async deliveryStatus(): Promise<{ failed: number; unknown: number }> {

@@ -167,7 +167,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
   let server:Promise<void>|undefined
   try {
     const binary=path.join(root,'cli')
-    await writeFile(binary,`#!${process.execPath}\nif(process.env.EZ_RUN_ID==='r_hold')setInterval(()=>{},1000);console.log(JSON.stringify({cwd:process.cwd(),home:process.env.HOME,token:process.env.TELEGRAM_BOT_TOKEN,control:process.env.EZ_CONTROL_DIR,run:process.env.EZ_RUN_ID,repair:process.env.EZ_REPAIR_ENABLED,args:process.argv.slice(2)}));\n`,{mode:0o700})
+    await writeFile(binary,`#!${process.execPath}\nif(['r_hold','tg_43'].includes(process.env.EZ_RUN_ID))setInterval(()=>{},1000);console.log(JSON.stringify({cwd:process.cwd(),home:process.env.HOME,token:process.env.TELEGRAM_BOT_TOKEN,control:process.env.EZ_CONTROL_DIR,run:process.env.EZ_RUN_ID,repair:process.env.EZ_REPAIR_ENABLED,args:process.argv.slice(2)}));\n`,{mode:0o700})
     await writeFile(path.join(root,'claude'),await readFile(binary),{mode:0o700})
     await writeFile(path.join(root,'codex'),await readFile(binary),{mode:0o700})
     await writeFile(path.join(root,'opencode'),'#!/bin/sh\nexit 0\n',{mode:0o700})
@@ -284,18 +284,30 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       assert.match(output, /"stream":"exit","code":0/)
       return output.trim().split('\n').map(line=>JSON.parse(line))
     }
-    // Another agent remains independent; this agent's queued schedule and chat
-    // wait behind its active owner schedule in the same mind.
+    // Chat completes while this agent's scheduled turn stays active. A second
+    // scheduled turn still waits, and the shared lifecycle lease stays held.
     await completed(otherDirectory,'r_other_shared')
+    const chatEvents=await completed(directory,'tg_42')
     assert.ok(await readFile(path.join(directory,'r_schedule_queued.request.json')))
-    assert.ok(await readFile(path.join(directory,'tg_42.request.json')))
+    assert.equal(await workspaceLease(agents[0].toolsHome),undefined)
+    await ownerRun(agents[0].controlDir,'tg_43')
+    await writeFile(path.join(directory,'tg_43.request.json'),JSON.stringify({texts:['Hold chat'],options:{cli:'grok'}}))
+    for(let n=0;n<100;n++){try{await readFile(path.join(directory,'tg_43.process.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+    await readFile(path.join(directory,'tg_43.running.json'))
     assert.doesNotMatch(await readFile(path.join(directory,'r_hold.events'),'utf8'),/"stream":"exit"/)
     await readFile(path.join(directory,'r_hold.running.json'))
     await writeFile(path.join(directory,'r_hold.cancel'),'')
     let heldOutput=''
     for(let n=0;n<200;n++){heldOutput=await readFile(path.join(directory,'r_hold.events'),'utf8');if(heldOutput.includes('"stream":"exit"'))break;await new Promise(r=>setTimeout(r,20))}
     assert.match(heldOutput, /"stream":"exit","code":1/)
-    const [scheduleEvents,chatEvents]=await Promise.all([completed(directory,'r_schedule_queued'),completed(directory,'tg_42')])
+    const scheduleEvents=await completed(directory,'r_schedule_queued')
+    // When the scheduled lane finishes first, chat still owns the lease.
+    assert.equal(await workspaceLease(agents[0].toolsHome),undefined)
+    await writeFile(path.join(directory,'tg_43.cancel'),'')
+    for(let n=0;n<100;n++){try{await readFile(path.join(directory,'tg_43.running.json'))}catch{break}await new Promise(r=>setTimeout(r,20))}
+    const unlock=await workspaceLease(agents[0].toolsHome)
+    assert.ok(unlock)
+    await unlock()
     const scheduled=JSON.parse(scheduleEvents.filter(e=>e.stream==='stdout').map(e=>e.text).join(''))
     const chat=JSON.parse(chatEvents.filter(e=>e.stream==='stdout').map(e=>e.text).join(''))
     assert.equal(scheduled.cwd,await realpath(agents[0].workspace))
