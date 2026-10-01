@@ -562,3 +562,33 @@ test('curated models respect installed clients and provider scope', async () => 
     assert.equal(catalog.some(entry => entry.cli === 'pi' && !entry.model), false)
   } finally { await rm(control, { recursive: true, force: true }) }
 })
+
+
+test('private channel model choices do not consume owner preset slots', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-private-ai-capacity-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    await store.requestPairing(42, 42); await store.approveOwner(42)
+    const initial = initialPreset('codex')
+    await store.captureChoice(initial)
+    for (let n = 1; n < 12; n++) await store.savePreset({...initial, id:`saved-${n}`, name:`Saved ${n}`})
+    const before = (await store.status()).ai!
+    const model = {cli:'codex', model:'gpt-5.6-luna', name:'Luna', efforts:['low','max']}
+    const menu = createAiMenu(store, 'codex', async () => [model], dir, undefined, async () => true)
+    const scope = 'a'.repeat(64)
+    const choice = await store.captureApplicationChoice(initial, scope)
+    await store.saveNativeSession(choice.sessionId, 'private-native-session')
+    const guard = {owner:(await store.status()).owner!, applicationScope:scope, expectedSession:choice.sessionId, authorize:async()=>{}}
+    const preset = await menu.saveSelection(model, 'low', guard)
+    await store.changeApplicationSession(scope, guard, preset)
+    const readback = (await store.applicationSession(scope))!
+    assert.equal(readback.sessionId, choice.sessionId)
+    assert.equal(readback.nativeSessionId, 'private-native-session')
+    assert.equal(readback.preset?.model, model.model)
+    assert.equal(readback.preset?.effort, 'low')
+    assert.deepEqual((await store.status()).ai, before)
+    await assert.rejects(menu.saveSelection(model, 'max'), /at most 12/)
+    await assert.rejects(store.changeApplicationSession(scope, {...guard, expectedSession:null}, preset), /Conversation changed/)
+    assert.deepEqual((await store.applicationSession(scope))?.preset, readback.preset)
+  } finally { await rm(dir, {recursive:true, force:true}) }
+})
