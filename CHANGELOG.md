@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.0-beta.43
+
+- Keep model and reasoning settings with each named conversation and preserve
+  native history across supported model changes. Save the selected AI as the
+  default for new conversations.
+- Keep private application-channel AI choices separate from owner preset slots.
+- Honor current-owner-authorized messaging tasks without a second approval;
+  retain bounded task authority across restart without replaying uncertain sends.
+- Expose installed native controls through Ez help and preserve operator CLI pins,
+  isolated credentials, plugin volumes and private broker ownership on Linux.
+- Reuse the exact healthy pinned relay during failed-update recovery.
+- Legacy deployments need the reviewed installer migration in
+  docs/application-channel.md for the trusted broker capability change; ordinary
+  updater compatibility guards remain in force.
+
 ## 0.1.0-beta.42
 
 - Keep recurring schedule edits at their next pending or future occurrence, so
