@@ -104,11 +104,25 @@ test('installed snippets follow install, upgrade and uninstall without files or 
   const before=await fs.readFile(f.log,'utf8'),index=await details();
   assert.equal(index.sample.description,description);assert.deepEqual(index.sample.commands,['ez sample --help']);
   assert.equal(await fs.readFile(index.sample.skills[0],'utf8'),'Synthetic');
+  assert.deepEqual(index.sample.skillReads,[['ez','tools','skill','sample','SKILL.md']]);
+  assert.deepEqual(JSON.parse((await f.call('tools','skill','sample','SKILL.md')).stdout),{plugin:'sample',revision:p.revision,path:'SKILL.md',content:'Synthetic'});
   assert.equal(await fs.readFile(f.log,'utf8'),before);
   assert.deepEqual(JSON.parse((await f.call('tools','list')).stdout),{sample:'sample'});
   await f.call('plugins','uninstall','sample');assert.deepEqual(await details(),{});
  }
  await assert.rejects(fs.access(path.join(f.workspace,'TOOLS.md')),{code:'ENOENT'});
+});
+test('skill reads reject undeclared paths, traversal, symlinks and oversized files',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ for(const requested of ['../config.json','/etc/passwd','client.mjs'])await assert.rejects(f.call('tools','skill','sample',requested),/Unknown installed plugin skill/);
+ await assert.rejects(f.call('tools','skill','foreign','SKILL.md'),/Unknown installed plugin skill/);
+ const r=JSON.parse(await fs.readFile(path.join(f.home,'registry.json'),'utf8')),file=path.join(r.plugins.sample.source,'SKILL.md');
+ await fs.rm(file);await fs.symlink(path.join(f.home,'config.json'),file);
+ await assert.rejects(f.call('tools','skill','sample','SKILL.md'),/symlink/);
+ await fs.rm(file);await fs.writeFile(file,'x'.repeat(64*1024+1));
+ await assert.rejects(f.call('tools','skill','sample','SKILL.md'),/64 KiB/);
+ r.plugins.sample.manifest.skills=['../config.json'];await fs.writeFile(path.join(f.home,'registry.json'),JSON.stringify(r));
+ await assert.rejects(f.call('tools','skill','sample','../config.json'),/Unsafe skill path/);
 });
 test('application plugin context is namespaced, authorized, and absent from ordinary commands',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);

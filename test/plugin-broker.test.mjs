@@ -42,11 +42,12 @@ async function fixture(t) {
     revision,
     source,
     project: `ezp-${hash(realHome).slice(0, 16)}-sample`,
-    manifest: { schemaVersion: 1, id: 'sample', version: '1.0.0', commands: { sample: { executable: 'client.mjs', args: [] } }, skills: [] },
+    manifest: { schemaVersion: 1, id: 'sample', version: '1.0.0', commands: { sample: { executable: 'client.mjs', args: [] } }, skills: ['SKILL.md'] },
     deployment: { schemaVersion: 1, services: { sample: { buildTarget: 'runtime', volumes: {}, workspace: false, healthcheck: ['node', '--version'] } }, commands: { sample: { service: 'sample', argv: ['node', '/app/client.mjs'], suffix: [] } }, exports: {} },
     compose: path.join(home, 'packages', 'sample', 'compose.json'),
   };
   await fs.writeFile(path.join(home, 'registry.json'), JSON.stringify({ schemaVersion: 1, owner: realHome, plugins: { sample: record }, commands: { sample: 'sample' } }) + '\n', { mode: 0o600 });
+  await fs.writeFile(path.join(source, 'SKILL.md'), '# Synthetic authoring format\n');
   const fake = path.join(root, 'fake');
   await fs.mkdir(fake, { mode: 0o700 });
   await fs.writeFile(path.join(fake, 'docker'), `#!${process.execPath}
@@ -103,6 +104,13 @@ test('isolated broker authenticates an owned run, pins plugin revision, and writ
     const detailed = await request(f.socket, { version: 1, id: randomUUID(), operation: 'manager', runId: f.runId, args: ['tools', 'list', '--details'] });
     assert.equal(detailed.ok, true);
     assert.deepEqual(JSON.parse(detailed.stdout).sample.commands, ['ez sample --help']);
+    assert.deepEqual(JSON.parse(detailed.stdout).sample.skillReads, [['ez', 'tools', 'skill', 'sample', 'SKILL.md']]);
+    const skill = await request(f.socket, { version: 1, id: randomUUID(), operation: 'manager', runId: f.runId, args: ['tools', 'skill', 'sample', 'SKILL.md'] });
+    assert.equal(skill.code, 0);
+    assert.deepEqual(JSON.parse(skill.stdout), { plugin: 'sample', revision, path: 'SKILL.md', content: '# Synthetic authoring format\n' });
+    const privateFile = await request(f.socket, { version: 1, id: randomUUID(), operation: 'manager', runId: f.runId, args: ['tools', 'skill', 'sample', '../../config.json'] });
+    assert.notEqual(privateFile.code, 0);
+    assert.equal(privateFile.stdout, '');
     const resolved = await request(f.socket, { version: 1, id: randomUUID(), operation: 'resolve', runId: f.runId, alias: 'sample' });
     assert.equal(resolved.ok, true);
     assert.equal(resolved.revision, revision);
@@ -162,6 +170,9 @@ test('broker rejects resolve and invoke for a revoked run', async t => {
   try {
     await waitForSocket(f.socket);
     await new RunStore(f.controlDir).patch(f.runId, { status: 'cancelled' });
+    const skill = await request(f.socket, { version: 1, id: randomUUID(), operation: 'manager', runId: f.runId, args: ['tools', 'skill', 'sample', 'SKILL.md'] });
+    assert.equal(skill.ok, false);
+    assert.equal(skill.stdout, undefined);
     const resolved = await request(f.socket, { version: 1, id: randomUUID(), operation: 'resolve', runId: f.runId, alias: 'sample' });
     assert.equal(resolved.ok, false);
     const invoked = await request(f.socket, { version: 1, id: randomUUID(), operation: 'invoke', runId: f.runId, alias: 'sample', revision, capability: 'a'.repeat(64), args: [] });

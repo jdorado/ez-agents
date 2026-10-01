@@ -400,6 +400,12 @@ and `skills`. Descriptions are limited to 200 characters in this view; full
 instructions stay in the skill. Installation, replacement and removal are reflected
 on the next read, without hooks, LLM calls or a cached inventory file.
 
+The additive `skillReads` field supplies literal argument arrays for
+`ez tools skill <plugin> <declared-path>`. This read returns JSON with the
+installed plugin revision, declared path and skill content. Use it in isolated
+agents, where host package paths are private. It reads only the installed
+manifest's skills; arbitrary files, symlinks and files over 64 KiB are rejected.
+
 `ez tools list` retains its alias mapping for existing clients. Native AGENTS.md
 contains only the agent-bound discovery shortcut. New workspaces do not seed
 TOOLS.md, SOUL.md, USER.md, or an `inbox/`/`work/` layout; upgrades preserve
