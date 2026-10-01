@@ -36,6 +36,7 @@ test('host transport serializes owner schedules and chat in the bound mind',asyn
   assert.ok(await exists('tg_1.request.json'))
   assert.equal(await exists('tg_1.events'),'')
   assert.ok(!(await exists(id+'.events')).includes('"stream":"exit"'))
+  await until(async()=>(await exists(id+'.events')).includes('"stream":"stdout"'))
   const scheduled=JSON.parse(stdout(await exists(id+'.events')))
   assert.equal(scheduled.cwd,await realpath(workspace))
   assert.equal(scheduled.agents,'bound-owner-instructions')
