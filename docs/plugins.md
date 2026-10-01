@@ -29,7 +29,14 @@ initial main onboarding; no sibling repository, broker or provider account is
 needed. Finish owner pairing and verify an actual Telegram agent reply first.
 Init creates a private registry and `tools/bin/ez`, adds a
 managed AGENTS.md registry locator, and binds the matching host executor to that bin
-folder. Native binaries are linked through; an existing `ez` collision fails.
+folder. Native binaries are linked through; the package's own `bin/ez` is replaced
+by that bound launcher, while an unrelated existing `ez` collision fails.
+Both host-bound and isolated `ez --help` list installed native scheduling and delivery helpers
+under `native`, with literal `argv` entries for their help. These are existing
+native executables, not plugin aliases; discovery does not grant authority.
+Standalone registries omit helpers they do not have installed. The managed
+workspace locator remains unchanged: core help discovers native controls and
+`tools list --details` discovers registered plugins.
 Run before starting the host executor. For an already running installation,
 place a symlink to the returned launcher in that agent's existing private bin
 directory and set that binding's `toolsHome` to the absolute registry directory.
@@ -52,6 +59,10 @@ For an isolated Codex agent, this binding is consumed by the per-agent
 `plugin-broker` service, not by a host executor. Start the deployment only after
 initialization with `COMPOSE_PROFILES=isolated`; Compose then starts the relay
 and broker together. The relay-side `ez` command has no tools-home or Docker
+access. Operator-owned private network grants also work through the broker:
+each grant binds an exact reviewed plugin revision and declared service, and
+never attaches the relay or broker itself to that network. The host binding
+must remain outside the agent's writable mounts. The client has no Docker
 socket mount. It sends a declared alias, literal arguments, bounded stdin and
 the active run ID over the private control-directory Unix socket. The broker
 revalidates the exact registry/host/workspace ownership, pinned revision and
@@ -68,7 +79,10 @@ across agents unless an operator adds an explicit reviewed binding.
 The same broker accepts source-based `plugins inspect`, `catalog-add`, and
 `install` only when the source is an existing path under the bound workspace and
 the revision is literal and pinned. It also exposes data-preserving
-`plugins uninstall` and the local-file `updates prepare/apply/recover` lifecycle.
+`plugins uninstall` and the local-file plugin `updates prepare/apply/recover` lifecycle.
+Local main-runtime archives require operator preparation outside the agent:
+the agent cannot author replacement code for its privileged broker. It may
+apply an already prepared operator candidate through the normal update queue.
 Candidate archives must be staged inside the bound workspace; public registry
 discovery remains host-supervisor work because the broker has no network. Paths
 outside that workspace are rejected.

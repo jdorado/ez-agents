@@ -90,6 +90,7 @@ const validateManagerArgs = async (value, workspace) => {
         (args.length === 3 || ['stable', 'beta', 'manual'].includes(extra))) return args;
     if (action === 'prepare' && args.length === 5 && IDENTIFIER.test(name) && extra === '--file' &&
         typeof tail[0] === 'string' && path.isAbsolute(tail[0])) {
+      if (name === 'main') throw Error('Main runtime candidates require operator preparation outside the agent');
       let resolved;
       try { resolved = await fs.realpath(tail[0]); } catch { throw Error('Upgrade candidate must be an existing file inside the agent workspace'); }
       if (!childOf(resolved, workspace)) throw Error('Upgrade candidate must stay inside the agent workspace');

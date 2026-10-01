@@ -164,7 +164,11 @@ applying job before resuming normal work. A failed build leaves the old runtime
 running. Failed activation restores the previous code/configuration and checks it.
 If recovery itself fails, inspect and fix the reported infrastructure problem,
 then use `ez updates recover <job-id>` and finish the turn. This retries only the
-saved code/configuration recovery, not provider operations.
+saved code/configuration recovery, not provider operations. If the original relay
+is already running and healthy with the exact saved immutable image, recovery
+keeps it while restoring the host and bindings. This also works when Docker
+has removed that image index but retained the original container. Other images
+and unhealthy relays still require the normal Compose replacement.
 An update never wakes the agent or injects wrapper state into its session; the
 owner or agent inspects receipts with `ez updates` when asked.
 

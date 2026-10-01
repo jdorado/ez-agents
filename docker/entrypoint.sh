@@ -21,7 +21,10 @@ if [ "$(id -u)" = 0 ]; then
   chmod 700 /run/secrets
   chown "$runtime_uid:$runtime_gid" /state/control /state/home /workspace
   if [ -f /run/secrets/relay_env ]; then exec 3</run/secrets/relay_env; else exec 3</dev/null; fi
-  exec setpriv --ruid="$relay_uid" --euid="$runtime_uid" --regid="$runtime_gid" --clear-groups --bounding-set=-all --no-new-privs /app/docker/entrypoint.sh "$@"
+  # Some Linux security modules normalize differing real/effective UIDs during
+  # an exec under no_new_privs. Preserve the relay's split identity here; the
+  # executor applies no_new_privs after normalizing its own IDs.
+  exec setpriv --ruid="$relay_uid" --euid="$runtime_uid" --regid="$runtime_gid" --clear-groups --bounding-set=-all /app/docker/entrypoint.sh "$@"
 fi
 # Reserve the private environment descriptor before Node can use it for libuv.
 # Root startup already opened it; preserve that inherited secret descriptor.
