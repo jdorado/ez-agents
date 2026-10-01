@@ -1,5 +1,6 @@
 import { InlineKeyboard, type Context } from 'grammy'
 import { ControlStore, sessionTitle } from './control-state.js'
+import { presetLabel } from './ai.js'
 
 // IDs identify existing relay bindings only; the engine still owns all context.
 // Titles come from owner renames; no run text or delivery history is read here.
@@ -61,13 +62,15 @@ export const createConversationMenu = (control: ControlStore) => {
         } else {
           const keyboard = new InlineKeyboard().text('Archive this conversation', `chat:archive:${id}`).row()
             .text('Back to conversations', 'chat:list:0:0')
-          try { await control.switchSession(id) }
+          let selected
+          try { selected = await control.switchSession(id) }
           catch (error) {
             // Even an older session that cannot resume can still be archived.
             await render(ctx, `${sessionTitle(session)}\n${error instanceof Error ? error.message : 'Unable to continue.'}`, keyboard)
             return true
           }
-          await render(ctx, `Current conversation: ${sessionTitle(session)}\nSend a message to continue. To rename it, use /rename followed by a name.`, keyboard)
+          keyboard.inline_keyboard.unshift([{ text: 'Choose AI', callback_data: 'menu:ai' }])
+          await render(ctx, `Current conversation: ${sessionTitle(selected)}\nAI: ${selected.preset ? presetLabel(selected.preset) : 'Not saved; open Choose AI.'}\nSend a message to continue. To rename it, use /rename followed by a name.`, keyboard)
         }
       } catch (error) {
         await ctx.reply(error instanceof Error ? error.message : 'Conversation selection failed.')

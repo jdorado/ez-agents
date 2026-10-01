@@ -58,6 +58,8 @@ services:
     stop_grace_period: 10s
     user: "0:0"
     cap_drop: [ALL]
+    # The trusted broker maintains private files owned by the installer UID.
+    cap_add: [DAC_OVERRIDE, CHOWN]
     security_opt: [no-new-privileges:true]
     network_mode: none
     environment:

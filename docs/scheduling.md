@@ -21,6 +21,10 @@ ezenciel-agents-schedule cancel RUN_ID
 
 Use `--text-file` for longer instructions. `edit ID` replaces the complete schedule
 with a new revision; use the same trigger/name/text flags as `create`.
+An edit keeps a future pending occurrence when its trigger is unchanged;
+otherwise the edited rule begins at its next future occurrence. Editing does
+not replay missed work from an old start date. Use `--now` to request a new
+one-time run explicitly. `show` reports the pending occurrence used by dispatch.
 Intervals use `--every-seconds` (minimum 60), optional `--start`, and optional
 `--until`. Cron also supports start/end bounds. All absolute timestamps require
 an explicit offset. `--now` starts on the next relay tick, not synchronously.
@@ -40,18 +44,18 @@ available through `ezenciel-agents-schedule context`.
 ## Execution and authority
 
 Due occurrences enter the durable queue with stable IDs and literal task text.
-Background runs use fresh native sessions in `work/tasks/RUN_ID/`. No identity
-files or role instructions are generated there. Existing workspace Markdown
-provides context; the engine chooses what to read. Codex uses `AGENTS.md` or `.git`
-as its native project-root marker, so a nested task sees the existing agent scope. Task folders remain for
-inspection and artifact delivery.
+Owner-scheduled runs use fresh native sessions in the bound agent workspace.
+No identity files or role instructions are generated. Existing workspace Markdown
+provides context, including native `AGENTS.md` discovery and relative links; the
+engine chooses what to read. Per-run native state stays under `control/`.
 
-One writer runs per task directory. Up to four background tasks can run alongside
-the main conversation. Foreground inputs queue while a foreground turn runs;
+One writer runs in the agent workspace: owner schedules and foreground turns
+queue behind each other. Foreground inputs queue while another turn runs;
 ez does not create another reply agent. The agent can delegate or schedule long
 work and return to chat. It decides when to send through the message CLI.
 A recurring schedule has at most one pending or active occurrence. Shared
-provider resources still need writer coordination.
+provider resources still need writer coordination. The former four background
+slots are no longer used for owner schedules.
 
 Production relay/host execution has no wall-clock timeout. The old
 `EZ_EXECUTOR_TIMEOUT_SECONDS` setting is ignored. Individual network/tool waits
@@ -70,7 +74,7 @@ goal is not reported as successful. Native RPC requests have a response deadline
 running tasks do not.
 Each scheduled task has its own Codex state under `control/cli/codex/tasks/RUN_ID`,
 with a snapshot of the agent's Codex configuration and the existing auth link.
-Foreground chat and background tasks do not initialize or migrate one shared
+Foreground chat and scheduled tasks do not initialize or migrate one shared
 native database concurrently.
 
 The foreground chat still uses `codex exec`. That invocation exits after one

@@ -44,7 +44,7 @@ test('a wrapper-shaped run id has no maintenance treatment and a stale notice is
  }finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
 })
 
-test('chat replies through the real ingress/outbox while scheduled CLI remains alive; targeted cancellation',async()=>{
+test('owner chat queues behind a scheduled CLI in the same workspace; targeted cancellation',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-scheduler-relay-')), children:ReturnType<typeof spawn>[]=[]
  const runs=new RunStore(dir),scheduler=new Scheduler(dir),control=new ControlStore(dir,1000)
  const replies:string[]=[], workspaces:string[]=[]
@@ -68,27 +68,20 @@ test('chat replies through the real ingress/outbox while scheduled CLI remains a
   assert.equal(background.status,'running')
   const update:Update={update_id:123,message:{message_id:123,date:0,text:'What is 17 × 19?',from:{id:101,is_bot:false,first_name:'Fixture'},chat:{id:101,type:'private',first_name:'Fixture'}}}
   await relay.bot.handleUpdate(update);await relay.drainInbox(true);await relay.drainOutbox()
-  assert.ok(replies.includes('323'))
+  assert.ok(!replies.includes('323'))
   assert.equal((await runs.get(background.id))?.status,'running')
   assert.equal(children[0].exitCode,null)
-  assert.equal(new Set(workspaces).size,2)
+  assert.deepEqual(workspaces,[dir])
   // Pausing future dispatch doesn't kill active work; cancelling this run does.
   await scheduler.enable('slow',false);await relay.drainSources()
   assert.equal(children[0].exitCode,null)
   await scheduler.cancel(background.id);await relay.drainSources()
   await until(async()=> (await runs.get(background.id))?.status==='cancelled')
+  await until(async()=>children.length===2)
+  await relay.drainOutbox()
+  assert.ok(replies.includes('323'))
+  assert.deepEqual(workspaces,[dir,dir])
   assert.equal((await runs.list()).filter(r=>r.scheduled).length,1)
-  for(let n=0;n<5;n++)await scheduler.save({id:'pool_'+n,name:'Pool',text:'Long work',trigger:{at:new Date(Date.now()+2000).toISOString()},enabled:true,owner,execution})
-  await scheduler.tick(owner,runs,Date.now()+3000);await relay.drainSources()
-  const queued=(await runs.list()).find(r=>r.scheduled && r.status==='queued')!
-  assert.ok(queued)
-  assert.equal((await runs.list()).filter(r=>r.scheduled && r.status==='running').length,4)
-  await scheduler.enable(queued.scheduled!.id,false);await relay.drainSources()
-  assert.equal((await runs.get(queued.id))?.status,'queued')
-  await scheduler.enable(queued.scheduled!.id,true);await scheduler.cancel(queued.id);await relay.drainSources()
-  assert.equal((await runs.get(queued.id))?.status,'cancelled')
-  await relay.bot.handleUpdate({...update,update_id:124,message:{...update.message!,message_id:124,text:'/stop'}} as Update)
-  await until(async()=>!(await runs.list()).some(r=>r.scheduled && r.status==='running'))
  }finally{
   await relay.stop()
   for(const child of children)if(child.exitCode===null && child.signalCode===null)await once(child,'close')

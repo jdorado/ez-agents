@@ -17,15 +17,15 @@ export function execute(command,args,options={}) {
   return new Promise((resolve,reject)=>{
     const invocation=process.env.EZ_DOCKER_COMPOSE==='standalone'&&command==='docker'&&args[0]==='compose'
       ? {command:'docker-compose',args:args.slice(1)} : {command,args};
-    const child=spawn(invocation.command,invocation.args,{cwd:options.cwd,env:environment(),stdio:['ignore','pipe','pipe']});let output='';
+    const child=spawn(invocation.command,invocation.args,{cwd:options.cwd,env:environment(),stdio:['ignore','pipe','pipe']});let output='',stdout='';
     const timer=setTimeout(()=>child.kill('SIGKILL'),options.timeout||600000);
     const file=options.outputFile?createWriteStream(options.outputFile,{flags:'wx',mode:0o600}):null;
     const written=file?new Promise((resolve,reject)=>{file.once('finish',resolve);file.once('error',reject);}):Promise.resolve();
-    if(file)child.stdout.pipe(file);else child.stdout.on('data',b=>{output=(output+b).slice(-16000);});
+    if(file)child.stdout.pipe(file);else child.stdout.on('data',b=>{output=(output+b).slice(-16000);if(options.stdoutOnly)stdout=(stdout+b).slice(-16000);});
     child.stderr.on('data',b=>{output=(output+b).slice(-16000);});
     void written.catch(()=>child.kill('SIGKILL'));
     child.once('error',error=>{clearTimeout(timer);reject(error);});
-    child.once('close',async code=>{clearTimeout(timer);try{await written;if(code!==0)throw Error(`${invocation.command} failed (${code}): ${output}`);resolve(output);}catch(error){reject(error);}});
+    child.once('close',async code=>{clearTimeout(timer);try{await written;if(code!==0)throw Error(`${invocation.command} failed (${code}): ${output}`);resolve(options.stdoutOnly?stdout:output);}catch(error){reject(error);}});
   });
 }
 export async function textAtomic(file,text) {
@@ -109,8 +109,18 @@ export async function perform(home,job,hooks) {
       await run(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'bin/ezenciel-agents.mjs'),'--version'],{cwd:root});
       try { await replaceGuidance(root, config.workspace, run); }
       catch(error) { console.error(`Workspace guidance replacement failed; upgrade continues: ${error.message}`); }
-      const image=`ez-upgrade-${job.sha256.slice(0,24)}`;
-      await run('docker',['build','--target','runtime','-t',image,root]);
+      // Preserve operator-owned native CLI pins from the effective deployment.
+      // Building only the package defaults silently downgrades those clients.
+      const deployment=JSON.parse(await run('docker',[...relayArgs(config),'config','--format','json'],{stdoutOnly:true}));
+      const args=deployment.services?.relay?.build?.args||{};
+      if(typeof args!=='object'||Array.isArray(args))throw Error('Invalid relay build arguments');
+      const buildArgs=Object.keys(args).sort().flatMap(key=>{
+        const value=args[key];
+        if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)||typeof value!=='string'||value.includes('\0'))throw Error('Unresolved relay build argument');
+        return ['--build-arg',`${key}=${value}`];
+      });
+      const image=`ez-upgrade-${digest(JSON.stringify([job.sha256,buildArgs])).slice(0,24)}`;
+      await run('docker',['build','--target','runtime',...buildArgs,'-t',image,root]);
       const envFile=path.join(config.deploymentDir,'docker.env'),oldEnv=await fs.readFile(envFile,'utf8');
       const cid=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
       if(!cid||/\s/.test(cid))throw Error('Expected one running relay');
@@ -162,11 +172,21 @@ export async function recover(home,job,hooks) {
   try {
     if(job.rollback) {
       if(job.target==='main') {
-        await run('docker',[...relayArgs(config),'stop','relay']);await hooks.stopHost();
+        // Keep a healthy instance of the exact pinned image when a failed
+        // activation retained it, even if Docker has removed its image index.
+        const pinned=parseEnv(job.rollback.env).EZ_RELAY_IMAGE;
+        const retained=await (async()=>{
+          const id=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
+          if(!/^[a-f0-9]{12,64}$/i.test(id))return false;
+          const current=JSON.parse(await run('docker',['inspect','--format','{{json .}}',id]));
+          return /^sha256:[a-f0-9]{64}$/.test(pinned||'')&&current.Image===pinned&&current.State?.Running===true&&current.State?.Health?.Status==='healthy';
+        })().catch(()=>false);
+        if(!retained)await run('docker',[...relayArgs(config),'stop','relay']);
+        await hooks.stopHost();
         await textAtomic(path.join(config.deploymentDir,'docker.env'),job.rollback.env);
         await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),job.rollback.packageRoot);
         await hooks.startHost(job.rollback.packageRoot);
-        await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build',...(await relayServices(config))]);
+        if(!retained)await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build',...(await relayServices(config))]);
       } else {
         const b=job.rollback;
         await run('docker',[...pluginArgs(b.record),'stop']);

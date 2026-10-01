@@ -1,13 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile, readFile, stat, symlink, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { Scheduler, scheduledRunId } from '../src/scheduler.js'
 import { RunStore } from '../src/runs.js'
 import { nextOccurrence, validateTrigger, type Trigger } from '../src/schedule-time.js'
-import { taskWorkspace } from '../src/task-workspace.js'
 
 const next=(t:Trigger,after:string)=>{
  const at=nextOccurrence(validateTrigger(t),Date.parse(after));return at===null ? null : new Date(at).toISOString()
@@ -56,6 +55,47 @@ test('missed recurrences coalesce; an active occurrence cannot overlap another',
  await f.scheduler.tick(f.owner,f.runs,f.now+800000)
  assert.equal((await f.runs.list()).length,2)
 })
+test('recurring edits preserve a future cursor or start the changed rule in the future',async t=>{
+ const f=await fixture(t), start=new Date(Date.now()-86400000).toISOString()
+ const original=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start}},true)
+ const future=nextOccurrence(original.trigger,Date.now()+120000)!
+ await writeFile(join(f.dir,`schedules/${original.id}.${original.revision}.cursor`),JSON.stringify({next:future}))
+ const same=await f.scheduler.save({...f.input,text:'Edited text',trigger:original.trigger})
+ assert.notEqual(same.revision,original.revision)
+ assert.equal(await f.scheduler.pendingOccurrence(same),future)
+ await f.scheduler.tick(f.owner,f.runs,future-1)
+ assert.equal((await f.runs.list()).length,0)
+ await f.scheduler.tick(f.owner,f.runs,future)
+ const [first]=await f.runs.list()
+ assert.equal(first.scheduled?.dueAt,new Date(future).toISOString())
+ assert.equal(first.texts[1],'Edited text')
+ await f.runs.patch(first.id,{status:'completed'})
+
+ const changed=await f.scheduler.save({...f.input,text:'Changed cadence',trigger:{everySeconds:120,start}})
+ const nextDue=await f.scheduler.pendingOccurrence(changed)
+ assert.ok(nextDue !== null && nextDue >= Date.now())
+ await f.scheduler.tick(f.owner,f.runs,nextDue-1)
+ assert.equal((await f.runs.list()).length,1,'edit must not replay the old start')
+ await f.scheduler.tick(f.owner,f.runs,nextDue)
+ const second=(await f.runs.list()).find(r=>r.scheduled?.revision===changed.revision)
+ assert.equal(second?.scheduled?.dueAt,new Date(nextDue).toISOString())
+ assert.equal(second?.texts[1],'Changed cadence')
+})
+test('an explicit one-time edit still dispatches at its requested time',async t=>{
+ const f=await fixture(t), first=await f.scheduler.save(f.input,true)
+ const due=Date.now()+2000
+ const edited=await f.scheduler.save({...f.input,trigger:{at:new Date(due).toISOString()},text:'Run now'})
+ assert.notEqual(first.revision,edited.revision)
+ await f.scheduler.tick(f.owner,f.runs,due)
+ assert.equal((await f.runs.list()).find(r=>r.scheduled?.revision===edited.revision)?.texts[1],'Run now')
+})
+test('an unreadable prior cursor rejects an edit without publishing its revision',async t=>{
+ const f=await fixture(t), start=new Date(Date.now()-86400000).toISOString()
+ const saved=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start}},true)
+ await writeFile(join(f.dir,`schedules/${saved.id}.${saved.revision}.cursor`),'{broken')
+ await assert.rejects(f.scheduler.save({...f.input,text:'Edited',trigger:saved.trigger}))
+ assert.equal((await f.scheduler.get(saved.id)).revision,saved.revision)
+})
 test('pause, edit, removal, owner revocation, corrupt records and traversal fail closed',async t=>{
  const f=await fixture(t), s=await f.scheduler.save(f.input)
  await f.scheduler.enable(s.id,false);await f.scheduler.tick(f.owner,f.runs,f.now)
@@ -76,19 +116,6 @@ test('pause, edit, removal, owner revocation, corrupt records and traversal fail
  await assert.rejects(f.scheduler.cancel('../bad'))
  await f.scheduler.cancel(run.id);assert.equal(await f.scheduler.cancelled(run.id),true)
 })
-test('task workspaces are distinct and cannot escape through symlinks',async t=>{
- const f=await fixture(t)
- await writeFile(join(f.dir,'private.md'),'Owner context')
- const first=await taskWorkspace(f.dir,'r_one'),second=await taskWorkspace(f.dir,'r_two')
- assert.notEqual(first,second)
- await assert.rejects(readFile(join(first,'private.md'),'utf8'),{code:'ENOENT'})
- await assert.rejects(readFile(join(first,'AGENTS.md'),'utf8'),{code:'ENOENT'})
- await assert.rejects(taskWorkspace(f.dir,'../escape'))
- const other=join(f.dir,'other');await mkdir(other)
- await symlink(other,join(f.dir,'work/tasks/r_link'))
- await assert.rejects(taskWorkspace(f.dir,'r_link'))
-})
-
 test('startup quarantines an interrupted spawn before PID persistence; explicit edit releases its schedule',async t=>{
  const f=await fixture(t),s=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start:new Date(f.now).toISOString()}})
  await f.scheduler.tick(f.owner,f.runs,f.now)

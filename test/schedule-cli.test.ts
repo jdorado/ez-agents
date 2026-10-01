@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -52,6 +52,9 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
  await runs.patch(task.id,{status:'running'})
  await assert.rejects(exec(process.execPath,[bin,'list'],{env:{...env,EZ_RUN_ID:task.id}}),/owner-authorized/)
  const schedule=JSON.parse((await exec(process.execPath,[bin,'show','test'],{env})).stdout)
+ const pending=Date.parse('2027-09-22T05:00:00Z')
+ await writeFile(join(dir,'schedules',`test.${schedule.revision}.cursor`),JSON.stringify({next:pending}))
+ assert.equal(JSON.parse((await exec(process.execPath,[bin,'show','test'],{env})).stdout).nextEligibleAt,new Date(pending).toISOString())
  const interrupted=await runs.create({chatId:101,telegramUserId:101,texts:['old'],execution,scheduled:{id:'test',revision:schedule.revision,dueAt:new Date().toISOString(),pairedAt:schedule.owner.pairedAt}})
  await runs.patch(interrupted.id,{status:'failed',interrupted:true})
  const held=JSON.parse((await exec(process.execPath,[bin,'show','test'],{env})).stdout)

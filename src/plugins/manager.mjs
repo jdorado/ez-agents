@@ -1,5 +1,6 @@
 import { sharedService, attachShared } from './shared.mjs';
 import { exposure, commandExposure } from './exposure.mjs';
+import { installedNativeHelp } from './native-tasks.mjs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,16 @@ const emit = value => console.log(JSON.stringify(value));
 const keys = (object, allowed) => { if(!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).some(k=>!allowed.includes(k))) throw Error('Invalid or unknown descriptor fields'); };
 const strings = value => { if(!Array.isArray(value) || value.some(x=>typeof x!=='string' || x.includes('\0'))) throw Error('Expected literal string arguments'); return value; };
 const containerPath = value => { if(typeof value!=='string' || !value.startsWith('/') || value.includes('..') || /[\0\n\r:$]/.test(value) || value.startsWith('/var/run') || value.startsWith('/proc') || value.startsWith('/sys')) throw Error('Invalid container path'); return value; };
-const privateDir = async dir => fs.mkdir(dir,{recursive:true,mode:0o700});
+export async function privateDir(dir) {
+  const created=await fs.mkdir(dir,{recursive:true,mode:0o700});
+  if(!created)return;
+  // A root broker must leave new private directories with the installer's
+  // ownership, just as atomic files are. Do not change existing directories.
+  let current=created;await stewardOwned(current);
+  for(const part of path.relative(created,dir).split(path.sep).filter(Boolean)) {
+    current=path.join(current,part);await stewardOwned(current);
+  }
+}
 export async function atomic(file, value) {
   const tmp = `${file}.${randomUUID()}.tmp`;
   await fs.writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});
@@ -280,11 +290,12 @@ export async function hostNetworkBindings(config, record, home) {
     throw Error('Invalid host network bindings');
   const route = configured?.[record.manifest?.id];
   if (route === undefined) return [];
-  if (process.env.EZ_DOCKER_COMPOSE === 'standalone') {
-    throw Error('Isolated broker cannot use host network bindings');
-  }
-  if (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
-      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir))
+  const isolated = process.env.EZ_DOCKER_COMPOSE === 'standalone';
+  if (isolated && host.isolation !== 'isolated') throw Error('Isolated broker requires an isolated host binding');
+  // Like folder grants, network grants use the exact mounted identities. The
+  // broker does not receive the host deployment's convenience symlinks.
+  if (!isolated && (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
+      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir)))
     throw Error('Invalid host network binding deployment');
   keys(route, ['revisions', 'bindings']);
   const trusted = await snapshot(record.source);
@@ -519,7 +530,14 @@ export async function init(home,workspace,catalogFile,hostConfig,standalone=fals
         await fs.access(target,fs.constants.X_OK);
         await fs.symlink(target,path.join(bin,name));
       }
-      for(const file of await fs.readdir(agent.binDir)) {if(file==='ez') throw Error('Existing ez binding collision');if(Object.hasOwn(manifest.bin,file))continue;await fs.symlink(path.join(agent.binDir,file),path.join(bin,file));}
+      for(const file of await fs.readdir(agent.binDir)) {
+        if(file==='ez') {
+          if(await fs.realpath(path.join(agent.binDir,file))!==await fs.realpath(new URL('../../bin/ez',import.meta.url)))throw Error('Existing ez binding collision');
+          continue;
+        }
+        if(Object.hasOwn(manifest.bin,file))continue;
+        await fs.symlink(path.join(agent.binDir,file),path.join(bin,file));
+      }
       agent.binDir=bin;agent.toolsHome=home;await atomic(hostConfig,host);
     }
   });
@@ -540,7 +558,6 @@ export async function install(home,config,name,source,revision) {
     const stage=path.join(base,`.stage-${randomUUID()}`);await privateDir(stage);
     try {
       for(const [relative,file] of p.files) {const dest=path.join(stage,relative);await fs.mkdir(path.dirname(dest),{recursive:true,mode:0o755});await fs.writeFile(dest,file.data,{mode:file.mode,flag:'wx'});}
-      await fs.chmod(stage,0o755);
       // A previously interrupted install may leave a snapshot. Never silently replace it.
       try { await fs.rename(stage,target); } catch(error) {
         if(!['EEXIST','ENOTEMPTY'].includes(error.code)) throw error;
@@ -583,7 +600,7 @@ export async function main(args) {
     return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1),{publish:port,serve:true});
   }
   if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],native:await installedNativeHelp(path.join(home,'bin')),foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');

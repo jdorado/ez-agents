@@ -22,6 +22,8 @@ on the same CLI. Each agent gets its own purpose and native conversation IDs.
 `isolated` sets `EZ_EXECUTOR_TRANSPORT=local` and runs the native CLI in the
 relay. `host-capable` sets `host` and reuses the installer UID; unlabeled
 existing host transports stay host-capable so they are not flipped.
+Only isolated deployments configure the plugin-broker socket and Compose profile;
+host-capable deployments use their bound host transport and registry.
 
 On Docker Desktop/OrbStack the control volume's Unix socket is not connectable
 from the macOS host, so a host-capable agent also publishes an authenticated
@@ -83,6 +85,22 @@ broker has no network, validates the host binding and registry owner, and is the
 only service allowed to launch plugin containers. The relay never receives the
 Docker socket or a tools registry mount. Host-capable agents keep the existing
 host executor path instead.
+
+The trusted broker has only `DAC_OVERRIDE` and `CHOWN` in addition to its
+Docker socket, so it can read private installer-owned registry files and preserve
+their ownership. The relay drops all capabilities before loading its secrets.
+It retains distinct real/effective UIDs; `no_new_privs` is applied to the native
+executor after normalizing those IDs. Applying it earlier can cause Linux
+security modules to discard the relay's effective UID during exec.
+Private native credentials and skills are checked using that effective UID;
+`access(2)` checks the distinct real UID and can incorrectly hide a valid binding.
+Runtime updates preserve explicit relay build arguments from the operator's
+Compose deployment, including native CLI version pins.
+New private broker directories and update archives inherit the installer's
+ownership. Existing installations need the reviewed deployment migration in
+[application-channel.md](application-channel.md#reviewed-deployment-migration)
+for this Compose capability change; ordinary updates retain their compatibility
+guard. Preserve the existing runtime UID/GID and private state during migration.
 
 ## Operate and verify
 
@@ -164,6 +182,9 @@ an already connected account. Monitoring and sends require their own authority.
 
 ### Isolated plugin commands
 
+The image pins modern Docker Compose, including its standalone executable, so
+existing operator-created volumes retain their data and driver bindings.
+
 The relay-side `ez` client sends only declared aliases, literal argument arrays,
 bounded stdin, and the active run ID to the broker. The broker re-reads owner
 authority and the registry before every call, pins the discovered revision, and
@@ -176,8 +197,10 @@ Source-based `plugins inspect`, `catalog-add`, and `install` management calls ar
 accepted only for an existing path inside that agent's mounted workspace, with a
 literal SHA-256 revision where the command requires one. The same management
 surface permits data-preserving `plugins uninstall` and local candidate
-`updates prepare/apply/recover`; candidate archives must also be inside the
-workspace. Public update discovery stays with the host supervisor because the
+plugin `updates prepare/apply/recover`; plugin candidate archives must also be inside the
+workspace. Local main-runtime archives require operator preparation outside the
+agent, because the runtime contains the privileged broker. The agent can apply
+an operator-prepared candidate. Public update discovery stays with the host supervisor because the
 broker has no network. The broker never turns an arbitrary host path into a
 plugin mount.
 

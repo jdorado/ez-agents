@@ -2,7 +2,7 @@ import { executionDefaults } from './model-policy.js'
 import { startTaskExecutor } from './task-executor.js'
 import { deliverySocketPath } from './delivery-socket.js'
 import { mkdtemp, rm, writeFile, mkdir, symlink, readFile } from 'node:fs/promises'
-import { accessSync, constants as fsConstants } from 'node:fs'
+import { accessSync, openSync, closeSync, constants as fsConstants } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -210,7 +210,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       // Loaded by path, never by prompt text, so the model cannot miss it.
       try {
         const skill = path.join(opts.controlDir, 'cli', 'pi', 'skills', 'ez-delivery', 'SKILL.md')
-        accessSync(skill, fsConstants.R_OK)
+        closeSync(openSync(skill, 'r'))
         args.push('--skill', path.dirname(skill))
       } catch { /* runs without the skill exactly as before */ }
       // Bind Pi to this conversation, not the most recently used session in
@@ -280,7 +280,7 @@ export const resolveExecutor = (name?: string): CliAdapter => EXECUTOR_REGISTRY[
 // secret.
 export const opencodeDataHome = (controlDir: string): string | undefined => {
   try {
-    accessSync(path.join(controlDir, 'cli', 'opencode', 'auth.json'), fsConstants.R_OK)
+    closeSync(openSync(path.join(controlDir, 'cli', 'opencode', 'auth.json'), 'r'))
     return path.join(controlDir, 'cli')
   } catch { return undefined }
 }
@@ -289,7 +289,7 @@ export const opencodeDataHome = (controlDir: string): string | undefined => {
 // auth.json). Only a path is ever returned, never a secret.
 export const piAgentDir = (controlDir: string): string | undefined => {
   try {
-    accessSync(path.join(controlDir, 'cli', 'pi', 'agent', 'auth.json'), fsConstants.R_OK)
+    closeSync(openSync(path.join(controlDir, 'cli', 'pi', 'agent', 'auth.json'), 'r'))
     return path.join(controlDir, 'cli', 'pi', 'agent')
   } catch { return undefined }
 }
@@ -315,7 +315,7 @@ export const opencodeInvocation = (
 export const executorInvocation = (command: string, args: string[]) => {
   const uid = process.geteuid?.()
   return process.platform === 'linux' && uid !== undefined && process.getuid?.() !== uid
-    ? { command: 'setpriv', args: [`--ruid=${uid}`, `--euid=${uid}`, '--', command, ...args] }
+    ? { command: 'setpriv', args: [`--ruid=${uid}`, `--euid=${uid}`, '--no-new-privs', '--', command, ...args] }
     : { command, args }
 }
 

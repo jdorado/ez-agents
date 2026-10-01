@@ -9,12 +9,18 @@ import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
-import { perform, environment, packageManager, backupStateDirectory } from '../src/updates/runtime.mjs';
+import { perform, environment, packageManager, backupStateDirectory, execute } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
 import { providerEnvironment, queueAutomatic } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
+
+test('structured runtime output excludes warnings but failures retain diagnostics',async()=>{
+ const script="process.stderr.write('Compose warning\\n');process.stdout.write(JSON.stringify({services:{}}));";
+ assert.deepEqual(JSON.parse(await execute(process.execPath,['-e',script],{stdoutOnly:true})),{services:{}});
+ await assert.rejects(execute(process.execPath,['-e',script+'process.exitCode=1'],{stdoutOnly:true}),/Compose warning/);
+});
 
 test('main upgrade backup omits a live plugin socket and keeps private files',async t=>{
  const root=await fs.mkdtemp('/tmp/ez-upgrade-socket-');
@@ -75,11 +81,27 @@ async function fixture(t,kind='main') {
  const pack=async()=>{const entries=[];async function walk(dir,prefix=''){for(const e of await fs.readdir(dir,{withFileTypes:true})){const rel=prefix+e.name;if(e.isDirectory())await walk(path.join(dir,e.name),rel+'/');else entries.push(['package/'+rel,await fs.readFile(path.join(dir,e.name))]);}}await walk(source);const file=path.join(root,'candidate.tgz');await fs.writeFile(file,tar(entries));return file;};
  return {root,home,old,source,agent,config,record,target,pack};
 }
-function runtime(f,{fail,stopped=false}={}) {
+test('root preparation leaves private plugin updates readable by the installer', {
+ skip:process.platform!=='linux'||process.geteuid?.()!==0,
+},async t=>{
+ const f=await fixture(t,'plugin');
+ await fs.rm(path.join(f.home,'updates'),{recursive:true});
+ await fs.chmod(f.root,0o755);
+ await fs.chown(f.home,20001,20002);
+ const job=await prepare(f.home,f.target,{file:await f.pack()});
+ const dir=jobPath(f.home,job.id);
+ for(const file of [path.join(f.home,'updates'),dir,path.join(dir,'job.json'),path.join(dir,'candidate.tgz')]) {
+  const stat=await fs.stat(file);assert.equal(stat.uid,20001);assert.equal(stat.gid,20002);
+ }
+ const script=`const fs=require('fs');fs.readFileSync(${JSON.stringify(path.join(dir,'job.json'))});fs.readFileSync(${JSON.stringify(path.join(dir,'candidate.tgz'))});`;
+ await exec('setpriv',['--reuid=20001','--regid=20002','--clear-groups','--no-new-privs',process.execPath,'-e',script]);
+});
+function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'}}={}) {
  const calls=[];let failed=false;
  const execute=async(command,args,opts)=>{
   calls.push([command,...args]);if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
+  if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
   if(args.includes('ps'))return stopped?'':'container-id';
   if(args[0]==='inspect')return 'sha256:'+'a'.repeat(64);
   if(args[0]==='volume'&&args[1]==='ls')return 'existing';
@@ -254,8 +276,21 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.notEqual(await fs.readFile(path.join(active,'bin/example.mjs'),'utf8'),'tampered');
  assert(r.calls.findIndex(c=>c.includes('build'))<r.calls.findIndex(c=>c[0]==='stopHost'));
+ const build=r.calls.find(c=>c[0]==='docker'&&c[1]==='build');
+ assert.equal(build[build.indexOf('--build-arg')+1],'CODEX_CLI_VERSION=0.156.1');
  const status=await command(f.home,['status']);assert(!JSON.stringify(status).includes('private-test-token'));assert(!('rollback'in status.jobs[0]));
  assert.equal((await fs.stat(path.join(jobPath(f.home,job.id),'job.json'))).mode&0o777,0o600);
+});
+test('the same archive with different deployment CLI pins gets distinct image bindings',async t=>{
+ const tags=[],hashes=[];
+ for(const pin of ['0.153.4','0.156.1']) {
+  const f=await fixture(t),job=await queued(f),r=runtime(f,{buildArgs:{CODEX_CLI_VERSION:pin}});
+  assert.equal((await perform(f.home,job,r)).status,'completed');
+  const build=r.calls.find(c=>c[0]==='docker'&&c[1]==='build'),tag=build[build.indexOf('-t')+1];
+  assert.match(await fs.readFile(path.join(f.config.deploymentDir,'docker.env'),'utf8'),new RegExp(tag));
+  tags.push(tag);hashes.push(job.sha256);
+ }
+ assert.equal(hashes[0],hashes[1]);assert.notEqual(tags[0],tags[1]);
 });
 test('update cleanup keeps the newest backup per target and ignores unfinished jobs',async t=>{
  const f=await fixture(t),older='11111111-1111-1111-1111-111111111111',latest='22222222-2222-2222-2222-222222222222',queued='33333333-3333-3333-3333-333333333333',rolledBack='44444444-4444-4444-4444-444444444444';
@@ -395,7 +430,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await fs.rm(path.join(f.source,'node_modules'),{recursive:true});
  const log=path.join(f.root,'commands.jsonl');
  await fs.writeFile(path.join(fake,provider),`#!${process.execPath}\nif(${JSON.stringify(provider)}==='corepack'&&process.argv[2]!=='pnpm@10.30.3')throw Error('Unpinned manager');if(process.argv.includes('--version')){console.log('10.30.3');process.exit(0)}const fs=require('fs');fs.mkdirSync('node_modules/tsx/dist',{recursive:true});fs.writeFileSync('node_modules/tsx/dist/loader.mjs','');`,{mode:0o755});
- await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nconst fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a.includes('ps'))console.log('cid');if(a[0]==='inspect')console.log('sha256:'+'a'.repeat(64));`,{mode:0o755});
+ await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nconst fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a.includes('config'))console.log(JSON.stringify({services:{relay:{build:{args:{}}}}}));if(a.includes('ps'))console.log('cid');if(a[0]==='inspect')console.log('sha256:'+'a'.repeat(64));`,{mode:0o755});
  const wrapper=path.join(f.root,'supervisor.mjs'),module=new URL('../src/updates/supervisor.mjs',import.meta.url).href;
  await fs.writeFile(wrapper,`import {supervise} from ${JSON.stringify(module)};const a=new AbortController();process.on('SIGTERM',()=>a.abort());await supervise(${JSON.stringify(f.config.deploymentDir)},a.signal,{discover:async()=>{${provider==='pnpm' ? "throw Error('Synthetic discovery failure')" : 'return []'}}});`);
  const start=()=>{const p=spawn(process.execPath,[wrapper],{env:{...process.env,PATH:fake},stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);return {p,output:()=>output};};
@@ -520,4 +555,21 @@ test('private plugins retain explicit local-file preparation and application gua
  await assert.rejects(submit(f.home,job.id,true),/Local candidates require an explicit upgrade request/);
  const submitted=await submit(f.home,job.id,false);assert.equal(submitted.status,'queued');
  const result=await perform(f.home,submitted,runtime(f));assert.equal(result.status,'completed');
+});
+
+for(const mode of ['exact','wrong-image','unhealthy']) test(`recovery reuses only a healthy retained pinned relay: ${mode}`,async t=>{
+ const f=await fixture(t),job=await queued(f),r=runtime(f);await perform(f.home,job,r);
+ const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
+ const calls=[],execute=async(command,args,options)=>{
+  calls.push([command,...args]);
+  if(args.includes('ps'))return 'b'.repeat(64);
+  if(args[0]==='inspect'&&args.includes('{{json .}}'))return JSON.stringify({Image:'sha256:'+(mode==='wrong-image'?'c':'a').repeat(64),State:{Running:true,Health:{Status:mode==='unhealthy'?'unhealthy':'healthy'}}});
+  if(mode==='exact'&&args.includes('up'))throw Error('Pinned image index no longer exists');
+  return r.execute(command,args,options);
+ };
+ const result=await perform(f.home,interrupted,{...r,execute});
+ assert.equal(result.status,'rolled-back');
+ assert.equal(calls.some(c=>c.includes('up')),mode!=='exact');
+ assert.equal(calls.some(c=>c.includes('stop')),mode!=='exact');
+ assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
 });

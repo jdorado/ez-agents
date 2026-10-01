@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { access, chmod, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -9,6 +9,7 @@ import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
+import { opencodeDataHome, piAgentDir } from '../src/executor.js'
 
 test('private control directory preserves pause, fails closed on errors, and resumes queued work', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-upgrade-pause-'))
@@ -27,6 +28,13 @@ test('private control directory preserves pause, fails closed on errors, and res
       // Prove the old access check fails even though the marker is absent.
       await assert.rejects(access(pause), { code: 'EACCES' })
       await assert.rejects(stat(pause), { code: 'ENOENT' })
+      for (const engine of ['opencode', 'pi/agent']) {
+        const directory = join(dir, 'cli', engine)
+        await mkdir(directory, { recursive: true, mode: 0o700 })
+        await writeFile(join(directory, 'auth.json'), '{}', { mode: 0o600 })
+      }
+      assert.equal(opencodeDataHome(dir), join(dir, 'cli'))
+      assert.equal(piAgentDir(dir), join(dir, 'cli', 'pi', 'agent'))
     }
     const control = new ControlStore(dir, 1000)
     await control.requestPairing(101, 101)
@@ -62,7 +70,7 @@ test('Linux relay real/effective UID regression (Docker test target)', {
   delete env.NODE_TEST_CONTEXT // Run an independent test runner, not the parent's IPC protocol.
   const result = spawnSync('setpriv', [
     '--ruid=1001', '--euid=1000', '--regid=1000', '--clear-groups',
-    '--bounding-set=-all', '--no-new-privs', process.execPath, '--import', 'tsx',
+    '--bounding-set=-all', process.execPath, '--import', 'tsx',
     '--test', fileURLToPath(import.meta.url),
   ], { encoding: 'utf8', timeout: 15000, env })
   assert.equal(result.status, 0, result.stdout + result.stderr)
