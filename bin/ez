@@ -88,7 +88,7 @@ const manager = async args => {
 const main = async () => {
   const args = process.argv.slice(2);
   if (!args.length || args[0] === '--help' || args[0] === '-h') {
-    process.stdout.write(JSON.stringify({commands:['tools list [--details]','<registered CLI> ...'],native:await installedNativeHelp(fileURLToPath(new URL('.',import.meta.url)))})+'\n');
+    process.stdout.write(JSON.stringify({commands:['tools list [--details]','tools skill <plugin> <declared-path>','<registered CLI> ...'],native:await installedNativeHelp(fileURLToPath(new URL('.',import.meta.url)))})+'\n');
     return;
   }
   const stdin = ['plugins', 'tools', 'updates', 'status'].includes(args[0]) ? '' : await readStdin();

@@ -59,6 +59,7 @@ const validateManagerArgs = async (value, workspace) => {
   if (!args.length) throw Error('Missing broker management command');
   const [group, action, name, extra, ...tail] = args;
   if (group === 'tools' && action === 'list' && (args.length === 2 || args.length === 3 && name === '--details')) return args;
+  if (group === 'tools' && action === 'skill' && IDENTIFIER.test(name) && args.length === 4) return args;
   if (group === 'tools' && action === 'exposure' && args.length === 2) return args;
   if (group === 'plugins' && action === 'available' && args.length === 2) return args;
   if (group === 'plugins' && action === 'list' && args.length === 2) return args;

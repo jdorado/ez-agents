@@ -600,17 +600,34 @@ export async function main(args) {
     return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1),{publish:port,serve:true});
   }
   if(group==='tools'&&action==='connect')return (await import('./connection.mjs')).connect(home,rest[0],rest.slice(1));
-  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],native:await installedNativeHelp(path.join(home,'bin')),foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
+  if(group==='--help'||!group) return emit({commands:['status','updates check|policy|prepare|apply|status','plugins available|catalog-add|list|inspect|install|start|stop|status|logs|uninstall|export','tools list [--details]|skill <plugin> <declared-path>|exposure|connect <alias> <args...>|serve <host-port:container-port> <alias> <args...>','<registered CLI> ...'],native:await installedNativeHelp(path.join(home,'bin')),foreignWorkspace:'Relay-bound registries run only from their owning agent workspace',scope:home});
   if(group==='plugins'&&(!action||args.includes('--help'))) return emit({commands:['available','list','inspect <id>','install <id>','start <id>','stop <id>','status <id>','logs <id>','uninstall <id>','catalog-add <id> --source PATH --revision HASH','export <id> <artifact> --output PATH','folder-bind <id> --service NAME --source PATH --target PATH [--writable]','folder-unbind <id> --service NAME --target PATH','folders <id>','shared-enable <id> <service>','shared-disable <id> <service>','shared-status <id> <service>'],uninstall:'Stops and removes containers/network and unregisters aliases; retains all volumes and secrets. No data deletion flag.',scope:home});
   if(group==='plugins'||group==='tools') {
     args=rest;args=args.filter(a=>a!=='--json');
     if(action==='available'&&group==='plugins') return emit(config.catalog);
     const r=await registry(home);
+    if(group==='tools' && action==='skill') {
+      if(args.length!==2)throw Error('Use tools skill <plugin> <declared-path>');
+      const [name,skill]=args,record=r.plugins[id(name)];
+      if(!record || !record.manifest.skills.includes(skill))throw Error('Unknown installed plugin skill');
+      if(path.isAbsolute(skill) || skill.split('/').some(part=>!part || part==='.' || part==='..') || /[\0\r\n]/.test(skill))throw Error('Unsafe skill path');
+      const source=await fs.realpath(record.source);
+      if(source!==record.source || !childOf(source,home))throw Error('Skill source must stay inside installed packages');
+      let file=source;
+      for(const part of skill.split('/')) {
+        file=path.join(file,part);
+        if((await fs.lstat(file)).isSymbolicLink())throw Error('Skill symlinks are not supported');
+      }
+      const stat=await fs.stat(file);
+      if(!stat.isFile() || stat.size>64*1024)throw Error('Skill must be a regular file of at most 64 KiB');
+      return emit({plugin:name,revision:record.revision,path:skill,content:await fs.readFile(file,'utf8')});
+    }
     if(action==='list') {
       if(group==='tools' && args.length===1 && args[0]==='--details')return emit(Object.fromEntries(Object.entries(r.plugins).map(([name,p])=>[name,{
         description:typeof p.manifest.description==='string'?p.manifest.description.replace(/\s+/g,' ').trim().slice(0,200):'',
         commands:Object.keys(p.manifest.commands).map(alias=>`ez ${alias} --help`),
         skills:p.manifest.skills.map(skill=>path.join(p.source,skill)),
+        skillReads:p.manifest.skills.map(skill=>['ez','tools','skill',name,skill]),
       }])));
       if(args.length)throw Error('Use tools list [--details] or plugins list');
       return emit(group==='tools'?r.commands:r.plugins);
