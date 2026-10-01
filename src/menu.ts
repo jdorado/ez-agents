@@ -130,7 +130,8 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const existing = state.presets.find((preset) => preset.cli === stored.cli && preset.provider === stored.provider && preset.model === stored.model && preset.effort === stored.effort)
     const preset = existing ?? candidate
     await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
-    await control.savePreset(preset, guard)
+    // Private scopes persist their selection on the session, not the owner menu.
+    if (!guard?.applicationScope) await control.savePreset(preset, guard)
     return preset
   }
   const save = async (ctx: Context, model: ModelChoice, effort?: string) => {
