@@ -1,4 +1,5 @@
 import { executionDefaults } from './model-policy.js'
+import { redactFailure } from './failure.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
@@ -62,7 +63,12 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     if(message.method==='thread/goal/cleared')settled(null)
     if(message.method==='turn/completed'){
       if(activeTurn===message.params.turn.id)activeTurn=undefined
-      if(message.params.turn.status!=='completed'){finish(message.params.turn.status==='interrupted'?130:1);return}
+      if(message.params.turn.status!=='completed'){
+        if(message.params.turn.status==='interrupted')finish(130)
+        else fail(new Error(redactFailure(typeof message.params.turn.error?.message==='string'
+          ? message.params.turn.error.message : 'Native turn failed without error details')))
+        return
+      }
       // Completion of a turn is not completion of a native goal. The native
       // app-server remains running and owns any automatic next turn.
       void request('thread/goal/get',{threadId}).then(result=>settled(result.goal)).catch(fail)

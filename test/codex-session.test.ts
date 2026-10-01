@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { runCodexSession } from '../src/codex-session.js'
 
-for(const mode of ['external','goal','long-goal','plain','tool-goal','blocked','disconnect','approval','late-limit','early-limit','early-clear','missing-goal'])test(`native Codex session: ${mode}`,async()=>{
+for(const mode of ['external','goal','long-goal','plain','tool-goal','blocked','disconnect','approval','late-limit','early-limit','early-clear','missing-goal','failed','failed-redacted','failed-no-error','interrupted'])test(`native Codex session: ${mode}`,async(t)=>{
+  const diagnostics:string[]=[]
+  t.mock.method(console,'error',(...args:unknown[])=>diagnostics.push(args.join(' ')))
   const prompt=mode==='long-goal'?'/goal Complete the research.\n'+'Full workflow context.\n'.repeat(400)+'FINAL_COMPLETION_CRITERION':'test'
   const requests:string[]=[],output:string[]=[]
   const program=`
@@ -24,6 +26,10 @@ if(q.method==='turn/start'){
  send({method:'turn/completed',params:{threadId:'unrelated',turn:{id:'unrelated',status:'completed'}}});start('one');
  if(${JSON.stringify(mode)}==='disconnect')return process.exit(0);
  if(${JSON.stringify(mode)}==='approval')return send({id:999,method:'item/commandExecution/requestApproval',params:{threadId:'native-test'}});
+ if(['failed','failed-redacted','failed-no-error','interrupted'].includes(${JSON.stringify(mode)})){
+  const message=${JSON.stringify(mode)}==='failed-redacted'?'Native provider request failed: Bearer synthetic-private-token https://user:password@example.test/response?api_key=synthetic-private-key':'Native provider request failed';
+  return event('turn/completed',{turn:{id:'one',status:${JSON.stringify(mode)}==='interrupted'?'interrupted':'failed',error:${JSON.stringify(mode)}==='failed-no-error'?null:{message}}});
+ }
  if(${JSON.stringify(mode)}==='missing-goal')event('thread/goal/updated',{goal:{status:'active'}});
  end('one');return;
 }
@@ -57,9 +63,16 @@ if(q.method==='thread/goal/get'){
     assert.equal(threadConfig.model_provider,'openrouter')
     assert.deepEqual(threadConfig['model_providers.openrouter'],{name:'OpenRouter',base_url:'https://openrouter.ai/api/v1',env_key:'OPENROUTER_API_KEY',wire_api:'responses',supports_websockets:false})
   }
-  assert.equal(result,['external','plain','goal','long-goal','tool-goal'].includes(mode)?0:1)
+  assert.equal(result,mode==='interrupted'?130:['external','plain','goal','long-goal','tool-goal'].includes(mode)?0:1)
   assert.equal(requests.filter(x=>x==='turn/start').length,1,'transport must not send goal continuation prompts')
   assert.equal(requests.filter(x=>x==='thread/goal/set').length,0)
   if(mode==='goal')assert.equal(requests.filter(x=>x==='thread/goal/get').length,2,'must wait for the second turn to complete')
+  if(mode==='failed' || mode==='failed-redacted')assert.ok(diagnostics.some(line=>line.includes('Native provider request failed')),'terminal native error must reach existing stderr diagnostics')
+  if(mode==='failed-redacted'){
+    assert.ok(diagnostics.some(line=>line.includes('https://example.test/response')))
+    assert.ok(diagnostics.every(line=>!line.includes('synthetic-private') && !line.includes('user:password')))
+  }
+  if(mode==='failed-no-error')assert.ok(diagnostics.some(line=>line.includes('Native turn failed without error details')))
+  if(mode==='interrupted')assert.equal(diagnostics.length,0,'owner interruption is not a provider failure')
   assert.equal(JSON.parse(output[0]).thread_id,'native-test')
 })
