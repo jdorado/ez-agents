@@ -445,3 +445,6 @@ partial request. Separate owner runtimes must retain separate workspace mounts.
 
 This is inbound file support. Application replies currently deliver text only;
 outgoing file downloads remain unsupported by this HTTP channel.
+
+Private scope model selections are stored on that scope’s native-session binding.
+They do not add entries to the owner’s saved AI menu or consume its preset limit.
