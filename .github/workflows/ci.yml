@@ -39,7 +39,7 @@ jobs:
           sudo apt-get "${apt_options[@]}" update
           sudo apt-get "${apt_options[@]}" install --no-install-recommends -y ffmpeg
       - run: pnpm verify
-      - run: npm run release:check
+      - run: pnpm run release:check
       - run: git diff --check
 
   docker:

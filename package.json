@@ -52,7 +52,8 @@
     "scripts/assert-local-registry.mjs",
     ".dockerignore",
     "scripts/trusted-beta.mjs",
-    "scripts/generate-publish-caller.mjs"
+    "scripts/generate-publish-caller.mjs",
+    "pnpm-workspace.yaml"
   ],
   "publishConfig": {
     "access": "public",
@@ -70,7 +71,7 @@
     "verify": "pnpm test && pnpm build",
     "smoke:scheduler": "tsx scripts/smoke-scheduler.ts",
     "smoke": "./bin/ezenciel-agents-docker run --rm --no-deps relay smoke",
-    "prepublishOnly": "npm run verify",
+    "prepublishOnly": "pnpm run verify",
     "registry:up": "docker compose -f registry/docker-compose.yml up -d",
     "registry:down": "docker compose -f registry/docker-compose.yml down",
     "publish:local": "node scripts/publish-local.mjs",

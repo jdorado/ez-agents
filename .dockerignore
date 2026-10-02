@@ -27,3 +27,5 @@
 !scripts/trusted-beta.mjs
 !scripts/generate-publish-caller.mjs
 !scripts/smoke-busy-reply.ts
+
+!pnpm-workspace.yaml

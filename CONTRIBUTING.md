@@ -12,7 +12,7 @@ repository. Public docs describe shipped behavior and explicit limitations.
    unnecessary behavior first, and explain why remaining code is needed. Change
    the code, user instructions and focused tests together. Authority,
    paths, credentials, cancellation and uncertain writes need negative tests.
-4. Run `pnpm verify`, `npm run release:check` and `git diff --check`.
+4. Run `pnpm verify`, `pnpm run release:check` and `git diff --check`.
    Packaging/runtime changes also need the Docker checks in docs/releasing.md.
 5. Open a PR explaining the problem, resulting behavior, verification and limits.
    Include a short sanitized reproduction. State which tests were not run.

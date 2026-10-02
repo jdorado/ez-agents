@@ -228,7 +228,7 @@ Upgrading does not invent an explicit setting for an omitted field.
 Verify upgrade from the previous supported artifact, retained identity/state,
 failed-health rollback, and rejection of incompatible candidates. Main runtime
 changes also need supervisor restart and requesting-process-exit tests. Run
-`pnpm verify`, `npm run release:check`, packed Docker builds and
+`pnpm verify`, `pnpm run release:check`, packed Docker builds and
 `node docker/upgrade-smoke.mjs` with a local `EZ_WHATSAPP_SOURCE` containing the
 WhatsApp fixture. The smoke uses synthetic transport only. VM installation,
 agent-led upgrades, restart and real account acceptance remain separate QA gates.

@@ -2,7 +2,7 @@
 
 Use Node 22+ and pnpm 10.30.3: `pnpm install --frozen-lockfile`, then
 `pnpm verify`. Tests use temporary synthetic state; TypeScript checks source and
-tests. Use `npm run release:check` for package contents. See CONTRIBUTING.md for
+tests. Use `pnpm run release:check` for package contents. See CONTRIBUTING.md for
 PR expectations and [release checks](releasing.md) for Docker and clean-host QA.
 
 For the cross-repository fixture, place the reviewed WhatsApp source beside this
