@@ -109,12 +109,12 @@ after service outages; core revocation blocks sends immediately.
 
 ## Native execution and core tools
 
-V1 uses audited Codex CLI **0.153.4** for task work, regardless of the owner's
+V1 uses audited Codex CLI **0.159.2** for task work, regardless of the owner's
 selected executor. Missing or different versions fail closed; upgrading this pin
 requires repeating the native tool inventory test. Owner work retains its normal
 executor. The task runner creates a fresh ephemeral home/session, skips user
 config, rules and ancestor project instructions, and disables shell, file/image,
-browser, apps, hooks, memory and agent spawning tools. A native permissions
+browser, apps, hooks, memory, goals and agent spawning tools. A native permissions
 profile denies general filesystem access and tool network access. No owner
 workspace or conversation is passed to this runner. The runner uses the pinned
 CLI's bundled model catalog with task-specific tool defaults: direct MCP calls,
