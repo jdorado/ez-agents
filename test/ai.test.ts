@@ -4,12 +4,48 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlStore } from '../src/control-state.js'
-import { initialPreset, chatPreset, readModels, isPreset, readOpencodeModels, readCuratedModels, validateSelection, opencodeProviderAllowlist } from '../src/ai.js'
+import { initialPreset, chatPreset, readModels, readCodexCatalog, isPreset, readOpencodeModels, readCuratedModels, validateSelection, opencodeProviderAllowlist } from '../src/ai.js'
 import { createAiMenu } from '../src/menu.js'
 import { EXECUTOR_REGISTRY, nativeSessionId } from '../src/executor.js'
 import { InboxStore } from '../src/inbox.js'
 import { executionDefaults } from '../src/model-policy.js'
 import type { Update } from 'grammy/types'
+
+const noCodex = async (): Promise<string> => { throw new Error('Native discovery unavailable') }
+
+test('Codex discovery refreshes through the bound native CLI without curated overrides or a turn', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'ez-native-catalog-'))
+  const previousToken = process.env.TELEGRAM_BOT_TOKEN
+  try {
+    process.env.TELEGRAM_BOT_TOKEN = 'must-not-reach-native-client'
+    await writeFile(join(home, 'models_cache.json'), JSON.stringify({ models: [
+      { slug: 'old-model', visibility: 'list' },
+    ] }))
+    const calls: string[][] = []
+    const run = async (args: string[], env: NodeJS.ProcessEnv) => {
+      calls.push(args)
+      assert.equal(env.CODEX_HOME, home)
+      assert.equal(env.TELEGRAM_BOT_TOKEN, undefined)
+      return JSON.stringify({ models: [
+        { slug: 'new-model', display_name: 'New model', visibility: 'list',
+          supported_reasoning_levels: [{ effort: 'ultra' }], model_messages: 'untrusted', api_key: 'secret' },
+        { slug: 'hidden-model', visibility: 'hide' },
+      ] })
+    }
+    assert.deepEqual(await readModels(home, async cli => cli === 'codex', home,
+      undefined, undefined, undefined, undefined, run), [
+      { cli: 'codex', model: 'new-model', name: 'New model', efforts: ['ultra'] },
+    ])
+    assert.deepEqual(calls, [['debug', 'models']])
+    for (const unavailable of [noCodex, async () => 'not json', async () => '{"models":[]}']) {
+      assert.deepEqual(await readCodexCatalog(home, unavailable), { models: [{ slug: 'old-model', visibility: 'list' }] })
+    }
+  } finally {
+    if (previousToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN
+    else process.env.TELEGRAM_BOT_TOKEN = previousToken
+    await rm(home, { recursive: true, force: true })
+  }
+})
 
 test('same-client model and default changes preserve history; provider changes require a fresh conversation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-model-switch-'))
@@ -173,7 +209,7 @@ test('model catalog projects native metadata only, excluding hidden entries and 
         supported_reasoning_levels: [{ effort: 'high' }, { effort: 'xhigh' }, { effort: 'max' }] },
       { slug: 'hidden-model', visibility: 'hide' },
     ] }))
-    assert.deepEqual(await readModels(home, async (cli) => cli === 'codex'), [
+    assert.deepEqual(await readModels(home, async (cli) => cli === 'codex', undefined, undefined, undefined, undefined, undefined, noCodex), [
       { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium'] },
       { cli: 'codex', model: 'gpt-5.6-luna', name: 'Luna', efforts: ['high', 'xhigh', 'max'] },
     ])
@@ -258,7 +294,7 @@ test('model catalog can read an agent-bound Codex home', async () => {
       { slug: 'gpt-6-astra', display_name: 'GPT-6 Astra', visibility: 'list',
         supported_reasoning_levels: [{ effort: 'low' }] },
     ] }))
-    assert.deepEqual(await readModels(home, async (cli) => cli === 'codex', codexHome), [
+    assert.deepEqual(await readModels(home, async (cli) => cli === 'codex', codexHome, undefined, undefined, undefined, undefined, noCodex), [
       { cli: 'codex', model: 'gpt-6-astra', name: 'GPT-6 Astra', efforts: ['low'] },
     ])
   } finally {
@@ -270,7 +306,10 @@ test('model catalog can read an agent-bound Codex home', async () => {
 test('Choose AI lists the agent-bound Codex home instead of only the desktop fallback', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-codex-home-'))
   const codexHome = await mkdtemp(join(tmpdir(), 'ez-ai-menu-cache-'))
+  const previousPath = process.env.PATH
   try {
+    await writeFile(join(codexHome, 'codex'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+    process.env.PATH = `${codexHome}:${previousPath ?? ''}`
     await writeFile(join(codexHome, 'models_cache.json'), JSON.stringify({ models: [
       { slug: 'fixture-bound-model', display_name: 'Bound Fixture', visibility: 'list',
         supported_reasoning_levels: [{ effort: 'medium' }] },
@@ -298,6 +337,7 @@ test('Choose AI lists the agent-bound Codex home instead of only the desktop fal
     await menu.handle(context(client.callback_data) as never)
     assert.deepEqual(replies.at(-1)!.buttons.map((button) => button.text), ['Bound Fixture', 'Back to clients'])
   } finally {
+    process.env.PATH = previousPath
     await rm(dir, { recursive: true, force: true })
     await rm(codexHome, { recursive: true, force: true })
   }
@@ -522,7 +562,7 @@ test('model catalog merges user-curated entries ahead of discovered ones', async
     const installedOnly = async (cli: string) => cli === 'codex' || cli === 'pi'
     const noRunner = async (_args: string[]): Promise<string> => { throw new Error('no native CLI in test') }
     const catalog = await readModels(home, installedOnly, join(home, '.codex'),
-      noRunner, undefined, undefined, control)
+      noRunner, undefined, undefined, control, noCodex)
     assert.deepEqual(catalog.filter((m) => m.cli === 'pi'), [
       { cli: 'pi', model: 'opencode-go/muse-spark-1.3-contributor', name: 'Pi · Muse Spark 1.3', efforts: ['xhigh'] },
       { cli: 'pi', name: 'Pi · client default', efforts: [] },
@@ -538,7 +578,7 @@ test('model catalog merges user-curated entries ahead of discovered ones', async
     assert.deepEqual(await readCuratedModels(join(control, 'missing-dir')), [])
     await writeFile(join(control, 'ai-models.json'), 'not json')
     assert.deepEqual(await readModels(home, async (cli) => cli === 'codex', join(home, '.codex'),
-      noRunner, undefined, undefined, control), [
+      noRunner, undefined, undefined, control, noCodex), [
       { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium'] },
     ])
   } finally {
