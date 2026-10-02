@@ -290,6 +290,19 @@ test('isolated broker host binding validates exact mounts without deployment sym
   if(previous===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=previous;
  }
 });
+test('host-capable binding validates an external real workspace without deployment symlinks',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source),workspace=path.join(f.root,'external-workspace');
+ await fs.rm(f.workspace,{recursive:true});await fs.mkdir(workspace);await fs.mkdir(f.home);
+ const binding={service:'sample',network:'sample_default'};
+ await fs.writeFile(f.hostConfig,JSON.stringify({cli:'synthetic',agents:[{name:'sample',workspace,controlDir:f.control,binDir:path.join(f.root,'bin'),toolsHome:f.home,pluginNetworkBindings:{sample:{revisions:[p.revision],bindings:[binding]}}}]}));
+ const realWorkspace=await fs.realpath(workspace),config={workspace:realWorkspace,hostConfig:await fs.realpath(f.hostConfig),folders:{sample:[{service:'sample',source:realWorkspace,target:'/data/files'}]}};
+ const record={source:p.source,project:'ezp-synthetic',revision:p.revision,manifest:p.manifest,deployment:p.deployment};
+ const c=await compose(config,record,{},f.home);
+ assert.equal(c.services.sample.volumes.find(volume=>volume.target===realWorkspace).source,realWorkspace);
+ assert.equal(c.services.sample.volumes.find(volume=>volume.target==='/data/files').source,realWorkspace);
+ const network=Object.values(c.networks).find(candidate=>candidate.name==='sample_default');
+ assert.deepEqual(network,{external:true,name:'sample_default'});
+});
 test('isolated broker allows unbound plugins when another plugin has host binding',async t=>{
  const f=await fixture(t),p=await snapshot(f.source),isolated=path.join(f.root,'isolated-other'),workspace=path.join(isolated,'workspace'),control=path.join(isolated,'control'),hostConfig=path.join(isolated,'host-executor.json'),previous=process.env.EZ_DOCKER_COMPOSE;
  await fs.mkdir(f.home,{recursive:true});await fs.mkdir(workspace,{recursive:true});await fs.mkdir(control,{recursive:true});
