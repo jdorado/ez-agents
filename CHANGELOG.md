@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.46
 
 - Refresh the isolated broker after plugin upgrade or rollback so status reports
   the resulting installed versions rather than its startup inventory. Preserve
