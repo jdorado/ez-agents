@@ -372,6 +372,33 @@ test('plugin updates register additive command routes on an unchanged deployment
  const dispatch=await prepareCommand(f.home,'query',[]);assert.deepEqual(dispatch.argv.slice(-4),['node','sample','/app/bin/example.mjs','query']);
  assert(r.calls.some(call=>call.includes('up')));
 });
+test('isolated plugin replacement refreshes broker version inventory after registry activation',async t=>{
+ const f=await fixture(t,'plugin');
+ await fs.appendFile(path.join(f.config.deploymentDir,'docker.env'),'EZ_EXECUTOR_TRANSPORT=local\n');
+ const job=await queued(f),r=runtime(f),execute=r.execute;
+ let observed;
+ r.execute=async(command,args,options)=>{
+  if(args.includes('restart')&&args.at(-1)==='plugin-broker') observed=(await read(path.join(f.home,'registry.json'))).plugins.sample.manifest.version;
+  return execute(command,args,options);
+ };
+ assert.equal((await perform(f.home,job,r)).status,'completed');
+ assert.equal(observed,'0.1.1');
+ assert.equal(r.calls.filter(call=>call.includes('restart')).length,1);
+ const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
+ assert.equal((await perform(f.home,interrupted,r)).status,'rolled-back');
+ assert.equal(observed,'0.1.0');
+ assert.equal(r.calls.filter(call=>call.includes('restart')).length,2);
+});
+test('plugin update preserves a created but never running service as stopped',async t=>{
+ const f=await fixture(t,'plugin'),job=await queued(f),r=runtime(f),execute=r.execute;
+ r.execute=async(command,args,options)=>{
+  if(args.includes('ps')) {r.calls.push([command,...args]);return args.includes('--status')?'':'created-container';}
+  return execute(command,args,options);
+ };
+ assert.equal((await perform(f.home,job,r)).status,'completed');
+ assert.equal(job.rollback.running,false);
+ assert.equal(r.calls.some(call=>call.includes('up')),false);
+});
 test('plugin command additions ignore object key order but reject collisions and changed routes',async t=>{
  const f=await fixture(t,'plugin'),deployment=await read(path.join(f.source,'ez-deployment.json'));
  deployment.services.sample={healthcheck:deployment.services.sample.healthcheck,volumes:deployment.services.sample.volumes,buildTarget:deployment.services.sample.buildTarget};

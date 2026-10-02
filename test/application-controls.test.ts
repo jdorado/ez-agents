@@ -8,6 +8,7 @@ import { ApplicationChannel, applicationScope } from '../src/application-channel
 import { ControlStore } from '../src/control-state.js'
 import { createAiMenu } from '../src/menu.js'
 import { RunStore } from '../src/runs.js'
+import { softwareStatus } from '../src/software-status.js'
 
 test('shared controls validate detected host presets against the host catalog', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ez-host-controls-'))
@@ -67,6 +68,8 @@ test('private scope reset and model controls preserve running sessions and share
     ...(body===undefined?{}:{body:JSON.stringify(body)}),
   })
   const before = await (await call()).json() as any
+  assert.deepEqual(before.software,await softwareStatus(root))
+  assert.match(before.software[0],/^Relay: running · /)
   assert.equal(before.activeSessionId,run.execution!.sessionId)
   assert.equal(JSON.stringify(before).includes('native-private'),false)
   assert.equal((await channel.scopeControls(second.bindingId,'exercise')).activeSessionId,null)

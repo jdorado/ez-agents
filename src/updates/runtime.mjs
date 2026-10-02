@@ -61,6 +61,10 @@ export async function relayServices(config) {
   const env = await fs.readFile(path.join(config.deploymentDir,'docker.env'),'utf8').catch(() => '');
   return parseEnv(env).EZ_EXECUTOR_TRANSPORT === 'local' ? ['relay','plugin-broker'] : ['relay'];
 }
+async function refreshBroker(config, run) {
+  if ((await relayServices(config)).includes('plugin-broker'))
+    await run('docker', [...relayArgs(config), 'restart', 'plugin-broker']);
+}
 const healthCodes = new Set(['RELAY_UNREADABLE','RELAY_NOT_POLLING','RELAY_STALE','HOST_UNREADABLE','HOST_STALE','PLUGIN_BROKER_UNREADABLE']);
 async function healthEvidence(config,run) {
   const id=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
@@ -145,8 +149,8 @@ export async function perform(home,job,hooks) {
       await checkFolders(config,candidate,home);
       const stage={...candidate,compose:path.join(dir,'compose.json')};await atomic(stage.compose,await compose(config,stage,secrets,home));
       for(const [service,spec] of Object.entries(stage.deployment.services))await run('docker',[...pluginArgs(stage),spec.image?'pull':'build',service]);
-      const running=Boolean((await run('docker',[...pluginArgs(old),'ps','-q'])).trim());
-      job.rollback={record:old,registry:r,compose:await read(old.compose),running};await save();
+      const running=Boolean((await run('docker',[...pluginArgs(old),'ps','--status','running','-q'])).trim());
+      job.rollback={record:old,registry:structuredClone(r),compose:await read(old.compose),running};await save();
       await run('docker',[...pluginArgs(old),'stop']);
       const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
       const volumes=new Set(Object.values(old.deployment.services).flatMap(s=>Object.keys(s.volumes||{})));
@@ -156,6 +160,7 @@ export async function perform(home,job,hooks) {
       r.plugins[job.target]=candidate;
       for(const alias of Object.keys(candidate.manifest.commands))r.commands[alias]=job.target;
       await atomic(path.join(home,'registry.json'),r);
+      await refreshBroker(config,run);
       job.runtimeVerified=running;
     }
     job.status='completed';job.endedAt=new Date().toISOString();await save();
@@ -192,6 +197,7 @@ export async function recover(home,job,hooks) {
         const b=job.rollback;
         await run('docker',[...pluginArgs(b.record),'stop']);
         await atomic(b.record.compose,b.compose);await atomic(path.join(home,'registry.json'),b.registry);
+        await refreshBroker(config,run);
         if(b.running)await run('docker',[...pluginArgs(b.record),'up','-d','--wait','--wait-timeout','90','--no-build']);
       }
       job.status='rolled-back';

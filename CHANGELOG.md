@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Refresh the isolated broker after plugin upgrade or rollback so status reports
+  the resulting installed versions rather than its startup inventory. Preserve
+  the previous registry snapshot independently during plugin activation.
+  Preserve stopped plugins as stopped when Docker retains a created container.
+
+- Include the existing Telegram runtime/version summary in authorized private
+  channel controls so channel status can show the running relay and host versions.
+
 ## 0.1.0-beta.45
 
 - Keep owner chat responsive while a scheduled native turn runs. Foreground
