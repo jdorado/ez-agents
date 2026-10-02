@@ -66,6 +66,17 @@ test('shared workspace lease excludes concurrent writers and refuses queued nati
     await fs.mkdir(path.join(dir,'host-executor'));await fs.writeFile(path.join(dir,'host.json'),JSON.stringify({agents:[{toolsHome:dir,workspace:dir,controlDir:dir}]}));await fs.writeFile(path.join(dir,'config.json'),JSON.stringify({hostConfig:path.join(dir,'host.json'),workspace:dir}));await fs.writeFile(path.join(dir,'host-executor','r.request.json'),'{}');await assert.rejects(invokeLease(dir),/pending/);await fs.rm(path.join(dir,'host-executor','r.request.json'));const unlock=await invokeLease(dir);await unlock();
   }finally{await fs.rm(dir,{recursive:true,force:true});}
 });
+test('workspace lease contention tolerates a concurrent owner release',async()=>{
+  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'ez-lease-release-'));
+  try {
+    for(let n=0;n<100;n++) {
+      const release=await workspaceLease(dir);assert.ok(release);
+      const [,contender]=await Promise.all([release(),workspaceLease(dir)]);
+      if(contender)await contender();
+      const next=await workspaceLease(dir);assert.ok(next);await next();
+    }
+  }finally{await fs.rm(dir,{recursive:true,force:true});}
+});
 test('command output bound and timeout remove exact containers without leaking daemon secrets',async()=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'ez-bound-'));
   try {

@@ -305,7 +305,9 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     assert.equal(await workspaceLease(agents[0].toolsHome),undefined)
     await writeFile(path.join(directory,'tg_43.cancel'),'')
     for(let n=0;n<100;n++){try{await readFile(path.join(directory,'tg_43.running.json'))}catch{break}await new Promise(r=>setTimeout(r,20))}
-    const unlock=await workspaceLease(agents[0].toolsHome)
+    // The running marker is removed before the lifecycle lease is released.
+    let unlock
+    for(let n=0;n<100;n++){unlock=await workspaceLease(agents[0].toolsHome);if(unlock)break;await new Promise(r=>setTimeout(r,20))}
     assert.ok(unlock)
     await unlock()
     const scheduled=JSON.parse(scheduleEvents.filter(e=>e.stream==='stdout').map(e=>e.text).join(''))
