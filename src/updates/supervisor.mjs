@@ -38,6 +38,20 @@ export async function idle(control) {
   const status=await callDeliverySocket(path.join(control,'delivery.sock'),{op:'status'},2000).catch(()=>null);
   return !status||status.running===0;
 }
+// Pause admission only after work is idle, and release it if a turn raced the
+// check. A queued upgrade must never hold the owner's chat behind a long turn.
+export async function withIdleUpgrade(control,job,signal,apply,{isIdle=idle,wait=sleep}={}) {
+  if(signal.aborted||!await isIdle(control))return;
+  const pause=path.join(control,'upgrade-pause.json');
+  await atomic(pause,{id:job.id});
+  try {
+    for(let n=0;n<3;n++) {
+      await wait(500);
+      if(signal.aborted||!await isIdle(control))return;
+    }
+    if(!signal.aborted)return await apply();
+  } finally {await fs.rm(pause,{force:true});}
+}
 export async function queueAutomatic(home,available) {
   const existing=await jobs(home);
   if(existing.some(job=>['queued','applying','recovery-required'].includes(job.status)))return null;
@@ -103,19 +117,15 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       if(!isolated && child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
       const pending=(await jobs(home)).find(j=>j.status==='queued');
       if(pending) {
-        await atomic(pause,{id:pending.id});
-        // Relay admission is paused; drain the requesting turn and any already-claimed job.
-        let quiet=0;
-        while(!signal.aborted&&quiet<3){quiet=await idle(agent.controlDir)?quiet+1:0;await sleep(500);}
-        if(signal.aborted)break;
-        let result;
-        try {
-          result=await locked(home,async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));return perform(home,latest,{stopHost,startHost});});
-        } catch(error) {
-          // A pre-switch rejection is terminal. Applying jobs keep their journal for recovery.
-          const latest=await read(path.join(jobPath(home,pending.id),'job.json'));
-          if(latest.status==='queued'){latest.status='failed';latest.error=error.message;await atomic(path.join(jobPath(home,pending.id),'job.json'),latest);}else throw error;
-        } finally {await fs.rm(pause,{force:true});}
+        const result=await withIdleUpgrade(agent.controlDir,pending,signal,async()=>{
+          try {
+            return await locked(home,async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));return perform(home,latest,{stopHost,startHost});});
+          } catch(error) {
+            // A pre-switch rejection is terminal. Applying jobs keep their journal for recovery.
+            const latest=await read(path.join(jobPath(home,pending.id),'job.json'));
+            if(latest.status==='queued'){latest.status='failed';latest.error=error.message;await atomic(path.join(jobPath(home,pending.id),'job.json'),latest);}else throw error;
+          }
+        });
         if(result?.status==='completed') {
           if(pending.target==='main')return;
           nextCheck=0;

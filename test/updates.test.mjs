@@ -13,7 +13,7 @@ import { perform, environment, packageManager, backupStateDirectory, execute } f
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
-import { providerEnvironment, queueAutomatic, waitForHostHeartbeat } from '../src/updates/supervisor.mjs';
+import { providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
 
 test('structured runtime output excludes warnings but failures retain diagnostics',async()=>{
@@ -510,6 +510,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  const requester=await exec(process.execPath,['--input-type=module','-e',`import {submit} from ${JSON.stringify(new URL('../src/updates/control.mjs',import.meta.url).href)};console.log(JSON.stringify(await submit(${JSON.stringify(f.home)},${JSON.stringify(job.id)},false)));`]);
  assert.equal(JSON.parse(requester.stdout).status,'queued');
  await new Promise(r=>setTimeout(r,1800));assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).status,'queued');
+ await assert.rejects(fs.readFile(path.join(f.agent.controlDir,'upgrade-pause.json')),e=>e.code==='ENOENT');
  await fs.rm(running);
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));if(j.status==='failed'||j.status==='rolled-back')throw Error(JSON.stringify(j)+first.output());return j.status==='completed';});
  const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);assert.equal(await firstClosed,0,first.output());
@@ -527,6 +528,26 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));return j.status==='rolled-back';});
  assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
  const closed3=new Promise(r=>third.p.once('close',r));third.p.kill('SIGTERM');assert.equal(await closed3,0,third.output());
+});
+
+test('queued upgrades keep admission open while busy and release a raced or aborted pause',async t=>{
+ const root=await fs.mkdtemp(path.join(tmpdir(),'ez-upgrade-admission-'));
+ t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const pause=path.join(root,'upgrade-pause.json'),job={id:'test'},abort=new AbortController();
+ const absent=()=>assert.rejects(fs.readFile(pause),e=>e.code==='ENOENT');
+ let applied=0;
+ const apply=async()=>{assert.equal((await read(pause)).id,job.id);applied++;return 'applied';};
+ await withIdleUpgrade(root,job,abort.signal,apply,{isIdle:async()=>false});
+ await absent();assert.equal(applied,0);
+ let checks=0;
+ await withIdleUpgrade(root,job,abort.signal,apply,{isIdle:async()=>++checks===1,wait:async()=>{}});
+ await absent();assert.equal(applied,0);
+ assert.equal(await withIdleUpgrade(root,job,abort.signal,apply,{isIdle:async()=>true,wait:async()=>{}}),'applied');
+ await absent();assert.equal(applied,1);
+ await assert.rejects(withIdleUpgrade(root,job,abort.signal,async()=>{throw Error('apply failed');},{isIdle:async()=>true,wait:async()=>{}}),/apply failed/);
+ await absent();
+ await withIdleUpgrade(root,job,abort.signal,apply,{isIdle:async()=>true,wait:async()=>abort.abort()});
+ await absent();assert.equal(applied,1);
 });
 
 test('npm candidates verify exact version and integrity; automatic policy is enforced again at execution',async t=>{
