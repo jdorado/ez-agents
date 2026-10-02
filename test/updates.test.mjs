@@ -276,6 +276,16 @@ test('compatibility bridge hands off any matching canonical beta release',async 
  await atomic(path.join(f.source,'package.json'),{...candidate,version:'0.1.0-beta.34'});
  await assert.rejects(eligibility(f.home,'main',f.source,false),/newer/);
 });
+test('private RC and QA builds graduate only to their matching beta release',async t=>{
+ const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),candidate=await read(path.join(f.source,'package.json'));
+ for(const suffix of ['rc.7','qa.4']) {
+  await atomic(path.join(f.old,'package.json'),{...prior,version:'0.1.0-beta.46.'+suffix});
+  await atomic(path.join(f.source,'package.json'),{...candidate,version:'0.1.0-beta.46'});
+  assert.equal((await eligibility(f.home,'main',f.source,true)).pkg.version,'0.1.0-beta.46');
+  await atomic(path.join(f.source,'package.json'),{...candidate,version:'0.1.0-beta.45'});
+  await assert.rejects(eligibility(f.home,'main',f.source,false),/newer/);
+ }
+});
 test('reviewed Library beta14 command migration is exact and fail-closed',()=>{
  const manifest=(version,document)=>({schemaVersion:1,id:'library',version,description:'library',commands:{library:{executable:'bin/ez-library.mjs',args:[]},'library-query':{executable:'bin/ez-library.mjs',args:[],channelQuery:true},...(document?{'library-document':{executable:'bin/ez-library.mjs',args:[],channelQuery:true}}:{})},skills:['skills/library/SKILL.md']});
  const deployment=(query,document)=>({schemaVersion:3,services:{library:{buildTarget:'runtime',volumes:{data:'/state'},healthcheck:['node','/app/bin/ez-library.mjs','--version'],memoryMiB:4096,cpus:2}},commands:{'library-query':{service:'library',argv:['node','/app/bin/ez-library.mjs',query]},...(document?{'library-document':{service:'library',argv:['node','/app/bin/ez-library.mjs','document']}}:{})},sharedServices:{}});

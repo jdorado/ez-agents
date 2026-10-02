@@ -1,5 +1,9 @@
 # Agent-owned software upgrades
 
+Private `beta.N.rc.M` and `beta.N.qa.M` candidates may upgrade to the matching
+published `beta.N`, despite SemVer's prerelease ordering. All identity, integrity,
+deployment and owner-policy checks still apply; older betas remain rejected.
+
 For an application's independently deployed frontend, backend or embedded gateway,
 see [managed applications](managed-applications.md). They use their existing
 deployment tools and a saved maintenance mandate; this package updater inventories
