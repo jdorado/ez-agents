@@ -13,7 +13,7 @@ import { perform, environment, packageManager, backupStateDirectory, execute } f
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
-import { providerEnvironment, queueAutomatic } from '../src/updates/supervisor.mjs';
+import { providerEnvironment, queueAutomatic, waitForHostHeartbeat } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
 
 test('structured runtime output excludes warnings but failures retain diagnostics',async()=>{
@@ -41,6 +41,14 @@ test('supervisor forwards only provider keys declared by the agent installation'
  assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey:'bad-key'}]}]},{}),/environment key/);
  for(const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN'])
   assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey}]}]},{}),/Reserved Codex provider environment key/);
+});
+test('host startup gate tolerates initialization beyond the former ten-second window',async()=>{
+ let reads=0;
+ await waitForHostHeartbeat('/control',{pid:42,exitCode:null},()=>undefined,{
+  attempts:120,intervalMs:0,wait:async()=>{},
+  readHeartbeat:async()=>++reads===111?{pid:42,at:Date.now()}:null,
+ });
+ assert.equal(reads,111);
 });
 const contract=kind=>({protocol:1,kind,stateSchema:1,mainProtocol:1});
 function tar(entries) {
