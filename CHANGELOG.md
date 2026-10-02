@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refresh the isolated broker after plugin upgrade or rollback so status reports
+  the resulting installed versions rather than its startup inventory.
+
 - Include the existing Telegram runtime/version summary in authorized private
   channel controls so channel status can show the running relay and host versions.
 
