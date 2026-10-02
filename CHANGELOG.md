@@ -2,6 +2,9 @@
 
 ## 0.1.0-beta.46
 
+- Allow private RC/QA candidates to graduate to their matching published beta
+  through the existing updater, without permitting a move to an older beta.
+
 - Refresh the isolated broker after plugin upgrade or rollback so status reports
   the resulting installed versions rather than its startup inventory. Preserve
   the previous registry snapshot independently during plugin activation.
