@@ -389,6 +389,16 @@ test('isolated plugin replacement refreshes broker version inventory after regis
  assert.equal(observed,'0.1.0');
  assert.equal(r.calls.filter(call=>call.includes('restart')).length,2);
 });
+test('plugin update preserves a created but never running service as stopped',async t=>{
+ const f=await fixture(t,'plugin'),job=await queued(f),r=runtime(f),execute=r.execute;
+ r.execute=async(command,args,options)=>{
+  if(args.includes('ps')) {r.calls.push([command,...args]);return args.includes('--status')?'':'created-container';}
+  return execute(command,args,options);
+ };
+ assert.equal((await perform(f.home,job,r)).status,'completed');
+ assert.equal(job.rollback.running,false);
+ assert.equal(r.calls.some(call=>call.includes('up')),false);
+});
 test('plugin command additions ignore object key order but reject collisions and changed routes',async t=>{
  const f=await fixture(t,'plugin'),deployment=await read(path.join(f.source,'ez-deployment.json'));
  deployment.services.sample={healthcheck:deployment.services.sample.healthcheck,volumes:deployment.services.sample.volumes,buildTarget:deployment.services.sample.buildTarget};
