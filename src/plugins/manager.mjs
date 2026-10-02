@@ -233,17 +233,10 @@ async function hostFolderRoots(config, record, home) {
   if (!host || typeof host !== 'object' || !Array.isArray(host.agents)) throw Error('Invalid host folder bindings');
   const candidates = host.agents.filter(agent => agent && typeof agent === 'object' && typeof agent.toolsHome === 'string' && realpathSync(agent.toolsHome) === home);
   if (candidates.length !== 1) throw Error('Host folder binding does not belong to this registry');
-  const agent = candidates[0], deployment = path.dirname(hostConfig);
+  const agent = candidates[0];
   if (typeof agent.workspace !== 'string' || typeof agent.controlDir !== 'string' ||
       realpathSync(agent.workspace) !== config.workspace ||
       childOf(hostConfig, config.workspace) || childOf(hostConfig, realpathSync(agent.controlDir)))
-    throw Error('Invalid host folder binding deployment');
-  // The isolated broker receives only the exact workspace, control directory,
-  // tools home, and host config mounts. It must not require the host
-  // deployment's convenience mind/control symlinks (or a deployment mount).
-  if (process.env.EZ_DOCKER_COMPOSE !== 'standalone' &&
-      (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
-       realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir)))
     throw Error('Invalid host folder binding deployment');
   const configured = agent.pluginFolderRoots;
   if (configured !== undefined && (!configured || typeof configured !== 'object' || Array.isArray(configured)))
@@ -287,7 +280,7 @@ export async function hostNetworkBindings(config, record, home) {
   if (!host || typeof host !== 'object' || !Array.isArray(host.agents)) throw Error('Invalid host network bindings');
   const candidates = host.agents.filter(agent => agent && typeof agent === 'object' && typeof agent.toolsHome === 'string' && realpathSync(agent.toolsHome) === home);
   if (candidates.length !== 1) throw Error('Host network binding does not belong to this registry');
-  const agent = candidates[0], deployment = path.dirname(hostConfig);
+  const agent = candidates[0];
   if (typeof agent.workspace !== 'string' || typeof agent.controlDir !== 'string' ||
       realpathSync(agent.workspace) !== config.workspace ||
       childOf(hostConfig, config.workspace) || childOf(hostConfig, realpathSync(agent.controlDir)))
@@ -299,11 +292,6 @@ export async function hostNetworkBindings(config, record, home) {
   if (route === undefined) return [];
   const isolated = process.env.EZ_DOCKER_COMPOSE === 'standalone';
   if (isolated && host.isolation !== 'isolated') throw Error('Isolated broker requires an isolated host binding');
-  // Like folder grants, network grants use the exact mounted identities. The
-  // broker does not receive the host deployment's convenience symlinks.
-  if (!isolated && (realpathSync(path.join(deployment, 'mind')) !== config.workspace ||
-      realpathSync(path.join(deployment, 'control')) !== realpathSync(agent.controlDir)))
-    throw Error('Invalid host network binding deployment');
   keys(route, ['revisions', 'bindings']);
   const trusted = await snapshot(record.source);
   if (record.revision !== trusted.revision || record.source !== trusted.source ||

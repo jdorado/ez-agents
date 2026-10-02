@@ -13,9 +13,9 @@ async function packageToolDiscovery(packageRoot,home,workspace) {
 
 export async function bindUpdates(home,hostConfig,packageRoot=fileURLToPath(new URL('../../',import.meta.url))) {
   home=await fs.realpath(home);hostConfig=await fs.realpath(hostConfig);
-  const config=await read(path.join(home,'config.json')),host=await read(hostConfig),deploymentDir=path.dirname(hostConfig);
-  if(path.basename(hostConfig)!=='host-executor.json'||host.agents.length!==1||host.agents[0].toolsHome!==home||host.agents[0].workspace!==config.workspace)throw Error('Updates require this agent registry and its own single-deployment host config');
-  if(await fs.realpath(path.join(deploymentDir,'mind'))!==config.workspace||await fs.realpath(path.join(deploymentDir,'control'))!==host.agents[0].controlDir)throw Error('Noncanonical deployment state paths');
+  const config=await read(path.join(home,'config.json')),host=await read(hostConfig),deploymentDir=path.dirname(hostConfig),agent=host.agents[0];
+  if(path.basename(hostConfig)!=='host-executor.json'||host.agents.length!==1||agent.toolsHome!==home||agent.workspace!==config.workspace)throw Error('Updates require this agent registry and its own single-deployment host config');
+  if(await fs.realpath(agent.workspace)!==agent.workspace||await fs.realpath(agent.controlDir)!==agent.controlDir)throw Error('Noncanonical deployment state paths');
   packageRoot=await fs.realpath(packageRoot);
   await fs.mkdir(path.join(home,'updates'),{recursive:true,mode:0o700});
   await atomic(path.join(home,'config.json'),{...config,hostConfig,packageRoot:packageRoot.replace(/\/$/,''),deploymentDir});
@@ -26,7 +26,7 @@ export async function bindUpdates(home,hostConfig,packageRoot=fileURLToPath(new 
   await fs.writeFile(path.join(bin,'ez'),`#!${process.execPath}\nimport fs from 'node:fs';import {pathToFileURL} from 'node:url';const c=JSON.parse(fs.readFileSync(${configFile}));const m=await import(pathToFileURL(c.packageRoot+'/src/plugins/manager.mjs'));m.main(['--home',${JSON.stringify(home)},...process.argv.slice(2)]).catch(e=>{console.error(e.message);process.exitCode=1});\n`,{mode:0o700});
   for(const [name,entry] of Object.entries(pkg.bin)) {
     const dest=path.join(bin,name);await fs.rm(dest,{force:true});
-    await fs.writeFile(dest,`#!${process.execPath}\nimport fs from 'node:fs';import {spawn} from 'node:child_process';const c=JSON.parse(fs.readFileSync(${configFile}));const child=spawn(c.packageRoot+'/'+${JSON.stringify(entry)},process.argv.slice(2),{stdio:'inherit',env:{...process.env,EZ_DEPLOYMENT_DIR:c.deploymentDir,EZ_CONTROL_DIR:c.deploymentDir+'/control'}});for(const s of ['SIGTERM','SIGINT'])process.on(s,()=>child.kill(s));child.on('error',e=>{console.error(e.message);process.exitCode=1});child.on('close',c=>process.exitCode=c??1);\n`,{mode:0o700});
+    await fs.writeFile(dest,`#!${process.execPath}\nimport fs from 'node:fs';import {spawn} from 'node:child_process';const c=JSON.parse(fs.readFileSync(${configFile}));const child=spawn(c.packageRoot+'/'+${JSON.stringify(entry)},process.argv.slice(2),{stdio:'inherit',env:{...process.env,EZ_DEPLOYMENT_DIR:c.deploymentDir,EZ_CONTROL_DIR:${JSON.stringify(agent.controlDir)}}});for(const s of ['SIGTERM','SIGINT'])process.on(s,()=>child.kill(s));child.on('error',e=>{console.error(e.message);process.exitCode=1});child.on('close',c=>process.exitCode=c??1);\n`,{mode:0o700});
   }
   await packageToolDiscovery(packageRoot,home,config.workspace);
   return {ok:true,home,deploymentDir,packageRoot,policy:'Automatic compatible beta-channel updates by default; saved stable-only or manual policies take precedence. Local candidates require an explicit owner request.'};

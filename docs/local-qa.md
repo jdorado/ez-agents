@@ -16,7 +16,7 @@ Commit, push and open a PR first — then stage only from that PR's exact commit
 ```sh
 node scripts/stage-qa.mjs --source /absolute/feature-checkout \
   --catalog /absolute/deployment/tools/qa --label beta-12 \
-  --version 0.1.0-beta.12.qa.1 --flow /absolute/feature-QA.md
+  --version 0.1.0-beta.12.rc.1 --flow /absolute/feature-QA.md
 ```
 
 `beta-12` is a local catalog label, distinct from public `0.1.0-beta.12`. The

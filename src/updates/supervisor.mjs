@@ -20,6 +20,16 @@ export function providerEnvironment(host, environment=process.env) {
 }
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+export async function waitForHostHeartbeat(controlDir,child,failure,{attempts=300,intervalMs=100,readHeartbeat=read,wait=sleep}={}) {
+  for(let n=0;n<attempts;n++) {
+    const error=failure();
+    if(error||child.exitCode!==null)throw error||Error('Host transport failed to start');
+    const beat=await readHeartbeat(path.join(controlDir,'host-executor/heartbeat.json')).catch(missing);
+    if(beat?.pid===child.pid&&Date.now()-beat.at<10000)return;
+    await wait(intervalMs);
+  }
+  throw Error('Host transport heartbeat timeout');
+}
 export async function idle(control) {
   const host=await fs.readdir(path.join(control,'host-executor')).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
   if(host.some(f=>f.endsWith('.running.json')||f.endsWith('.request.json')))return false;
@@ -67,13 +77,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     child=spawn(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'src/host-executor.ts'),path.join(deployment,'host-executor.json')],
       {env:{...environment(),...providerEnvironment(host),EZ_HOST_SUPERVISOR_PID:String(process.pid)},stdio:['ignore','inherit','inherit']});
     let error;child.once('error',e=>{error=e;});
-    for(let n=0;n<100;n++) {
-      if(error||child.exitCode!==null)throw error||Error('Host transport failed to start');
-      const beat=await read(path.join(agent.controlDir,'host-executor/heartbeat.json')).catch(missing);
-      if(beat?.pid===child.pid&&Date.now()-beat.at<10000)return;
-      await sleep(100);
-    }
-    throw Error('Host transport heartbeat timeout');
+    await waitForHostHeartbeat(agent.controlDir,child,()=>error);
   };
   const pause=path.join(agent.controlDir,'upgrade-pause.json');
   const beat=setInterval(()=>{void atomic(path.join(directory,'supervisor.json'),{pid:process.pid,at:Date.now()}).catch(()=>{});},1000);

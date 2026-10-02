@@ -20,7 +20,7 @@ test('local QA staging preserves source and rejects label replacement and dirty 
   git(['init']);git(['add','package.json','feature.txt','run.sh']);
   git(['-c','user.name=QA','-c','user.email=qa@example.invalid','-c','core.hooksPath=/dev/null','-c','commit.gpgsign=false','commit','-m','fixture']);
   const script=fileURLToPath(new URL('../scripts/stage-qa.mjs',import.meta.url));
-  const args=[script,'--source',source,'--catalog',catalog,'--label','beta-12','--version','0.1.0-beta.12.qa.1','--flow',flow];
+  const args=[script,'--source',source,'--catalog',catalog,'--label','beta-12','--version','0.1.0-beta.12.rc.1','--flow',flow];
   const stage=()=>{const prior=process.umask(0o027);try{return execFileSync(process.execPath,args,{stdio:'pipe'}).toString();}finally{process.umask(prior);}};
   try {
     const result=JSON.parse(stage()),data=await fs.readFile(path.join(result.directory,result.file));
@@ -28,7 +28,7 @@ test('local QA staging preserves source and rejects label replacement and dirty 
     assert.equal(git(['status','--porcelain']),'');
     await extract(data,path.join(root,'unpacked'));
     const built=JSON.parse(await fs.readFile(path.join(root,'unpacked/package.json'),'utf8'));
-    assert.equal(built.version,'0.1.0-beta.12.qa.1');assert.equal(built.ezQa.commit,result.commit);
+    assert.equal(built.version,'0.1.0-beta.12.rc.1');assert.equal(built.ezQa.commit,result.commit);
     assert.equal(await fs.readFile(path.join(root,'unpacked/feature.txt'),'utf8'),'feature source');
     assert.equal((await fs.stat(path.join(root,'unpacked'))).mode&0o777,0o755);
     assert.equal((await fs.stat(path.join(root,'unpacked/feature.txt'))).mode&0o777,0o644);
