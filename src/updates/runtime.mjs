@@ -150,7 +150,7 @@ export async function perform(home,job,hooks) {
       const stage={...candidate,compose:path.join(dir,'compose.json')};await atomic(stage.compose,await compose(config,stage,secrets,home));
       for(const [service,spec] of Object.entries(stage.deployment.services))await run('docker',[...pluginArgs(stage),spec.image?'pull':'build',service]);
       const running=Boolean((await run('docker',[...pluginArgs(old),'ps','-q'])).trim());
-      job.rollback={record:old,registry:r,compose:await read(old.compose),running};await save();
+      job.rollback={record:old,registry:structuredClone(r),compose:await read(old.compose),running};await save();
       await run('docker',[...pluginArgs(old),'stop']);
       const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
       const volumes=new Set(Object.values(old.deployment.services).flatMap(s=>Object.keys(s.volumes||{})));
