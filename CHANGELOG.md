@@ -1,10 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.45
 
 - Keep owner chat responsive while a scheduled native turn runs. Foreground
   turns and scheduled turns each stay serial, with separate native sessions.
   Host workspace invocations remain excluded until both streams finish.
+
+- Expose the existing immediate scheduling command in bounded managed guidance;
+  scope the owner-requested preference to foreground turns and prevent scheduled
+  work from scheduling itself again. Upgrade and rollback render the selected
+  package's guidance while preserving agent-owned text.
+- Support real external agent workspaces and private control directories without
+  deployment convenience symlinks, including plugin grants and updater backups.
+- Treat a concurrently released workspace lock as busy without adding retries,
+  and allow bounded host initialization beyond the former ten-second window.
+- Preserve failed native Codex turn diagnostics for channel delivery instead of
+  losing the failure when a native turn completes without response text.
 
 ## 0.1.0-beta.44
 
