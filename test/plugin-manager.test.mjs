@@ -74,7 +74,7 @@ test('native discovery binding preserves notes and adds bounded nonblocking rout
  await init(f.home,f.workspace);
  await assert.rejects(fs.access(notes),{code:'ENOENT'});
  const first=await fs.readFile(instructions,'utf8');assert(first.startsWith('Owner mandate\n'));assert(first.includes(f.home+'/bin/ez'));
- assert.match(first,/tools list --details/);assert.match(first,/ --help/);assert.match(first,/during a foreground owner turn, prefer `ezenciel-agents-schedule create --now \.\.\.`/);assert.match(first,/A `\[schedule \.\.\.\]` turn executes its assigned work directly and must not schedule it again/);assert.doesNotMatch(first,/ezenciel-agents-message|KISS/);
+ assert.match(first,/tools list --details/);assert.match(first,/`--help`/);assert.match(first,/during a foreground owner turn, prefer `ezenciel-agents-schedule create --now \.\.\.`/);assert.match(first,/A `\[schedule \.\.\.\]` turn executes its assigned work directly and must not schedule it again/);assert.doesNotMatch(first,/ezenciel-agents-message|KISS/);
  const managed=first.slice(first.indexOf('<!-- ez tools: begin -->'),first.indexOf('<!-- ez tools: end -->')+'<!-- ez tools: end -->'.length);
  assert.ok(Buffer.byteLength(managed)<=600);
  await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(instructions,'utf8'),first);
@@ -93,7 +93,13 @@ test('isolated discovery uses the relay-bound ez client without exposing toolsHo
  const f=await fixture(t);await fs.mkdir(f.home);const workspace=await fs.realpath(f.workspace),controlDir=await fs.realpath(f.control),toolsHome=await fs.realpath(f.home),host={cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir,binDir:path.join(f.root,'bin'),toolsHome}]};
  await fs.mkdir(path.join(f.root,'bin'));await fs.writeFile(f.hostConfig,JSON.stringify(host));
  await init(f.home,f.workspace,undefined,f.hostConfig);
- const instructions=await fs.readFile(path.join(f.workspace,'AGENTS.md'),'utf8');assert.match(instructions,/`ez tools list --details`/);assert.doesNotMatch(instructions,new RegExp(f.home.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+ const instructions=await fs.readFile(path.join(f.workspace,'AGENTS.md'),'utf8');assert.match(instructions,/Use `ez`/);assert.match(instructions,/`tools list --details`/);assert.doesNotMatch(instructions,new RegExp(f.home.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+});
+test('discovery rejects an over-budget launcher before rewriting instructions',async t=>{
+ const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),longHome=path.join(f.root,'h'.repeat(200),'n'.repeat(200));
+ await fs.mkdir(longHome,{recursive:true});await fs.writeFile(instructions,'Owner mandate\n');
+ await assert.rejects(bindToolDiscovery(longHome,f.workspace),/600-byte core budget/);
+ assert.equal(await fs.readFile(instructions,'utf8'),'Owner mandate\n');
 });
 test('installed snippets follow install, upgrade and uninstall without files or Docker reads',async t=>{
  const f=await fixture(t);await init(f.home,f.workspace);
