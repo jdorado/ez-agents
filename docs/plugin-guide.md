@@ -97,7 +97,7 @@ baseline is:
 ```sh
 pnpm install --frozen-lockfile
 pnpm verify
-npm run release:check
+pnpm run release:check
 git diff --check
 ```
 

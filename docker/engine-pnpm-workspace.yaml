@@ -1,0 +1,4 @@
+# Native CLI engines share the same install protections as project dependencies.
+minimumReleaseAge: 10080
+trustPolicy: no-downgrade
+blockExoticSubdeps: true

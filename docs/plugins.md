@@ -334,7 +334,7 @@ only to its authoritative service over the reviewed transport.
 
 ## Verification
 
-`npm run verify` runs offline negative/contract tests. Explicit Docker integration:
+`pnpm run verify` runs offline negative/contract tests. Explicit Docker integration:
 `node docker/plugin-smoke.mjs`. It builds the actual WhatsApp package with the
 synthetic transport in an isolated snapshot and tests installation, start,
 registered CLI, literal file paths, idempotency, restart persistence and

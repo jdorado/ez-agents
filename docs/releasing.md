@@ -11,7 +11,7 @@ separate release bot is not required.
    update plugin manifest version when present. After lockfile changes, copy
    `pnpm-lock.yaml` to `docker/pnpm-lock.yaml` (npm omits the root lockfile; CI
    checks this shipping copy is identical). Never overwrite a published version.
-2. Run `pnpm install --frozen-lockfile`, `pnpm verify`, `npm run release:check`,
+2. Run `pnpm install --frozen-lockfile`, `pnpm verify`, `pnpm run release:check`,
    `git diff --check`. Review `npm audit --omit=dev` and dependency licenses.
    Record accepted risks with a reason; never run an unreviewed audit fix.
 3. Build both Docker targets from a clean checkout:
