@@ -3,9 +3,9 @@ FROM node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git util-linux ffmpeg docker.io && rm -rf /var/lib/apt/lists/*
 COPY --from=compose-bin /docker-compose /usr/local/bin/docker-compose
-ENV PNPM_HOME=/opt/pnpm
+ENV PNPM_HOME=/opt/pnpm COREPACK_HOME=/opt/corepack COREPACK_DEFAULT_TO_LATEST=0
 ENV PATH=/opt/pnpm:$PATH
-RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
+RUN corepack enable && corepack prepare pnpm@10.30.3 --activate && pnpm config set --global global-bin-dir /usr/local/bin
 RUN mkdir -p /opt/pnpm/global/5
 COPY docker/engine-pnpm-workspace.yaml /opt/pnpm/global/5/pnpm-workspace.yaml
 COPY package.json pnpm-workspace.yaml ./
