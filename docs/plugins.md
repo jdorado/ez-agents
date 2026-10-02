@@ -157,6 +157,11 @@ snapshots. Reinstallation reuses that data. Plain install does not replace a dif
 compatible upgrades under saved policy; see [upgrades](upgrades.md). Manual
 uninstall/reinstall remains available but does not promise schema rollback.
 
+Installed package files retain their reviewed modes (0644 for ordinary files,
+0755 for executables and nested directories), including under restrictive umasks
+or inherited default ACLs. The snapshot root remains private (0700); provider
+data and private operation receipts keep their separate permissions.
+
 For another reviewed local package, inspect with `plugins inspect <id> --source
 /absolute/source`, then install with that source and the returned `--revision
 sha256:...`. Changed contents fail. To make a reviewed package discoverable without installing,

@@ -46,6 +46,21 @@ async function fixture(t) {
  const call=(...args)=>exec(process.execPath,[bin,'--home',home,...args],{env});
  return {root,source,home,deploymentDir,workspace,control,hostConfig,fake,log,manifest,deployment,env,call};
 }
+test('install preserves reviewed package modes under a restrictive umask',async t=>{
+ const f=await fixture(t);
+ await fs.mkdir(path.join(f.source,'nested'));await fs.writeFile(path.join(f.source,'nested','note.md'),'Synthetic');
+ const pkg=JSON.parse(await fs.readFile(path.join(f.source,'package.json'),'utf8'));pkg.files.push('nested');
+ await fs.writeFile(path.join(f.source,'package.json'),JSON.stringify(pkg));await fs.chmod(path.join(f.source,'client.mjs'),0o755);
+ const p=await snapshot(f.source);await init(f.home,f.workspace);
+ const argv=['--home',f.home,'plugins','install','sample','--source',f.source,'--revision',p.revision];
+ const script=`process.umask(0o077);const m=await import(${JSON.stringify(new URL('../src/plugins/manager.mjs',import.meta.url).href)});await m.main(${JSON.stringify(argv)});`;
+ await exec(process.execPath,['--input-type=module','-e',script],{env:f.env});
+ const record=JSON.parse(await fs.readFile(path.join(f.home,'registry.json'),'utf8')).plugins.sample;
+ for(const [relative,file]of p.files)assert.equal((await fs.stat(path.join(record.source,relative))).mode&0o777,file.mode,relative);
+ assert.equal((await fs.stat(path.join(record.source,'nested'))).mode&0o777,0o755);
+ assert.equal((await fs.stat(record.source)).mode&0o777,0o700);
+ assert.equal((await snapshot(record.source)).revision,p.revision);
+});
 test('persistent connection reuses one container and releases registry lock between frames',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
  await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nif(process.argv[2]==='container')process.exit(0);require('readline').createInterface({input:process.stdin}).on('line',line=>{const f=JSON.parse(line);console.log(JSON.stringify(f.coreResponse?{reply:f.coreResponse}:{coreRequest:{id:f.id,method:'tools.list',params:{}}}));});`,{mode:0o700});
