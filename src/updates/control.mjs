@@ -10,8 +10,9 @@ export const missing = error => {if(error.code!=='ENOENT')throw error;return nul
 export const targetId = value => {if(value!=='main'&&!/^[a-z][a-z0-9-]{0,39}$/.test(value))throw Error('Invalid update target');return value;};
 const jobId=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const compatibilityBuild=/^(.+)\.compat\.\d+$/;
+const qaBuild=/^(\d+\.\d+\.\d+-beta\.\d+)\.(?:rc|qa)\.[1-9]\d*$/;
 const upgradeable=(candidate,installed)=>{
-  const match=compatibilityBuild.exec(installed);
+  const match=compatibilityBuild.exec(installed)||qaBuild.exec(installed);
   return newer(candidate,installed)||Boolean(match&&match[1]===candidate);
 };
 export const updateHome = home => path.join(home,'updates');
