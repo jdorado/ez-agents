@@ -43,10 +43,10 @@ export async function stewardOwned(file) {
 }
 // Native instructions keep only the registry locator and one crucial routing
 // hint. Inventory and full scheduler usage are generated on read.
-export async function bindToolDiscovery(home,workspace) {
-  home=await fs.realpath(home);workspace=await fs.realpath(workspace);
+export async function toolDiscoveryBlock(home,hostConfig) {
+  home=await fs.realpath(home);
   let launcher=path.join(home,'bin','ez');
-  const config=await json(path.join(home,'config.json')).catch(error=>{if(error.code==='ENOENT')return undefined;throw error;});
+  const config=hostConfig?{hostConfig}:await json(path.join(home,'config.json')).catch(error=>{if(error.code==='ENOENT')return undefined;throw error;});
   if(config?.hostConfig) {
     const host=await json(config.hostConfig);
     if(host.isolation==='isolated') launcher='ez';
@@ -54,6 +54,11 @@ export async function bindToolDiscovery(home,workspace) {
   const start='<!-- ez tools: begin -->',end='<!-- ez tools: end -->';
   const block=start+'\nUse `'+launcher+'`; run it with `--help` or `tools list --details` to discover installed capabilities, and read the matching skill when needed.\nKeep the channel responsive: during a foreground owner turn, prefer `ezenciel-agents-schedule create --now ...` when work can continue independently. A `[schedule ...]` turn executes its assigned work directly and must not schedule it again.\n'+end;
   if(Buffer.byteLength(block)>600)throw Error('Tool discovery guidance exceeds the 600-byte core budget');
+  return {block,start,end};
+}
+export async function bindToolDiscovery(home,workspace) {
+  home=await fs.realpath(home);workspace=await fs.realpath(workspace);
+  const {block,start,end}=await toolDiscoveryBlock(home);
   for(const name of ['AGENTS.md','AGENTS.override.md']) {
     const file=path.join(workspace,name);
     const stat=await fs.lstat(file).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
@@ -511,6 +516,7 @@ export async function init(home,workspace,catalogFile,hostConfig,standalone=fals
   if(standalone && hostConfig) throw Error('Standalone setup cannot bind a relay host config');
   if(typeof home!=='string'||typeof workspace!=='string'||!path.isAbsolute(home)||!path.isAbsolute(workspace)||/[\r\n\0$:,]/.test(home+workspace)) throw Error('Explicit absolute home/workspace required');
   workspace=await fs.realpath(workspace);await privateDir(home);home=await fs.realpath(home);if(hostConfig)hostConfig=await fs.realpath(hostConfig);
+  await toolDiscoveryBlock(home,hostConfig);
   if(await fs.lstat(path.join(home,'registry.json')).catch(()=>null)) throw Error('Registry already exists; refusing replacement');
   catalogFile=path.resolve(catalogFile||fileURLToPath(new URL('../../default-plugins.json',import.meta.url)));
   const sources=await json(catalogFile);

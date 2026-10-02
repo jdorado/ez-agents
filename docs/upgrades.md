@@ -252,6 +252,8 @@ can continue independently without blocking interaction. The hint tells schedule
 turns to execute their assigned work directly instead of rescheduling themselves.
 Inventory and full scheduler usage are generated on read. Plugin registry init and update binding refresh that block.
 Malformed markers and symlinks fail visibly rather than overwriting personal work.
+Upgrade and rollback render the block through the exact package root being activated,
+so an already-running package cannot leave stale guidance behind.
 
 Codex, Grok and OpenCode discover workspace instructions natively. Claude
 receives the native `--append-system-prompt-file` binding to `AGENTS.md`, alongside

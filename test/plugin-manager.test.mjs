@@ -101,6 +101,13 @@ test('discovery rejects an over-budget launcher before rewriting instructions',a
  await assert.rejects(bindToolDiscovery(longHome,f.workspace),/600-byte core budget/);
  assert.equal(await fs.readFile(instructions,'utf8'),'Owner mandate\n');
 });
+test('standalone init rejects over-budget guidance before creating activation state',async t=>{
+ const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),longHome=path.join(f.root,'i'.repeat(200),'j'.repeat(200)),catalog=path.join(f.root,'empty-catalog.json');
+ await fs.writeFile(catalog,'{}');await fs.writeFile(instructions,'Owner mandate\n');
+ await assert.rejects(initManager(longHome,f.workspace,catalog,undefined,true),/600-byte core budget/);
+ assert.deepEqual(await fs.readdir(longHome),[]);
+ assert.equal(await fs.readFile(instructions,'utf8'),'Owner mandate\n');
+});
 test('installed snippets follow install, upgrade and uninstall without files or Docker reads',async t=>{
  const f=await fixture(t);await init(f.home,f.workspace);
  const details=async()=>JSON.parse((await f.call('tools','list','--details')).stdout);
