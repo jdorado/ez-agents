@@ -11,6 +11,7 @@ import { MAX_INCOMING_ATTACHMENT_BYTES, stageChatAttachment } from './files.js'
 import { assertEffort } from './model-policy.js'
 import { ApprovalStore } from './approval.js'
 import { Tasks } from './tasks.js'
+import { softwareStatus } from './software-status.js'
 import { SpeechCreditsDepletedError } from './audio.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -72,7 +73,7 @@ export class ApplicationChannel {
   private admissions = Promise.resolve()
   readonly bindings: ApplicationBindings
   constructor(private options: {
-    controlDir: string; workspace?: string; initial: AiPreset
+    controlDir: string; workspace?: string; isolation?: string; initial: AiPreset
     wake: () => void
     cancel: (id: string) => Promise<void>
     speech?: (text: string, language: 'en' | 'es') => Promise<{ buffer: Buffer; mimeType: string }>
@@ -180,6 +181,7 @@ export class ApplicationChannel {
     await this.sharedBinding(bindingId, false)
     return {ai:{...ai, selectedId:session?.preset?.id ?? ai.selectedId,
       presets:session?.preset ? [...ai.presets.filter(item=>item.id!==session.preset!.id),session.preset] : ai.presets},
+      software: await softwareStatus(this.options.controlDir, this.options.isolation),
       models, activeSessionId:session?.sessionId ?? null, sessions:session ? [{id:session.sessionId,title:sessionTitle(session),cli:session.cli,archived:false}] : []}
   }
   async changeScopeControls(bindingId: string, scope: string, input: unknown) {

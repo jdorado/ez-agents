@@ -58,6 +58,9 @@ the ordinary last-selection-wins behavior. Already-admitted runs keep their
 captured conversation and AI. Uncertain control responses require a fresh read,
 not blind repetition of `/new`.
 
+The scope-control response includes `software`, the same current runtime/version
+summary used by Telegram status. It is read-only and does not create a session.
+
 For private application conversations, `GET /v1/scope-control?scope=<encoded-scope>` returns
 the same catalog and the current scope's public control ID and preset. The scope
 is the application's original admission scope, resolved under its authenticated

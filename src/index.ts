@@ -100,7 +100,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   }
 
   const applicationChannel = new ApplicationChannel({
-    controlDir: config.controlDir, workspace: config.workspace, initial: aiMenu.initial,
+    controlDir: config.controlDir, workspace: config.workspace, isolation: config.isolation, initial: aiMenu.initial,
     aiControls: aiMenu,
     speech: config.geminiApiKey ? (text, language) => synthesizeSpeech(text, {
       geminiApiKey: config.geminiApiKey,

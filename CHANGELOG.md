@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Include the existing Telegram runtime/version summary in authorized private
+  channel controls so channel status can show the running relay and host versions.
+
 ## 0.1.0-beta.45
 
 - Keep owner chat responsive while a scheduled native turn runs. Foreground
