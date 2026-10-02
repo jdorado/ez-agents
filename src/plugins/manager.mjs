@@ -60,7 +60,7 @@ export async function bindToolDiscovery(home,workspace) {
     const prior=stat?await fs.readFile(file,'utf8'):'';
     const from=prior.indexOf(start),to=prior.indexOf(end);
     if((from<0)!==(to<0)||(from>=0&&(to<from||prior.indexOf(start,from+start.length)>=0||prior.indexOf(end,to+end.length)>=0)))throw Error('Malformed tool discovery block');
-    const block=start+'\nInstalled capabilities: `'+launcher+' --help` and `'+launcher+' tools list --details`. Use this bound launcher; read the matching skill when needed.\nKeep the channel responsive: when work can continue independently, prefer `ezenciel-agents-schedule create --now ...`; use foreground execution when live interaction is needed.\n'+end;
+    const block=start+'\nInstalled capabilities: `'+launcher+' --help` and `'+launcher+' tools list --details`. Use this bound launcher; read the matching skill when needed.\nKeep the channel responsive: during a foreground owner turn, prefer `ezenciel-agents-schedule create --now ...` when work can continue independently. A `[schedule ...]` turn executes its assigned work directly and must not schedule it again.\n'+end;
     const next=from<0?prior+'\n'+block+'\n':prior.slice(0,from)+block+prior.slice(to+end.length);
     if(next===prior)continue;
     const tmp=file+'.'+randomUUID()+'.tmp';

@@ -74,7 +74,7 @@ test('native discovery binding preserves notes and adds bounded nonblocking rout
  await init(f.home,f.workspace);
  await assert.rejects(fs.access(notes),{code:'ENOENT'});
  const first=await fs.readFile(instructions,'utf8');assert(first.startsWith('Owner mandate\n'));assert(first.includes(f.home+'/bin/ez'));
- assert.match(first,/tools list --details/);assert.match(first,/ --help/);assert.match(first,/prefer `ezenciel-agents-schedule create --now \.\.\.`/);assert.doesNotMatch(first,/ezenciel-agents-message|KISS/);
+ assert.match(first,/tools list --details/);assert.match(first,/ --help/);assert.match(first,/during a foreground owner turn, prefer `ezenciel-agents-schedule create --now \.\.\.`/);assert.match(first,/A `\[schedule \.\.\.\]` turn executes its assigned work directly and must not schedule it again/);assert.doesNotMatch(first,/ezenciel-agents-message|KISS/);
  const managed=first.slice(first.indexOf('<!-- ez tools: begin -->'),first.indexOf('<!-- ez tools: end -->')+'<!-- ez tools: end -->'.length);
  assert.ok(Buffer.byteLength(managed)<=600);
  await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(instructions,'utf8'),first);

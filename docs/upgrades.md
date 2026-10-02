@@ -246,10 +246,11 @@ Personal text outside that block is preserved byte-for-byte. Do not reinsert
 coding, KISS, contribution or repair loops into operating minds.
 
 The package-owned guidance is the managed `<!-- ez tools -->` block: the bound
-`ez` launcher, `ez --help`, `ez tools list --details`, and one routing hint to
-prefer `ezenciel-agents-schedule create --now` when work can continue independently
-without blocking foreground interaction. Inventory and full scheduler usage are
-generated on read. Plugin registry init and update binding refresh that block.
+`ez` launcher, `ez --help`, `ez tools list --details`, and one routing hint for
+foreground owner turns to prefer `ezenciel-agents-schedule create --now` when work
+can continue independently without blocking interaction. The hint tells scheduled
+turns to execute their assigned work directly instead of rescheduling themselves.
+Inventory and full scheduler usage are generated on read. Plugin registry init and update binding refresh that block.
 Malformed markers and symlinks fail visibly rather than overwriting personal work.
 
 Codex, Grok and OpenCode discover workspace instructions natively. Claude
