@@ -23,7 +23,7 @@ export async function recoverNativeLease(home) {
 export async function workspaceLease(home,owner={kind:'plugin'}) {
   const file=path.join(home,'workspace-writer.lock'),temp=file+'.'+randomUUID()+'.tmp';
   await fs.writeFile(temp,JSON.stringify({...owner,pid:process.pid}),{flag:'wx',mode:0o600});
-  try {await fs.link(temp,file);}catch(error){if(error.code!=='EEXIST')throw error;const prior=await leaseOwner(file);if(!prior.alive)throw Error('Stale workspace-writer.lock: inspect stopped owner and command containers, then restart for recovery');return undefined;}
+  try {await fs.link(temp,file);}catch(error){if(error.code!=='EEXIST')throw error;let prior;try {prior=await leaseOwner(file);}catch(error){if(error.code==='ENOENT')return undefined;throw error;}if(!prior.alive)throw Error('Stale workspace-writer.lock: inspect stopped owner and command containers, then restart for recovery');return undefined;}
   finally {await fs.rm(temp);}
   return async()=>{await fs.rm(file);};
 }
