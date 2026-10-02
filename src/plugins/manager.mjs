@@ -41,7 +41,8 @@ export async function stewardOwned(file) {
   const parent = await fs.stat(path.dirname(file));
   await fs.chown(file, parent.uid, parent.gid);
 }
-// Only a registry locator lives in native instructions. Inventory is generated on read.
+// Native instructions keep only the registry locator and one crucial routing
+// hint. Inventory and full scheduler usage are generated on read.
 export async function bindToolDiscovery(home,workspace) {
   home=await fs.realpath(home);workspace=await fs.realpath(workspace);
   let launcher=path.join(home,'bin','ez');
@@ -59,7 +60,7 @@ export async function bindToolDiscovery(home,workspace) {
     const prior=stat?await fs.readFile(file,'utf8'):'';
     const from=prior.indexOf(start),to=prior.indexOf(end);
     if((from<0)!==(to<0)||(from>=0&&(to<from||prior.indexOf(start,from+start.length)>=0||prior.indexOf(end,to+end.length)>=0)))throw Error('Malformed tool discovery block');
-    const block=start+'\nInstalled capabilities: `'+launcher+' --help` and `'+launcher+' tools list --details`. Use this bound launcher; read the matching skill when needed.\n'+end;
+    const block=start+'\nInstalled capabilities: `'+launcher+' --help` and `'+launcher+' tools list --details`. Use this bound launcher; read the matching skill when needed.\nKeep the channel responsive: when work can continue independently, prefer `ezenciel-agents-schedule create --now ...`; use foreground execution when live interaction is needed.\n'+end;
     const next=from<0?prior+'\n'+block+'\n':prior.slice(0,from)+block+prior.slice(to+end.length);
     if(next===prior)continue;
     const tmp=file+'.'+randomUUID()+'.tmp';

@@ -68,13 +68,15 @@ test('catalog paths resolve relative to the catalog and pin each new agent indep
  assert.notEqual(first.sample.revision,next.catalog.sample.revision);
  assert.deepEqual(JSON.parse((await f.call('plugins','available')).stdout),first);
 });
-test('native discovery binding preserves notes and never seeds a tool inventory',async t=>{
+test('native discovery binding preserves notes and adds bounded nonblocking routing guidance',async t=>{
  const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),notes=path.join(f.workspace,'TOOLS.md');
  await fs.writeFile(instructions,'Owner mandate\n');
  await init(f.home,f.workspace);
  await assert.rejects(fs.access(notes),{code:'ENOENT'});
  const first=await fs.readFile(instructions,'utf8');assert(first.startsWith('Owner mandate\n'));assert(first.includes(f.home+'/bin/ez'));
- assert.match(first,/tools list --details/);assert.match(first,/ --help/);assert.doesNotMatch(first,/ezenciel-agents-message|KISS/);
+ assert.match(first,/tools list --details/);assert.match(first,/ --help/);assert.match(first,/prefer `ezenciel-agents-schedule create --now \.\.\.`/);assert.doesNotMatch(first,/ezenciel-agents-message|KISS/);
+ const managed=first.slice(first.indexOf('<!-- ez tools: begin -->'),first.indexOf('<!-- ez tools: end -->')+'<!-- ez tools: end -->'.length);
+ assert.ok(Buffer.byteLength(managed)<=600);
  await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(instructions,'utf8'),first);
  await fs.writeFile(notes,'Legacy policy');
  await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(notes,'utf8'),'Legacy policy');
