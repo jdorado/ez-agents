@@ -13,7 +13,7 @@ import { perform, environment, packageManager, backupStateDirectory, execute } f
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
-import { providerEnvironment, queueAutomatic } from '../src/updates/supervisor.mjs';
+import { providerEnvironment, queueAutomatic, waitForHostHeartbeat } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
 
 test('structured runtime output excludes warnings but failures retain diagnostics',async()=>{
@@ -41,6 +41,14 @@ test('supervisor forwards only provider keys declared by the agent installation'
  assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey:'bad-key'}]}]},{}),/environment key/);
  for(const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN'])
   assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey}]}]},{}),/Reserved Codex provider environment key/);
+});
+test('host startup gate tolerates initialization beyond the former ten-second window',async()=>{
+ let reads=0;
+ await waitForHostHeartbeat('/control',{pid:42,exitCode:null},()=>undefined,{
+  attempts:120,intervalMs:0,wait:async()=>{},
+  readHeartbeat:async()=>++reads===111?{pid:42,at:Date.now()}:null,
+ });
+ assert.equal(reads,111);
 });
 const contract=kind=>({protocol:1,kind,stateSchema:1,mainProtocol:1});
 function tar(entries) {
@@ -80,6 +88,14 @@ async function fixture(t,kind='main') {
  if(kind==='plugin'){const m=await read(path.join(source,'ez-plugin.json'));m.version=pkg.version;await atomic(path.join(source,'ez-plugin.json'),m);}
  const pack=async()=>{const entries=[];async function walk(dir,prefix=''){for(const e of await fs.readdir(dir,{withFileTypes:true})){const rel=prefix+e.name;if(e.isDirectory())await walk(path.join(dir,e.name),rel+'/');else entries.push(['package/'+rel,await fs.readFile(path.join(dir,e.name))]);}}await walk(source);const file=path.join(root,'candidate.tgz');await fs.writeFile(file,tar(entries));return file;};
  return {root,home,old,source,agent,config,record,target,pack};
+}
+async function externalState(f) {
+ const workspace=path.join(f.root,'workspace'),controlDir=path.join(f.root,'control');
+ await fs.rename(f.agent.workspace,workspace);await fs.rename(f.agent.controlDir,controlDir);
+ f.agent.workspace=workspace;f.agent.controlDir=controlDir;f.config.workspace=workspace;
+ await atomic(path.join(f.config.deploymentDir,'host-executor.json'),{cli:'grok',agents:[f.agent]});
+ await atomic(path.join(f.home,'config.json'),f.config);
+ return f;
 }
 test('root preparation leaves private plugin updates readable by the installer', {
  skip:process.platform!=='linux'||process.geteuid?.()!==0,
@@ -267,12 +283,14 @@ test('reviewed Library beta14 command migration is exact and fail-closed',()=>{
  const unsafe=structuredClone(next);unsafe.deployment.services.library.cpus=4;assert.equal(reviewedPluginDeploymentMigration('library',old,unsafe),undefined);
 });
 test('main transaction stages before stopping, pins rollback image, preserves state and rebinds root',async t=>{
- const f=await fixture(t),job=await queued(f),r=runtime(f);
+ const f=await externalState(await fixture(t)),job=await queued(f),r=runtime(f);
  await fs.writeFile(path.join(f.agent.workspace,'memory.md'),'retain me');
  // Mutable preparation files cannot alter the verified archive executed later.
  await fs.writeFile(path.join(jobPath(f.home,job.id),'package/bin/example.mjs'),'tampered');
  const result=await perform(f.home,job,r);assert.equal(result.status,'completed');
  assert.equal(await fs.readFile(path.join(f.agent.workspace,'memory.md'),'utf8'),'retain me');
+ assert.equal(await fs.readFile(path.join(jobPath(f.home,job.id),'backup/workspace/memory.md'),'utf8'),'retain me');
+ await assert.rejects(fs.access(path.join(f.config.deploymentDir,'mind')));
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.notEqual(await fs.readFile(path.join(active,'bin/example.mjs'),'utf8'),'tampered');
  assert(r.calls.findIndex(c=>c.includes('build'))<r.calls.findIndex(c=>c[0]==='stopHost'));
@@ -366,7 +384,7 @@ test('interrupted activation recovers previous code; rollback failure is explici
  const retried=await read(path.join(jobPath(f.home,interrupted.id),'job.json'));assert.equal((await perform(f.home,retried,r)).status,'rolled-back');
 });
 test('bound dispatch follows active package root and retains private scope',async t=>{
- const f=await fixture(t);
+ const f=await externalState(await fixture(t));
  const prior=await fs.readFile(path.join(f.agent.workspace,'TOOLS.md'),'utf8');
  const bound=await bindUpdates(f.home,path.join(f.config.deploymentDir,'host-executor.json'));
  assert.match(bound.policy,/beta-channel/);

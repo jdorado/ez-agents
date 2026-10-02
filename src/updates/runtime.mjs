@@ -90,7 +90,7 @@ async function backupVolume(run,record,name,directory) {
 // Interruptible work is journaled before any running installation is touched.
 // On restart, recovery restores code/config only, never provider journals.
 export async function perform(home,job,hooks) {
-  const run=hooks.execute||execute,{config}=await state(home),dir=jobPath(home,job.id),file=path.join(dir,'job.json');
+  const run=hooks.execute||execute,{config,agent}=await state(home),dir=jobPath(home,job.id),file=path.join(dir,'job.json');
   const save=()=>atomic(file,job);
   if(job.status==='applying'||job.recoveryRequested)return recover(home,job,hooks);
   if(job.status!=='queued')throw Error('Job is not queued');
@@ -129,7 +129,8 @@ export async function perform(home,job,hooks) {
       job.rollback={env:envValue(oldEnv,'EZ_RELAY_IMAGE',oldImage),packageRoot:config.packageRoot};await save();
       await run('docker',[...relayArgs(config),'stop','relay']);await hooks.stopHost();
       const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
-      for(const name of ['mind','control'])await backupStateDirectory(path.join(config.deploymentDir,name),path.join(backup,name));
+      await backupStateDirectory(config.workspace,path.join(backup,'workspace'));
+      await backupStateDirectory(agent.controlDir,path.join(backup,'control'));
       for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
       let env=oldEnv.split(job.previousRoot+path.sep).join(root+path.sep);env=envValue(env,'EZ_RELAY_IMAGE',image);
       await textAtomic(envFile,env);

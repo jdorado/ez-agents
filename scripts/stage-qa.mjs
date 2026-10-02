@@ -8,10 +8,10 @@ import {parseArgs} from 'node:util';
 import {digest, extract, version, newer} from '../src/updates/artifact.mjs';
 
 const {values:v}=parseArgs({options:Object.fromEntries(['source','catalog','label','version','flow'].map(k=>[k,{type:'string'}]))});
-if(!['source','catalog','label','version','flow'].every(k=>v[k]))throw Error('Required: --source CHECKOUT --catalog DIRECTORY --label beta-12 --version 0.1.0-beta.12.qa.1 --flow QA.md');
+if(!['source','catalog','label','version','flow'].every(k=>v[k]))throw Error('Required: --source CHECKOUT --catalog DIRECTORY --label beta-12 --version 0.1.0-beta.12.rc.1 --flow QA.md');
 if(!/^beta-[1-9]\d*$/.test(v.label))throw Error('Label must be beta-N');
 version(v.version);
-if(!/^\d+\.\d+\.\d+-beta\.\d+\.qa\.[1-9]\d*$/.test(v.version))throw Error('Use a distinct private version: X.Y.Z-beta.N.qa.BUILD');
+if(!/^\d+\.\d+\.\d+-beta\.\d+\.rc\.[1-9]\d*$/.test(v.version))throw Error('Use a distinct private version: X.Y.Z-beta.N.rc.M');
 const source=await fs.realpath(v.source),catalog=path.resolve(v.catalog);
 const run=(cmd,args,cwd=source)=>execFileSync(cmd,args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 if(run('git',['status','--porcelain']))throw Error('Commit the reviewed source before staging QA');
