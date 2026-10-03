@@ -207,8 +207,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       if (run.scheduled && !(await scheduler.get(run.scheduled.id)).enabled) return
       // A long scheduled turn must not occupy the owner's chat stream.
-      // Each stream remains serial, with separate native sessions.
-      if (run.scheduled ? background.size > 0 : activeChild !== null) return
+      // Foreground stays serial; scheduled jobs have independent native sessions.
+      if (run.scheduled ? background.size >= (config.scheduledConcurrency ?? 6) : activeChild !== null) return
       let texts = run.texts
       if (run.external) {
         // Availability failures leave durable queued work for a later check.
@@ -743,6 +743,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       '',
       'Work',
       `Current: ${running ? (waitingForHost ? 'waiting for the workspace' : 'running') : 'idle'}`,
+      `Scheduled limit: ${config.scheduledConcurrency ?? 6}`,
       `Background: ${scheduled ? `${scheduled} scheduled task${scheduled === 1 ? '' : 's'} running` : 'none'}`,
       `Queue: ${queued || incoming.pending ? `${queued} run${queued === 1 ? '' : 's'}; ${incoming.pending} incoming message${incoming.pending === 1 ? '' : 's'}` : 'empty'}`,
       ...(attention.length ? ['', 'Needs attention', ...attention] : []),

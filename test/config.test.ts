@@ -84,3 +84,11 @@ test('Telegram transport is inferred from a valid token; legacy flag contradicti
   assert.equal(loadConfig({ EZ_TELEGRAM_ENABLED: 'false', EZ_APPLICATION_PORT: '8110' }).telegramEnabled, false)
   assert.equal(loadConfig({ TELEGRAM_BOT_TOKEN: token, EZ_TELEGRAM_ENABLED: 'true' }).telegramEnabled, true)
 })
+
+test('scheduled concurrency defaults to six and accepts only positive integers',()=>{
+ const env={EZ_APPLICATION_PORT:'8110'}
+ assert.equal(loadConfig(env).scheduledConcurrency,6)
+ assert.equal(loadConfig({...env,EZ_SCHEDULED_CONCURRENCY:'2'}).scheduledConcurrency,2)
+ for(const value of ['0','-1','1.5','bad','9007199254740992'])
+  assert.throws(()=>loadConfig({...env,EZ_SCHEDULED_CONCURRENCY:value}),/EZ_SCHEDULED_CONCURRENCY must be a positive integer/)
+})

@@ -285,10 +285,10 @@ test('one installed CLI executes two agent bindings with separate minds and sani
       return output.trim().split('\n').map(line=>JSON.parse(line))
     }
     // Chat completes while this agent's scheduled turn stays active. A second
-    // scheduled turn still waits, and the shared lifecycle lease stays held.
+    // scheduled turn also completes, and the held job keeps the lifecycle lease.
     await completed(otherDirectory,'r_other_shared')
     const chatEvents=await completed(directory,'tg_42')
-    assert.ok(await readFile(path.join(directory,'r_schedule_queued.request.json')))
+    await completed(directory,'r_schedule_queued')
     assert.equal(await workspaceLease(agents[0].toolsHome),undefined)
     await ownerRun(agents[0].controlDir,'tg_43')
     await writeFile(path.join(directory,'tg_43.request.json'),JSON.stringify({texts:['Hold chat'],options:{cli:'grok'}}))
