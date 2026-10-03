@@ -27,10 +27,11 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
   const context=JSON.parse((await exec(process.execPath,[bin,'context'],{env})).stdout)
   assert.deepEqual(context.run.texts,['owner request']);assert.equal(context.busyReplies,undefined)
  await assert.rejects(exec(process.execPath,[bin,'context'],{env:{...env,EZ_RUN_ID:''}}),/active owner run/)
- const args=['create','test','--at','2027-09-09T09:00:00+04:00','--text','Literal $(do-not-execute) /goal objective']
+ await assert.rejects(exec(process.execPath,[bin,'create','missing-model','--now','--text','Do work'],{env}),/saved explicit model/)
+ const args=['create','test','--model','fixture-model','--at','2027-09-09T09:00:00+04:00','--text','Literal $(do-not-execute) /goal objective']
  const saved=JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
  assert.equal(saved.text,args.at(-1));assert.equal(saved.execution.preset.cli,'grok')
- assert.equal(saved.execution.preset.model,undefined);assert.equal(saved.execution.preset.effort,undefined)
+ assert.equal(saved.execution.preset.model,'fixture-model');assert.equal(saved.execution.preset.effort,undefined)
  await assert.rejects(exec(process.execPath,[bin,'create','blocked','--at','2027-09-09T09:00:00+04:00','--text','test','--model','gpt-5.6-terra','--effort','bad option'],{env}),/Invalid reasoning effort/)
  const astra=JSON.parse((await exec(process.execPath,[bin,'create','astra','--at','2027-09-09T10:00:00+04:00','--text','Astra task','--model','gpt-6-astra'],{env})).stdout)
  assert.equal(astra.execution.preset.model,'gpt-6-astra');assert.equal(astra.execution.preset.effort,undefined)
@@ -79,7 +80,7 @@ test('trigger uses saved task settings after a chat switch, preserves cadence an
  const execution={sessionId:crypto.randomUUID(),preset:{id:'task',name:'Saved task',cli:'codex',model:'gpt-6-astra',effort:'medium'}}
  const saved=await scheduler.save({id:'daily',name:'Daily',text:'Literal /goal task',owner,execution,enabled:true,trigger:{cron:'5 7 * * 1-5',timezone:'America/New_York',start:'2027-01-01T00:00:00Z'}},true)
  const next=await scheduler.pendingOccurrence(saved)
- const chat=await control.captureChoice(initialPreset('codex'))
+ const chat=await control.captureChoice({...initialPreset('codex'),model:'fixture-model'})
  await control.savePreset({id:'chat',name:'Chat',cli:'codex',model:'gpt-6-luna',effort:'max'})
  await control.selectPreset('chat',chat.sessionId)
  assert.equal((await control.status()).ai?.selectedId,'chat')
@@ -118,7 +119,7 @@ test('deferred literal input retains owner-scoped conversation through source me
  const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
  const control=new ControlStore(dir,1000),runs=new RunStore(dir)
  await control.requestPairing(101,101);await control.approveOwner(101)
- const execution=await control.captureChoice(initialPreset('codex'))
+ const execution=await control.captureChoice({...initialPreset('codex'),model:'fixture-model'})
  await runs.create({id:'tg_1',chatId:101,telegramUserId:101,texts:['Use the blue ledger'],execution})
  await runs.patch('tg_1',{status:'completed'})
  await runs.create({id:'tg_2',chatId:101,telegramUserId:101,texts:['Do the same for March'],execution})

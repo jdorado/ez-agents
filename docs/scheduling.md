@@ -38,8 +38,13 @@ times fire once, at the earlier instant. Search is bounded to eight years.
 Public-holiday calendars and arbitrary RRULE syntax are not implemented.
 
 New tasks capture selected engine settings. Explicit `--cli`, `--model` and
-`--effort` override those choices. Edits preserve existing choices. To run an
-existing task outside its cadence, use `trigger ID --key REQUEST_KEY`: it queues
+`--effort` override those choices. Edits preserve existing choices.
+Core always passes the task's concrete saved model. Creation and edits
+require a model in the captured settings or an explicit `--model`; missing models
+are rejected. Legacy tasks with no saved model remain inspectable, but dispatch
+and executor admission refuse to run them until they are explicitly configured.
+Chat changes and native defaults never supply a missing model at run time.
+To run an existing task outside its cadence, use `trigger ID --key REQUEST_KEY`: it queues
 the task's saved instructions, engine, model, effort and delivery binding in a
 fresh session, without changing its definition or next regular occurrence.
 Model/text/trigger overrides are rejected. Reuse the same request key after an

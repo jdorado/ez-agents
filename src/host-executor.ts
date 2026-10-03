@@ -13,6 +13,7 @@ import { readModels, validateSelection, validateOpencodeProviders, type ModelCho
 import type { ChildProcess } from 'node:child_process'
 import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
+import { assertScheduledModel } from './model-policy.js'
 import { processSnapshot } from './process-tree.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
@@ -194,6 +195,10 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 await new Tasks(agent.controlDir).authorize(run, false)
               } else await authorizeRun(agent.controlDir, path.basename(base))
               const opts=request.options as ExecutorOptions
+              if (run?.scheduled) {
+                assertScheduledModel(run.execution?.preset.model)
+                if (opts.model !== run.execution!.preset.model) throw new Error('Scheduled run model does not match its saved task model')
+              }
               const cli = opts.cli || installation.cli
               resolveExecutor(cli)
               const provider = cli === 'codex' && opts.provider

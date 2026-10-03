@@ -28,7 +28,7 @@ const fixture=async(t:any)=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-schedules-'));t.after(()=>rm(dir,{recursive:true,force:true}))
  const scheduler=new Scheduler(dir), runs=new RunStore(dir), now=Date.now()+10000
  const owner={telegramUserId:101,telegramChatId:101,pairedAt:new Date().toISOString()}
- const input={id:'test',name:'Test',text:'Do the work',owner,execution:{sessionId:randomUUID(),preset:{id:'fixture',name:'Fixture',cli:'codex'}},enabled:true,trigger:{at:new Date(now).toISOString()}}
+ const input={id:'test',name:'Test',text:'Do the work',owner,execution:{sessionId:randomUUID(),preset:{id:'fixture',name:'Fixture',cli:'codex',model:'fixture-model'}},enabled:true,trigger:{at:new Date(now).toISOString()}}
  return {dir,scheduler,runs,now,owner,input}
 }
 test('durable dispatch survives cursor-write crash without duplicating an occurrence',async t=>{
@@ -157,4 +157,24 @@ test('ordinary recurring work still runs after a non-interrupted failure', async
  const [run]=await f.runs.list();await f.runs.patch(run.id,{status:'failed'})
  await f.scheduler.tick(f.owner,f.runs,f.now+60000)
  assert.equal((await f.runs.list()).length,2)
+})
+
+test('missing models cannot be saved, dispatched or triggered; legacy settings remain readable for repair',async t=>{
+ const f=await fixture(t)
+ const missing={...f.input,execution:{...f.input.execution,preset:{...f.input.execution.preset,model:undefined}}}
+ await assert.rejects(f.scheduler.save(missing),/saved explicit model/)
+ const saved=await f.scheduler.save(f.input,true),next=await f.scheduler.pendingOccurrence(saved)
+ const file=join(f.dir,'schedules/test.json')
+ await writeFile(file,JSON.stringify({...saved,execution:missing.execution}))
+ const legacy=await f.scheduler.get(saved.id)
+ assert.equal(legacy.execution.preset.model,undefined)
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ assert.equal((await f.runs.list()).length,0)
+ assert.equal(await f.scheduler.pendingOccurrence(legacy),next,'blocked dispatch must preserve the pending occurrence')
+ await assert.rejects(f.scheduler.trigger(saved.id,saved.revision,'legacy',f.owner,f.runs),/saved explicit model/)
+ const repaired=await f.scheduler.save({...legacy,execution:f.input.execution})
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ const [run]=await f.runs.list()
+ assert.equal(run.execution?.preset.model,f.input.execution.preset.model)
+ assert.equal(run.scheduled?.revision,repaired.revision)
 })

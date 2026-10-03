@@ -10,6 +10,7 @@ import { RunStore } from '../src/runs.js'
 import { serveDeliverySocket, createLedgerHandler } from '../src/delivery-socket.js'
 import { packageVersion } from '../src/version.js'
 import { initialPreset } from '../src/ai.js'
+import { discoverDefaults } from '../src/client-defaults.js'
 import { initializeWorkspace } from '../src/workspace.js'
 import type { Update } from 'grammy/types'
 
@@ -21,7 +22,9 @@ const purpose=join(root,'purpose.md');await writeFile(purpose,'Verify native sch
 await initializeWorkspace(workspace,purpose)
 const control=new ControlStore(controlDir,1000),scheduler=new Scheduler(controlDir),runs=new RunStore(controlDir)
 await control.requestPairing(101,101);await control.approveOwner(101)
-const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset(cli))
+const initial=initialPreset(cli)
+const defaults=initial.model ? initial : (await discoverDefaults(workspace,{nativeCodexFallback:true})).find(p=>p.cli===cli)
+const owner=(await control.status()).owner!,execution=await control.captureChoice({...initial,model:defaults?.model,effort:defaults?.effort})
 const replies:{at:number;text:string}[]=[]
 const relay=createRelay({workspace,controlDir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:cli,telegramBotToken:'fixture'})
 // Engine children reach this process's memory ledger through the socket.
