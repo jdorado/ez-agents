@@ -8,6 +8,7 @@ import { ApprovalStore } from './approval.js'
 import { deliveredMessages } from './message-history.js'
 import { readOnlyOwner, requireOwnerExecution } from './execution-authority.js'
 import { telegramOwner } from './control-state.js'
+import { Scheduler } from './scheduler.js'
 
 // Stateless pipe transport. The relay owns the runs/outbox ledger in process
 // memory; engine children, plugin children and the host executor reach it
@@ -27,6 +28,7 @@ export { deliverySocketPath }
 export type DeliverySocketOp =
   | { op: 'ping' }
   | { op: 'status' }
+  | { op: 'triggerSchedule'; payload: { scheduleId: string; revision: string; key: string; callerRunId?: string } }
   | { op: 'enqueue'; payload: Record<string, unknown> }
   | { op: 'wait'; payload: { id: string; timeoutMs?: number } }
   | { op: 'get'; payload: { runId: string } }
@@ -208,6 +210,19 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
           queued: all.filter((run) => run.status === 'queued').length,
         }
       }
+      case 'triggerSchedule': {
+        const {scheduleId,revision,key,callerRunId}=op.payload ?? {}
+        if (!nonEmptyString(scheduleId) || !nonEmptyString(revision) || !nonEmptyString(key)) throw new Error('Task ID, revision and request key are required')
+        if (callerRunId !== undefined) {
+          const caller=await requireOwnerExecution(controlDir,callerRunId)
+          if (caller.replyOnly || (caller.scheduled && caller.scheduled.pairedAt !== (await readOnlyOwner(controlDir))?.pairedAt)) throw new Error('Scheduling requires an active owner-authorized run')
+        }
+        const owner=await readOnlyOwner(controlDir)
+        if (!owner) throw new Error('Pair an owner before scheduling')
+        const run=await new Scheduler(controlDir).trigger(scheduleId,revision,key,owner,runs)
+        hooks.wake()
+        return run
+      }
       case 'enqueue': {
         const envelope = (op.payload ?? {}) as Record<string, unknown>
         if (envelope.kind === 'owner') {
@@ -351,4 +366,3 @@ export const deliverySocketAlive = (socketPath: string, timeoutMs = 2000): Promi
 // closed DeliverySocketOp union.
 export const callDeliverySocket = (socketPath: string, op: DeliverySocketOp, timeoutMs = 130_000): Promise<unknown> =>
   callSocket(socketPath, op, timeoutMs)
-

@@ -20,7 +20,7 @@ test('native tasks use verified control binding, sanitized environment and uncha
     const denied=await nativeTasks(home,['list']);assert.notEqual(denied.code,0);assert.match(denied.stderr,/Pair an owner/)
     const control=new ControlStore(controlDir,1000);await control.requestPairing(101,101);await control.approveOwner(101)
     const text='Read scan; $(must-not-run) /goal literal'
-    const saved=await nativeTasks(home,['create','native-fixture','--now','--text',text]);assert.equal(saved.code,0,saved.stderr)
+    const saved=await nativeTasks(home,['create','native-fixture','--model','fixture-model','--now','--text',text]);assert.equal(saved.code,0,saved.stderr)
     const value=JSON.parse(saved.stdout);assert.equal(value.text,text);assert.equal(value.execution.preset.cli,'grok')
     assert.equal(JSON.parse((await nativeTasks(home,['show','native-fixture'])).stdout).text,text)
     assert.equal((await nativeTasks(home,['remove','native-fixture'])).code,0)

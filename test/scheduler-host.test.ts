@@ -20,14 +20,25 @@ test('host transport keeps chat responsive beside a schedule in the bound mind',
  const old={...EXECUTOR_REGISTRY.grok},token=process.env.TELEGRAM_BOT_TOKEN
  EXECUTOR_REGISTRY.grok.command=process.execPath;EXECUTOR_REGISTRY.grok.buildArgs=()=>[script]
  process.env.TELEGRAM_BOT_TOKEN='never-in-child'
- const abort=new AbortController(),server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal)
+ const abort=new AbortController(),server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal,undefined,async()=>[{cli:'grok',model:'fixture-model',name:'Fixture',efforts:[]}])
  const dir=join(controlDir,'host-executor'),runs=new RunStore(controlDir),id='r_schedule_fixture'
  const exists=async(file:string)=>readFile(join(dir,file),'utf8').catch(()=>'')
  try{
   await until(async()=>Boolean(await exists('heartbeat.json')))
-  await runs.create({id,chatId:101,telegramUserId:101,texts:['slow'],execution:{sessionId:randomUUID(),preset:{id:'fixture',name:'Fixture',cli:'grok'}},scheduled:{id:'s',revision:'v',dueAt:new Date().toISOString(),pairedAt:'paired'}})
-  const submit=async(id:string)=>writeFile(join(dir,id+'.request.json'),JSON.stringify({texts:['fixture'],options:{workspace:'/evil',controlDir:'/evil',cli:'grok',timeoutMs:1}}))
+  await runs.create({id,chatId:101,telegramUserId:101,texts:['slow'],execution:{sessionId:randomUUID(),preset:{id:'fixture',name:'Fixture',cli:'grok',model:'fixture-model'}},scheduled:{id:'s',revision:'v',dueAt:new Date().toISOString(),pairedAt:'paired'}})
+  const submit=async(id:string)=>writeFile(join(dir,id+'.request.json'),JSON.stringify({texts:['fixture'],options:{workspace:'/evil',controlDir:'/evil',cli:'grok',model:'fixture-model',timeoutMs:1}}))
   await ownerRun(controlDir,'tg_1')
+  for(const [badId,savedModel,requestedModel,reason] of [
+    ['r_schedule_missing',undefined,undefined,'saved explicit model'],
+    ['r_schedule_mismatch','fixture-model','wrong-model','does not match'],
+  ] as const){
+    await runs.create({id:badId,chatId:101,telegramUserId:101,texts:['blocked'],execution:{sessionId:randomUUID(),preset:{id:'fixture',name:'Fixture',cli:'grok',model:savedModel}},scheduled:{id:badId,revision:'v',dueAt:new Date().toISOString(),pairedAt:'paired'}})
+    await runs.patch(badId,{status:'running'})
+    await writeFile(join(dir,badId+'.request.json'),JSON.stringify({texts:['blocked'],options:{cli:'grok',model:requestedModel}}))
+    await until(async()=> (await exists(badId+'.events')).includes('"stream":"exit"'))
+    assert.match(await exists(badId+'.events'),new RegExp(reason))
+    assert.equal(await exists(badId+'.process.json'),'','host must reject before engine spawn')
+  }
   await runs.patch(id,{status:'running'})
   await submit(id)
   await until(async()=>Boolean(await exists(id+'.process.json')))

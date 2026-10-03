@@ -16,6 +16,8 @@ automatic channel for core and plugins without a saved policy. Existing explicit
 stable or manual policies are preserved. The owner may select either per target.
 The main target and installed plugins version independently.
 
+Queued upgrades leave channel admission open while native work runs. The supervisor pauses admission only after work is idle and releases that pause if a turn raced the check.
+
 The owner chooses the saved update policy. The host supervisor owns
 interruption-safe replacement. There is one host service per agent, not a second
 agent or an additional updater daemon. Its replaceable child runs the normal CLI

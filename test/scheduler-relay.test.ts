@@ -11,8 +11,53 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { Scheduler } from '../src/scheduler.js'
 import { initialPreset } from '../src/ai.js'
+import type { ExecutorOptions } from '../src/executor.js'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let i=0;i<200;i++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Timed out')}
+
+test('executor admission rejects a legacy queued schedule with no model before spawning',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-missing-task-model-')),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
+ let launches=0
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async()=>{
+  launches++;throw new Error('Must not launch')
+ })
+ relay.bot.api.config.use(async()=>({ok:true,result:{message_id:42}}) as never)
+ try{
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  const owner=(await control.status()).owner!,execution=await control.captureChoice({...initialPreset('codex'),model:'saved-model'})
+  const due=Date.now()+2000
+  const saved=await scheduler.save({id:'legacy',name:'Legacy',text:'Work',owner,execution,enabled:true,trigger:{at:new Date(due).toISOString()}},true)
+  const run=await runs.create({id:'r_schedule_legacy',chatId:101,telegramUserId:101,texts:['Work'],
+   execution:{...execution,preset:{...execution.preset,model:undefined}},
+   scheduled:{id:saved.id,revision:saved.revision,dueAt:new Date(due).toISOString(),pairedAt:owner.pairedAt}})
+  await relay.drainSources()
+  assert.equal((await runs.get(run.id))?.status,'failed');assert.equal(launches,0)
+  assert.equal((await scheduler.get(saved.id)).execution.preset.model,'saved-model')
+ }finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
+})
+
+test('manual task trigger launches its saved model in a fresh native session after chat switches AI',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-trigger-launch-')),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
+ let launched:ExecutorOptions | undefined
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(_texts,options)=>{
+  launched=options
+  const child=spawn(process.execPath,['-e','setTimeout(()=>{},10)'],{detached:process.platform!=='win32'})
+  await once(child,'spawn');return {child,cleanup:async()=>{},stdout:''}
+ })
+ try{
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  const owner=(await control.status()).owner!,chat=await control.captureChoice(initialPreset('codex'))
+  await control.savePreset({id:'chat',name:'Chat',cli:'codex',model:'gpt-6-luna',effort:'max'})
+  await control.selectPreset('chat',chat.sessionId)
+  const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:chat.sessionId,preset:{id:'daily',name:'Daily model',cli:'codex',model:'gpt-6-astra',effort:'medium'}},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
+  const run=await scheduler.trigger(saved.id,saved.revision,'launch-smoke',owner,runs)
+  await relay.drainSources();await until(async()=> (await runs.get(run.id))?.status==='completed')
+  assert.equal(launched?.model,'gpt-6-astra');assert.equal(launched?.effort,'medium')
+  assert.equal(launched?.nativeSession,true);assert.equal(launched?.isResume,false)
+  assert.notEqual(launched?.sessionId,chat.sessionId)
+  assert.equal((await control.status()).ai?.selectedId,'chat')
+ }finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
+})
 
 // Adversarial: the relay must not reserve wrapper semantics for an
 // update-shaped run id or a stale attention notice.
@@ -55,7 +100,7 @@ test('Slack application replies beside a schedule and keeps both streams serial'
  })
  try{
   await control.requestPairing(101,101);await control.approveOwner(101)
-  const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset('grok'))
+  const owner=(await control.status()).owner!,execution=await control.captureChoice({...initialPreset('grok'),model:'fixture-model'})
   const due=Date.now()+10000
   for(const id of ['first','second'])await scheduler.save({id,name:id,text:'Long work',trigger:{at:new Date(due).toISOString()},enabled:true,owner,execution})
   await scheduler.tick(owner,runs,due);await relay.drainSources()
@@ -103,7 +148,7 @@ test('owner chat replies while a scheduled CLI keeps running; targeted cancellat
  relay.bot.api.config.use(async(_prev,method,payload)=>{if(method==='sendMessage')replies.push((payload as {text:string}).text);return {ok:true,result:{message_id:42}} as never})
  try{
   await control.requestPairing(101,101);await control.approveOwner(101)
-  const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset('grok'))
+  const owner=(await control.status()).owner!,execution=await control.captureChoice({...initialPreset('grok'),model:'fixture-model'})
   const due=Date.now()+2000
   await scheduler.save({id:'slow',name:'Slow',text:'Long work',trigger:{at:new Date(due).toISOString()},enabled:true,owner,execution})
   await scheduler.tick(owner,runs,due);await relay.drainSources()

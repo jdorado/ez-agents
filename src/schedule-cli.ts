@@ -16,12 +16,13 @@ import { type Trigger } from './schedule-time.js'
 async function main() {
   const { values:v, positionals:[action='list',id] } = parseArgs({allowPositionals:true,options:{
     cli:{type:'string'}, model:{type:'string'}, effort:{type:'string'},
-    all:{type:'boolean'}, limit:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
+    all:{type:'boolean'}, limit:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
     name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
     cron:{type:'string'}, timezone:{type:'string'}, 'every-seconds':{type:'string'}, start:{type:'string'}, until:{type:'string'}, help:{type:'boolean'},
   }})
   if(v.help){console.log(`ezenciel-agents-schedule list | runs | show ID | pause ID | resume ID | remove ID | cancel RUN_ID
   failures [--all] [--limit N] | run RUN_ID | context
+  trigger SCHEDULE_ID --key REQUEST_KEY
   review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT
   create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE)
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
@@ -30,7 +31,9 @@ async function main() {
 Context reads the current run only.
 Failures default to unreviewed owner runs. Review records a diagnosis; it never changes execution status or retries work.
 A conditional review schedule consumes no model run when there are no unreviewed failures.
-New tasks inherit the selected engine settings. Omitted model/effort uses native defaults; edit preserves existing settings unless overridden.
+New tasks capture the selected engine settings; edit preserves existing settings unless overridden.
+Every task requires a concrete saved model. Supply --model if the selected settings have none; existing tasks never fall back to chat or client defaults.
+Trigger runs an existing task once with its saved instructions, AI and delivery binding in a fresh session. Reuse the request key after an uncertain result; the regular schedule is unchanged.
 Creates a scheduled task. Instructions are text, never shell commands.
 Use --now to run once. Run completion is not delivery proof.
 Edit replaces the full schedule. Pause/remove affect future work; cancel stops a particular run.
@@ -95,7 +98,13 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     }
   }else if(action==='list')result=await Promise.all((await scheduler.list()).filter(owned).map(show))
   else if(action==='runs')result=(await runs.list()).filter(r=>r.scheduled && r.scheduled.pairedAt===owner.pairedAt && ownsRun(owner,r))
-  else if(action==='create' || action==='edit'){
+  else if(action==='trigger'){
+    if(!id || !v.key)throw new Error('Trigger requires SCHEDULE_ID and --key REQUEST_KEY')
+    if(Object.keys(v).some(key=>key!=='key'))throw new Error('Trigger uses saved task settings; overrides are not allowed')
+    const schedule=await scheduler.get(id)
+    if(!owned(schedule))throw new Error('Schedule ownership mismatch')
+    result=await callDeliverySocket(socketPath,{op:'triggerSchedule',payload:{scheduleId:id,revision:schedule.revision,key:v.key,...(caller ? {callerRunId:caller.id} : {})}})
+  }else if(action==='create' || action==='edit'){
     if(action==='edit' && (!id || !owned(await scheduler.get(id))))throw new Error('Unknown schedule')
     if(action==='create' && id && (await scheduler.list()).some(s=>s.id===id))throw new Error('Schedule exists; use edit')
     if([v.now,v.at,v.cron,v['every-seconds']].filter(Boolean).length!==1)throw new Error('Choose exactly one trigger')
