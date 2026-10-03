@@ -89,10 +89,10 @@ test('a wrapper-shaped run id has no maintenance treatment and a stale notice is
  }finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
 })
 
-test('Slack application replies beside a schedule and keeps both streams serial',async()=>{
+test('Slack application replies beside schedules configured to stay serial',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-slack-scheduled-')),runs=new RunStore(dir),scheduler=new Scheduler(dir),control=new ControlStore(dir,1000)
  const children=new Map<string,ReturnType<typeof spawn>>()
- const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture'},async(_texts,options)=>{
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture',scheduledConcurrency:1},async(_texts,options)=>{
   const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:process.platform!=='win32'})
   children.set(options.runId,child);await once(child,'spawn')
   if(!options.runId.startsWith('r_schedule_'))await runs.enqueueMessage(options.runId,'Slack reply')
@@ -172,6 +172,41 @@ test('owner chat replies while a scheduled CLI keeps running; targeted cancellat
  }finally{
   await relay.stop()
   for(const child of children)if(child.exitCode===null && child.signalCode===null)await once(child,'close')
+  await until(async()=>!(await runs.list()).some(r=>r.status==='running'))
+  await rm(dir,{recursive:true,force:true})
+ }
+})
+
+for(const limit of [undefined,2])test(`scheduled admission bounds independent native jobs at ${limit ?? 6} and releases a cancelled slot`,async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-parallel-schedules-')),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
+ const children=new Map<string,ReturnType<typeof spawn>>(),optionsSeen:ExecutorOptions[]=[]
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'grok',telegramBotToken:'fixture',scheduledConcurrency:limit},async(_texts,options)=>{
+  optionsSeen.push(options)
+  const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:process.platform!=='win32'})
+  children.set(options.runId,child);await once(child,'spawn');return {child,cleanup:async()=>{},stdout:''}
+ })
+ try{
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  const owner=(await control.status()).owner!,execution=await control.captureChoice({...initialPreset('grok'),model:'saved-model',effort:'medium'})
+  const jobs: Awaited<ReturnType<Scheduler['trigger']>>[]=[]
+  for(let n=0;n<(limit ?? 6)+1;n++){
+   const saved=await scheduler.save({id:`job${n}`,name:`Job${n}`,text:'Finite test',owner,execution,enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
+   jobs.push(await scheduler.trigger(saved.id,saved.revision,`key${n}`,owner,runs))
+  }
+  await Promise.all([relay.drainSources(),relay.drainSources()])
+  assert.equal((await runs.list()).filter(r=>r.status==='running').length,limit ?? 6)
+  assert.equal((await runs.get(jobs.at(-1)!.id))?.status,'queued')
+  assert.equal(new Set(optionsSeen.map(o=>o.sessionId)).size,limit ?? 6)
+  for(const options of optionsSeen){assert.equal(options.model,'saved-model');assert.equal(options.effort,'medium');assert.equal(options.nativeSession,true);assert.equal(options.isResume,false)}
+  const foreground=await runs.create({id:'tg_parallel_chat',chatId:101,telegramUserId:101,texts:['Owner chat'],execution})
+  await relay.drainSources();assert.equal((await runs.get(foreground.id))?.status,'running')
+  assert.equal(children.size,(limit ?? 6)+1)
+  await scheduler.cancel(jobs[0].id);await relay.drainSources()
+  await until(async()=> (await runs.get(jobs[0].id))?.status==='cancelled')
+  await relay.drainSources();assert.equal((await runs.get(jobs.at(-1)!.id))?.status,'running')
+  for(const job of jobs.slice(1))assert.equal((await runs.get(job.id))?.status,'running')
+ }finally{
+  await relay.stop()
   await until(async()=>!(await runs.list()).some(r=>r.status==='running'))
   await rm(dir,{recursive:true,force:true})
  }

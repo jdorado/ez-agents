@@ -52,7 +52,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   let catalogRefresh: Promise<void> | undefined
   const locks: string[] = []
   const sharedWorkspaces = new Map<HostBinding, string>()
-  const activeWorkspaces = new Map<HostBinding, { lanes: Set<boolean>; release?: () => Promise<void> }>()
+  const activeWorkspaces = new Map<HostBinding, { lanes: Map<string, boolean>; release?: () => Promise<void> }>()
   const additionalWorkspaces = new Map<HostBinding, string[]>()
   const catalog = async (agent: HostBinding) => {
     const discovered = await readModels(undefined, undefined, path.join(agent.controlDir, 'cli', 'codex'),
@@ -161,18 +161,18 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           const base=path.join(directory,id)
           const scheduled = Boolean(run?.scheduled)
           let workspace = activeWorkspaces.get(agent)
-          if (workspace?.lanes.has(scheduled)) continue
+          if (!scheduled && workspace && [...workspace.lanes.values()].includes(false)) continue
           if (!workspace) {
             const release = agent.toolsHome
               ? await (await import('./plugins/workspace-lease.mjs')).workspaceLease(agent.toolsHome,{kind:'native',runId:id}) : undefined
             if (agent.toolsHome && !release) continue
-            workspace = { lanes: new Set(), release }
+            workspace = { lanes: new Map(), release }
             activeWorkspaces.set(agent, workspace)
           }
-          workspace.lanes.add(scheduled)
-          // Keep plugin workspace invocations excluded until both streams finish.
+          workspace.lanes.set(id, scheduled)
+          // Keep plugin workspace invocations excluded until all native jobs finish.
           const releaseWorkspace = async () => {
-            workspace.lanes.delete(scheduled)
+            workspace.lanes.delete(id)
             if (!workspace.lanes.size) {
               activeWorkspaces.delete(agent)
               await workspace.release?.()

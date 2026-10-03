@@ -63,17 +63,20 @@ No identity files or role instructions are generated. Existing workspace Markdow
 provides context, including native `AGENTS.md` discovery and relative links; the
 engine chooses what to read. Per-run native state stays under `control/`.
 
-One foreground turn and one owner-scheduled turn can run at the same time.
-Foreground inputs queue behind foreground work; scheduled turns queue behind
-scheduled work. A long scheduled goal therefore does not block chat. Both streams
+One foreground turn and up to six owner-scheduled turns can run at the same time.
+Set `EZ_SCHEDULED_CONCURRENCY` to a positive integer to change the scheduled-job
+limit; it defaults to six. For Docker deployments, put this setting in the
+existing private relay environment file (`EZ_RELAY_ENV_FILE`); no Compose
+layout migration is needed. Foreground inputs queue behind foreground work;
+scheduled turns queue only when their limit is occupied. A long scheduled goal therefore does not block chat. Both streams
 use the existing admission and executor path, with separate native sessions.
 They share the agent-owned Markdown workspace: the agent coordinates shared file
 updates, and plugins enforce canonical record-write guards. The host keeps plugin
-workspace invocations excluded until both native turns finish.
+workspace invocations excluded until all native turns finish.
 The agent decides when to send through the message CLI.
 A recurring schedule has at most one pending or active occurrence. Shared
-provider resources still need writer coordination. The former four background
-slots are no longer used for owner schedules.
+provider resources still need writer coordination. This is admission to the existing native executor, not a second queue or
+workflow controller.
 
 Production relay/host execution has no wall-clock timeout. The old
 `EZ_EXECUTOR_TIMEOUT_SECONDS` setting is ignored. Individual network/tool waits
