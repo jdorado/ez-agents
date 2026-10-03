@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.0-beta.47
+
+- Trigger an existing scheduled task manually with its saved instructions, model,
+  reasoning effort and delivery settings in a fresh session. Preserve recurring
+  timing and prevent overlapping schedule runs.
+- Require explicit saved models for scheduled work; reject missing or mismatched
+  models before launch. Legacy definitions remain readable for explicit repair.
+- Refresh Codex catalogs through the bound native CLI. Managed builds and upgrades
+  resolve latest Codex before cache lookup and supersede stale deployment pins.
+  Record the concrete native version; restricted correspondence uses audited
+  Codex 0.160.0 and fails closed on unaudited versions.
+- Keep owner channels responsive while upgrades wait for active work to finish.
+- Standardize dependency installs and runtime builds on pinned pnpm.
+
+Beta limits: live fresh-host/reboot acceptance and the Daily Leverage VM smoke
+remain pending. Publication does not establish an installed-agent upgrade.
+
 ## 0.1.0-beta.46
 
 - Allow private RC/QA candidates to graduate to their matching published beta
