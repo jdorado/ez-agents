@@ -85,7 +85,7 @@ test('web owner uses the standard schedule CLI, executor and outbox with Telegra
   await writeFile(fixture,`import {spawnSync} from 'node:child_process';
     if(process.env.TELEGRAM_BOT_TOKEN)throw Error('secret leak');
     const scheduled=process.env.EZ_RUN_ID.startsWith('r_schedule_');
-    if(!scheduled){const r=spawnSync(process.execPath,[${JSON.stringify(scheduleCli)},'create','followup','--now','--name','Followup','--text','Finish the requested work'],{env:process.env,encoding:'utf8'});if(r.status)throw Error(r.stderr)}
+    if(!scheduled){const r=spawnSync(process.execPath,[${JSON.stringify(scheduleCli)},'create','followup','--model','fixture-model','--now','--name','Followup','--text','Finish the requested work'],{env:process.env,encoding:'utf8'});if(r.status)throw Error(r.stderr)}
     const r=spawnSync(process.execPath,[${JSON.stringify(messageCli)},'--text',scheduled?'Scheduled reply':'Chat reply'],{env:process.env,encoding:'utf8'});if(r.status)throw Error(r.stderr);`)
   EXECUTOR_REGISTRY.grok={...original,command:process.execPath,buildArgs:()=>['--import',require.resolve('tsx'),fixture]}
   const config=loadConfig({EZ_APPLICATION_PORT:'8787',EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'grok'})
@@ -151,7 +151,7 @@ for (const mode of ['owner','web','telegram']) test(`${mode} revocation stops it
     await runs.create({id:'r_telegram',chatId:42,telegramUserId:42,ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),texts:['Wait'],execution:await control.captureChoice(initialPreset('grok'))})
   } else {
     const binding=(await relay.applicationChannel.bindings.register('web',secret(),owner))!
-    await scheduler.save({id:'wait',name:'Wait',text:'Wait',enabled:true,trigger:{at:new Date(Date.now()+1000).toISOString()},owner,delivery:{bindingId:binding.bindingId,scope:'main'},execution:await control.captureChoice(initialPreset('grok'))})
+    await scheduler.save({id:'wait',name:'Wait',text:'Wait',enabled:true,trigger:{at:new Date(Date.now()+1000).toISOString()},owner,delivery:{bindingId:binding.bindingId,scope:'main'},execution:await control.captureChoice({...initialPreset('grok'),model:'fixture-model'})})
     await scheduler.tick(owner,runs,Date.now()+2000)
   }
   await relay.drainSources()

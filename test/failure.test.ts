@@ -100,7 +100,7 @@ test('failure capture, diagnosis, verified recovery and conditional quiet next t
  })
  try{
   await control.requestPairing(101,101);await control.approveOwner(101)
-  const owner=(await control.status()).owner!,execution=await control.captureChoice(initialPreset('grok')),start=Date.now()+2000
+  const owner=(await control.status()).owner!,execution=await control.captureChoice({...initialPreset('grok'),model:'fixture-model'}),start=Date.now()+2000
   await scheduler.save({id:'review',name:'Review failures',text:'Review failures',trigger:{everySeconds:60,start:new Date(start).toISOString()},when:'unreviewed-failures',enabled:true,owner,execution})
   await scheduler.tick(owner,runs,start)
   assert.equal((await runs.list()).length,0,'no model job for an empty inbox')
@@ -251,7 +251,7 @@ for (const intake of [true,false]) test(`relay shutdown terminates an in-flight 
   await control.requestPairing(101,101);const owner=await control.approveOwner(101)
   if(intake) await relay.bot.handleUpdate({update_id:91,message:{message_id:91,date:0,text:'fixture',from:{id:101,is_bot:false,first_name:'Fixture'},chat:{id:101,type:'private',first_name:'Fixture'}}})
   else {
-   const scheduler=new Scheduler(dir),at=Date.now()+1000,execution=await control.captureChoice(initialPreset('grok'))
+   const scheduler=new Scheduler(dir),at=Date.now()+1000,execution=await control.captureChoice({...initialPreset('grok'),model:'fixture-model'})
    await scheduler.save({id:'fixture',name:'Fixture',text:'fixture',trigger:{at:new Date(at).toISOString()},enabled:true,owner,execution})
    await scheduler.tick(owner,runs,at)
   }
@@ -276,7 +276,7 @@ test('group members can inspect failures and wake review without exposing other 
  const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
  const runs=new RunStore(dir),control=new ControlStore(dir,900000),scheduler=new Scheduler(dir)
  await control.requestPairing(101,-123,'Fixture');const owner=await control.approveOwner(-123,true)
- const execution=await control.captureChoice(initialPreset('grok'))
+ const execution=await control.captureChoice({...initialPreset('grok'),model:'fixture-model'})
  await runs.create({id:'tg_1',chatId:-123,telegramUserId:202,texts:['failed'],execution})
  await runs.patch('tg_1',{status:'failed',endedAt:new Date().toISOString()})
  await runs.create({id:'tg_2',chatId:-124,telegramUserId:202,texts:['private'],execution})
@@ -343,7 +343,7 @@ test('failed reviewer readback exposes its stop through show, list and resume un
  const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
  const control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
  await control.requestPairing(101,101);const owner=await control.approveOwner(101)
- const execution=await control.captureChoice(initialPreset('grok')),now=Date.now()+1000
+ const execution=await control.captureChoice({...initialPreset('grok'),model:'fixture-model'}),now=Date.now()+1000
  const s=await scheduler.save({id:'review',name:'Review',text:'Review failures',trigger:{everySeconds:60,start:new Date(now).toISOString()},when:'unreviewed-failures',enabled:true,owner,execution})
  await runs.create({id:'r_original',chatId:101,telegramUserId:101,texts:['Work'],execution});await runs.patch('r_original',{status:'failed'})
  await scheduler.tick(owner,runs,now)

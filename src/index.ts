@@ -26,6 +26,7 @@ import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch } from './control-state.js'
 import { ApprovalStore } from './approval.js'
 import { startExecutorJob, terminateJob, opencodeDataHome } from './executor.js'
+import { assertScheduledModel } from './model-policy.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
 import { markdownToTelegramHtml, escapeHtml } from './format.js'
@@ -240,6 +241,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           ? { sessionId: randomUUID(), hasStarted: false, nativeSessionId: undefined }
           : await control.executionSession(started.execution!)
         const selected = run.taskId ? (started.execution?.preset.cli === 'codex' ? started.execution.preset : initialPreset('codex')) : started.execution!.preset
+        if (run.scheduled) assertScheduledModel(selected.model)
         const { child, cleanup } = await launch(texts, {
           workspace: config.workspace,
           timeoutMs: config.executorTimeoutMs,

@@ -1,4 +1,4 @@
-import { assertEffort } from './model-policy.js'
+import { assertEffort, assertScheduledModel } from './model-policy.js'
 import { needsFailureReview } from './failure.js'
 import { mkdir, readFile, readdir, writeFile, rename, link, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
@@ -112,6 +112,7 @@ export class Scheduler {
     if (input.when !== undefined && input.when !== 'unreviewed-failures') throw new Error('Unknown schedule condition')
     const execution: ExecutionChoice = {...input.execution, preset: persistedPreset(input.execution.preset)}
     if (!input.name || !input.text?.trim() || !isExecutionChoice(execution)) throw new Error('Schedule needs name, text and an AI selection')
+    assertScheduledModel(execution.preset.model)
     assertEffort(execution.preset.effort, execution.preset.model, execution.preset.cli)
     const s: Schedule = {...input, execution, trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
     const now = Date.now()
@@ -162,6 +163,7 @@ export class Scheduler {
   async trigger(id: string, revision: string, key: string, owner: Owner, runs: RunStore): Promise<RunRecord> {
     const s=await this.get(id)
     if (!sameOwner(s.owner,owner) || !s.enabled || s.revision !== revision) throw new Error('Schedule is disabled, changed or outside this owner binding')
+    assertScheduledModel(s.execution.preset.model)
     if (s.delivery) {
       const binding=(await new ApplicationBindings(this.controlDir).list()).find(b=>b.bindingId===s.delivery!.bindingId)
       if (!binding || !sameOwner(binding.owner,owner)) throw new Error('Schedule delivery binding is unavailable')
@@ -202,6 +204,7 @@ export class Scheduler {
       try {
         const next = await this.pendingOccurrence(s)
         if (next === null || next > now) continue
+        assertScheduledModel(s.execution.preset.model)
         // One occurrence at a time. A failed reviewer stops this revision just like
         // interrupted work: retain its receipt until an explicit schedule edit.
         if ((await runs.list()).some(r => r.scheduled?.id === s.id &&
@@ -218,7 +221,7 @@ export class Scheduler {
           scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}},true)
         // A restart between run creation and this cursor write sees the same occurrence ID.
         await atomic(cursor,{next:future})
-      } catch { console.error('Schedule dispatch failed',s.id) }
+      } catch (error) { console.error('Schedule dispatch failed',s.id,error instanceof Error ? error.message : 'Unknown error') }
     }
   }
 }

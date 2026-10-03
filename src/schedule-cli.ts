@@ -32,6 +32,7 @@ Context reads the current run only.
 Failures default to unreviewed owner runs. Review records a diagnosis; it never changes execution status or retries work.
 A conditional review schedule consumes no model run when there are no unreviewed failures.
 New tasks capture the selected engine settings; edit preserves existing settings unless overridden.
+Every task requires a concrete saved model. Supply --model if the selected settings have none; existing tasks never fall back to chat or client defaults.
 Trigger runs an existing task once with its saved instructions, AI and delivery binding in a fresh session. Reuse the request key after an uncertain result; the regular schedule is unchanged.
 Creates a scheduled task. Instructions are text, never shell commands.
 Use --now to run once. Run completion is not delivery proof.
