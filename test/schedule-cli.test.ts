@@ -10,6 +10,8 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
 import { serveTestLedger } from './helpers/ledger.js'
+import { Scheduler } from '../src/scheduler.js'
+import { callDeliverySocket, socketPathFor } from '../src/delivery-socket.js'
 const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
 test('public scheduler CLI saves literal text, reads back, edits, pauses, and rejects external or finished callers',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'ez-schedule-cli-'));t.after(()=>rm(dir,{recursive:true,force:true}))
@@ -66,6 +68,47 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
 test('executor PATH exposes the extensionless scheduler command',async()=>{
  const command=fileURLToPath(new URL('../bin/ezenciel-agents-schedule',import.meta.url))
   assert.match((await exec(command,['--help'])).stdout,/Creates a scheduled task/)
+})
+
+test('trigger uses saved task settings after a chat switch, preserves cadence and reconciles its request key',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-trigger-cli-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
+ const control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
+ await control.requestPairing(101,101);await control.approveOwner(101)
+ const owner=(await control.status()).owner!
+ const execution={sessionId:crypto.randomUUID(),preset:{id:'task',name:'Saved task',cli:'codex',model:'gpt-6-astra',effort:'medium'}}
+ const saved=await scheduler.save({id:'daily',name:'Daily',text:'Literal /goal task',owner,execution,enabled:true,trigger:{cron:'5 7 * * 1-5',timezone:'America/New_York',start:'2027-01-01T00:00:00Z'}},true)
+ const next=await scheduler.pendingOccurrence(saved)
+ const chat=await control.captureChoice(initialPreset('codex'))
+ await control.savePreset({id:'chat',name:'Chat',cli:'codex',model:'gpt-6-luna',effort:'max'})
+ await control.selectPreset('chat',chat.sessionId)
+ assert.equal((await control.status()).ai?.selectedId,'chat')
+ const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:''}
+ const args=[bin,'trigger','daily','--key','smoke-1']
+ const first=JSON.parse((await exec(process.execPath,args,{env})).stdout)
+ assert.equal(first.status,'queued');assert.deepEqual(first.execution.preset,execution.preset)
+ assert.notEqual(first.execution.sessionId,execution.sessionId)
+ assert.equal(first.scheduled.id,saved.id);assert.equal(first.scheduled.revision,saved.revision)
+ assert.equal(first.texts[1],saved.text)
+ assert.deepEqual(await scheduler.get('daily'),saved);assert.equal(await scheduler.pendingOccurrence(saved),next)
+ const retry=JSON.parse((await exec(process.execPath,args,{env})).stdout)
+ assert.equal(retry.id,first.id);assert.equal((await runs.list()).length,1)
+ await assert.rejects(exec(process.execPath,[bin,'trigger','daily','--key','different'],{env}),/queued or running/)
+ await assert.rejects(exec(process.execPath,[...args,'--model','gpt-6-luna'],{env}),/overrides are not allowed/)
+ await runs.patch(first.id,{status:'completed'})
+ const parallel=await Promise.allSettled(['smoke-2','smoke-3'].map(key=>callDeliverySocket(socketPathFor(dir),{op:'triggerSchedule',payload:{scheduleId:'daily',revision:saved.revision,key}})))
+ assert.equal(parallel.filter(r=>r.status==='fulfilled').length,1,'concurrent trigger keys cannot overlap')
+ for(const run of await runs.list())await runs.patch(run.id,{status:'completed'})
+ const restricted=await runs.create({chatId:101,telegramUserId:101,texts:[],execution,external:{sourceId:'source',bindingId:'binding',eventIds:['event']}})
+ await runs.patch(restricted.id,{status:'running'})
+ await assert.rejects(callDeliverySocket(socketPathFor(dir),{op:'triggerSchedule',payload:{scheduleId:'daily',revision:saved.revision,key:'restricted',callerRunId:restricted.id}}),/blocked/)
+ await assert.rejects(callDeliverySocket(socketPathFor(dir),{op:'triggerSchedule',payload:{scheduleId:'daily',revision:'stale',key:'stale'}}),/changed/)
+ await assert.rejects(exec(process.execPath,[bin,'trigger','daily','--key','../bad'],{env}),/Invalid record identifier/)
+ await scheduler.enable('daily',false)
+ await assert.rejects(exec(process.execPath,[bin,'trigger','daily','--key','paused'],{env}),/disabled/)
+ await scheduler.enable('daily',true)
+ await control.revokeOwner();await control.requestPairing(202,202);await control.approveOwner(202)
+ await assert.rejects(exec(process.execPath,[bin,'trigger','daily','--key','wrong-owner'],{env}),/ownership mismatch/)
 })
 
 
