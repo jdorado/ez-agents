@@ -1,7 +1,7 @@
 FROM docker/compose-bin:v5.5.1@sha256:14162382692aae43977f79effa64a499d61de19d4645461881daaf88773f7e74 AS compose-bin
 FROM node:22.22.0-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94 AS dependencies
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git util-linux ffmpeg docker.io && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git util-linux ffmpeg docker.io jq python3 python-is-python3 && rm -rf /var/lib/apt/lists/*
 COPY --from=compose-bin /docker-compose /usr/local/bin/docker-compose
 ENV PNPM_HOME=/opt/pnpm COREPACK_HOME=/opt/corepack COREPACK_DEFAULT_TO_LATEST=0
 ENV PATH=/opt/pnpm:$PATH

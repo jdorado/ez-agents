@@ -319,3 +319,9 @@ restart after repair. Existing authorized work and outbox draining remain active
 polling health remains unhealthy. Transient HTTP, rate-limit and server errors
 may reconnect. grammY still owns reconnect behavior inside its poller; ez does
 not override private library methods or implement a replacement poller.
+
+The isolated executor image includes Node, jq and Python 3 (`python` and
+`python3`) for task-local JSON/text processing. Domain calculations and writes
+remain behind installed plugins. Registered command admission waits up to five
+seconds for the short registry lock; lifecycle changes still fail closed, and
+no caller removes an existing lock. Serialize calls when a plugin requires it.

@@ -652,3 +652,23 @@ test('writable folders require an explicit per-folder grant and can be revoked',
  assert.equal((await compose(config,record)).services.sample.volumes.find(v=>v.target==='/data/files').read_only,true);
  await assert.rejects(f.call('plugins','folder-unbind','sample','--service','sample','--target','/data/files','--writable'),/Supply/);
 });
+
+test('command admission waits for a live short lock without removing it',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ let release,started;
+ const ready=new Promise(resolve=>started=resolve),hold=new Promise(resolve=>release=resolve);
+ const writer=locked(f.home,async()=>{started();await hold;});
+ await ready;
+ const call=f.call('sample','read');
+ await new Promise(resolve=>setTimeout(resolve,100));
+ assert.equal(JSON.parse(await fs.readFile(path.join(f.home,'registry.lock'),'utf8')).pid,process.pid);
+ release();await writer;
+ assert.deepEqual(JSON.parse((await call).stdout),['read']);
+});
+
+test('bounded lock admission times out without stealing an interrupted lock',async t=>{
+ const f=await fixture(t),file=path.join(f.home,'registry.lock');
+ await fs.mkdir(f.home,{recursive:true});await fs.writeFile(file,'preserved');
+ await assert.rejects(locked(f.home,async()=>assert.fail('must not enter'),{waitMs:50}),/Registry busy/);
+ assert.equal(await fs.readFile(file,'utf8'),'preserved');
+});

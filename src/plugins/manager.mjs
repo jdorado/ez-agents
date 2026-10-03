@@ -94,11 +94,18 @@ async function invocationLease(home,container) {
   await stewardOwned(file);
   return async()=>{await fs.rm(file,{force:true});};
 }
-export async function locked(home, fn, {allowInvocations=false}={}) {
+export async function locked(home, fn, {allowInvocations=false, waitMs=0}={}) {
   const lock = path.join(home,'registry.lock');
   let handle;
-  try { handle=await fs.open(lock,'wx',0o600); }
-  catch(error) { if(error.code==='EEXIST') throw Error('Registry busy; inspect registry.lock before recovering an interrupted manager'); throw error; }
+  const deadline=Date.now()+waitMs;
+  while(!handle) {
+    try { handle=await fs.open(lock,'wx',0o600); }
+    catch(error) {
+      if(error.code!=='EEXIST')throw error;
+      if(Date.now()>=deadline)throw Error('Registry busy; inspect registry.lock before recovering an interrupted manager');
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+  }
   try {
     await handle.writeFile(JSON.stringify({pid:process.pid}));
     if(!allowInvocations&&await activeInvocations(home))throw Error('Plugin commands are active; retry the registry or lifecycle change after they finish');
@@ -498,7 +505,7 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     const invocationRelease=invocation?await invocationLease(home,container):undefined;
     const release=(invocationRelease||contextFile)?(async()=>{try{if(contextFile)await fs.rm(contextFile,{force:true});}finally{await invocationRelease?.();}}):undefined;
     return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),...(contextFile?['--file',contextFile]:[]),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
-  },{allowInvocations:true});
+  },{allowInvocations:true,waitMs:5000});
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
   if(standalone && hostConfig) throw Error('Standalone setup cannot bind a relay host config');
