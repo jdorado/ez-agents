@@ -79,19 +79,20 @@ test('isolated deployments need no host ledger endpoint',async t=>{
 });
 test('same-artifact build retries do not spawn a second Docker build and reuse verified completed image',async t=>{
   const home=await fixture(t),source=path.join(home,'source');await fs.mkdir(source);await fs.writeFile(path.join(source,'package.json'),'{}');
-  let started,finish,count=0;const running=new Promise(r=>started=r),held=new Promise(r=>finish=r);
-  const invoke=async(cmd,args)=>{if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);if(args[0]==='build'){count++;started();await held;}return 'sha256:fixture';};
+  let started,finish,count=0,latest='0.160.0';const running=new Promise(r=>started=r),held=new Promise(r=>finish=r);
+  const invoke=async(cmd,args)=>{if(cmd==='npm'&&args?.[0]==='view')return JSON.stringify(latest);if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);if(args[0]==='build'){count++;started();await held;}return 'sha256:fixture';};
   const first=build({home,source},invoke);await running;
   assert.equal((await build({home,source},invoke)).state,'busy-or-interrupted');assert.equal(count,1);
   finish();const result=await first;assert.equal(result.state,'completed');
   assert.equal((await build({home,source},invoke)).reused,true);assert.equal(count,1);
   await fs.writeFile(path.join(source,'package.json'),'{"changed":true}');await build({home,source},invoke);assert.equal(count,2);
+  latest='0.160.1';const newer=await build({home,source},invoke);assert.equal(count,3);assert.equal(newer.codexVersion,latest);assert.notEqual(newer.image,result.image);
 });
 test('source checkouts build RCs only: clean reviewed commit plus increasing label',async t=>{
   const home=await fixture(t),source=path.join(home,'source');await fs.mkdir(source);await fs.writeFile(path.join(source,'package.json'),'{}');
   let inside=true,status='',built=[],toplevel=source;const sha='a'.repeat(40);
   const invoke=async(cmd,args)=>{
-    if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);
+    if(cmd==='npm'&&args?.[0]==='view')return '"0.160.0"';if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);
     if(cmd==='git'){
       if(!inside)throw Error('not a git repository');
       if(args[2]==='rev-parse'&&args[3]==='--show-toplevel')return toplevel;
@@ -120,13 +121,13 @@ test('source checkouts build RCs only: clean reviewed commit plus increasing lab
 });
 test('a failed build releases its own lock and leaves a failure receipt for diagnosis',async t=>{
   const home=await fixture(t),source=path.join(home,'source');await fs.mkdir(source);await fs.writeFile(path.join(source,'package.json'),'{}');
-  const invoke=async(cmd)=>{if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);throw Error('Synthetic build failed');};
+  const invoke=async(cmd,args)=>{if(cmd==='npm'&&args?.[0]==='view')return '"0.160.0"';if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);throw Error('Synthetic build failed');};
   await assert.rejects(build({home,source},invoke),/Synthetic/);
   const [id]=await fs.readdir(path.join(home,'builds'));const dir=path.join(home,'builds',id);
   assert.equal(JSON.parse(await fs.readFile(path.join(dir,'status.json'))).state,'failed');await assert.rejects(fs.access(path.join(dir,'lock')));
 });
 test('source changes during a build cannot produce a reusable success receipt',async t=>{
   const home=await fixture(t),source=path.join(home,'source');await fs.mkdir(source);await fs.writeFile(path.join(source,'package.json'),'{}');
-  const invoke=async(cmd,args)=>{if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);if(args[0]==='build')await fs.writeFile(path.join(source,'package.json'),'{"changed":true}');return 'image';};
+  const invoke=async(cmd,args)=>{if(cmd==='npm'&&args?.[0]==='view')return '"0.160.0"';if(cmd==='npm')return JSON.stringify([{files:[{path:'package.json'}]}]);if(args[0]==='build')await fs.writeFile(path.join(source,'package.json'),'{"changed":true}');return 'image';};
   await assert.rejects(build({home,source},invoke),/changed during build/);
 });

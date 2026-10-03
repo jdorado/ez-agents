@@ -109,7 +109,7 @@ after service outages; core revocation blocks sends immediately.
 
 ## Native execution and core tools
 
-V1 uses audited Codex CLI **0.159.2** for task work, regardless of the owner's
+V1 uses audited Codex CLI **0.160.0** for task work, regardless of the owner's
 selected executor. Missing or different versions fail closed; upgrading this pin
 requires repeating the native tool inventory test. Owner work retains its normal
 executor. The task runner creates a fresh ephemeral home/session, skips user
