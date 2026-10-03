@@ -11,8 +11,32 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { Scheduler } from '../src/scheduler.js'
 import { initialPreset } from '../src/ai.js'
+import type { ExecutorOptions } from '../src/executor.js'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let i=0;i<200;i++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Timed out')}
+
+test('manual task trigger launches its saved model in a fresh native session after chat switches AI',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-trigger-launch-')),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
+ let launched:ExecutorOptions | undefined
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(_texts,options)=>{
+  launched=options
+  const child=spawn(process.execPath,['-e','setTimeout(()=>{},10)'],{detached:process.platform!=='win32'})
+  await once(child,'spawn');return {child,cleanup:async()=>{},stdout:''}
+ })
+ try{
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  const owner=(await control.status()).owner!,chat=await control.captureChoice(initialPreset('codex'))
+  await control.savePreset({id:'chat',name:'Chat',cli:'codex',model:'gpt-6-luna',effort:'max'})
+  await control.selectPreset('chat',chat.sessionId)
+  const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:chat.sessionId,preset:{id:'daily',name:'Daily model',cli:'codex',model:'gpt-6-astra',effort:'medium'}},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
+  const run=await scheduler.trigger(saved.id,saved.revision,'launch-smoke',owner,runs)
+  await relay.drainSources();await until(async()=> (await runs.get(run.id))?.status==='completed')
+  assert.equal(launched?.model,'gpt-6-astra');assert.equal(launched?.effort,'medium')
+  assert.equal(launched?.nativeSession,true);assert.equal(launched?.isResume,false)
+  assert.notEqual(launched?.sessionId,chat.sessionId)
+  assert.equal((await control.status()).ai?.selectedId,'chat')
+ }finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
+})
 
 // Adversarial: the relay must not reserve wrapper semantics for an
 // update-shaped run id or a stale attention notice.

@@ -141,7 +141,7 @@ export class RunStore {
     taskId?: string
     application?: ApplicationOrigin
     delivery?: { bindingId: string; scope: string }
-  }): Promise<RunRecord> {
+  }, exclusiveSchedule = false): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     if (input.id) {
       assertId(input.id)
@@ -152,6 +152,9 @@ export class RunStore {
         return existing
       }
     }
+    if (exclusiveSchedule && input.scheduled && [...store.values()].some(run =>
+      run.scheduled?.id === input.scheduled!.id && ['queued','running'].includes(run.status)))
+      throw new Error('Schedule already has a queued or running occurrence')
     const run: RunRecord = {
       version: input.taskId ? 2 : 1,
       taskId: input.taskId,

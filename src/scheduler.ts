@@ -159,6 +159,28 @@ export class Scheduler {
     try { await readFile(join(this.dir,assertId(runId)+'.cancel')); return true }
     catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e }
   }
+  async trigger(id: string, revision: string, key: string, owner: Owner, runs: RunStore): Promise<RunRecord> {
+    const s=await this.get(id)
+    if (!sameOwner(s.owner,owner) || !s.enabled || s.revision !== revision) throw new Error('Schedule is disabled, changed or outside this owner binding')
+    if (s.delivery) {
+      const binding=(await new ApplicationBindings(this.controlDir).list()).find(b=>b.bindingId===s.delivery!.bindingId)
+      if (!binding || !sameOwner(binding.owner,owner)) throw new Error('Schedule delivery binding is unavailable')
+    } else if (!owner.telegramChatId || owner.telegramChatId !== s.owner.telegramChatId || owner.telegramUserId !== s.owner.telegramUserId || (owner.telegramLinkedAt ?? owner.pairedAt) !== (s.owner.telegramLinkedAt ?? s.owner.pairedAt)) throw new Error('Schedule Telegram binding is unavailable')
+    const runId='r_schedule_manual_'+createHash('sha256').update(JSON.stringify([s.id,ownerId(owner),ownerEpoch(owner),assertId(key)])).digest('hex')
+    const existing=await runs.get(runId)
+    if (existing) {
+      if (!ownsRun(owner,existing) || existing.scheduled?.revision !== s.revision) throw new Error('Request key belongs to a different task revision or owner')
+      return existing
+    }
+    const all=await runs.list()
+    if (all.some(r=>holdsSchedule(s,r))) throw new Error('Inspect the held occurrence and edit the schedule before retrying')
+    if (s.when === 'unreviewed-failures' && !all.some(r=>needsFailureReview(r) && ownsRun(owner,r) && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt))) throw new Error('Schedule condition is not met')
+    const dueAt=new Date().toISOString()
+    return runs.create({id:runId,ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
+      ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
+      texts:[`[schedule ${s.id} due ${dueAt}]`,s.text],execution:{...s.execution,sessionId:randomUUID()},
+      scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId ? {originRunId:s.originRunId} : {})}},true)
+  }
   async recover(runs: RunStore) {
     for (const run of await runs.list()) {
       if (!run.scheduled || run.status !== 'running') continue
@@ -193,7 +215,7 @@ export class Scheduler {
           ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
           ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
           texts:[`[schedule ${s.id} due ${dueAt}]`, s.text],execution:s.execution,
-          scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}})
+          scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}},true)
         // A restart between run creation and this cursor write sees the same occurrence ID.
         await atomic(cursor,{next:future})
       } catch { console.error('Schedule dispatch failed',s.id) }
