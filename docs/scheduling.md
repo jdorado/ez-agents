@@ -65,7 +65,9 @@ engine chooses what to read. Per-run native state stays under `control/`.
 
 One foreground turn and up to six owner-scheduled turns can run at the same time.
 Set `EZ_SCHEDULED_CONCURRENCY` to a positive integer to change the scheduled-job
-limit; it defaults to six. Foreground inputs queue behind foreground work;
+limit; it defaults to six. For Docker deployments, put this setting in the
+existing private relay environment file (`EZ_RELAY_ENV_FILE`); no Compose
+layout migration is needed. Foreground inputs queue behind foreground work;
 scheduled turns queue only when their limit is occupied. A long scheduled goal therefore does not block chat. Both streams
 use the existing admission and executor path, with separate native sessions.
 They share the agent-owned Markdown workspace: the agent coordinates shared file
