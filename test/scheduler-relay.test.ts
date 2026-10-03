@@ -188,7 +188,7 @@ for(const limit of [undefined,2])test(`scheduled admission bounds independent na
  try{
   await control.requestPairing(101,101);await control.approveOwner(101)
   const owner=(await control.status()).owner!,execution=await control.captureChoice({...initialPreset('grok'),model:'saved-model',effort:'medium'})
-  const jobs=[]
+  const jobs: Awaited<ReturnType<Scheduler['trigger']>>[]=[]
   for(let n=0;n<(limit ?? 6)+1;n++){
    const saved=await scheduler.save({id:`job${n}`,name:`Job${n}`,text:'Finite test',owner,execution,enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
    jobs.push(await scheduler.trigger(saved.id,saved.revision,`key${n}`,owner,runs))
