@@ -20,7 +20,7 @@ test('host transport keeps chat responsive beside a schedule in the bound mind',
  const old={...EXECUTOR_REGISTRY.grok},token=process.env.TELEGRAM_BOT_TOKEN
  EXECUTOR_REGISTRY.grok.command=process.execPath;EXECUTOR_REGISTRY.grok.buildArgs=()=>[script]
  process.env.TELEGRAM_BOT_TOKEN='never-in-child'
- const abort=new AbortController(),server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal)
+ const abort=new AbortController(),server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal,undefined,async()=>[{cli:'grok',model:'fixture-model',name:'Fixture',efforts:[]}])
  const dir=join(controlDir,'host-executor'),runs=new RunStore(controlDir),id='r_schedule_fixture'
  const exists=async(file:string)=>readFile(join(dir,file),'utf8').catch(()=>'')
  try{
