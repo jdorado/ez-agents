@@ -34,7 +34,7 @@ try {
   assert.equal(login.status,0,login.stderr);
   assert.match(login.stdout,/\/usr\/local\/bin\/ezenciel-agents-application/);
   assert.match(login.stdout,/\/usr\/local\/bin\/ezenciel-agents-message/);
-  assert.match(login.stdout,/codex-cli 0\.153\.4/);
+  assert.match(login.stdout,/codex-cli \d+\.\d+\.\d+/);
   const started = run(['run','-d','--name',application,...nonroot,image,'start']);
   assert.equal(started.status,0,started.stderr);
   let ready = false;

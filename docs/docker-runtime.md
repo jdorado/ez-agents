@@ -162,6 +162,16 @@ control state, then remove only the verified orphaned `control-state.lock` and
 restart the single relay. Never remove a lock while a writer might still be live.
 Model catalog metadata is exported from the selected host CLI without credentials.
 The AI menu stays within that CLI. No automatic executor fallback is performed.
+Codex discovery invokes `codex debug models` in the agent's bound `CODEX_HOME`
+and projects only visible model names and supported reasoning efforts. Older
+clients without that command or unavailable discovery retain the native cache.
+The native CLI owns availability: a new model may require a CLI upgrade as well
+as a catalog refresh. Managed builds and upgrades resolve npm Codex `latest` before cache lookup and
+record the concrete version in the build/update receipt and image identity. Old
+deployment Codex pins are superseded. Host installations remain operator-owned.
+Restricted correspondence retains its audited native version gate and fails closed
+when the normal CLI is newer than the audited version. Direct Docker builds use
+`latest`; use `--no-cache` to refresh native acquisition on a reused builder.
 
 ## Secrets and plugins
 

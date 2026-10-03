@@ -36,7 +36,12 @@ References used for the adapter contract:
 - [Codex non-interactive execution](https://learn.chatgpt.com/docs/non-interactive-mode)
 - [OpenCode native run events](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/cmd/run.ts)
 
-The catalog is local metadata, not an authentication or billing health check.
+The catalog is native metadata, not an authentication or billing health check.
+Codex refreshes through `codex debug models` with the whitelisted executor
+environment and the execution-bound `CODEX_HOME`; discovery starts no session
+or inference. Only visible model names and supported efforts are projected.
+Unavailable discovery retains the native cache. The installed native version
+still owns which models it advertises; Core never guesses newly released aliases.
 Grok/Codex/OpenCode support explicit listed model/effort choices. Other installed clients
 offer their own default only in this slice. OpenCode lists the installed `opencode models`
 catalog with the whitelisted executor environment, so only models the relay can actually
@@ -46,7 +51,8 @@ Authenticated providers appear only when the agent-bound
 login); otherwise the free tier lists. `EZ_OPENCODE_PROVIDERS` optionally
 restricts the catalog to named providers (e.g. `opencode-go`); a set
 allowlist that matches nothing offers no OpenCode choice rather than falling
-back outside it. Refresh by opening the native client;
+back outside it. Codex discovery refreshes directly; for other cache-only
+catalogs, refresh by opening the native client;
 the relay does not install models, manage subscriptions or guess aliases.
 
 Setup initialization and relay startup seed one default choice per installed client.

@@ -128,7 +128,25 @@ export const readCuratedModels = async (controlDir?: string): Promise<ModelChoic
   return curated
 }
 
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[], curationDir?: string): Promise<ModelChoice[]> => {
+// Let the installed native client refresh its own catalog. No conversation or
+// prompt is submitted; CODEX_HOME is the same agent binding used for execution.
+export const readCodexCatalog = async (codexHome: string, run?: (args: string[], env: NodeJS.ProcessEnv) => Promise<string>): Promise<unknown> => {
+  const env = { ...executorEnvironment(), CODEX_HOME: codexHome }
+  const args = ['debug', 'models']
+  try {
+    const stdout = run ? await run(args, env) : await (async () => {
+      const invocation = executorInvocation('codex', args)
+      return (await promisify(execFile)(invocation.command, invocation.args, {
+        cwd: codexHome, env, timeout: 8000, maxBuffer: 4 * 1024 * 1024,
+      })).stdout
+    })()
+    const catalog = JSON.parse(stdout)
+    if (catalog && Array.isArray(catalog.models) && catalog.models.length) return catalog
+  } catch { /* Older/offline native clients retain their last known catalog. */ }
+  try { return JSON.parse(await readFile(join(codexHome, 'models_cache.json'), 'utf8')) } catch { return {} }
+}
+
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[], curationDir?: string, codexRunner?: (args: string[], env: NodeJS.ProcessEnv) => Promise<string>): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -147,7 +165,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
     }
   }
   if (await available('codex')) {
-    const cache = await json(join(codexHome, 'models_cache.json'))
+    const cache = record(await readCodexCatalog(codexHome, codexRunner))
     for (const entry of Array.isArray(cache.models) ? cache.models : []) {
       const info = record(entry)
       if (info.visibility !== 'list' || !safe(info.slug)) continue

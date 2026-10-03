@@ -52,7 +52,8 @@ test('codex-gui is a distinct preset and catalog entry', async () => {
     await writeFile(path.join(home, '.codex/models_cache.json'), JSON.stringify({ models: [
       { slug: 'fixture-model', display_name: 'Fixture', visibility: 'list', supported_reasoning_levels: [{ effort: 'medium' }] },
     ] }))
-    const models = await readModels(home, async (cli) => cli === 'codex' || cli === 'codex-gui')
+    const models = await readModels(home, async (cli) => cli === 'codex' || cli === 'codex-gui', undefined, undefined, undefined, undefined, undefined,
+      async () => { throw new Error('Native discovery unavailable') })
     assert.ok(models.some((model) => model.cli === 'codex' && model.model === 'fixture-model'))
     assert.ok(models.some((model) => model.cli === 'codex-gui' && model.model === 'fixture-model'))
   } finally { await rm(home, { recursive: true, force: true }) }

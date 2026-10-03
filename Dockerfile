@@ -16,9 +16,9 @@ FROM dependencies AS test
 RUN pnpm verify
 FROM dependencies AS runtime
 # Isolated agents run this CLI in the relay; do not bind-mount the
-# operator's ~/.codex. Pin the reviewed CLI for repeatable release images.
-ARG CODEX_CLI_VERSION=0.153.4
-RUN pnpm add --global --ignore-scripts @openai/codex@${CODEX_CLI_VERSION} && command -v codex
+# operator's ~/.codex. Managed builds resolve latest to a concrete cache key.
+ARG CODEX_CLI_VERSION=latest
+RUN pnpm add --global --ignore-scripts @openai/codex@${CODEX_CLI_VERSION} && command -v codex && codex --version
 # Isolated agents run the selected CLI in the relay; host-capable agents reuse
 # the host installation instead. OpenCode carries no task-runner pin because
 # restricted messaging tasks stay on the audited Codex above.
@@ -35,7 +35,7 @@ RUN node -e 'for (const [name, target] of Object.entries(require("./package.json
 # Build identity for relay status (package version stays release-owned).
 ARG BUILD_TAG=""
 ARG BUILD_SHA=""
-RUN node -e 'require("node:fs").writeFileSync("/app/build.json",JSON.stringify({tag:process.env.BUILD_TAG||"",sha:process.env.BUILD_SHA||""})+"\n")'
+RUN node -e 'require("node:fs").writeFileSync("/app/build.json",JSON.stringify({tag:process.env.BUILD_TAG||"",sha:process.env.BUILD_SHA||"",codexVersion:require("node:child_process").execFileSync("codex",["--version"],{encoding:"utf8"}).trim()})+"\n")'
 ENV HOME=/state/home EZ_AGENT_WORKSPACE=/workspace EZ_CONTROL_DIR=/state/control EZ_EXECUTOR_CLI=grok PATH=/app/bin:/opt/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 ENTRYPOINT ["/app/docker/entrypoint.sh"]

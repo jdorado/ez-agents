@@ -114,6 +114,11 @@ export async function migrateLedger({ deployment } = {}) {
   return { ok: true, deployment: directory, changed: true, port, overlay };
 }
 
+export async function latestCodexVersion(invoke,manager={command:"npm",args:[]}) {
+  const version=JSON.parse(await invoke(manager.command,[...manager.args,'view','@openai/codex@latest','version','--json','--registry','https://registry.npmjs.org/']));
+  if(typeof version!=='string'||!/^\d+\.\d+\.\d+$/.test(version))throw Error('Invalid latest Codex version');
+  return version;
+}
 async function fingerprintOf(source,invoke) {
   const listing=JSON.parse(await invoke('npm',['pack','--dry-run','--ignore-scripts','--json'],{cwd:source}));
   const hash=createHash('sha256');
@@ -144,8 +149,9 @@ async function buildIdentity(source,label,invoke) {
 export async function build({home=defaultHome(),source=root,label},invoke=run) {
   source=await fs.realpath(source);
   const identity=await buildIdentity(source,label,invoke);
+  const codexVersion=await latestCodexVersion(invoke);
   const fingerprint=await fingerprintOf(source,invoke);
-  const artifact=createHash('sha256').update(JSON.stringify([fingerprint,identity.label??'',identity.sha??''])).digest('hex');
+  const artifact=createHash('sha256').update(JSON.stringify([fingerprint,identity.label??'',identity.sha??'',codexVersion])).digest('hex');
   const image='ezenciel-agents:install-'+artifact.slice(0,24);
   const dir=path.join(path.resolve(home),'builds',artifact);await fs.mkdir(dir,{recursive:true,mode:0o700});
   const lock=path.join(dir,'lock'),receipt=path.join(dir,'status.json'),log=path.join(dir,'build.log');
@@ -155,14 +161,14 @@ export async function build({home=defaultHome(),source=root,label},invoke=run) {
     await handle.writeFile(JSON.stringify({pid:process.pid,source,image,...identity}));
     const prior=await read(receipt).catch(absent);
     if(prior?.state==='completed')try{if(await invoke('docker',['image','inspect','--format','{{.Id}}',image])===prior.imageId)return {...prior,reused:true};}catch{/* Image was removed; rebuild under the same exclusive lock. */}
-    await atomic(receipt,{state:'building',pid:process.pid,source,image,log,...identity});
-    console.error(JSON.stringify({state:'building',image,log,...identity}));
-    const buildArgs=identity.label?['--build-arg',`BUILD_TAG=${identity.label}`,'--build-arg',`BUILD_SHA=${identity.sha}`]:[];
+    await atomic(receipt,{state:'building',pid:process.pid,source,image,log,codexVersion,...identity});
+    console.error(JSON.stringify({state:'building',image,log,codexVersion,...identity}));
+    const buildArgs=['--build-arg',`CODEX_CLI_VERSION=${codexVersion}`,...(identity.label?['--build-arg',`BUILD_TAG=${identity.label}`,'--build-arg',`BUILD_SHA=${identity.sha}`]:[])];
     const tags=[image,...(identity.label?[`ezenciel-agents:${identity.label}`]:[])];
     const output=await fs.open(log,'a',0o600);
     try{await invoke('docker',['build','--progress','plain','--target','runtime',...buildArgs,...tags.flatMap(t=>['-t',t]),source],{log:output.fd,timeout:3600000});}finally{await output.close();}
     if(await fingerprintOf(source,invoke)!==fingerprint)throw Error('Package changed during build; keep the source stable and retry');
-    const result={state:'completed',source,image,imageId:await invoke('docker',['image','inspect','--format','{{.Id}}',image]),log,...identity};await atomic(receipt,result);return result;
+    const result={state:'completed',source,image,imageId:await invoke('docker',['image','inspect','--format','{{.Id}}',image]),log,codexVersion,...identity};await atomic(receipt,result);return result;
   }catch(e){await atomic(receipt,{state:'failed',source,image,log,error:e.message,...identity});throw e;}
   finally{await handle.close();await fs.rm(lock);}
 }
