@@ -9,6 +9,7 @@ import { deliveredMessages } from './message-history.js'
 import { readOnlyOwner, requireOwnerExecution } from './execution-authority.js'
 import { telegramOwner } from './control-state.js'
 import { Scheduler } from './scheduler.js'
+import { runEvidence, type EvidenceOptions } from './run-evidence.js'
 
 // Stateless pipe transport. The relay owns the runs/outbox ledger in process
 // memory; engine children, plugin children and the host executor reach it
@@ -38,6 +39,7 @@ export type DeliverySocketOp =
   | { op: 'receipt'; payload: { context: unknown; id: string } }
   | { op: 'history'; payload: { runId: string; limit?: number; messageId?: number } }
   | { op: 'deliveryStatus'; payload?: Record<string, never> }
+  | { op: 'evidence'; payload: EvidenceOptions }
   | { op: 'approvalCheck'; payload: { actionId: string } }
   | { op: 'latestReply'; payload?: Record<string, never> }
 
@@ -321,6 +323,7 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
           ...(payload.messageId === undefined ? {} : { messageId: payload.messageId as number }),
         })
       }
+      case 'evidence': return runEvidence(controlDir, op.payload ?? {})
       case 'deliveryStatus': return runs.deliveryStatus()
       case 'approvalCheck': {
         const actionId = (op.payload as { actionId?: unknown } | undefined)?.actionId

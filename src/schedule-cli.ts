@@ -16,12 +16,13 @@ import { type Trigger } from './schedule-time.js'
 async function main() {
   const { values:v, positionals:[action='list',id] } = parseArgs({allowPositionals:true,options:{
     cli:{type:'string'}, model:{type:'string'}, effort:{type:'string'},
-    all:{type:'boolean'}, limit:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
+    all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
     name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
     cron:{type:'string'}, timezone:{type:'string'}, 'every-seconds':{type:'string'}, start:{type:'string'}, until:{type:'string'}, help:{type:'boolean'},
   }})
   if(v.help){console.log(`ezenciel-agents-schedule list | runs | show ID | pause ID | resume ID | remove ID | cancel RUN_ID
   failures [--all] [--limit N] | run RUN_ID | context
+  evidence [RUN_ID] [--offset N --limit N --expected SNAPSHOT_SHA256]
   trigger SCHEDULE_ID --key REQUEST_KEY
   review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT
   create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE)
@@ -29,6 +30,10 @@ async function main() {
     [--cli EXECUTOR] [--model MODEL] [--effort <native-effort>]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
 Context reads the current run only.
+Evidence exports sanitized current-owner Telegram operational metadata only.
+Follow nextOffset with --expected; a changed snapshot requires restarting.
+Relay retention is incomplete. Content hashes identify submitted text, not recipient content.
+Native sessions, tool/delegation events and failure/review prose are not exported.
 Failures default to unreviewed owner runs. Review records a diagnosis; it never changes execution status or retries work.
 A conditional review schedule consumes no model run when there are no unreviewed failures.
 New tasks capture the selected engine settings; edit preserves existing settings unless overridden.
@@ -77,7 +82,12 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       ...(held.length ? {recovery:'Inspect the failed run and explicitly edit this schedule to resume; pause/resume does not clear the stop.'} : {})}
   }
   let result:unknown
-  if(action==='context'){
+  if(action==='evidence'){
+    result=await callDeliverySocket(socketPath,{op:'evidence',payload:{
+      ...(caller ? {callerRunId:caller.id} : {}), ...(id ? {runId:id} : {}),
+      offset:Number(v.offset ?? 0),limit:Number(v.limit ?? 100),expected:v.expected,
+    }})
+  }else if(action==='context'){
     if(!caller)throw new Error('Context requires an active owner run')
     const origin=caller.scheduled?.originRunId ? await runs.get(caller.scheduled.originRunId) : null
     if(origin && !ownsFailureRun(origin))throw new Error('Source context is outside this owner binding')

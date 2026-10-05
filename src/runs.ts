@@ -71,6 +71,9 @@ export type StoredOutboxItem = OutboxItem & { state?: 'queued' | 'sending' | 'se
 export const sentOutbox = (controlDir: string): StoredOutboxItem[] =>
   [...outboxFor(controlDir).values()].filter(item => item.state === 'sent')
 
+// Explicit operational evidence reads; the projection verifies owner/run scope.
+export const retainedOutbox = (controlDir: string): StoredOutboxItem[] => [...outboxFor(controlDir).values()]
+
 // Stateless pipe: the relay owns the ledger in process memory. Cross-process
 // producers (engine children, plugin children, host executor) reach it through
 // the delivery socket (see delivery-socket.ts), never through control/ files.
