@@ -173,6 +173,32 @@ Create a normal recurring schedule with `--every-seconds 900 --when unreviewed-f
 
 `failures [--all] [--limit N]` returns failedAt, reason, exit code, native session, captured error and runtime versions. Capture keeps at most 4 KiB of redacted stderr, including a failed native Codex turn's error message when supplied. A failure without error details remains explicitly unknown; historical failures are not backfilled. `run RUN_ID` reads an owned run. `review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT` records the investigation without rewriting execution history. A stale timestamp is rejected; a later failure needs a new review. Restricted reply, external and isolated-task callers cannot review failures. An attention review is handed off, not repeatedly relaunched; another new failure wakes the next review.
 
+For a shareable operational projection, use `evidence [RUN_ID] --offset 0 --limit 100`.
+This reads the live relay through its existing authenticated socket, under the
+bound operator or an active unrestricted Telegram owner run. Application/channel,
+external and isolated-task callers cannot use it. It exposes only current-owner
+Telegram foreground/scheduled runs, stable IDs, clocks/status/presets, failure
+metadata without prose, and retained run-associated outbox metadata. No native
+session, prompt, reasoning, tool arguments/results, message text or channel identity
+is returned. Failure text is represented by its SHA-256, not copied or diagnosed.
+
+The response carries exact `readStartedAt`/`observedAt`, `snapshotSha256`, and
+coverage total/offset/limit/returned/nextOffset. Follow `nextOffset` with the same
+`--expected SNAPSHOT_SHA256`; changed retained evidence fails closed and requires
+a fresh traversal. Each page recomputes the projection; no snapshot store or
+background capture is added. History resets on relay restart and is bounded to
+2000 terminal runs and 2000 terminal outbox items; full historical coverage cannot
+be inferred. Unassociated deliveries and excluded scopes remain unknown.
+
+Delivery records identify queued/sent/failed/unknown state and whether a retained
+Telegram receipt contains a valid clock and returned message IDs (only their count
+is exported). The submitted UTF-8 text/voice-text hash can be compared to an exact
+canonical source. It does not prove rendered or current recipient-side content;
+attachments are not exported. Empty receipt lists never prove that no delivery
+occurred. The relay does not retain native tool/delegation events, so that coverage
+is explicitly unavailable. This command does not mark failures reviewed, send
+messages, read private sessions, trigger work or certify owning results.
+
 The prompt controls diagnosis, authorized recovery and quiet notification behavior. Inspect prior effects and receipts before retrying anything. A failed review run itself remains visible as a new failure for the next occurrence.
 
 The Telegram Scheduled tasks menu lists enabled schedules that still have a pending
