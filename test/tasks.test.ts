@@ -372,3 +372,12 @@ test('voice generation failure persists uncertainty and sends no text', async t 
   await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true})
   assert.equal(generated,1);assert.equal(f.sends.length,0)
 })
+
+
+test('a cancelled worker cannot dispatch a voice generated after stop', async t => {
+  let stop: () => Promise<unknown>
+  const f=await fixture(t,false,async () => { await stop(); return {buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'} })
+  const {run}=await f.activate();stop=()=>f.runs.patch(run.id,{status:'cancelled'})
+  assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'stopped',voice:true}) as {state:string}).state,'uncertain')
+  assert.equal(f.sends.length,0)
+})

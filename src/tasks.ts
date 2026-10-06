@@ -347,7 +347,10 @@ export class Tasks {
       try {
         const audio = args.voice ? await this.speech!(args.text) : undefined
         if(audio && (audio.mimeType!=='audio/ogg' || audio.buffer.length>256000 || audio.buffer.subarray(0,4).toString()!=='OggS'))throw Error('Voice audio exceeds channel limits or has invalid format')
-        await this.authorize(run) // Recheck current owner, grant, task, binding and account after synthesis.
+        const current = await new RunStore(this.controlDir).get(run.id)
+        if (!current || current.status !== 'running') throw new Error('Task run ended before voice dispatch')
+        await this.authorize(current)
+        if ((await new RunStore(this.controlDir).get(run.id))?.status !== 'running') throw new Error('Task run ended before dispatch')
         if (task.expiresAt <= Date.now()) throw new Error('Task expired before dispatch')
         const receipt = await sourceCall(source.socketPath, 'task-send', {
           accountId: task.accountId, conversationId: contact, text: args.text, key: providerKey,
