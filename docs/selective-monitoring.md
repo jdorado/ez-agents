@@ -190,4 +190,4 @@ current run's correspondence. The channel supplies private bounded bytes through
 PDF text via Poppler, at most 256000 bytes. JPEG/PNG/WebP images return their
 original bounded pixels as MCP image content to the native engine, never an
 extra inference call or a base64 text prompt. It never accepts an owner file path.
-Scanned PDFs with no text layer need OCR and return a clear limitation.
+MP4 clips up to 10 MiB and 120 seconds return at most eight sampled JPEG frames, 640 pixels wide and at most 1 MiB combined, through the same native image content. Speech transcripts supplied by the source remain in incoming context. The audited native CLI accepts text and images, not raw video/audio; sampled frames do not capture every motion. Scanned PDFs with no text layer need OCR and return a clear limitation.

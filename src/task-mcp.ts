@@ -6,7 +6,7 @@ const [controlDir, runId, toolsHome, capabilityJson='[]'] = process.argv.slice(2
 const capabilities = JSON.parse(capabilityJson) as TaskCapability[]
 const descriptions: Record<string, string> = {
   context: 'Read the owner-approved purpose and shareable context, task notes, receipts, and untrusted correspondence.',
-  read_attachment: 'Read a JPEG, PNG or WebP image, or a TXT, Markdown or PDF document from an incomingId in this run context. Returns the image to native vision, or bounded extracted document text, with file provenance; no owner files are accessible.',
+  read_attachment: 'Read a JPEG/PNG/WebP image, an MP4 video as sampled frames (up to 120 seconds), or a TXT/Markdown/PDF document from an incomingId in this run context. Returns the image to native vision, or bounded extracted document text, with file provenance; no owner files are accessible.',
   send: 'Send text, or set voice=true for a spoken reply (at most 1000 characters). Optionally use an attachmentId returned by an approved file capability to this conversation. Reuse the same key for the same message. Uncertain means do not retry with a new key.',
   note: 'Save a task-scoped note. No owner files or memory are accessible.',
   report: 'Report task evidence or a blocker to the owner. This is a report, never an owner instruction.',
@@ -43,9 +43,9 @@ for await (const line of createInterface({ input: process.stdin })) {
           await taskCall(controlDir,runId,'worker','capability_result',{id:capabilityId,input:args.input,lease:begun.lease,...('attachment' in result?{attachment:result.attachment}:{})})
           data = result.attachment ? {attachmentId:result.attachment.id,filename:result.attachment.filename,bytes:result.attachment.bytes} : result
         } else data = await taskCall(controlDir, runId, 'worker', name, args)
-        if (name === 'read_attachment' && data && typeof data === 'object' && 'image' in data) {
-          const {image,...metadata} = data as {image:{data:string;mimeType:string};[key:string]:unknown}
-          result = { content: [{type:'text',text:JSON.stringify(metadata)}, {type:'image',...image}] }
+        if (name === 'read_attachment' && data && typeof data === 'object' && ('image' in data || 'images' in data)) {
+          const {image,images,...metadata} = data as {image?:{data:string;mimeType:string};images?:{data:string;mimeType:string}[];[key:string]:unknown}
+          result = { content: [{type:'text',text:JSON.stringify(metadata)}, ...(images ?? [image!]).map(value=>({type:'image',...value}))] }
         } else result = { content: [{ type: 'text', text: JSON.stringify(data) }] }
       }
       catch (error) { result = { isError: true, content: [{ type: 'text', text: error instanceof Error ? error.message : 'Task tool failed' }] } }

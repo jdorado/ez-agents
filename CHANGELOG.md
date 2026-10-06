@@ -1,5 +1,6 @@
 # Changelog
 
+- Private QA: MP4 attachments supply bounded sampled frames to native vision; speech remains in the provider-sourced incoming transcript.
 - Private QA: scoped JPEG/PNG/WebP reads return native MCP image content through the existing shared attachment path.
 
 - Private QA: restricted incoming TXT/PDF reading through shared Telegram attachment staging; bounded source-only MCP tool, no owner filesystem access.

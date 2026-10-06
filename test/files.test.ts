@@ -73,3 +73,16 @@ test('shared image read returns original pixels with native MIME and no staged r
  assert.deepEqual(await readdir(path.join(dir,'attachments')),[])
  await assert.rejects(readChatAttachment(dir,'photo.png',Buffer.from('Spoofed image bytes')))
 })
+
+test('video read uses bounded native frames and removes temporary decoder files',async t=>{
+ const {readChatAttachment}=await import('../src/files.js'),{readdir}=await import('node:fs/promises'),{execFile}=await import('node:child_process'),{promisify}=await import('node:util')
+ const execute=promisify(execFile)
+ try {await execute('ffmpeg',['-version'])}catch{t.skip('FFmpeg is exercised in the Docker artifact test');return}
+ const dir=await mkdtemp('/tmp/ez-video-read-');t.after(()=>rm(dir,{recursive:true,force:true}))
+ const video=path.join(dir,'fixture.mp4')
+ await execute('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=64x64:r=8','-f','lavfi','-i','sine=frequency=1000:sample_rate=24000','-t','1','-c:v','mpeg4','-c:a','aac',video])
+ const result=await readChatAttachment(dir,'video.mp4',await readFile(video))
+ assert.equal(result.type,'mp4');assert.ok((result.images?.length??0)>0);assert.ok((result.images?.length??0)<=8)
+ assert.ok(result.images?.every(image=>image.mimeType==='image/jpeg'));assert.ok(result.durationSeconds!<=120)
+ assert.deepEqual(await readdir(path.join(dir,'attachments')),[]);assert.ok(!(await readdir(dir)).some(name=>name.startsWith('video-')))
+})
