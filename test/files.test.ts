@@ -67,7 +67,7 @@ test('shared incoming document reader extracts PDF text and removes its staged f
 test('shared image read returns original pixels with native MIME and no staged residue',async t=>{
  const {readChatAttachment}=await import('../src/files.js'),{readdir}=await import('node:fs/promises')
  const dir=await mkdtemp('/tmp/ez-image-read-');t.after(()=>rm(dir,{recursive:true,force:true}))
- const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=','base64')
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64')
  const result=await readChatAttachment(dir,'photo.png',png)
  assert.equal(result.image?.mimeType,'image/png');assert.equal(result.image?.data,png.toString('base64'));assert.equal(result.text,undefined)
  assert.deepEqual(await readdir(path.join(dir,'attachments')),[])

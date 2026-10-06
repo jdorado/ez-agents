@@ -26,7 +26,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   await writeFile(`${home}/config.toml`, 'invalid = [ syntax')
   const requests: any[] = [], sends: any[] = []
   const incoming={id:'1',conversationId:'contact-a',receivedAt:Date.now()+1000,text:'shop.txt attached'}
-  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=','base64')
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64')
   const provider = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk
     const { command, args } = JSON.parse(body)
