@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.48.rc.14
+
+- Forward only the existing broker and delivery socket paths to the trusted task MCP subprocess, allowing scoped browser launch through the isolated installed launcher without exposing a tool registry.
+
+
 ## 0.1.0-beta.48.rc.13
 
 - Preserve the existing runtime file owner when an administrator replaces discussion application grants, keeping private mode 0600 and preventing restricted task startup failures.

@@ -24,8 +24,9 @@ export function taskModelCatalog(catalog: { models: Record<string, unknown>[] })
     apply_patch_tool_type: null, experimental_supported_tools: [], multi_agent_version: null,
     supports_search_tool: false, use_responses_lite: false })) };
 }
-export function taskArguments(directory: string, broker: string[], prompt: string, toolNames = ['context', 'read_attachment', 'send', 'note', 'report', 'complete'], selection: {model?:string;effort?:string} = {}) {
+export function taskArguments(directory: string, broker: string[], prompt: string, toolNames = ['context', 'read_attachment', 'send', 'note', 'report', 'complete'], selection: {model?:string;effort?:string} = {}, brokerEnvironment: NodeJS.ProcessEnv = {}) {
   const preset = executionDefaults('codex', selection)
+  const brokerEnv={HOME:homedir(),...Object.fromEntries(['EZ_PLUGIN_BROKER_SOCKET','EZ_DELIVERY_SOCKET'].flatMap(key=>brokerEnvironment[key] ? [[key,brokerEnvironment[key]]] : []))}
   return ['exec', ...(preset.model ? ['--model',preset.model] : []), ...(preset.effort ? ['-c',`model_reasoning_effort=${JSON.stringify(preset.effort)}`] : []), '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--strict-config', '--json', '-C', directory,
     ...taskDisabledFeatures.flatMap(feature => ['--disable', feature]), '--enable', 'skip_host_skill_discovery',
     '-c', `model_catalog_json=${JSON.stringify(join(directory, '..', 'models.json'))}`,
@@ -34,7 +35,7 @@ export function taskArguments(directory: string, broker: string[], prompt: strin
     '-c', `permissions.ez-task.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(directory)}="write"}`,
     '-c', 'permissions.ez-task.network.enabled=false',
     // The trusted broker needs the host's CLI configuration; the model keeps its isolated HOME.
-    '-c', `mcp_servers.ez={command=${JSON.stringify(broker[0])},args=${JSON.stringify(broker.slice(1))},env={HOME=${JSON.stringify(homedir())}},required=true,enabled_tools=${JSON.stringify(toolNames)}}`,
+    '-c', `mcp_servers.ez={command=${JSON.stringify(broker[0])},args=${JSON.stringify(broker.slice(1))},env={${Object.entries(brokerEnv).map(([key,value])=>`${key}=${JSON.stringify(value)}`).join(',')}},required=true,enabled_tools=${JSON.stringify(toolNames)}}`,
     ...toolNames.flatMap(name => ['-c', `mcp_servers.ez.tools.${name}.approval_mode="approve"`]),
     '-'] // Literal input travels on stdin, including slash commands and leading options.
 }
@@ -64,7 +65,7 @@ export async function startTaskExecutor(options: ExecutorOptions) {
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
       fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId, options.toolsHome ?? '', JSON.stringify(task.capabilities ?? []),JSON.stringify(applications)]
     const prompt = JSON.stringify({event: run.external ? 'correspondence_received' : 'task_activated', taskId: run.taskId})
-    const invocation = executorInvocation('codex', taskArguments(directory, broker, prompt, toolNames, options))
+    const invocation = executorInvocation('codex', taskArguments(directory, broker, prompt, toolNames, options, Object.fromEntries(['EZ_PLUGIN_BROKER_SOCKET','EZ_DELIVERY_SOCKET'].flatMap(key=>environment[key] ? [[key,environment[key]]] : []))))
     const child = spawn(invocation.command, invocation.args, {
       cwd: directory, env: { ...environment, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     })
