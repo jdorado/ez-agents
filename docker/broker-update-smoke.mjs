@@ -6,8 +6,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
-import { atomic, snapshot, prepareCommand } from '../src/plugins/manager.mjs';
+import { atomic, snapshot } from '../src/plugins/manager.mjs';
 import { execute, refreshBroker } from '../src/updates/runtime.mjs';
 const docker=(...args)=>execFileSync('docker',args,{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:120000}).trim();
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -79,7 +78,8 @@ if(process.argv[2]!=='--inside') {
   // Read-only probe must neither repair a tampered snapshot nor create leases.
   await fs.appendFile(path.join(a.source,'bin/example.mjs'),'\n// unreviewed');await assert.rejects(probe(),/STRUCTURAL_READINESS_FAILED/);
   await fs.writeFile(path.join(a.source,'bin/example.mjs'),'console.log("synthetic")');
-  await fs.rm(hostConfig);await assert.rejects(probe(),/STRUCTURAL_READINESS_FAILED/);
+  await assert.rejects(call(['exec','-T','--env',`EZ_PLUGIN_BROKER_HOST_CONFIG=${root}/missing.json`,'plugin-broker','node','--import','/app/node_modules/tsx/dist/loader.mjs','/app/docker/broker-readiness.mjs',...await fingerprints()]),/STRUCTURAL_READINESS_FAILED/);
+  await fs.rm(hostConfig);await assert.rejects(probe(),{code:'ENOENT'});
   await atomic(hostConfig,host([a.revision]));await refreshBroker(config);
   console.log('PASS source tamper and missing host file fail; no provider command or native run identity used');
  }finally {await call(['down','--volumes','--remove-orphans']);}
