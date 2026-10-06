@@ -18,6 +18,7 @@ import { taskRequests } from '../src/task-rpc.js'
 // Unknown fixture model names miss model-driven tool overrides.
 // Run explicitly with EZ_TEST_NATIVE_TASKS=1 after installing the audited CLI.
 test('native restricted task has only bounded MCP tools, ignores private guidance, and executes broker calls', { skip: !process.env.EZ_TEST_NATIVE_TASKS, timeout: 30000 }, async () => {
+  assert.equal((await promisify(execFile)('codex',['--version'])).stdout.trim(), `codex-cli ${TASK_CODEX_VERSION}`)
   const root = await mkdtemp('/tmp/ez-native-task-'), directory = `${root}/task`, home = `${root}/home`
   await mkdir(directory); await mkdir(home)
   await writeFile(`${root}/AGENTS.md`, 'PRIVATE_CANARY_DO_NOT_LOAD')
@@ -26,19 +27,19 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   const provider = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk
     const { command, args } = JSON.parse(body)
-    res.end(JSON.stringify({ ok: true, data: command === 'events-head' ? { cursor: 0, accountId: 'fixture-account', taskProtocol: 'message-v1' }
+    res.end(JSON.stringify({ ok: true, data: command === 'events-head' ? { cursor: 0, accountId: 'fixture-account', taskProtocol: 'message-v1',taskVoice:true }
       : command === 'task-send' ? (sends.push(args), { ...args, state: 'accepted' }) : {} }))
   })
   await new Promise<void>(r => provider.listen(`${root}/p.sock`, r))
   await ownerRun(root, 'owner')
   await new EventSources(root).register('fixture', `${root}/p.sock`, (await new ControlStore(root, 900000).status()).owner!)
-  const tasks = new Tasks(root), drain = taskRequests(tasks)
+  const tasks = new Tasks(root,async () => ({buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'})), drain = taskRequests(tasks)
   const proposal: any = await tasks.ownerCall('owner', 'start', { sourceId: 'fixture', conversationId: 'contact-a', purpose: 'Book dinner without payment', context: 'Two people at 7pm', hours: 1 })
   assert.equal(proposal.state, 'active')
   const runs = new RunStore(root), run = (await runs.list()).find(r => r.taskId)!
   await runs.patch(run.id, { status: 'running' })
   const sequence = [
-    ['context', {}], ['send', { text: 'Is a table for two available at 7pm?', key: 'first' }],
+    ['context', {}], ['send', { text: 'Is a table for two available at 7pm?', key: 'first', voice:true }],
     ['note', { text: 'Awaiting confirmation' }], ['complete', { text: 'Request sent; no booking confirmation received.' }],
     ['send', { text: 'A completed task cannot send', key: 'second' }],
   ]
@@ -81,7 +82,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     assert.equal(namespaces.length, 1); assert.equal(namespaces[0].name, 'mcp__ez')
     assert.deepEqual(namespaces[0].tools.map((t: any) => t.name).sort(), ['complete', 'context', 'note', 'report', 'send'])
     assert.match(JSON.stringify(requests[5].input), /inactive or expired/)
-    assert.equal(sends.length, 1); assert.equal(sends[0].conversationId, 'contact-a')
+    assert.equal(sends.length, 1);assert.equal(Buffer.from(sends[0].audio.data,'base64').toString(),'OggSfixture OpusHead'); assert.equal(sends[0].conversationId, 'contact-a')
     assert.equal((await tasks.get(proposal.id))!.state, 'completed')
   } finally {
     child?.kill(); clearInterval(timer); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r()))

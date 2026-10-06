@@ -11,7 +11,7 @@ import { executorEnvironment, executorInvocation, terminateJob, type ExecutorOpt
 
 // This adapter is deliberately version-pinned: a new native tool default needs
 // a fresh tool-inventory audit before external correspondence can use it.
-export const TASK_CODEX_VERSION = '0.160.0'
+export const TASK_CODEX_VERSION = '0.160.1'
 export const taskDisabledFeatures = ['apps', 'browser_use', 'computer_use', 'in_app_browser', 'image_generation',
   'memories', 'goals', 'multi_agent', 'multi_agent_v2', 'hooks', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host',
   'skill_search', 'skill_mcp_dependency_install', 'tool_suggest', 'workspace_dependencies', 'view_image']

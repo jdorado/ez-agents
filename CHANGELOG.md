@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Audit restricted native tools on Codex 0.160.1 and retain the exact version gate.
 - Extend the existing speech renderer with OpenRouter TTS and Ogg Opus/WAV encoding.
 - Allow authorized task replies to use core-rendered voice on supporting channels, with post-synthesis authorization and unchanged uncertain-send protection.
 
