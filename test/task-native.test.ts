@@ -13,6 +13,7 @@ import { ownerRun } from './helpers/owner-run.js'
 import { EventSources } from '../src/event-sources.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
+import {ApplicationBindings} from '../src/application-channel.js'
 import { taskRequests } from '../src/task-rpc.js'
 
 // Real bundled model metadata plus native CLI, synthetic endpoint, no credentials or provider sends.
@@ -48,8 +49,14 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   assert.equal(proposal.state, 'active')
   const runs = new RunStore(root), run = await runs.create({id:'event_document_fixture',taskId:proposal.id,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'fixture',bindingId:(await tasks.get(proposal.id))!.bindingId,eventIds:['1','2','3']}})
   await runs.patch(run.id, { status: 'running' })
+  const toolsHome=`${root}/tools`;await mkdir(`${toolsHome}/bin`,{recursive:true})
+  await writeFile(`${toolsHome}/config.json`,JSON.stringify({workspace:directory}))
+  await writeFile(`${toolsHome}/bin/ez`,`#!${process.execPath}\nlet raw='';for await(const c of process.stdin)raw+=c;const task=JSON.parse(raw);if(!/^task_[a-f0-9]{32}$/.test(task.taskId)||!/^([a-f0-9]{64})$/.test(task.taskToken))process.exit(2);console.log(JSON.stringify({launch:{url:'https://fixture.example/#launch='+ 'e'.repeat(64),expiresAt:Date.now()+300000}}));`,{mode:0o700})
+  const bindings=new ApplicationBindings(root), owner=(await new ControlStore(root,900000).status()).owner!
+  await bindings.register('browser','z'.repeat(48),owner)
+  await bindings.taskLaunch('browser',{command:'fixture',args:['launch','--task'],tasks:[proposal.id]})
   const sequence = [
-    ['context', {}], ['read_attachment',{incomingId:'1'}], ['read_attachment',{incomingId:'2'}], ['read_attachment',{incomingId:'3'}], ['send', { text: 'Is a table for two available at 7pm?', key: 'first', voice:true }],
+    ['context', {}], ['browser_link',{application:'browser'}], ['read_attachment',{incomingId:'1'}], ['read_attachment',{incomingId:'2'}], ['read_attachment',{incomingId:'3'}], ['send', { text: 'Is a table for two available at 7pm?', key: 'first', voice:true }],
     ['note', { text: 'Awaiting confirmation' }], ['complete', { text: 'Request sent; no booking confirmation received.' }],
     ['send', { text: 'A completed task cannot send', key: 'second' }],
   ]
@@ -72,31 +79,33 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   try {
     const entry = new URL('../src/task-mcp.ts', import.meta.url).href
     await writeFile(`${root}/broker.mjs`, `if(process.env.HOME !== ${JSON.stringify(homedir())}) throw Error('Broker lost host CLI configuration'); await import(${JSON.stringify(entry)});`)
-    const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), `${root}/broker.mjs`, root, run.id]
+    const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), `${root}/broker.mjs`, root, run.id,toolsHome,'[]','["browser"]']
     const catalog = await promisify(execFile)('codex', ['debug', 'models', '--bundled'], { maxBuffer: 4 * 1024 * 1024 });
     await writeFile(`${root}/models.json`, JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))));
-    const args = taskArguments(directory, broker, JSON.stringify({event:'task_activated',taskId:proposal.id}), undefined, {model:'gpt-6-astra'})
+    const args = taskArguments(directory, broker, JSON.stringify({event:'task_activated',taskId:proposal.id}), ['context','browser_link','read_attachment','send','note','report','complete'], {model:'gpt-6-astra'})
     args.splice(-1, 0, '--disable', 'enable_request_compression', '-c', 'model_provider="fixture"', '-c', `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${(server.address() as any).port}/v1",wire_api="responses",requires_openai_auth=false}`)
     child = spawn('codex', args, { cwd: directory, env: { PATH: process.env.PATH, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] })
     child.stdin!.end(JSON.stringify({event:'task_activated',taskId:proposal.id}));
     let stderr = ''; child.stderr!.on('data', c => { stderr += c }); child.stdout!.resume()
     const code = await new Promise(r => child!.on('close', r))
     assert.equal(code, 0, `Requires audited Codex ${TASK_CODEX_VERSION}: ${stderr}`)
-    assert.ok(requests.length === 9, 'Native tool call completed a second model turn')
+    assert.ok(requests.length === 10, 'Native tool call completed a second model turn')
     assert.ok(!JSON.stringify(requests).includes('PRIVATE_CANARY_DO_NOT_LOAD'))
+    assert.ok(JSON.stringify(requests).includes('https://fixture.example/#launch='))
+    assert.ok(!JSON.stringify(requests).includes('taskToken'))
     const messages=requests[0].input.filter((v:any)=>v.role==='user')
     assert.ok(messages.some((m:any)=>m.content.some((c:any)=>c.text===JSON.stringify({event:'task_activated',taskId:proposal.id}))))
     const tools = requests[0].tools ?? requests[0].input.find((v: any) => v.type === 'additional_tools')?.tools
     assert.deepEqual(tools.filter((t: any) => t.type === 'function').map((t: any) => t.name).sort(), ['list_mcp_resource_templates', 'list_mcp_resources', 'read_mcp_resource', 'request_user_input'])
     const namespaces = tools.filter((t: any) => t.type === 'namespace')
     assert.equal(namespaces.length, 1); assert.equal(namespaces[0].name, 'mcp__ez')
-    assert.deepEqual(namespaces[0].tools.map((t: any) => t.name).sort(), ['complete', 'context', 'note', 'read_attachment', 'report', 'send'])
+    assert.deepEqual(namespaces[0].tools.map((t: any) => t.name).sort(), ['browser_link','complete', 'context', 'note', 'read_attachment', 'report', 'send'])
     assert.match(JSON.stringify(requests.at(-1).input), /inactive or expired/)
     assert.ok(JSON.stringify(requests).includes('Shop opens at 7am.'))
     assert.ok(JSON.stringify(requests).includes('data:image/'), 'Native CLI forwards MCP images into vision input: '+JSON.stringify(requests.map(request=>request.input)))
     assert.ok(JSON.stringify(requests).includes('durationSeconds'), 'Native input includes video frame metadata')
     assert.ok(JSON.stringify(requests).includes('Shop closes at 6pm.'))
-    const videoTurn=requests[4].input
+    const videoTurn=requests[5].input
     assert.ok(JSON.stringify(videoTurn).includes('data:image/'), 'Native CLI receives sampled video frames as vision input')
     assert.equal(sends.length, 1);assert.equal(Buffer.from(sends[0].audio.data,'base64').toString(),'OggSfixture OpusHead'); assert.equal(sends[0].conversationId, 'contact-a')
     assert.equal((await tasks.get(proposal.id))!.state, 'completed')

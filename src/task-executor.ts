@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readRun } from './delivery-socket.js'
+import {ApplicationBindings} from './application-channel.js'
 import { Tasks } from './tasks.js'
 import { executorEnvironment, executorInvocation, terminateJob, type ExecutorOptions } from './executor.js'
 
@@ -41,9 +42,10 @@ export async function startTaskExecutor(options: ExecutorOptions) {
   const run = await readRun(options.controlDir, options.runId)
   if (!run || run.status !== 'running') throw new Error('No active task run')
   const task = await new Tasks(options.controlDir).authorize(run, false)
+  const applications=(run.application || task.anyConversation) ? [] : (await new ApplicationBindings(options.controlDir).list()).filter(b=>b.taskLaunch && (b.taskLaunch.tasks==="all" || b.taskLaunch.tasks.includes(task.id))).map(b=>b.id)
   const capabilityNames = (task.capabilities ?? []).map(item => `capability_${item.id}`)
-  const toolNames = [...(task.anyConversation ? ['context','read_attachment','send'] : ['context','read_attachment','send','note','report','complete']),...capabilityNames]
-  if (capabilityNames.length && !options.toolsHome) throw new Error('Channel capabilities require an installed tool registry')
+  const toolNames = [...(task.anyConversation ? ['context','read_attachment','send'] : ['context','read_attachment','send','note','report','complete']),...capabilityNames,...(applications.length?["browser_link"]:[])]
+  if ((capabilityNames.length || (applications.length && !process.env.EZ_PLUGIN_BROKER_SOCKET)) && !options.toolsHome) throw new Error('Channel capabilities require an installed tool registry')
   const environment = executorEnvironment()
   const versionInvocation = executorInvocation('codex', ['--version'])
   const version = await promisify(execFile)(versionInvocation.command, versionInvocation.args, { env: environment })
@@ -60,7 +62,7 @@ export async function startTaskExecutor(options: ExecutorOptions) {
       : join(homedir(), '.codex', 'auth.json')
     await symlink(auth, join(home, 'auth.json'))
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
-      fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId, options.toolsHome ?? '', JSON.stringify(task.capabilities ?? [])]
+      fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId, options.toolsHome ?? '', JSON.stringify(task.capabilities ?? []),JSON.stringify(applications)]
     const prompt = JSON.stringify({event: run.external ? 'correspondence_received' : 'task_activated', taskId: run.taskId})
     const invocation = executorInvocation('codex', taskArguments(directory, broker, prompt, toolNames, options))
     const child = spawn(invocation.command, invocation.args, {

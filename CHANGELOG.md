@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-beta.48.rc.12
+
+- Add short-lived browser conversation links for explicitly granted restricted discussions, retaining each task’s context and tool permissions.
+
 - Private QA: MP4 attachments supply bounded sampled frames to native vision; speech remains in the provider-sourced incoming transcript.
 - Private QA: scoped JPEG/PNG/WebP reads return native MCP image content through the existing shared attachment path.
 
