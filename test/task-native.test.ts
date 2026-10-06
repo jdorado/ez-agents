@@ -85,7 +85,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     const namespaces = tools.filter((t: any) => t.type === 'namespace')
     assert.equal(namespaces.length, 1); assert.equal(namespaces[0].name, 'mcp__ez')
     assert.deepEqual(namespaces[0].tools.map((t: any) => t.name).sort(), ['complete', 'context', 'note', 'read_attachment', 'report', 'send'])
-    assert.match(JSON.stringify(requests[5].input), /inactive or expired/)
+    assert.match(JSON.stringify(requests.at(-1).input), /inactive or expired/)
     assert.ok(JSON.stringify(requests).includes('Shop opens at 7am.'))
     assert.equal(sends.length, 1);assert.equal(Buffer.from(sends[0].audio.data,'base64').toString(),'OggSfixture OpusHead'); assert.equal(sends[0].conversationId, 'contact-a')
     assert.equal((await tasks.get(proposal.id))!.state, 'completed')
