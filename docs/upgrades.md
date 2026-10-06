@@ -285,3 +285,32 @@ the host or create a repair task. An automatically failed or rolled-back version
 is not retried until a newer version appears or the owner explicitly retries.
 Inspect `ez updates check` and `ez updates status` for target diagnostics.
 Actual update transactions retain their existing admission, drain and rollback rules.
+
+### Isolated broker readiness
+
+Isolated activation and rollback explicitly recreate only `plugin-broker` with
+`--no-deps --force-recreate --no-build --pull never --wait`. Plugin-only refresh
+pins the installed broker image ID; main activation uses the newly built image
+and rollback uses the recorded old image. This refreshes the narrow read-only
+host-configuration file mount after atomic replacement. The relay and native
+sessions are preserved during plugin-only refresh. Host-capable updates do not
+start a broker. Existing update admission and drain remain authoritative.
+
+Socket health is liveness only. Before reporting completion, the updater runs
+`docker/broker-readiness.mjs` inside the actual broker, with expected SHA-256
+fingerprints of the host binding, registry and registry configuration. This
+bounded diagnostic checks socket existence, agent/registry ownership, packaged
+source identity, declared command routes, folder grants and reviewed network
+pins. It reads state without rewriting Compose files, executing a plugin,
+creating authorization or supplying `EZ_RUN_ID`. Fingerprints are checked again
+after validation and on the host; a changed binding fails verification.
+`brokerReadiness` and `rollbackBrokerReadiness` in update status are structural
+readbacks at that transaction, not continuous health or native invocation proof.
+A failed refresh or probe enters the existing rollback/recovery path.
+
+A genuine authorized native invocation through the bound launcher, with its real
+receipt, remains separate acceptance evidence. Structural readiness and Docker
+health cannot prove provider delivery or a successful native command. Do not
+invent a run ID for that evidence. The synthetic regression is
+`EZ_RELAY_IMAGE=<exact runtime image ID> node docker/broker-update-smoke.mjs`;
+it uses disposable Linux state, no credentials or provider calls.
