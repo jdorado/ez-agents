@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.48.rc.13
+
+- Preserve the existing runtime file owner when an administrator replaces discussion application grants, keeping private mode 0600 and preventing restricted task startup failures.
+
+
 ## 0.1.0-beta.48.rc.12
 
 - Add short-lived browser conversation links for explicitly granted restricted discussions, retaining each task’s context and tool permissions.

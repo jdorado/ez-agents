@@ -1,6 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, writeFile, rename, open, unlink } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, open, unlink, stat, chown } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ControlStore, sessionTitle, telegramOwner, type ControlGuard, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
@@ -63,7 +63,13 @@ export class ApplicationBindings {
       const owner=(await new ControlStore(this.controlDir,900000).status()).owner
       if(!binding || !sameOwner(binding.owner,owner))throw Error('Application authority revoked')
       if(launch)binding.taskLaunch=launch; else delete binding.taskLaunch
-      const tmp=`${file}.${randomUUID()}.tmp`;await writeFile(tmp,JSON.stringify(bindings),{mode:0o600,flag:'wx'});await rename(tmp,file)
+      const previous=await stat(file),tmp=`${file}.${randomUUID()}.tmp`
+      try {
+        await writeFile(tmp,JSON.stringify(bindings),{mode:0o600,flag:'wx'})
+        const created=await stat(tmp)
+        if(created.uid!==previous.uid || created.gid!==previous.gid)await chown(tmp,previous.uid,previous.gid)
+        await rename(tmp,file)
+      }finally{await unlink(tmp).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error})}
     }finally{await lock.close();await unlink(`${file}.lock`)}
   }
   async authenticate(token: string): Promise<Binding> {
