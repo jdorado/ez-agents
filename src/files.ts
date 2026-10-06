@@ -118,10 +118,10 @@ export const stageChatAttachment = async (stagingRoot: string, name: string, byt
 
 // Shared inbound staging/validation with Telegram; restricted correspondence
 // can read only this already-authorized input, never arbitrary workspace paths.
-export async function readChatDocument(stagingRoot: string, name: string, bytes: Buffer) {
+export async function readChatAttachment(stagingRoot: string, name: string, bytes: Buffer) {
   const staged = await stageChatAttachment(stagingRoot, name, bytes, '')
   try {
-    if (!['pdf','text'].includes(staged.attachment.type)) throw Error('Only TXT, Markdown and PDF documents are readable')
+    if (['jpeg','png','webp'].includes(staged.attachment.type)) return {name:sanitizeFileName(name),type:staged.attachment.type,bytes:bytes.length,image:{data:bytes.toString('base64'),mimeType:`image/${staged.attachment.type}`}}
     const limit = 256000
     const text = staged.attachment.type === 'text' ? new TextDecoder('utf-8', {fatal:true}).decode(bytes)
       : (await promisify(execFile)('pdftotext', ['-enc','UTF-8','-layout',staged.fullPath,'-'], {timeout:20000,maxBuffer:limit})).stdout

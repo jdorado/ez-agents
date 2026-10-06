@@ -50,7 +50,7 @@ test('stages file into control attachments, never the workspace', async () => {
 })
 
 test('shared incoming document reader extracts PDF text and removes its staged file', async t => {
-  const {readChatDocument}=await import('../src/files.js')
+  const {readChatAttachment}=await import('../src/files.js')
   const {execFile}=await import('node:child_process'), {promisify}=await import('node:util')
   try { await promisify(execFile)('pdftotext',['-v']) } catch { t.skip('Poppler is exercised in the Docker artifact test');return }
   const dir=await mkdtemp('/tmp/ez-pdf-read-');t.after(()=>rm(dir,{recursive:true,force:true}))
@@ -59,7 +59,17 @@ test('shared incoming document reader extracts PDF text and removes its staged f
   let pdf='%PDF-1.4\n';const offsets=[0]
   for(const [i,value] of objects.entries()){offsets.push(Buffer.byteLength(pdf));pdf+=`${i+1} 0 obj\n${value}\nendobj\n`}
   const xref=Buffer.byteLength(pdf);pdf+='xref\n0 6\n0000000000 65535 f \n'+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
-  const result=await readChatDocument(dir,'shop.pdf',Buffer.from(pdf));assert.match(result.text,/Shop opens at 7am\./);assert.equal(result.type,'pdf')
+  const result=await readChatAttachment(dir,'shop.pdf',Buffer.from(pdf));assert.match(result.text ?? '',/Shop opens at 7am\./);assert.equal(result.type,'pdf')
   const {readdir}=await import('node:fs/promises');assert.deepEqual(await readdir(path.join(dir,'attachments')),[])
-  await assert.rejects(readChatDocument(dir,'invalid.pdf',Buffer.from('%PDF-invalid')))
+  await assert.rejects(readChatAttachment(dir,'invalid.pdf',Buffer.from('%PDF-invalid')))
+})
+
+test('shared image read returns original pixels with native MIME and no staged residue',async t=>{
+ const {readChatAttachment}=await import('../src/files.js'),{readdir}=await import('node:fs/promises')
+ const dir=await mkdtemp('/tmp/ez-image-read-');t.after(()=>rm(dir,{recursive:true,force:true}))
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=','base64')
+ const result=await readChatAttachment(dir,'photo.png',png)
+ assert.equal(result.image?.mimeType,'image/png');assert.equal(result.image?.data,png.toString('base64'));assert.equal(result.text,undefined)
+ assert.deepEqual(await readdir(path.join(dir,'attachments')),[])
+ await assert.rejects(readChatAttachment(dir,'photo.png',Buffer.from('Spoofed image bytes')))
 })

@@ -1,5 +1,7 @@
 # Changelog
 
+- Private QA: scoped JPEG/PNG/WebP reads return native MCP image content through the existing shared attachment path.
+
 - Private QA: restricted incoming TXT/PDF reading through shared Telegram attachment staging; bounded source-only MCP tool, no owner filesystem access.
 
 ## Unreleased

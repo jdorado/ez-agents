@@ -7,7 +7,7 @@ import { EventSources, sourceCall, type SourceEvent } from './event-sources.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { ownsRun } from './identity.js'
-import {MAX_INCOMING_ATTACHMENT_BYTES,readChatDocument} from './files.js'
+import {MAX_INCOMING_ATTACHMENT_BYTES,readChatAttachment} from './files.js'
 import {readTaskAttachment,type TaskAttachment} from './task-attachments.js'
 
 export type TaskCapability = { id: string; description: string; command: string; args: string[]; output?:'file' }
@@ -277,7 +277,7 @@ export class Tasks {
         if (!file || typeof file.name !== 'string' || file.name.length > 255 || typeof file.data !== 'string' || file.data.length > maximum || !/^[a-f0-9]{64}$/.test(file.sha256)) throw Error('Invalid incoming document')
         const bytes = Buffer.from(file.data,'base64')
         if (bytes.toString('base64') !== file.data || createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw Error('Incoming document changed')
-        const result = await readChatDocument(this.controlDir,file.name,bytes)
+        const result = await readChatAttachment(this.controlDir,file.name,bytes)
         const current = await new RunStore(this.controlDir).get(runId)
         if (!current || current.status !== 'running') throw Error('Task run cancelled')
         await this.authorize(current)

@@ -26,11 +26,13 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   await writeFile(`${home}/config.toml`, 'invalid = [ syntax')
   const requests: any[] = [], sends: any[] = []
   const incoming={id:'1',conversationId:'contact-a',receivedAt:Date.now()+1000,text:'shop.txt attached'}
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=','base64')
   const provider = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk
     const { command, args } = JSON.parse(body)
     res.end(JSON.stringify({ ok: true, data: command === 'events-head' ? { cursor: 0, accountId: 'fixture-account', taskProtocol: 'message-v1',taskVoice:true }
-      : command === 'events-check' ? {events:[incoming]}
+      : command === 'events-check' ? {events:[incoming,{...incoming,id:'2',text:'image.png attached'}]}
+      : command === 'task-document' && args.incomingId === '2' ? {name:'image.png',data:png.toString('base64'),sha256:createHash('sha256').update(png).digest('hex')}
       : command === 'task-document' ? {name:'shop.txt',data:Buffer.from('Shop opens at 7am.').toString('base64'),sha256:createHash('sha256').update('Shop opens at 7am.').digest('hex')}
       : command === 'task-send' ? (sends.push(args), { ...args, state: 'accepted' }) : {} }))
   })
@@ -40,10 +42,10 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   const tasks = new Tasks(root,async () => ({buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'})), drain = taskRequests(tasks)
   const proposal: any = await tasks.ownerCall('owner', 'start', { sourceId: 'fixture', conversationId: 'contact-a', purpose: 'Book dinner without payment', context: 'Two people at 7pm', hours: 1 })
   assert.equal(proposal.state, 'active')
-  const runs = new RunStore(root), run = await runs.create({id:'event_document_fixture',taskId:proposal.id,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'fixture',bindingId:(await tasks.get(proposal.id))!.bindingId,eventIds:['1']}})
+  const runs = new RunStore(root), run = await runs.create({id:'event_document_fixture',taskId:proposal.id,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'fixture',bindingId:(await tasks.get(proposal.id))!.bindingId,eventIds:['1','2']}})
   await runs.patch(run.id, { status: 'running' })
   const sequence = [
-    ['context', {}], ['read_attachment',{incomingId:'1'}], ['send', { text: 'Is a table for two available at 7pm?', key: 'first', voice:true }],
+    ['context', {}], ['read_attachment',{incomingId:'1'}], ['read_attachment',{incomingId:'2'}], ['send', { text: 'Is a table for two available at 7pm?', key: 'first', voice:true }],
     ['note', { text: 'Awaiting confirmation' }], ['complete', { text: 'Request sent; no booking confirmation received.' }],
     ['send', { text: 'A completed task cannot send', key: 'second' }],
   ]
@@ -76,7 +78,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     let stderr = ''; child.stderr!.on('data', c => { stderr += c }); child.stdout!.resume()
     const code = await new Promise(r => child!.on('close', r))
     assert.equal(code, 0, `Requires audited Codex ${TASK_CODEX_VERSION}: ${stderr}`)
-    assert.ok(requests.length === 7, 'Native tool call completed a second model turn')
+    assert.ok(requests.length === 8, 'Native tool call completed a second model turn')
     assert.ok(!JSON.stringify(requests).includes('PRIVATE_CANARY_DO_NOT_LOAD'))
     const messages=requests[0].input.filter((v:any)=>v.role==='user')
     assert.ok(messages.some((m:any)=>m.content.some((c:any)=>c.text===JSON.stringify({event:'task_activated',taskId:proposal.id}))))
@@ -87,6 +89,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     assert.deepEqual(namespaces[0].tools.map((t: any) => t.name).sort(), ['complete', 'context', 'note', 'read_attachment', 'report', 'send'])
     assert.match(JSON.stringify(requests.at(-1).input), /inactive or expired/)
     assert.ok(JSON.stringify(requests).includes('Shop opens at 7am.'))
+    assert.ok(JSON.stringify(requests).includes('data:image/png;base64,'+png.toString('base64')), 'Native CLI forwards MCP image bytes into vision input')
     assert.equal(sends.length, 1);assert.equal(Buffer.from(sends[0].audio.data,'base64').toString(),'OggSfixture OpusHead'); assert.equal(sends[0].conversationId, 'contact-a')
     assert.equal((await tasks.get(proposal.id))!.state, 'completed')
   } finally {
