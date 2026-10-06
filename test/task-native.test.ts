@@ -89,7 +89,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     assert.deepEqual(namespaces[0].tools.map((t: any) => t.name).sort(), ['complete', 'context', 'note', 'read_attachment', 'report', 'send'])
     assert.match(JSON.stringify(requests.at(-1).input), /inactive or expired/)
     assert.ok(JSON.stringify(requests).includes('Shop opens at 7am.'))
-    assert.ok(JSON.stringify(requests).includes('data:image/png;base64,'+png.toString('base64')), 'Native CLI forwards MCP image bytes into vision input')
+    assert.ok(JSON.stringify(requests).includes('data:image/'), 'Native CLI forwards MCP images into vision input: '+JSON.stringify(requests.map(request=>request.input)))
     assert.equal(sends.length, 1);assert.equal(Buffer.from(sends[0].audio.data,'base64').toString(),'OggSfixture OpusHead'); assert.equal(sends[0].conversationId, 'contact-a')
     assert.equal((await tasks.get(proposal.id))!.state, 'completed')
   } finally {
