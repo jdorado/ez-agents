@@ -23,7 +23,7 @@ export function taskModelCatalog(catalog: { models: Record<string, unknown>[] })
     apply_patch_tool_type: null, experimental_supported_tools: [], multi_agent_version: null,
     supports_search_tool: false, use_responses_lite: false })) };
 }
-export function taskArguments(directory: string, broker: string[], prompt: string, toolNames = ['context', 'send', 'note', 'report', 'complete'], selection: {model?:string;effort?:string} = {}) {
+export function taskArguments(directory: string, broker: string[], prompt: string, toolNames = ['context', 'read_attachment', 'send', 'note', 'report', 'complete'], selection: {model?:string;effort?:string} = {}) {
   const preset = executionDefaults('codex', selection)
   return ['exec', ...(preset.model ? ['--model',preset.model] : []), ...(preset.effort ? ['-c',`model_reasoning_effort=${JSON.stringify(preset.effort)}`] : []), '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--strict-config', '--json', '-C', directory,
     ...taskDisabledFeatures.flatMap(feature => ['--disable', feature]), '--enable', 'skip_host_skill_discovery',
@@ -42,7 +42,7 @@ export async function startTaskExecutor(options: ExecutorOptions) {
   if (!run || run.status !== 'running') throw new Error('No active task run')
   const task = await new Tasks(options.controlDir).authorize(run, false)
   const capabilityNames = (task.capabilities ?? []).map(item => `capability_${item.id}`)
-  const toolNames = [...(task.anyConversation ? ['context','send'] : ['context','send','note','report','complete']),...capabilityNames]
+  const toolNames = [...(task.anyConversation ? ['context','read_attachment','send'] : ['context','read_attachment','send','note','report','complete']),...capabilityNames]
   if (capabilityNames.length && !options.toolsHome) throw new Error('Channel capabilities require an installed tool registry')
   const environment = executorEnvironment()
   const versionInvocation = executorInvocation('codex', ['--version'])

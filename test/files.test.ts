@@ -48,3 +48,18 @@ test('stages file into control attachments, never the workspace', async () => {
     await rm(tmp, { recursive: true, force: true })
   }
 })
+
+test('shared incoming document reader extracts PDF text and removes its staged file', async t => {
+  const {readChatDocument}=await import('../src/files.js')
+  const {execFile}=await import('node:child_process'), {promisify}=await import('node:util')
+  try { await promisify(execFile)('pdftotext',['-v']) } catch { t.skip('Poppler is exercised in the Docker artifact test');return }
+  const dir=await mkdtemp('/tmp/ez-pdf-read-');t.after(()=>rm(dir,{recursive:true,force:true}))
+  const stream='BT /F1 12 Tf 20 80 Td (Shop opens at 7am.) Tj ET'
+  const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>','<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`]
+  let pdf='%PDF-1.4\n';const offsets=[0]
+  for(const [i,value] of objects.entries()){offsets.push(Buffer.byteLength(pdf));pdf+=`${i+1} 0 obj\n${value}\nendobj\n`}
+  const xref=Buffer.byteLength(pdf);pdf+='xref\n0 6\n0000000000 65535 f \n'+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  const result=await readChatDocument(dir,'shop.pdf',Buffer.from(pdf));assert.match(result.text,/Shop opens at 7am\./);assert.equal(result.type,'pdf')
+  const {readdir}=await import('node:fs/promises');assert.deepEqual(await readdir(path.join(dir,'attachments')),[])
+  await assert.rejects(readChatDocument(dir,'invalid.pdf',Buffer.from('%PDF-invalid')))
+})

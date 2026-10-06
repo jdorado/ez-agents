@@ -7,6 +7,7 @@ import { EventSources, sourceCall, type SourceEvent } from './event-sources.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { ownsRun } from './identity.js'
+import {MAX_INCOMING_ATTACHMENT_BYTES,readChatDocument} from './files.js'
 import {readTaskAttachment,type TaskAttachment} from './task-attachments.js'
 
 export type TaskCapability = { id: string; description: string; command: string; args: string[]; output?:'file' }
@@ -266,6 +267,21 @@ export class Tasks {
         waitForIncoming: task.waitForIncoming === true, capabilities: task.capabilities?.map(({id,description}) => ({id,description})),
         expiresAt: task.untilRevoked ? null : task.expiresAt, notes: task.notes, operations: task.untilRevoked ? Object.fromEntries(Object.entries(task.operations).filter(([key])=>key.startsWith(`${run.id}_`))) : task.operations,
         incoming }
+      }
+      if (command === 'read_attachment') {
+        if (!run.external || typeof args.incomingId !== 'string' || !run.external.eventIds.includes(args.incomingId) || !incoming.some(event => event.id === args.incomingId)) throw Error('Document is outside this incoming task run')
+        const source = (await new EventSources(this.controlDir).available(task.owner)).find(item => item.id === task.sourceId && item.bindingId === task.bindingId)
+        if (!source) throw Error('Task source changed')
+        const maximum = Math.ceil(MAX_INCOMING_ATTACHMENT_BYTES / 3) * 4
+        const file = await sourceCall(source.socketPath, 'task-document', {accountId:task.accountId,conversationId:contact,incomingId:args.incomingId}, maximum + 1000)
+        if (!file || typeof file.name !== 'string' || file.name.length > 255 || typeof file.data !== 'string' || file.data.length > maximum || !/^[a-f0-9]{64}$/.test(file.sha256)) throw Error('Invalid incoming document')
+        const bytes = Buffer.from(file.data,'base64')
+        if (bytes.toString('base64') !== file.data || createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw Error('Incoming document changed')
+        const result = await readChatDocument(this.controlDir,file.name,bytes)
+        const current = await new RunStore(this.controlDir).get(runId)
+        if (!current || current.status !== 'running') throw Error('Task run cancelled')
+        await this.authorize(current)
+        return {incomingId:args.incomingId,sha256:file.sha256,...result}
       }
       if (command === 'capability_begin' || command === 'capability_result') {
         const selected = task.capabilities?.find(item => item.id === args.id)

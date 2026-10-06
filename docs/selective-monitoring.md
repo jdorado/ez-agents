@@ -180,3 +180,12 @@ and the test contact/message. Do not bypass a missing grant by polling the inbox
 in an unrestricted scheduled owner session or sending through the raw CLI.
 
 Task `send` accepts `voice: true` for spoken replies up to 1,000 characters on sources advertising `taskVoice`. It uses the relay’s configured speech renderer, rechecks authorization after generation, and preserves the same uncertain-send key contract. Audio failure does not send text or retry. Voice and file attachments cannot be combined.
+
+### Incoming documents
+
+The restricted MCP `read_attachment` tool accepts only an `incomingId` from the
+current run's correspondence. The channel supplies private bounded bytes through
+`task-document`, bound to its account and exact conversation. Core reuses
+`stageChatAttachment` validation (10 MiB) and returns UTF-8 TXT/Markdown or
+PDF text via Poppler, at most 256000 bytes. It never accepts an owner file path.
+Scanned PDFs with no text layer need OCR and return a clear limitation.

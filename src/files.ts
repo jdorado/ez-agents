@@ -1,4 +1,7 @@
 import { mkdir, readFile, writeFile, realpath, stat } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { unlink } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
@@ -111,4 +114,19 @@ export const stageChatAttachment = async (stagingRoot: string, name: string, byt
   const kind = ['jpeg', 'png', 'webp'].includes(staged.fileType) ? 'image' : 'document'
   return { text: `[Attached ${kind} staged at ${staged.fullPath} (type: ${staged.fileType}, size: ${bytes.length} bytes)]${comment ? `\n\nCaption: ${comment}` : ''}`,
     attachment: {path: staged.fullPath, type: staged.fileType}, fullPath: staged.fullPath }
+}
+
+// Shared inbound staging/validation with Telegram; restricted correspondence
+// can read only this already-authorized input, never arbitrary workspace paths.
+export async function readChatDocument(stagingRoot: string, name: string, bytes: Buffer) {
+  const staged = await stageChatAttachment(stagingRoot, name, bytes, '')
+  try {
+    if (!['pdf','text'].includes(staged.attachment.type)) throw Error('Only TXT, Markdown and PDF documents are readable')
+    const limit = 256000
+    const text = staged.attachment.type === 'text' ? new TextDecoder('utf-8', {fatal:true}).decode(bytes)
+      : (await promisify(execFile)('pdftotext', ['-enc','UTF-8','-layout',staged.fullPath,'-'], {timeout:20000,maxBuffer:limit})).stdout
+    if (!text.trim()) throw Error('Document has no extractable text; scanned PDFs require OCR')
+    if (Buffer.byteLength(text) > limit) throw Error('Extracted document exceeds the 256000-byte text limit')
+    return { name: sanitizeFileName(name), type: staged.attachment.type, bytes: bytes.length, text }
+  } finally { await unlink(staged.fullPath) }
 }

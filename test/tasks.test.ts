@@ -25,6 +25,7 @@ async function fixture(t: test.TestContext, channelOwner = false, speech?: (text
     const data = command === 'events-head' ? { cursor: 0, accountId, taskProtocol: 'message-v1', persistentWatch: true, wildcardWatch: true, taskVoice: true }
       : command === 'task-watch' ? (watches.push(args), { watching: args.conversationId })
       : command === 'events-check' ? { events: events.filter(e => args.ids.includes(e.id)) }
+      : command === 'task-document' ? {name:'shop.txt',data:Buffer.from('Shop opens at 7am.').toString('base64'),sha256:createHash('sha256').update('Shop opens at 7am.').digest('hex')}
       : command === 'task-send' ? (sends.push(args), { ...args, state: uncertain ? 'uncertain' : 'accepted', receiptId: 'provider-1' }) : {}
     res.end(JSON.stringify({ ok: true, data }))
   })
@@ -380,4 +381,16 @@ test('a cancelled worker cannot dispatch a voice generated after stop', async t 
   const {run}=await f.activate();stop=()=>f.runs.patch(run.id,{status:'cancelled'})
   assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'stopped',voice:true}) as {state:string}).state,'uncertain')
   assert.equal(f.sends.length,0)
+})
+
+test('incoming documents use shared staging and never expose another event or owner path', async t => {
+ const f=await fixture(t), {taskId}=await f.activate(), task=(await f.tasks.get(taskId))!
+ const row={id:'1',conversationId:'contact-a',receivedAt:Date.now(),text:'Document attached'};f.rows([row])
+ const run=await f.runs.create({id:'event_document',taskId,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'generic',bindingId:task.bindingId,eventIds:['1']}})
+ await f.runs.patch(run.id,{status:'running'})
+ const document:any=await f.tasks.workerCall(run.id,'read_attachment',{incomingId:'1'})
+ assert.equal(document.text,'Shop opens at 7am.');assert.equal(document.name,'shop.txt');assert.equal(document.type,'text')
+ await assert.rejects(f.tasks.workerCall(run.id,'read_attachment',{incomingId:'2'}),/outside/)
+ await assert.rejects(f.tasks.workerCall(run.id,'read_attachment',{incomingId:'/etc/passwd'}),/outside/)
+ f.rows([{...row,conversationId:'contact-b'}]);await assert.rejects(f.tasks.workerCall(run.id,'read_attachment',{incomingId:'1'}),/correspondence/)
 })

@@ -1,5 +1,7 @@
 # Changelog
 
+- Private QA: restricted incoming TXT/PDF reading through shared Telegram attachment staging; bounded source-only MCP tool, no owner filesystem access.
+
 ## Unreleased
 
 - Audit restricted native tools on Codex 0.160.1 and retain the exact version gate.
