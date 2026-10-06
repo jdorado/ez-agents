@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Extend the existing speech renderer with OpenRouter TTS and Ogg Opus/WAV encoding.
+- Allow authorized task replies to use core-rendered voice on supporting channels, with post-synthesis authorization and unchanged uncertain-send protection.
+
 ## 0.1.0-beta.47
 
 - Trigger an existing scheduled task manually with its saved instructions, model,

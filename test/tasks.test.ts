@@ -15,14 +15,14 @@ import { requireOwnerExecution } from '../src/execution-authority.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
-async function fixture(t: test.TestContext, channelOwner = false) {
+async function fixture(t: test.TestContext, channelOwner = false, speech?: (text:string) => Promise<{buffer:Buffer;mimeType:string}>) {
   const dir = await mkdtemp('/tmp/ez-task-test-'), socket = join(dir, 's.sock')
   let accountId = 'account-a', events: SourceEvent[] = [], uncertain = false
   const sends: any[] = [], watches: any[] = []
   const server = createServer(async (req, res) => {
     let text = ''; for await (const chunk of req) text += chunk
     const { command, args } = JSON.parse(text)
-    const data = command === 'events-head' ? { cursor: 0, accountId, taskProtocol: 'message-v1', persistentWatch: true, wildcardWatch: true }
+    const data = command === 'events-head' ? { cursor: 0, accountId, taskProtocol: 'message-v1', persistentWatch: true, wildcardWatch: true, taskVoice: true }
       : command === 'task-watch' ? (watches.push(args), { watching: args.conversationId })
       : command === 'events-check' ? { events: events.filter(e => args.ids.includes(e.id)) }
       : command === 'task-send' ? (sends.push(args), { ...args, state: uncertain ? 'uncertain' : 'accepted', receiptId: 'provider-1' }) : {}
@@ -35,7 +35,7 @@ async function fixture(t: test.TestContext, channelOwner = false) {
     await runs.create({ id: 'owner', ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner), texts: ['Own this conversation'] })
     await runs.patch('owner', { status: 'running' })
   } else await ownerRun(dir, 'owner')
-  const control = new ControlStore(dir, 900000), sources = new EventSources(dir), runs = new RunStore(dir), tasks = new Tasks(dir)
+  const control = new ControlStore(dir, 900000), sources = new EventSources(dir), runs = new RunStore(dir), tasks = new Tasks(dir,speech)
   await sources.register('generic', socket, (await control.status()).owner!)
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); await rm(dir, { recursive: true, force: true }) })
   async function proposal() {
@@ -340,4 +340,35 @@ test('public grants enforce persisted hourly and cumulative admission budgets',a
   task.publicBudget.runs=0;task.publicBudget.totalRuns=1000;await writeFile(file,JSON.stringify(task))
   assert.equal(await f.tasks.admitPublic(proposal.id),'revoked')
   assert.equal((await f.tasks.get(proposal.id))?.state,'revoked')
+})
+
+
+test('voice reuses task send authority and receipt keys, rechecks the account after synthesis, and never falls back to text', async t => {
+  let generated = 0, changed = false
+  let changeAccount: (value:string) => void
+  const f = await fixture(t,false,async text => {
+    generated++; assert.equal(text, 'Spoken fixture')
+    if(changed)changeAccount('replaced')
+    return {buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'}
+  })
+  changeAccount = f.account
+  const {run} = await f.activate()
+  const sent = await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'spoken',voice:true})
+  assert.ok('state' in sent);assert.equal(sent.state,'accepted');assert.equal(generated,1);assert.equal(f.sends.length,1)
+  assert.equal(Buffer.from(f.sends[0].audio.data,'base64').toString(),'OggSfixture OpusHead')
+  await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'spoken',voice:true})
+  assert.equal(generated,1);assert.equal(f.sends.length,1)
+  await assert.rejects(f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'spoken'}), /different text/)
+  changed=true
+  assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'changed',voice:true}) as {state:string}).state,'uncertain')
+  assert.equal(f.sends.length,1)
+})
+
+test('voice generation failure persists uncertainty and sends no text', async t => {
+  let generated=0
+  const f=await fixture(t,false,async () => { generated++;throw new Error('provider failed') })
+  const {run}=await f.activate()
+  assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true}) as {state:string}).state,'uncertain')
+  await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true})
+  assert.equal(generated,1);assert.equal(f.sends.length,0)
 })

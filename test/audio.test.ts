@@ -1,3 +1,4 @@
+import {execFileSync} from 'node:child_process'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { pcmToWav, encodeOggOpus, transcribeAudio, synthesizeSpeech, SpeechCreditsDepletedError } from '../src/audio.js'
@@ -90,4 +91,22 @@ test('synthesizeSpeech rejects empty text', async () => {
     () => synthesizeSpeech('   ', { geminiApiKey: 'test' }),
     /Cannot synthesize speech for empty text/,
   )
+})
+
+
+test('OpenRouter uses the existing renderer and encoder for real Ogg Opus and WAV without provider fallback', async t => {
+  const mp3=execFileSync('ffmpeg',['-f','s16le','-ar','24000','-ac','1','-i','pipe:0','-f','mp3','pipe:1'],{input:Buffer.alloc(48000),stdio:['pipe','pipe','ignore']})
+  t.mock.method(globalThis,'fetch',async (url:string,options:RequestInit) => {
+    assert.equal(url,'https://openrouter.ai/api/v1/audio/speech')
+    assert.equal(new Headers(options.headers).get('authorization'),'Bearer fixture-key')
+    assert.deepEqual(JSON.parse(String(options.body)),{model:'fish-audio/s2.1-pro-free:free',input:'Fixture',response_format:'mp3'})
+    return new Response(mp3,{headers:{'content-type':'audio/mpeg'}})
+  })
+  const options={speechProvider:'openrouter' as const,openrouterApiKey:'fixture-key',geminiApiKey:'unused'}
+  const ogg=await synthesizeSpeech('Fixture',options)
+  assert.equal(ogg.mimeType,'audio/ogg');assert.equal(ogg.buffer.subarray(0,4).toString(),'OggS');assert.ok(ogg.buffer.includes(Buffer.from('OpusHead')))
+  const wav=await synthesizeSpeech('Fixture',{...options,format:'wav'})
+  assert.equal(wav.buffer.subarray(0,4).toString(),'RIFF');assert.equal(wav.buffer.readUInt32LE(24),24000)
+  t.mock.method(globalThis,'fetch',async () => new Response('private provider detail',{status:429}))
+  await assert.rejects(synthesizeSpeech('Fixture',options), /error 429/)
 })
