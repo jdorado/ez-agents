@@ -1,6 +1,7 @@
 import { needsFailureReview, failureStamp, redactFailure } from './failure.js'
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { loadControlConfig } from './config.js'
 import { ControlStore, sameOwner } from './control-state.js'
@@ -9,12 +10,15 @@ import type { RunRecord } from './runs.js'
 import { callDeliverySocket, socketPathFor } from './delivery-socket.js'
 import { initialPreset, isPreset } from './ai.js'
 import { executionOverrides } from './model-policy.js'
-import { holdsSchedule, Scheduler } from './scheduler.js'
+import { holdsSchedule, Scheduler, executionType } from './scheduler.js'
+import { Scripts, fileSha256, workspaceEntry, DEFAULT_SCRIPT_TIMEOUT_SECONDS } from './scripts.js'
+import { executorEnvironment } from './executor.js'
 import { ownsRun } from './identity.js'
 import { type Trigger } from './schedule-time.js'
 
 async function main() {
-  const { values:v, positionals:[action='list',id] } = parseArgs({allowPositionals:true,options:{
+  const { values:v, positionals:[action='list',id,scriptId] } = parseArgs({allowPositionals:true,options:{
+    script:{type:'string'}, arg:{type:'string',multiple:true}, file:{type:'string'}, interpreter:{type:'string'}, 'timeout-seconds':{type:'string'},
     cli:{type:'string'}, model:{type:'string'}, effort:{type:'string'},
     all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
     'preflight-file':{type:'string'},'clear-preflight':{type:'boolean'},name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
@@ -25,11 +29,20 @@ async function main() {
   evidence [RUN_ID] [--offset N --limit N --expected SNAPSHOT_SHA256]
   trigger SCHEDULE_ID --key REQUEST_KEY
   review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT
-  create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE)
+  create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE | --script SCRIPT_ID [--arg=VALUE ...])
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
     [--cli EXECUTOR] [--model MODEL] [--effort <native-effort>]
     [--preflight-file FILE | --clear-preflight]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
+  script list | show SCRIPT_ID | remove SCRIPT_ID
+  script register|update SCRIPT_ID --file WORKSPACE_PATH --interpreter COMMAND [--arg=VALUE ...] [--timeout-seconds N]
+Execution types: agent (prompt, engine, model, effort) or script (registered script ID and saved arguments).
+A script registration references an entry point inside the agent workspace and records its SHA-256. Core invokes
+the installed interpreter with the entry point and arguments directly, without a shell or a model. Changed entry-point
+bytes refuse to run until an explicit script update. The hash covers that file only, not imported dependencies.
+Script runs receive EZ_RUN_ID, EZ_SCHEDULE_ID, EZ_SCHEDULE_REVISION, EZ_DUE_AT, EZ_SCRIPT_ID, EZ_SCRIPT_REVISION and
+EZ_SCRIPT_SHA256 plus the normal executor allowlist. Stdout/stderr are bounded diagnostics in run, never owner messages.
+Script runs have a timeout (default ${DEFAULT_SCRIPT_TIMEOUT_SECONDS}s) and are never retried automatically.
 Context reads the current run only.
 Evidence exports sanitized current-owner Telegram operational metadata only.
 Follow nextOffset with --expected; a changed snapshot requires restarting.
@@ -72,6 +85,10 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
   if(process.env.EZ_RUN_ID && (!caller || caller.status!=='running' || caller.external || caller.taskId || caller.replyOnly ||
     !ownsRun(owner, caller) ||
     (caller.scheduled && caller.scheduled.pairedAt!==owner.pairedAt)))throw new Error('Scheduling requires an active owner-authorized run')
+  // A script occurrence may read state and deliver through bound plugins; it
+  // cannot change registrations or schedules, including its own.
+  const readOnly=['list','runs','show','run','context','failures','evidence'].includes(action) || (action==='script' && ['list','show'].includes(id ?? ''))
+  if(caller?.script && !readOnly)throw new Error('Script runs cannot change scripts or schedules')
   const owned=(s:{owner:typeof owner})=>sameOwner(s.owner,owner)
   const ownsFailureRun=(r:RunRecord | null)=>r && ownsRun(owner,r) && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt)
   const show=async(s:Awaited<ReturnType<Scheduler['get']>>)=>{
@@ -79,11 +96,33 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const interruptedRunIds=held.filter(r=>r.interrupted).map(r=>r.id)
     const failedReviewRunIds=held.filter(r=>!r.interrupted).map(r=>r.id)
     const next=s.enabled && !held.length ? await scheduler.pendingOccurrence(s) : null
-    return {...s,preflightReceipt:await scheduler.preflightReceipt(s),interruptedRunIds,failedReviewRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString(),
+    return {...s,executionType:executionType(s),preflightReceipt:await scheduler.preflightReceipt(s),interruptedRunIds,failedReviewRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString(),
       ...(held.length ? {recovery:'Inspect the failed run and explicitly edit this schedule to resume; pause/resume does not clear the stop.'} : {})}
   }
+  const scripts=new Scripts(config.controlDir)
   let result:unknown
-  if(action==='evidence'){
+  if(action==='script'){
+    const workspace=process.env.EZ_AGENT_WORKSPACE?.trim() || process.cwd()
+    if(id==='list')result=await scripts.list(owner)
+    else if(!scriptId)throw new Error('Script ID required')
+    else if(id==='show'){
+      const registration=await scripts.owned(scriptId,owner)
+      let current:string|null=null
+      try{current=await fileSha256((await workspaceEntry(workspace,registration.entry)).file)}catch{}
+      result={...registration,currentSha256:current,matchesRegistration:current===registration.sha256,
+        schedules:(await scheduler.list()).filter(s=>owned(s) && s.script?.id===scriptId).map(s=>s.id)}
+    }else if(id==='remove'){
+      const users=(await scheduler.list()).filter(s=>owned(s) && s.script?.id===scriptId).map(s=>s.id)
+      if(users.length)throw new Error(`Script is used by schedules ${users.join(', ')}; edit or remove them first`)
+      await scripts.remove(scriptId,owner);result={removed:scriptId}
+    }else if(id==='register' || id==='update'){
+      const previous=id==='update' ? await scripts.owned(scriptId,owner) : undefined
+      if(id==='register' && (!v.file || !v.interpreter))throw new Error('Register requires --file and --interpreter')
+      const timeout=v['timeout-seconds']===undefined ? previous?.timeoutSeconds ?? DEFAULT_SCRIPT_TIMEOUT_SECONDS : Number(v['timeout-seconds'])
+      result=await scripts.save({id:scriptId,owner,workspace,entry:v.file ? resolve(v.file) : previous!.entry,interpreter:v.interpreter ?? previous!.interpreter,
+        args:v.arg ?? previous?.args ?? [],timeoutSeconds:timeout,pathValue:executorEnvironment().PATH},id==='register')
+    }else throw new Error('Unknown script action; use --help')
+  }else if(action==='evidence'){
     result=await callDeliverySocket(socketPath,{op:'evidence',payload:{
       ...(caller ? {callerRunId:caller.id} : {}), ...(id ? {runId:id} : {}),
       offset:Number(v.offset ?? 0),limit:Number(v.limit ?? 100),expected:v.expected,
@@ -119,7 +158,9 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     if(action==='edit' && (!id || !owned(await scheduler.get(id))))throw new Error('Unknown schedule')
     if(action==='create' && id && (await scheduler.list()).some(s=>s.id===id))throw new Error('Schedule exists; use edit')
     if([v.now,v.at,v.cron,v['every-seconds']].filter(Boolean).length!==1)throw new Error('Choose exactly one trigger')
-    if(Boolean(v.text)===Boolean(v['text-file']))throw new Error('Choose --text or --text-file')
+    if([v.text,v['text-file'],v.script].filter(Boolean).length!==1)throw new Error('Choose --text, --text-file or --script')
+    if(v.script && (v.cli || v.model || v.effort))throw new Error('Script schedules run no model; --cli, --model and --effort do not apply')
+    if(v.arg && !v.script)throw new Error('--arg applies to script schedules only')
     const start=v.start || new Date(Date.now()+1000).toISOString()
     const trigger:Trigger=v.now ? {at:new Date(Date.now()+1000).toISOString()} : v.at ? {at:v.at} :
       v.cron ? {cron:v.cron,timezone:v.timezone!,start,until:v.until} : {everySeconds:Number(v['every-seconds']),start,until:v.until}
@@ -128,6 +169,12 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const origin = caller?.application ?? caller?.delivery
     const delivery = previousSchedule ? previousSchedule.delivery : (origin ? {bindingId:origin.bindingId,scope:origin.scope} : undefined)
     if (!delivery && !owner.telegramChatId) throw new Error('Create the schedule from an authenticated channel turn to bind its reply destination')
+    if (v.script) {
+      result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || v.script,
+        originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:'',when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
+        script:{id:v.script,args:v.arg ?? []}},action==='create'))
+      console.log(JSON.stringify(result,null,2));return
+    }
     const previous = previousSchedule?.execution
     const state = await control.status()
     const selected = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
