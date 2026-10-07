@@ -9,7 +9,7 @@ import { discoverDefaults } from './client-defaults.js'
 import { chatPreset } from './ai.js'
 import { ControlStore } from './control-state.js'
 import { loadControlConfig } from './config.js'
-import { EXECUTOR_REGISTRY, resolveExecutor, executorKey } from './executor.js'
+import { EXECUTOR_REGISTRY, resolveExecutor, executorKey, claudeConfigHome } from './executor.js'
 import { desktopCodexPath } from './desktop-bridge.js'
 
 export const findExecutableInPath = async (
@@ -152,7 +152,7 @@ export const runCli = async (): Promise<void> => {
     const config = loadControlConfig()
     await new ControlStore(config.controlDir, config.pairingTtlMs).syncClientPresets(
       chatPreset(await readActiveExecutor(envFilePath)), await discoverDefaults(workspace,
-        { codexHome: path.join(config.controlDir, 'cli', 'codex') }))
+        { codexHome: path.join(config.controlDir, 'cli', 'codex'), claudeHome: claudeConfigHome(config.controlDir) }))
     console.log(JSON.stringify({ workspace, created }))
     return
   }

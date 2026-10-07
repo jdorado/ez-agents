@@ -755,7 +755,9 @@ export class ControlStore {
       const state = await this.readState()
       await requireControlGuard(state, guard)
       if (!state.ai) throw new Error('AI settings not initialized')
-      if (state.ai.presets.length >= 12 && !state.ai.presets.some((p) => p.id === preset.id))
+      // Auto-detected client defaults come and go with installed clients; only
+      // owner-saved choices count toward the cap.
+      if (state.ai.presets.filter((p) => !p.id.startsWith('detected_')).length >= 12 && !state.ai.presets.some((p) => p.id === preset.id))
         throw new Error('Keep it small: at most 12 saved AIs.')
       state.ai.presets = [...state.ai.presets.filter((p) => p.id !== preset.id), persistedPreset(preset)]
       await this.writeState(state)

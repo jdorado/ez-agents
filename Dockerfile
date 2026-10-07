@@ -30,6 +30,10 @@ RUN pnpm add --global --allow-build=opencode-ai@${OPENCODE_CLI_VERSION} opencode
 # Pin the reviewed CLI for repeatable release images.
 ARG PI_CLI_VERSION=0.87.1
 RUN pnpm add --global --ignore-scripts @earendil-works/pi-coding-agent@${PI_CLI_VERSION} && command -v pi
+# Isolated agents select Claude Code from the relay menu with an agent-bound
+# CLAUDE_CONFIG_DIR login (control/cli/claude). Pin the reviewed CLI.
+ARG CLAUDE_CLI_VERSION=2.1.286
+RUN pnpm add --global --allow-build=@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION} @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION} && command -v claude && claude --version
 RUN chmod +x docker/entrypoint.sh bin/ez bin/ezenciel-agents* && mkdir -p /state/control /state/home /workspace && chown node:node /state/control /state/home /workspace
 RUN node -e 'for (const [name, target] of Object.entries(require("./package.json").bin)) require("node:fs").symlinkSync("/app/" + target, "/usr/local/bin/" + name); require("node:fs").symlinkSync("/app/bin/ez", "/usr/local/bin/ez")'
 # Build identity for relay status (package version stays release-owned).
