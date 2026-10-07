@@ -217,7 +217,7 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         if (!nonEmptyString(scheduleId) || !nonEmptyString(revision) || !nonEmptyString(key)) throw new Error('Task ID, revision and request key are required')
         if (callerRunId !== undefined) {
           const caller=await requireOwnerExecution(controlDir,callerRunId)
-          if (caller.replyOnly || (caller.scheduled && caller.scheduled.pairedAt !== (await readOnlyOwner(controlDir))?.pairedAt)) throw new Error('Scheduling requires an active owner-authorized run')
+          if (caller.replyOnly || caller.script || (caller.scheduled && caller.scheduled.pairedAt !== (await readOnlyOwner(controlDir))?.pairedAt)) throw new Error('Scheduling requires an active owner-authorized run')
         }
         const owner=await readOnlyOwner(controlDir)
         if (!owner) throw new Error('Pair an owner before scheduling')

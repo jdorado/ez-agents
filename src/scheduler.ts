@@ -10,12 +10,16 @@ import { assertId, ownsRun } from './identity.js'
 import { type ExecutionChoice, isExecutionChoice, persistedPreset } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
 import { RunStore, type RunRecord } from './runs.js'
+import { Scripts, assertScriptArgs, assertScriptId, type ScriptRunRef } from './scripts.js'
 
 export type Schedule = {
   originRunId?: string
   when?: 'unreviewed-failures'
   version: 1; id: string; revision: string; name: string; text: string; trigger: Trigger; enabled: boolean
-  owner: Owner; execution: ExecutionChoice
+  owner: Owner
+  // Exactly one execution type: an agent turn (execution) or a registered script.
+  execution?: ExecutionChoice
+  script?: { id: string; args: string[] }
   delivery?: { bindingId: string; scope: string }
 }
 export type ScheduledRunSummary = {
@@ -23,13 +27,24 @@ export type ScheduledRunSummary = {
   at: string
   currentRevision: boolean
 }
-export type ActiveSchedule = Schedule & { nextAt: number | null; runState?: 'queued' | 'running'; lastRun?: ScheduledRunSummary }
+export type ActiveSchedule = Schedule & { nextAt: number | null; runState?: 'queued' | 'running'; lastRun?: ScheduledRunSummary; scriptRevision?: string }
 export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string; originRunId?: string }
 export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
   const s = v as ScheduledOrigin
   return Boolean(s && /^[a-zA-Z0-9_-]+$/.test(s.id) && /^[a-zA-Z0-9_-]+$/.test(s.revision) &&
     Number.isFinite(Date.parse(s.dueAt)) && typeof s.pairedAt === 'string' && (s.originRunId === undefined || /^[a-zA-Z0-9_-]+$/.test(s.originRunId)))
 }
+export const executionType = (s: Pick<Schedule,'script'>): 'agent' | 'script' => s.script ? 'script' : 'agent'
+const validExecution = (s: Pick<Schedule,'execution'|'script'|'text'>) => s.script
+  ? s.execution === undefined && (() => { try { assertScriptId(s.script!.id); assertScriptArgs(s.script!.args); return true } catch { return false } })()
+  : isExecutionChoice(s.execution) && typeof s.text === 'string' && Boolean(s.text.trim())
+// The run carries the registration revision/hash current when it was queued.
+const scriptRef = async (controlDir: string, s: Schedule, owner: Owner): Promise<ScriptRunRef> => {
+  const ref: ScriptRunRef = { id: s.script!.id, args: s.script!.args }
+  try { const r = await new Scripts(controlDir).owned(s.script!.id, owner); return { ...ref, revision: r.revision, sha256: r.sha256 } }
+  catch { return ref }
+}
+const runTexts = (s: Schedule, dueAt: string) => s.script ? [`[schedule ${s.id} due ${dueAt}] script ${s.script.id}`] : [`[schedule ${s.id} due ${dueAt}]`, s.text]
 export const scheduledRunId = (s: Schedule, due: number) => 'r_schedule_' + createHash('sha256')
   .update(JSON.stringify([s.id,s.revision,due])).digest('hex')
 export const holdsSchedule = (s: Schedule, r: RunRecord): boolean =>
@@ -50,8 +65,8 @@ export class Scheduler {
   async get(id: string): Promise<Schedule> {
     const s = JSON.parse(await readFile(join(this.dir,assertId(id)+'.json'),'utf8')) as Schedule
     if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt,originRunId:s.originRunId}) ||
-      (s.when !== undefined && s.when !== 'unreviewed-failures') || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' || !s.text.trim() ||
-      !validOwner(s.owner) || !isExecutionChoice(s.execution) ||
+      (s.when !== undefined && s.when !== 'unreviewed-failures') || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' ||
+      !validOwner(s.owner) || !validExecution(s) ||
       (s.delivery !== undefined && !validApplicationOrigin({...s.delivery, requestId: s.id})))
       throw new Error('Invalid schedule record')
     validateTrigger(s.trigger)
@@ -99,7 +114,8 @@ export class Scheduler {
       if (!runState && current.some(r => holdsSchedule(s,r))) continue
       try {
         const nextAt = await this.pendingOccurrence(s)
-        if (runState || nextAt !== null) active.push({...s,nextAt,runState,...(last ? {
+        const scriptRevision = s.script ? await new Scripts(this.controlDir).get(s.script.id).then(r => r.revision, () => undefined) : undefined
+        if (runState || nextAt !== null) active.push({...s,nextAt,runState,...(scriptRevision ? {scriptRevision} : {}),...(last ? {
           lastRun: {status:last.status,at:last.endedAt ?? last.startedAt ?? last.createdAt,currentRevision:last.scheduled!.revision===s.revision},
         } : {})})
       }
@@ -110,11 +126,20 @@ export class Scheduler {
   async save(input: Omit<Schedule,'version'|'revision'>, exclusive = false): Promise<Schedule> {
     await this.ensure(); assertId(input.id)
     if (input.when !== undefined && input.when !== 'unreviewed-failures') throw new Error('Unknown schedule condition')
-    const execution: ExecutionChoice = {...input.execution, preset: persistedPreset(input.execution.preset)}
-    if (!input.name || !input.text?.trim() || !isExecutionChoice(execution)) throw new Error('Schedule needs name, text and an AI selection')
-    assertScheduledModel(execution.preset.model)
-    assertEffort(execution.preset.effort, execution.preset.model, execution.preset.cli)
-    const s: Schedule = {...input, execution, trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
+    let s: Schedule
+    if (input.script) {
+      if (input.execution !== undefined || !input.name) throw new Error('Script schedules need a name and no AI selection')
+      const script = {id:assertScriptId(input.script.id),args:assertScriptArgs(input.script.args)}
+      await new Scripts(this.controlDir).owned(script.id, input.owner)
+      s = {...input, text:'', script, trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
+    } else {
+      if (!input.execution) throw new Error('Schedule needs name, text and an AI selection')
+      const execution: ExecutionChoice = {...input.execution, preset: persistedPreset(input.execution.preset)}
+      if (!input.name || !input.text?.trim() || !isExecutionChoice(execution)) throw new Error('Schedule needs name, text and an AI selection')
+      assertScheduledModel(execution.preset.model)
+      assertEffort(execution.preset.effort, execution.preset.model, execution.preset.cli)
+      s = {...input, execution, trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
+    }
     const now = Date.now()
     let next = nextOccurrence(s.trigger,now-1)
     if (next === null) throw new Error('Schedule has no future occurrence within eight years')
@@ -163,7 +188,8 @@ export class Scheduler {
   async trigger(id: string, revision: string, key: string, owner: Owner, runs: RunStore): Promise<RunRecord> {
     const s=await this.get(id)
     if (!sameOwner(s.owner,owner) || !s.enabled || s.revision !== revision) throw new Error('Schedule is disabled, changed or outside this owner binding')
-    assertScheduledModel(s.execution.preset.model)
+    if (s.script) await new Scripts(this.controlDir).owned(s.script.id, owner)
+    else assertScheduledModel(s.execution!.preset.model)
     if (s.delivery) {
       const binding=(await new ApplicationBindings(this.controlDir).list()).find(b=>b.bindingId===s.delivery!.bindingId)
       if (!binding || !sameOwner(binding.owner,owner)) throw new Error('Schedule delivery binding is unavailable')
@@ -180,7 +206,7 @@ export class Scheduler {
     const dueAt=new Date().toISOString()
     return runs.create({id:runId,ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
       ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
-      texts:[`[schedule ${s.id} due ${dueAt}]`,s.text],execution:{...s.execution,sessionId:randomUUID()},
+      texts:runTexts(s,dueAt),...(s.script ? {script:await scriptRef(this.controlDir,s,owner)} : {execution:{...s.execution!,sessionId:randomUUID()}}),
       scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId ? {originRunId:s.originRunId} : {})}},true)
   }
   async recover(runs: RunStore) {
@@ -204,7 +230,7 @@ export class Scheduler {
       try {
         const next = await this.pendingOccurrence(s)
         if (next === null || next > now) continue
-        assertScheduledModel(s.execution.preset.model)
+        if (!s.script) assertScheduledModel(s.execution!.preset.model)
         // One occurrence at a time. A failed reviewer stops this revision just like
         // interrupted work: retain its receipt until an explicit schedule edit.
         if ((await runs.list()).some(r => r.scheduled?.id === s.id &&
@@ -217,7 +243,7 @@ export class Scheduler {
         await runs.create({id:scheduledRunId(s,next),
           ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
           ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
-          texts:[`[schedule ${s.id} due ${dueAt}]`, s.text],execution:s.execution,
+          texts:runTexts(s,dueAt),...(s.script ? {script:await scriptRef(this.controlDir,s,owner)} : {execution:s.execution}),
           scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}},true)
         // A restart between run creation and this cursor write sees the same occurrence ID.
         await atomic(cursor,{next:future})

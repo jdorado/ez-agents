@@ -32,7 +32,7 @@ test('executor admission rejects a legacy queued schedule with no model before s
    scheduled:{id:saved.id,revision:saved.revision,dueAt:new Date(due).toISOString(),pairedAt:owner.pairedAt}})
   await relay.drainSources()
   assert.equal((await runs.get(run.id))?.status,'failed');assert.equal(launches,0)
-  assert.equal((await scheduler.get(saved.id)).execution.preset.model,'saved-model')
+  assert.equal((await scheduler.get(saved.id)).execution!.preset.model,'saved-model')
  }finally{await relay.stop();await rm(dir,{recursive:true,force:true})}
 })
 

@@ -13,6 +13,8 @@ import { RunStore } from '../src/runs.js'
 import { packageVersion } from '../src/version.js'
 import { executionDefaults } from '../src/model-policy.js'
 import { workspaceLease } from '../src/plugins/workspace-lease.mjs'
+import { ControlStore } from '../src/control-state.js'
+import { Scripts } from '../src/scripts.js'
 
 test('host restart replaces a lock whose PID was reused by another process',async()=>{
   const root=await mkdtemp(path.join(tmpdir(),'ez-host-reused-pid-'))
@@ -524,4 +526,45 @@ test('startup replaces prior catalog after provider policy changes even when dis
     await readFile(path.join(directory,'heartbeat.json'))
     assert.deepEqual(JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')),[])
   } finally {abort.abort();await server;await rm(root,{recursive:true,force:true})}
+})
+
+test('host transport runs a registered script from the run record and refuses changed entry-point bytes', async () => {
+  const root=await mkdtemp(path.join(tmpdir(),'ez-host-script-'))
+  const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),directory=path.join(controlDir,'host-executor')
+  const abort=new AbortController();let server:Promise<void>|undefined
+  const oldToken=process.env.TELEGRAM_BOT_TOKEN
+  try {
+    await mkdir(workspace);await mkdir(directory,{recursive:true})
+    await writeFile(path.join(workspace,'guard.mjs'),"console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),due:process.env.EZ_DUE_AT,token:process.env.TELEGRAM_BOT_TOKEN}))\n")
+    process.env.TELEGRAM_BOT_TOKEN='must-not-reach-host-script'
+    await ownerRun(controlDir,'r_seed')
+    const owner=(await new ControlStore(controlDir,900000).status()).owner!
+    const registration=await new Scripts(controlDir).save({id:'guard',owner,workspace,entry:'guard.mjs',interpreter:'node',args:['saved'],timeoutSeconds:60},true)
+    const runs=new RunStore(controlDir)
+    const scripted=async(id:string)=>{
+      await runs.create({id,chatId:101,telegramUserId:101,texts:['[schedule]'],script:{id:'guard',args:['extra'],revision:registration.revision,sha256:registration.sha256},
+        scheduled:{id:'s_guard',revision:'rev1',dueAt:'2026-10-07T11:15:00.000Z',pairedAt:owner.pairedAt}})
+      await runs.patch(id,{status:'running'})
+      // The request cannot choose the command, script or workspace.
+      await writeFile(path.join(directory,`${id}.request.json`),JSON.stringify({texts:['x'],options:{workspace:'/wrong',cli:'grok',script:{id:'other',args:['injected']},timeoutMs:0}}))
+      let events:any[]=[]
+      for(let n=0;n<300;n++){try{events=(await readFile(path.join(directory,`${id}.events`),'utf8')).trim().split('\n').map(l=>JSON.parse(l));if(events.some(e=>e.stream==='exit'))break}catch{}await new Promise(r=>setTimeout(r,20))}
+      return events
+    }
+    server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal,undefined,async()=>[])
+    const events=await scripted('r_schedule_script_ok')
+    assert.equal(events.find(e=>e.stream==='exit')?.code,0)
+    const result=JSON.parse(events.filter(e=>e.stream==='stdout').map(e=>e.text).join(''))
+    assert.equal(result.cwd,await realpath(workspace));assert.deepEqual(result.args,['saved','extra'])
+    assert.equal(result.due,'2026-10-07T11:15:00.000Z');assert.equal(result.token,undefined)
+    await writeFile(path.join(workspace,'guard.mjs'),"console.log('changed')\n")
+    const refused=await scripted('r_schedule_script_changed')
+    assert.equal(refused.find(e=>e.stream==='exit')?.code,1)
+    assert.equal(refused.filter(e=>e.stream==='stdout').length,0)
+    assert.match(refused.filter(e=>e.stream==='stderr').map(e=>e.text).join(''),/entry point changed since registration/)
+  }finally{
+    abort.abort();await server
+    if(oldToken===undefined)delete process.env.TELEGRAM_BOT_TOKEN;else process.env.TELEGRAM_BOT_TOKEN=oldToken
+    await rm(root,{recursive:true,force:true})
+  }
 })

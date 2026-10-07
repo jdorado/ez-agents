@@ -11,6 +11,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { DESKTOP_UNAVAILABLE } from './desktop-bridge.js'
 import { macosWorkspaceProfile, workspaceSiblingDenies } from './workspace-confine.js'
+import { Scripts, type ScriptRunRef } from './scripts.js'
 
 export type ExecutorOptions = {
   repairEnabled?: boolean
@@ -38,7 +39,11 @@ export type ExecutorOptions = {
   codexAutoCompactTokens?: number
   codexProvider?: CodexProviderBinding
   onSession?: (id: string) => Promise<void>
+  // Registered script occurrence: invoke it directly, never a native CLI.
+  script?: ScriptLaunch
 }
+
+export type ScriptLaunch = ScriptRunRef & { scheduleId: string; scheduleRevision: string; dueAt: string }
 
 export type CodexProviderBinding = {
   id: string
@@ -323,6 +328,7 @@ export const startExecutorJob = async (
   texts: string[],
   options: ExecutorOptions,
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
+  if (options.script && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startScriptJob(options as ExecutorOptions & { script: ScriptLaunch })
   options = executionDefaults(executorKey(options.cli), options)
   // Routing is caller-owned: a restricted task run goes to the task runner
   // unless the host transport must ship it across the boundary first.
@@ -458,6 +464,39 @@ export const startExecutorJob = async (
 }
 
 export const startGrokJob = startExecutorJob
+
+// Spawn a verified registered script with the executor identity, environment
+// allowlist and workspace confinement. No shell, model, prompt or native session.
+export const startScriptJob = async (
+  options: ExecutorOptions & { script: ScriptLaunch },
+): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
+  const { script } = options
+  for (const value of [options.runId, script.scheduleId, script.scheduleRevision]) if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error('Invalid script run binding')
+  if (!Number.isFinite(Date.parse(script.dueAt))) throw new Error('Invalid script due time')
+  const environment: NodeJS.ProcessEnv = {
+    ...executorJobEnv(options),
+    EZ_SCHEDULE_ID: script.scheduleId, EZ_SCHEDULE_REVISION: script.scheduleRevision, EZ_DUE_AT: script.dueAt,
+    EZ_SCRIPT_ID: script.id, EZ_SCRIPT_REVISION: script.revision, EZ_SCRIPT_SHA256: script.sha256,
+  }
+  const verified = await new Scripts(options.controlDir).verifiedInvocation(script, options.workspace, environment.PATH)
+  let invocation = executorInvocation(verified.command, verified.args)
+  let profileDirectory: string | undefined
+  const denies = process.platform === 'darwin' ? workspaceSiblingDenies(options.workspace) : []
+  if (denies.length) {
+    profileDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
+    const profile = path.join(profileDirectory, 'workspace.sb')
+    await writeFile(profile, macosWorkspaceProfile(denies, [options.controlDir, options.binDir, options.toolsHome, options.sharedWorkspace,
+      ...(options.additionalWorkspaces ?? [])].filter((value): value is string => Boolean(value))), { mode: 0o600 })
+    invocation = { command: 'sandbox-exec', args: ['-f', profile, invocation.command, ...invocation.args] }
+  }
+  const cleanup = async () => { if (profileDirectory) await rm(profileDirectory, { recursive: true, force: true }) }
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: options.workspace, env: environment, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32', shell: false,
+  })
+  await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+    .catch(async (error) => { await cleanup(); throw error })
+  return { child, cleanup, stdout: '' }
+}
 
 // Structured client events only. Model text is never interpreted or sent to chat.
 export const nativeSessionId = (cli: string, line: string): string | undefined => {

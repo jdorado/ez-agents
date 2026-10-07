@@ -55,6 +55,66 @@ Paused, stale-owner, overlapping or held tasks and unmet conditions cannot be
 triggered. Historical deferred tasks keep their source context
 available through `ezenciel-agents-schedule context`.
 
+## Registered script schedules
+
+A schedule has one execution type. **Agent** schedules run the saved prompt with
+their saved engine, model and effort, as described below. **Script** schedules run
+a registered, agent-owned script directly: no model, effort, prompt or native
+session is involved.
+
+```sh
+ezenciel-agents-schedule script register book-freshness \
+  --file scripts/book-freshness.mjs --interpreter node [--arg=VALUE ...] [--timeout-seconds 900]
+ezenciel-agents-schedule create actual-book-freshness-guard \
+  --script book-freshness [--arg=VALUE ...] --cron '15 * * * *' --timezone Asia/Dubai
+ezenciel-agents-schedule script list | show ID | update ID [...] | remove ID
+```
+
+The agent writes, tests and maintains the script; core owns registration,
+scheduling, authorization, process execution, cancellation and run receipts.
+A registration records the owner binding, a workspace-relative entry point, an
+installed interpreter (command name on the executor PATH or absolute path),
+literal arguments, a timeout and the entry point's SHA-256 under a new revision.
+It references the workspace file; core keeps no source copy. Paths outside the
+workspace (including symlink escapes) and shell command strings are rejected.
+Core invokes `interpreter entry registrationArgs... scheduleArgs...` directly,
+without a shell. Missing interpreters fail clearly; nothing is installed.
+
+When an occurrence is queued, the run captures the current registration
+revision and hash. Immediately before spawning, the executor requires that
+revision to be current and the entry-point bytes to match. Changed bytes fail
+the run until the agent explicitly runs `script update`. The hash identifies the
+entry-point file only; it does not certify imported modules or other files.
+
+Script runs use the existing scheduler, admission queue, scheduled concurrency
+limit, one-occurrence-per-schedule rule, run records, delivery binding, manual
+`trigger`, pause/resume/edit/remove and `cancel`. They run in the agent's
+isolated environment (relay or host transport) under its normal identity, with
+the executor environment allowlist plus `EZ_RUN_ID`, `EZ_SCHEDULE_ID`,
+`EZ_SCHEDULE_REVISION`, `EZ_DUE_AT`, `EZ_SCRIPT_ID`, `EZ_SCRIPT_REVISION` and
+`EZ_SCRIPT_SHA256`. Use the run/schedule/due identifiers to form a stable
+occurrence identity. External operations go through the bound plugin CLI; a
+script must not read private databases, call providers directly or acquire
+credentials. A script run can read schedule and script state but cannot change
+registrations or schedules.
+
+Each registration has a bounded timeout (default 900 seconds, maximum 21600)
+that does not affect agent runs. Timeout and `cancel` stop the process and its
+children. Failed, timed-out or interrupted script runs are not retried, do not
+fall back to an LLM and do not start a debugging agent. Inspect them with
+`runs`, `run RUN_ID`, `failures` and `evidence`: the run shows the script ID,
+revision and hash, queue/start/finish clocks, exit code, cancellation/timeout,
+failure reason and a 4 KiB redacted tail of stdout/stderr. Those records follow
+the normal relay-memory retention. Stdout is diagnostic only. Process success
+means the script exited 0; domain success still requires the owning plugin's
+validation, receipt and canonical readback, which the script performs and
+records. Notifications use `ezenciel-agents-message` under the normal policy;
+routine unchanged runs should stay quiet.
+
+Editing a schedule replaces it completely, so it may switch execution type.
+When replacing an agent schedule with a script, move any judgment the prompt
+performed to its owning workflow first; the script schedule does not carry it.
+
 ## Execution and authority
 
 Due occurrences enter the durable queue with stable IDs and literal task text.
