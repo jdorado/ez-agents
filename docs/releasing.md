@@ -17,6 +17,10 @@ separate release bot is not required.
 3. Build both Docker targets from a clean checkout:
    `docker build --target test -t ez-release-tests .` and
    `docker build --target runtime -t ez-release-runtime .`.
+   Docker CI pins the reviewed Codex baseline (`TASK_CODEX_VERSION`) with the
+   existing `CODEX_CLI_VERSION` build argument; update that pin when the native
+   audit advances. Baseline CI does not validate a newly published native version.
+   Managed installs and upgrades keep their existing native version selection.
    Main relay: `EZ_RELAY_IMAGE=ez-release-runtime node docker/smoke.mjs`.
    The WhatsApp Compose overlay has no separate relay image; verify its
    provider integration with the synthetic plugin smoke in `docs/plugins.md`.

@@ -55,6 +55,8 @@ jobs:
           npm pack --ignore-scripts --pack-destination "$release_dir"
           tar -xzf "$release_dir"/*.tgz -C "$release_dir"
           docker build --target test -t ezenciel-agents-tests "$release_dir/package"
-          docker build --target runtime -t ezenciel-agents:local "$release_dir/package"
+          # Runtime CI uses the reviewed native baseline, not a moving registry tag.
+          # Keep this in sync with TASK_CODEX_VERSION when native audit advances.
+          docker build --target runtime --build-arg CODEX_CLI_VERSION=0.160.1 -t ezenciel-agents:local "$release_dir/package"
       - run: node docker/smoke.mjs
       - run: node docker/status-smoke.mjs

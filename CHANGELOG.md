@@ -9,6 +9,7 @@
 - Expose bounded, sanitized owner run and delivery evidence through native controls.
 - Repair transient plugin admission and isolated broker readiness after atomic binding changes; include isolated executor utilities.
 - Keep Codex version discovery JSON separate from stderr notices.
+- Validate Docker CI against audited Codex 0.160.1 instead of a moving registry tag; managed native version selection is unchanged.
 - Read scoped TXT/PDF and JPEG/PNG/WebP attachments through the shared native MCP path. MP4 attachments supply bounded sampled frames to native vision; speech remains in the provider-sourced incoming transcript.
 
 - Add short-lived browser conversation links for explicitly granted restricted discussions, retaining each task’s context and tool permissions.
