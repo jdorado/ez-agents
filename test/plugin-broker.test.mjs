@@ -183,6 +183,37 @@ test('broker rejects resolve and invoke for a revoked run', async t => {
   }
 });
 
+test('scheduled preflight uses authoritative configuration and rejects writes or stale revisions', async t => {
+  const f = await fixture(t);
+  const { Scheduler } = await import('../src/scheduler.js');
+  const { createLedgerHandler, serveDeliverySocket } = await import('../src/delivery-socket.js');
+  const control = new ControlStore(f.controlDir, 1000);
+  const owner = (await control.status()).owner;
+  const scheduler = new Scheduler(f.controlDir);
+  const schedule = await scheduler.save({id:'check', name:'Check', text:'Saved worker', enabled:true, owner,
+    execution:{sessionId:randomUUID(),preset:{id:'test',name:'test',cli:'codex',model:'fixture-model'}},
+    trigger:{everySeconds:60,start:new Date().toISOString()},preflight:{on:'eligible',checks:[{alias:'sample',args:['queue']}]}});
+  const ledger = await serveDeliverySocket(f.controlDir, createLedgerHandler(f.controlDir,{wake:()=>{},status:()=>({polling:false,applicationOnly:true,telegramConfigured:false,version:'fixture'})}));
+  t.after(()=>ledger.stop());
+  await fs.writeFile(path.join(f.fake,'docker'), `#!${process.execPath}\nprocess.stdout.write(JSON.stringify({schemaVersion:1,eligible:true,count:1,fingerprint:'a'.repeat(64),observedAt:new Date().toISOString()}));\n`, {mode:0o700});
+  const previousPath=process.env.PATH;process.env.PATH=f.fake+path.delimiter+previousPath;
+  const binding=await loadPluginBrokerBinding({home:f.home,workspace:f.workspace,controlDir:f.controlDir,socket:f.socket,hostConfig:f.hostConfig,timeoutMs:10000});
+  const abort=new AbortController(),serving=servePluginBroker(binding,abort.signal);
+  try {
+    await waitForSocket(f.socket);
+    const payload={version:1,id:randomUUID(),operation:'preflight',scheduleId:schedule.id,revision:schedule.revision};
+    assert.equal((await request(f.socket,{...payload,args:['write']})).ok,false);
+    assert.equal((await request(f.socket,{...payload,revision:randomUUID()})).ok,false);
+    assert.equal((await request(f.socket,payload)).ok,false); // undeclared read-only command
+    const file=path.join(f.home,'registry.json'),registry=JSON.parse(await fs.readFile(file,'utf8'));
+    registry.plugins.sample.manifest.commands.sample.exposure={receivesExternalContent:true,changesRecords:false,sendsExternally:false,requiresReview:false};
+    await fs.writeFile(file,JSON.stringify(registry));
+    const accepted=await request(f.socket,payload);assert.equal(accepted.ok,true);assert.equal(accepted.result.eligible,true);
+    await scheduler.save({...schedule,enabled:false});
+    assert.equal((await request(f.socket,payload)).ok,false);
+  } finally {abort.abort();await serving;process.env.PATH=previousPath;}
+});
+
 test('task launch broker admits only its fixed application command and writes no bearer into receipts',async t=>{
   const {createServer}=await import('node:http');
   const {Tasks}=await import('../src/tasks.js');const {EventSources}=await import('../src/event-sources.js');

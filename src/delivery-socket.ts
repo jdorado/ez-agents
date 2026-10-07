@@ -1,3 +1,5 @@
+import { sameOwner } from './control-state.js'
+import { ApplicationBindings } from './application-channel.js'
 import { createServer, type Server, type Socket } from 'node:net'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { rename, rm, writeFile } from 'node:fs/promises'
@@ -30,6 +32,7 @@ export { deliverySocketPath }
 export type DeliverySocketOp =
   | { op: 'ping' }
   | { op: 'status' }
+  | { op: 'schedulePreflight'; payload?: Record<string, unknown> }
   | { op: 'triggerSchedule'; payload: { scheduleId: string; revision: string; key: string; callerRunId?: string } }
   | { op: 'enqueue'; payload: Record<string, unknown> }
   | { op: 'wait'; payload: { id: string; timeoutMs?: number } }
@@ -213,6 +216,17 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
           running: all.filter((run) => run.status === 'running').length,
           queued: all.filter((run) => run.status === 'queued').length,
         }
+      }
+      case 'schedulePreflight': {
+        const {scheduleId,revision}=op.payload ?? {}
+        if(!nonEmptyString(scheduleId) || !nonEmptyString(revision)) throw Error('Schedule preflight identity required')
+        const scheduler=new Scheduler(controlDir),s=await scheduler.get(scheduleId),owner=await readOnlyOwner(controlDir)
+        if(!owner || !sameOwner(owner,s.owner) || !s.enabled || s.revision!==revision || !s.preflight) throw Error('Schedule preflight binding unavailable')
+        if(s.delivery) {
+          const binding=(await new ApplicationBindings(controlDir).list()).find(b=>b.bindingId===s.delivery!.bindingId)
+          if(!binding || !sameOwner(owner,binding.owner)) throw Error('Schedule preflight delivery revoked')
+        }
+        return s.preflight
       }
       case 'triggerSchedule': {
         const {scheduleId,revision,key,callerRunId}=op.payload ?? {}
