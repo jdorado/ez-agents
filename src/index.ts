@@ -46,7 +46,7 @@ import { softwareStatus } from './software-status.js'
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
     let message = error instanceof Error ? error.message : typeof error === 'string' ? error : 'Unknown error'
-    for (const secret of [config.channelBackendToken, config.telegramBotToken, config.geminiApiKey, config.openaiApiKey]) {
+    for (const secret of [config.channelBackendToken, config.telegramBotToken, config.geminiApiKey, config.openaiApiKey, config.openrouterApiKey]) {
       if (secret) message = message.replaceAll(secret, '[redacted]')
     }
     return message
@@ -62,7 +62,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const scheduler = new Scheduler(config.controlDir)
   const background = new Map<string, ChildProcess>()
   const completions = new Set<Promise<void>>()
-  const tasks = new Tasks(config.controlDir)
+  const speechOptions = { geminiApiKey: config.geminiApiKey, openrouterApiKey: config.openrouterApiKey, speechProvider: config.speechProvider, speechModel: config.speechModel }
+  const speechConfigured = config.speechProvider === 'openrouter' ? Boolean(config.openrouterApiKey) : Boolean(config.geminiApiKey)
+  const tasks = new Tasks(config.controlDir, speechConfigured ? (text) => synthesizeSpeech(text, { ...speechOptions, voice: config.speechVoiceEn, signal: AbortSignal.timeout(20000) }) : undefined)
   const processTaskRequests = taskRequests(tasks)
   let taskWork: Promise<void> | undefined
   const drainTaskRequests = (): Promise<void> => {
@@ -105,8 +107,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const applicationChannel = new ApplicationChannel({
     controlDir: config.controlDir, workspace: config.workspace, isolation: config.isolation, initial: aiMenu.initial,
     aiControls: aiMenu,
-    speech: config.geminiApiKey ? (text, language) => synthesizeSpeech(text, {
-      geminiApiKey: config.geminiApiKey,
+    speech: speechConfigured ? (text, language) => synthesizeSpeech(text, {
+      ...speechOptions,
       voice: language === 'es' ? config.speechVoiceEs : config.speechVoiceEn,
       format: 'wav',
     }) : undefined,
@@ -608,8 +610,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           } else if (item.type === 'voice' && item.voiceText) {
             await bot!.api.sendChatAction(item.chatId, 'record_voice')
             const { buffer } = await synthesizeSpeech(item.voiceText, {
-              geminiApiKey: config.geminiApiKey,
-              openaiApiKey: config.openaiApiKey,
+              ...speechOptions,
               voice: config.speechVoiceEn,
             })
             await paceSend()

@@ -1,7 +1,8 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import {fileURLToPath} from 'node:url'
 import { executorEnvironment } from './executor.js'
 import type { TaskCapability } from './tasks.js'
 import {attachmentLimit,stageTaskAttachment,type TaskAttachment} from './task-attachments.js'
@@ -42,4 +43,19 @@ export async function runTaskCapability(toolsHome: string | undefined, capabilit
   if (Buffer.byteLength(stdout) > 131072) throw new Error('Channel capability output is too large')
   if (code !== 0 || !stdout.trim()) throw new Error(`Channel capability failed with exit ${code}`)
   return {output:stdout}
+}
+
+export async function launchTaskApplication(toolsHome: string | undefined, launch:{command:string;args:string[]}, input:unknown, runId:string):Promise<unknown> {
+  const isolated=!!process.env.EZ_PLUGIN_BROKER_SOCKET
+  if(!isolated && (!toolsHome || !path.isAbsolute(toolsHome)))throw Error('Installed tool registry required')
+  const config=!isolated ? JSON.parse(await readFile(path.join(toolsHome!,'config.json'),'utf8')) : undefined
+  // Fixed owner-configured command; literal private stdin, never a shell or model-selected args.
+  return new Promise((resolve,reject)=>{
+    const child=spawn(isolated ? process.execPath : path.join(toolsHome!,'bin','ez'),isolated ? [fileURLToPath(new URL('../bin/ez',import.meta.url)),'--task-application'] : [launch.command,...launch.args],{env:{...executorEnvironment(),EZ_RUN_ID:runId},...(config ? {cwd:config.workspace} : {}),stdio:['pipe','pipe','pipe']})
+    let output='';const timer=setTimeout(()=>{child.kill();reject(Error('Application launch timed out'))},30000)
+    child.stdout.on('data',chunk=>{output+=chunk;if(Buffer.byteLength(output)>16000){child.kill();reject(Error('Application launch output too large'))}})
+    child.stderr.resume();child.on('error',reject)
+    child.on('close',code=>{clearTimeout(timer);try{if(code!==0)throw Error('Application launch failed');const value=JSON.parse(output);const url=new URL(value.launch?.url);if(url.protocol!=='https:' || url.username || url.password || typeof value.launch?.expiresAt!=='number')throw Error('Invalid application launch receipt');resolve(value.launch)}catch(e){reject(e)}})
+    child.stdin.end(JSON.stringify(input))
+  })
 }

@@ -6,6 +6,10 @@ export type AudioOptions = {
   geminiApiKey?: string
   openaiApiKey?: string
   voice?: string
+  speechProvider?: 'gemini' | 'openrouter'
+  speechModel?: string
+  openrouterApiKey?: string
+  signal?: AbortSignal
 }
 
 export class SpeechCreditsDepletedError extends Error {
@@ -32,27 +36,12 @@ export const pcmToWav = (pcm: Buffer, sampleRate = 24000, channels = 1): Buffer 
   return Buffer.concat([header, pcm])
 }
 
-export const encodeOggOpus = (pcm: Buffer, sampleRate = 24000, channels = 1): Promise<Buffer> => {
+const convertSpeech = (audio: Buffer, input: 's16le' | 'mp3', format: 'wav' | 'ogg', sampleRate = 24000, channels = 1): Promise<Buffer> => {
   return new Promise((resolve, reject) => {
     const invocation = executorInvocation(
       'ffmpeg',
-      [
-        '-f',
-        's16le',
-        '-ar',
-        String(sampleRate),
-        '-ac',
-        String(channels),
-        '-i',
-        '-',
-        '-c:a',
-        'libopus',
-        '-b:a',
-        '32k',
-        '-f',
-        'ogg',
-        '-',
-      ],
+      [...(input === 's16le' ? ['-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels)] : ['-f', 'mp3']),
+        '-i', '-', ...(format === 'ogg' ? ['-c:a', 'libopus', '-b:a', '32k', '-f', 'ogg'] : ['-ar', '24000', '-ac', '1', '-f', 's16le']), '-'],
     )
     const child = spawn(invocation.command, invocation.args,
       { env: executorEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] })
@@ -60,7 +49,8 @@ export const encodeOggOpus = (pcm: Buffer, sampleRate = 24000, channels = 1): Pr
     const output: Buffer[] = []
     let error = ''
 
-    child.stdout.on('data', (chunk) => output.push(chunk))
+    let outputBytes = 0
+    child.stdout.on('data', (chunk) => { outputBytes += chunk.length; if(outputBytes > 16 * 1024 * 1024) { child.kill('SIGKILL'); reject(new Error('Encoded speech exceeds limit')) } else output.push(chunk) })
     child.stderr.on('data', (chunk) => {
       error = (error + chunk.toString()).slice(-2048)
     })
@@ -70,15 +60,17 @@ export const encodeOggOpus = (pcm: Buffer, sampleRate = 24000, channels = 1): Pr
 
     child.on('close', (code) => {
       if (code === 0 && output.length > 0) {
-        resolve(Buffer.concat(output))
+        resolve(format === 'wav' ? pcmToWav(Buffer.concat(output)) : Buffer.concat(output))
       } else {
         reject(new Error(`Voice encoding failed (${code}): ${error}`))
       }
     })
 
-    child.stdin.end(pcm)
+    child.stdin.end(audio)
   })
 }
+
+export const encodeOggOpus = (pcm: Buffer, sampleRate = 24000, channels = 1) => convertSpeech(pcm, 's16le', 'ogg', sampleRate, channels)
 
 export const transcribeAudio = async (
   audioBytes: Buffer,
@@ -146,6 +138,29 @@ export const synthesizeSpeech = async (
   const trimmed = text.trim()
   if (!trimmed) throw new Error('Cannot synthesize speech for empty text')
 
+  if ((options.speechProvider ?? process.env.EZ_SPEECH_PROVIDER) === 'openrouter') {
+    const key = (options.openrouterApiKey ?? process.env.OPENROUTER_API_KEY)?.trim()
+    if (!key) throw new Error('OpenRouter speech is not configured')
+    const response = await fetch('https://openrouter.ai/api/v1/audio/speech', {
+      method: 'POST', signal: options.signal ?? AbortSignal.timeout(60000),
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: options.speechModel ?? process.env.EZ_SPEECH_MODEL ?? 'fish-audio/s2.1-pro-free:free',
+        input: trimmed, response_format: 'mp3', ...(options.voice ? { voice: options.voice } : {}) })
+    })
+    if (!response.ok) { await response.body?.cancel(); throw new Error(`OpenRouter speech synthesis error ${response.status}`) }
+    const chunks: Buffer[] = []; let size = 0
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('OpenRouter returned no audio')
+    try {
+      for (;;) { const {done,value} = await reader.read(); if(done) break
+        size += value.length; if(size > 16 * 1024 * 1024) throw new Error('Speech audio exceeds limit')
+        chunks.push(Buffer.from(value)) }
+    } finally { await reader.cancel() }
+    if (!size) throw new Error('OpenRouter returned no audio')
+    const buffer = await convertSpeech(Buffer.concat(chunks), 'mp3', options.format ?? 'ogg')
+    return { buffer, mimeType: options.format === 'wav' ? 'audio/wav' : 'audio/ogg' }
+  }
+
   const geminiKey = (options.geminiApiKey ?? process.env.GEMINI_API_KEY)?.trim()
   if (geminiKey) {
     const url =
@@ -154,7 +169,7 @@ export const synthesizeSpeech = async (
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': geminiKey },
-      signal: AbortSignal.timeout(60_000),
+      signal: options.signal ?? AbortSignal.timeout(60_000),
       body: JSON.stringify({
         contents: [{ parts: [{ text: trimmed }] }],
         generationConfig: {

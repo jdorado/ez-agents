@@ -48,3 +48,47 @@ test('stages file into control attachments, never the workspace', async () => {
     await rm(tmp, { recursive: true, force: true })
   }
 })
+
+test('shared incoming document reader extracts PDF text and removes its staged file', async t => {
+  const {readChatAttachment}=await import('../src/files.js')
+  const {execFile}=await import('node:child_process'), {promisify}=await import('node:util')
+  try { await promisify(execFile)('pdftotext',['-v']) } catch { t.skip('Poppler is exercised in the Docker artifact test');return }
+  const dir=await mkdtemp('/tmp/ez-pdf-read-');t.after(()=>rm(dir,{recursive:true,force:true}))
+  const stream='BT /F1 12 Tf 20 80 Td (Shop opens at 7am.) Tj ET'
+  const objects=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>','<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`]
+  let pdf='%PDF-1.4\n';const offsets=[0]
+  for(const [i,value] of objects.entries()){offsets.push(Buffer.byteLength(pdf));pdf+=`${i+1} 0 obj\n${value}\nendobj\n`}
+  const xref=Buffer.byteLength(pdf);pdf+='xref\n0 6\n0000000000 65535 f \n'+offsets.slice(1).map(n=>String(n).padStart(10,'0')+' 00000 n \n').join('')+`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  const result=await readChatAttachment(dir,'shop.pdf',Buffer.from(pdf));assert.match(result.text ?? '',/Shop opens at 7am\./);assert.equal(result.type,'pdf')
+  const {readdir}=await import('node:fs/promises');assert.deepEqual(await readdir(path.join(dir,'attachments')),[])
+  await assert.rejects(readChatAttachment(dir,'invalid.pdf',Buffer.from('%PDF-invalid')))
+})
+
+test('shared image read returns original pixels with native MIME and no staged residue',async t=>{
+ const {readChatAttachment}=await import('../src/files.js'),{readdir}=await import('node:fs/promises')
+ const dir=await mkdtemp('/tmp/ez-image-read-');t.after(()=>rm(dir,{recursive:true,force:true}))
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64')
+ const result=await readChatAttachment(dir,'photo.png',png)
+ assert.equal(result.image?.mimeType,'image/png');assert.equal(result.image?.data,png.toString('base64'));assert.equal(result.text,undefined)
+ assert.deepEqual(await readdir(path.join(dir,'attachments')),[])
+ await assert.rejects(readChatAttachment(dir,'photo.png',Buffer.from('Spoofed image bytes')))
+})
+
+test('video read uses bounded native frames and removes temporary decoder files',async t=>{
+ const {readChatAttachment}=await import('../src/files.js'),{readdir}=await import('node:fs/promises'),{execFile}=await import('node:child_process'),{promisify}=await import('node:util')
+ const execute=promisify(execFile)
+ try {await execute('ffmpeg',['-version'])}catch{t.skip('FFmpeg is exercised in the Docker artifact test');return}
+ const dir=await mkdtemp('/tmp/ez-video-read-');t.after(()=>rm(dir,{recursive:true,force:true}))
+ const video=path.join(dir,'fixture.mp4')
+ await execute('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=64x64:r=8','-f','lavfi','-i','sine=frequency=1000:sample_rate=24000','-t','1','-c:v','mpeg4','-c:a','aac',video])
+ const result=await readChatAttachment(dir,'video.mp4',await readFile(video))
+ assert.equal(result.type,'mp4');assert.ok((result.images?.length??0)>0);assert.ok((result.images?.length??0)<=8)
+ assert.ok(result.images?.every(image=>image.mimeType==='image/jpeg'));assert.ok(result.durationSeconds!<=120)
+ assert.deepEqual(await readdir(path.join(dir,'attachments')),[]);assert.ok(!(await readdir(dir)).some(name=>name.startsWith('video-')))
+})
+
+test('HEIF stills and audio-only M4A are not treated as MP4 video', () => {
+  const box = (brand: string) => Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from(`ftyp${brand}`), Buffer.alloc(12)])
+  for (const brand of ['heic', 'avif', 'mif1', 'M4A ']) assert.equal(detectFileType(box(brand)), 'unknown')
+  for (const brand of ['isom', 'mp42']) assert.equal(detectFileType(box(brand)), 'mp4')
+})

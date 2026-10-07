@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import {callDeliverySocket} from './delivery-socket-client.mjs';
 import path from 'node:path';
 import { createServer } from 'node:net';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
@@ -223,6 +224,14 @@ const managerCommand = async (binding, args, signal, runId) => new Promise((reso
   });
 });
 
+const authorizeTaskLaunch=async(binding,request)=>{
+  const input=JSON.parse(request.stdin)
+  if(Object.keys(input).some(k=>!['taskId','taskToken','expiresAt'].includes(k)) || typeof input.taskToken!=='string' || !/^[a-f0-9]{64}$/.test(input.taskToken))throw Error('Invalid task launch input')
+  const ticketHash=createHash('sha256').update(input.taskToken).digest('hex')
+  const grant=await callDeliverySocket(deliverySocketPath(binding.controlDir),{op:'taskApplication',payload:{runId:request.runId,ticketHash}})
+  if(input.taskId!==grant.taskId || input.expiresAt!==grant.expiresAt)throw Error('Task launch authority mismatch')
+  return grant.launch
+}
 const invokePlugin = async (binding, request, signal) => {
   const startedAt = new Date().toISOString();
   let plugin = request.alias;
@@ -230,7 +239,10 @@ const invokePlugin = async (binding, request, signal) => {
   let result;
   let failure;
   try {
-    await authorize(binding, request.runId);
+    if(request.operation==='task-launch') {
+      const launch=await authorizeTaskLaunch(binding,request)
+      if(launch.command!==request.alias || JSON.stringify(launch.args)!==JSON.stringify(request.args))throw Error('Task launch command changed')
+    }else await authorize(binding, request.runId);
     const current = await registry(binding.home);
     const selected = recordForAlias(current, request.alias);
     plugin = selected.plugin;
@@ -282,8 +294,12 @@ const invokePlugin = async (binding, request, signal) => {
 
 export async function validateBrokerRequest(request, workspace) {
   if (!request || typeof request !== 'object' || request.version !== 1 || !REQUEST_ID.test(request.id)) throw Error('Invalid plugin broker request');
-  if (!['resolve', 'invoke', 'manager'].includes(request.operation)) throw Error('Unknown plugin broker operation');
+  if (!['resolve', 'invoke', 'manager','task-launch'].includes(request.operation)) throw Error('Unknown plugin broker operation');
   validId(request.runId, RUN_ID, 'plugin run ID');
+  if(request.operation==='task-launch') {
+    if(Object.keys(request).some(k=>!['version','id','operation','runId','stdin'].includes(k)))throw Error('Unexpected task launch field')
+    boundedString(request.stdin,1024,'task launch stdin');return request
+  }
   if (request.operation === 'manager') {
     await validateManagerArgs(request.args, workspace);
     if (Object.keys(request).some(key => !['version', 'id', 'operation', 'runId', 'args'].includes(key))) throw Error('Unexpected broker management field');
@@ -337,6 +353,12 @@ export async function servePluginBroker(binding, signal = new AbortController().
             setTimeout(() => admissions.delete(capability), ADMISSION_TTL_MS).unref();
             response(socket, { version: 1, id: request.id, ok: true, plugin: selected.plugin, alias: request.alias, revision: selected.record.revision, capability });
             return;
+          }
+          if(request.operation==='task-launch') {
+            const launch=await authorizeTaskLaunch(binding,request)
+            const selected=recordForAlias(await registry(binding.home),launch.command)
+            const result=await invokePlugin(binding,{...request,alias:launch.command,args:launch.args,revision:selected.record.revision},abort.signal)
+            response(socket,{version:1,id:request.id,...result});return
           }
           if (request.operation === 'manager') {
             await authorize(binding, request.runId);
