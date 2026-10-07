@@ -15,16 +15,17 @@ import { requireOwnerExecution } from '../src/execution-authority.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
-async function fixture(t: test.TestContext, channelOwner = false) {
+async function fixture(t: test.TestContext, channelOwner = false, speech?: (text:string) => Promise<{buffer:Buffer;mimeType:string}>) {
   const dir = await mkdtemp('/tmp/ez-task-test-'), socket = join(dir, 's.sock')
   let accountId = 'account-a', events: SourceEvent[] = [], uncertain = false
   const sends: any[] = [], watches: any[] = []
   const server = createServer(async (req, res) => {
     let text = ''; for await (const chunk of req) text += chunk
     const { command, args } = JSON.parse(text)
-    const data = command === 'events-head' ? { cursor: 0, accountId, taskProtocol: 'message-v1', persistentWatch: true, wildcardWatch: true }
+    const data = command === 'events-head' ? { cursor: 0, accountId, taskProtocol: 'message-v1', persistentWatch: true, wildcardWatch: true, taskVoice: true }
       : command === 'task-watch' ? (watches.push(args), { watching: args.conversationId })
       : command === 'events-check' ? { events: events.filter(e => args.ids.includes(e.id)) }
+      : command === 'task-document' ? {name:'shop.txt',data:Buffer.from('Shop opens at 7am.').toString('base64'),sha256:createHash('sha256').update('Shop opens at 7am.').digest('hex')}
       : command === 'task-send' ? (sends.push(args), { ...args, state: uncertain ? 'uncertain' : 'accepted', receiptId: 'provider-1' }) : {}
     res.end(JSON.stringify({ ok: true, data }))
   })
@@ -35,7 +36,7 @@ async function fixture(t: test.TestContext, channelOwner = false) {
     await runs.create({ id: 'owner', ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner), texts: ['Own this conversation'] })
     await runs.patch('owner', { status: 'running' })
   } else await ownerRun(dir, 'owner')
-  const control = new ControlStore(dir, 900000), sources = new EventSources(dir), runs = new RunStore(dir), tasks = new Tasks(dir)
+  const control = new ControlStore(dir, 900000), sources = new EventSources(dir), runs = new RunStore(dir), tasks = new Tasks(dir,speech)
   await sources.register('generic', socket, (await control.status()).owner!)
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); await rm(dir, { recursive: true, force: true }) })
   async function proposal() {
@@ -247,7 +248,7 @@ test('approved initial task crosses the real host file client and uses a fresh r
   const { isHostRunId } = await import('../src/host-executor-protocol.js')
   const f = await fixture(t), { run } = await f.activate()
   assert.ok(isHostRunId(run.id))
-  await writeFile(join(f.dir, 'codex'), `#!${process.execPath}\nif(process.argv[2]==='--version')console.log('codex-cli 0.160.0');else if(process.argv[2]==='debug')console.log(JSON.stringify({models:[{slug:'fixture',tool_mode:'code_mode_only',apply_patch_tool_type:'freeform',multi_agent_version:'v2'}]}));else console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),control:process.env.EZ_CONTROL_DIR}));`, { mode: 0o700 })
+  await writeFile(join(f.dir, 'codex'), `#!${process.execPath}\nif(process.argv[2]==='--version')console.log('codex-cli 0.160.1');else if(process.argv[2]==='debug')console.log(JSON.stringify({models:[{slug:'fixture',tool_mode:'code_mode_only',apply_patch_tool_type:'freeform',multi_agent_version:'v2'}]}));else console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),control:process.env.EZ_CONTROL_DIR}));`, { mode: 0o700 })
   const priorPath = process.env.PATH
   process.env.PATH = `${f.dir}:${priorPath}`
   const abort = new AbortController(), host = serveHostExecutor({ cli: 'codex', agents: [{ name: 'test', workspace: f.dir, controlDir: f.dir, binDir: f.dir }] }, abort.signal)
@@ -340,4 +341,57 @@ test('public grants enforce persisted hourly and cumulative admission budgets',a
   task.publicBudget.runs=0;task.publicBudget.totalRuns=1000;await writeFile(file,JSON.stringify(task))
   assert.equal(await f.tasks.admitPublic(proposal.id),'revoked')
   assert.equal((await f.tasks.get(proposal.id))?.state,'revoked')
+})
+
+
+test('voice reuses task send authority and receipt keys, rechecks the account after synthesis, and never falls back to text', async t => {
+  let generated = 0, changed = false
+  let changeAccount: (value:string) => void
+  const f = await fixture(t,false,async text => {
+    generated++; assert.equal(text, 'Spoken fixture')
+    if(changed)changeAccount('replaced')
+    return {buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'}
+  })
+  changeAccount = f.account
+  const {run} = await f.activate()
+  const sent = await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'spoken',voice:true})
+  assert.ok('state' in sent);assert.equal(sent.state,'accepted');assert.equal(generated,1);assert.equal(f.sends.length,1)
+  assert.equal(Buffer.from(f.sends[0].audio.data,'base64').toString(),'OggSfixture OpusHead')
+  await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'spoken',voice:true})
+  assert.equal(generated,1);assert.equal(f.sends.length,1)
+  await assert.rejects(f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'spoken'}), /different text/)
+  changed=true
+  assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'changed',voice:true}) as {state:string}).state,'uncertain')
+  assert.equal(f.sends.length,1)
+})
+
+test('voice generation failure is a definite non-send: no text, no stored operation, same key retryable', async t => {
+  let generated=0
+  const f=await fixture(t,false,async () => { if(++generated===1)throw new Error('provider failed'); return {buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'} })
+  const {run, taskId}=await f.activate()
+  await assert.rejects(f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true}),/provider failed/)
+  assert.equal(f.sends.length,0);assert.equal(Object.hasOwn((await f.tasks.get(taskId))!.operations,'failed'),false)
+  assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true}) as {state:string}).state,'accepted')
+  assert.equal(generated,2);assert.equal(f.sends.length,1)
+})
+
+
+test('a cancelled worker cannot dispatch a voice generated after stop', async t => {
+  let stop: () => Promise<unknown>
+  const f=await fixture(t,false,async () => { await stop(); return {buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'} })
+  const {run}=await f.activate();stop=()=>f.runs.patch(run.id,{status:'cancelled'})
+  assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'stopped',voice:true}) as {state:string}).state,'uncertain')
+  assert.equal(f.sends.length,0)
+})
+
+test('incoming documents use shared staging and never expose another event or owner path', async t => {
+ const f=await fixture(t), {taskId}=await f.activate(), task=(await f.tasks.get(taskId))!
+ const row={id:'1',conversationId:'contact-a',receivedAt:Date.now(),text:'Document attached'};f.rows([row])
+ const run=await f.runs.create({id:'event_document',taskId,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'generic',bindingId:task.bindingId,eventIds:['1']}})
+ await f.runs.patch(run.id,{status:'running'})
+ const document:any=await f.tasks.workerCall(run.id,'read_attachment',{incomingId:'1'})
+ assert.equal(document.text,'Shop opens at 7am.');assert.equal(document.name,'shop.txt');assert.equal(document.type,'text')
+ await assert.rejects(f.tasks.workerCall(run.id,'read_attachment',{incomingId:'2'}),/outside/)
+ await assert.rejects(f.tasks.workerCall(run.id,'read_attachment',{incomingId:'/etc/passwd'}),/outside/)
+ f.rows([{...row,conversationId:'contact-b'}]);await assert.rejects(f.tasks.workerCall(run.id,'read_attachment',{incomingId:'1'}),/correspondence/)
 })

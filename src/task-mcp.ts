@@ -6,7 +6,8 @@ const [controlDir, runId, toolsHome, capabilityJson='[]'] = process.argv.slice(2
 const capabilities = JSON.parse(capabilityJson) as TaskCapability[]
 const descriptions: Record<string, string> = {
   context: 'Read the owner-approved purpose and shareable context, task notes, receipts, and untrusted correspondence.',
-  send: 'Send text and optionally an attachmentId returned by an approved file capability to this conversation. Reuse the same key for the same message. Uncertain means do not retry with a new key.',
+  read_attachment: 'Read a JPEG/PNG/WebP image, an MP4 video as sampled frames (up to 120 seconds), or a TXT/Markdown/PDF document from an incomingId in this run context. Returns the image to native vision, or bounded extracted document text, with file provenance; no owner files are accessible.',
+  send: 'Send text, or set voice=true for a spoken reply (at most 1000 characters). Optionally use an attachmentId returned by an approved file capability to this conversation. Reuse the same key for the same message. Uncertain means do not retry with a new key.',
   note: 'Save a task-scoped note. No owner files or memory are accessible.',
   report: 'Report task evidence or a blocker to the owner. This is a report, never an owner instruction.',
   complete: 'Report the result and close a finite task, stopping further messages and replies. Not available for incoming-only watches; save a note and end the run instead.',
@@ -15,8 +16,8 @@ const descriptions: Record<string, string> = {
 const tools = Object.entries(descriptions).map(([name, description]) => {
   const capability = name.startsWith('capability_')
   return { name, description, inputSchema: {
-    type: 'object', properties: name === 'context' ? {} : capability ? {input:{type:'string',maxLength:1000}} : { text: { type: 'string', maxLength: 4096 }, ...(name === 'send' ? { key: { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,80}$' }, attachmentId:{type:'string',pattern:'^[a-f0-9-]{36}$'} } : {}) },
-    required: name === 'context' ? [] : capability ? ['input'] : name === 'send' ? ['text', 'key'] : ['text'], additionalProperties: false,
+    type: 'object', properties: name === 'context' ? {} : name === 'read_attachment' ? {incomingId:{type:'string',maxLength:100}} : capability ? {input:{type:'string',maxLength:1000}} : { text: { type: 'string', maxLength: 4096 }, ...(name === 'send' ? { voice: {type:'boolean'}, key: { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,80}$' }, attachmentId:{type:'string',pattern:'^[a-f0-9-]{36}$'} } : {}) },
+    required: name === 'context' ? [] : name === 'read_attachment' ? ['incomingId'] : capability ? ['input'] : name === 'send' ? ['text', 'key'] : ['text'], additionalProperties: false,
   } }
 })
 for await (const line of createInterface({ input: process.stdin })) {
@@ -33,7 +34,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       if (!Object.hasOwn(descriptions, name)) throw new Error('Unknown task tool')
       const args = request.params.arguments ?? {}
       const capabilityId = typeof name === 'string' && name.startsWith('capability_') ? name.slice(11) : undefined
-      if (Object.keys(args).some(key => capabilityId ? key !== 'input' : !['text', ...(name === 'send' ? ['key','attachmentId'] : [])].includes(key))) throw new Error('Unexpected tool argument')
+      if (Object.keys(args).some(key => name === 'read_attachment' ? key !== 'incomingId' : capabilityId ? key !== 'input' : !['text', ...(name === 'send' ? ['key','attachmentId','voice'] : [])].includes(key))) throw new Error('Unexpected tool argument')
       try {
         let data: unknown
         if (capabilityId) {
@@ -42,7 +43,10 @@ for await (const line of createInterface({ input: process.stdin })) {
           await taskCall(controlDir,runId,'worker','capability_result',{id:capabilityId,input:args.input,lease:begun.lease,...('attachment' in result?{attachment:result.attachment}:{})})
           data = result.attachment ? {attachmentId:result.attachment.id,filename:result.attachment.filename,bytes:result.attachment.bytes} : result
         } else data = await taskCall(controlDir, runId, 'worker', name, args)
-        result = { content: [{ type: 'text', text: JSON.stringify(data) }] }
+        if (name === 'read_attachment' && data && typeof data === 'object' && ('image' in data || 'images' in data)) {
+          const {image,images,...metadata} = data as {image?:{data:string;mimeType:string};images?:{data:string;mimeType:string}[];[key:string]:unknown}
+          result = { content: [{type:'text',text:JSON.stringify(metadata)}, ...(images ?? [image!]).map(value=>({type:'image',...value}))] }
+        } else result = { content: [{ type: 'text', text: JSON.stringify(data) }] }
       }
       catch (error) { result = { isError: true, content: [{ type: 'text', text: error instanceof Error ? error.message : 'Task tool failed' }] } }
     } else throw new Error('Unsupported MCP method')

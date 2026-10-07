@@ -1,5 +1,16 @@
 # Changelog
 
+- Private QA: MP4 attachments supply bounded sampled frames to native vision; speech remains in the provider-sourced incoming transcript.
+- Private QA: scoped JPEG/PNG/WebP reads return native MCP image content through the existing shared attachment path.
+
+- Private QA: restricted incoming TXT/PDF reading through shared Telegram attachment staging; bounded source-only MCP tool, no owner filesystem access.
+
+## Unreleased
+
+- Audit restricted native tools on Codex 0.160.1 and retain the exact version gate.
+- Extend the existing speech renderer with OpenRouter TTS and Ogg Opus/WAV encoding.
+- Allow authorized task replies to use core-rendered voice on supporting channels, with post-synthesis authorization and unchanged uncertain-send protection.
+
 ## 0.1.0-beta.47
 
 - Trigger an existing scheduled task manually with its saved instructions, model,

@@ -20,7 +20,7 @@ try { privateEnv = parseEnv(readFileSync(3, 'utf8')) } catch (error) {
   if ((error as NodeJS.ErrnoException).code !== 'EINVAL' && (error as NodeJS.ErrnoException).code !== 'EBADF') throw error
 } finally { try { closeSync(3) } catch {} }
 for (const [key, value] of Object.entries(privateEnv)) {
-  if (value !== undefined && ['TELEGRAM_BOT_TOKEN', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'EZ_CHANNEL_BACKEND_TOKEN', 'EZ_SCHEDULED_CONCURRENCY'].includes(key)) process.env[key] = value
+  if (value !== undefined && ['TELEGRAM_BOT_TOKEN', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'EZ_SPEECH_PROVIDER', 'EZ_SPEECH_MODEL', 'EZ_SPEECH_VOICE_EN', 'EZ_SPEECH_VOICE_ES', 'EZ_CHANNEL_BACKEND_TOKEN', 'EZ_SCHEDULED_CONCURRENCY'].includes(key)) process.env[key] = value
 }
 privateEnv = {}
 const [command = 'start', ...args] = process.argv.slice(2)

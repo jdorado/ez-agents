@@ -20,7 +20,7 @@ unfinished run returns 409, missing speech configuration 503, and provider
 failure 502. Depleted Gemini credits return 503 with
 `code: speech_credits_depleted`. Audio responses have `Cache-Control: no-store`.
 
-Configure `GEMINI_API_KEY` on the relay. The existing speech renderer uses
+Configure `GEMINI_API_KEY` on the relay. Alternatively select `EZ_SPEECH_PROVIDER=openrouter`, supply `OPENROUTER_API_KEY` privately on the relay, and set `EZ_SPEECH_MODEL` (default `fish-audio/s2.1-pro-free:free`). The same renderer converts provider MP3 to the channel’s WAV or Ogg Opus format; provider failures do not select another provider. The existing speech renderer uses
 `gemini-3.8-flash-lite-tts`; Telegram still receives Ogg Opus. Applications should
 send `{"language":"en"}` or `{"language":"es"}` to select
 `EZ_SPEECH_VOICE_EN` or `EZ_SPEECH_VOICE_ES` (both default to Kore). Telegram

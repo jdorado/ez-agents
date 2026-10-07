@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { taskArguments, taskModelCatalog, TASK_CODEX_VERSION } from '../src/task-executor.js'
 import { Tasks } from '../src/tasks.js'
@@ -18,27 +19,37 @@ import { taskRequests } from '../src/task-rpc.js'
 // Unknown fixture model names miss model-driven tool overrides.
 // Run explicitly with EZ_TEST_NATIVE_TASKS=1 after installing the audited CLI.
 test('native restricted task has only bounded MCP tools, ignores private guidance, and executes broker calls', { skip: !process.env.EZ_TEST_NATIVE_TASKS, timeout: 30000 }, async () => {
+  assert.equal((await promisify(execFile)('codex',['--version'])).stdout.trim(), `codex-cli ${TASK_CODEX_VERSION}`)
   const root = await mkdtemp('/tmp/ez-native-task-'), directory = `${root}/task`, home = `${root}/home`
   await mkdir(directory); await mkdir(home)
   await writeFile(`${root}/AGENTS.md`, 'PRIVATE_CANARY_DO_NOT_LOAD')
   await writeFile(`${home}/config.toml`, 'invalid = [ syntax')
   const requests: any[] = [], sends: any[] = []
+  const incoming={id:'1',conversationId:'contact-a',receivedAt:Date.now()+1000,text:'shop.txt attached'}
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64')
+  const videoPath = `${root}/fixture.mp4`
+  await promisify(execFile)('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=64x64:d=1','-c:v','mpeg4',videoPath])
+  const video=await readFile(videoPath)
   const provider = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk
     const { command, args } = JSON.parse(body)
-    res.end(JSON.stringify({ ok: true, data: command === 'events-head' ? { cursor: 0, accountId: 'fixture-account', taskProtocol: 'message-v1' }
+    res.end(JSON.stringify({ ok: true, data: command === 'events-head' ? { cursor: 0, accountId: 'fixture-account', taskProtocol: 'message-v1',taskVoice:true }
+      : command === 'events-check' ? {events:[incoming,{...incoming,id:'2',text:'image.png attached'},{...incoming,id:'3',text:'video.mp4 attached; speech transcript: Shop closes at 6pm.'}]}
+      : command === 'task-document' && args.incomingId === '3' ? {name:'video.mp4',data:video.toString('base64'),sha256:createHash('sha256').update(video).digest('hex')}
+      : command === 'task-document' && args.incomingId === '2' ? {name:'image.png',data:png.toString('base64'),sha256:createHash('sha256').update(png).digest('hex')}
+      : command === 'task-document' ? {name:'shop.txt',data:Buffer.from('Shop opens at 7am.').toString('base64'),sha256:createHash('sha256').update('Shop opens at 7am.').digest('hex')}
       : command === 'task-send' ? (sends.push(args), { ...args, state: 'accepted' }) : {} }))
   })
   await new Promise<void>(r => provider.listen(`${root}/p.sock`, r))
   await ownerRun(root, 'owner')
   await new EventSources(root).register('fixture', `${root}/p.sock`, (await new ControlStore(root, 900000).status()).owner!)
-  const tasks = new Tasks(root), drain = taskRequests(tasks)
+  const tasks = new Tasks(root,async () => ({buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'})), drain = taskRequests(tasks)
   const proposal: any = await tasks.ownerCall('owner', 'start', { sourceId: 'fixture', conversationId: 'contact-a', purpose: 'Book dinner without payment', context: 'Two people at 7pm', hours: 1 })
   assert.equal(proposal.state, 'active')
-  const runs = new RunStore(root), run = (await runs.list()).find(r => r.taskId)!
+  const runs = new RunStore(root), run = await runs.create({id:'event_document_fixture',taskId:proposal.id,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'fixture',bindingId:(await tasks.get(proposal.id))!.bindingId,eventIds:['1','2','3']}})
   await runs.patch(run.id, { status: 'running' })
   const sequence = [
-    ['context', {}], ['send', { text: 'Is a table for two available at 7pm?', key: 'first' }],
+    ['context', {}], ['read_attachment',{incomingId:'1'}], ['read_attachment',{incomingId:'2'}], ['read_attachment',{incomingId:'3'}], ['send', { text: 'Is a table for two available at 7pm?', key: 'first', voice:true }],
     ['note', { text: 'Awaiting confirmation' }], ['complete', { text: 'Request sent; no booking confirmation received.' }],
     ['send', { text: 'A completed task cannot send', key: 'second' }],
   ]
@@ -71,7 +82,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     let stderr = ''; child.stderr!.on('data', c => { stderr += c }); child.stdout!.resume()
     const code = await new Promise(r => child!.on('close', r))
     assert.equal(code, 0, `Requires audited Codex ${TASK_CODEX_VERSION}: ${stderr}`)
-    assert.ok(requests.length === 6, 'Native tool call completed a second model turn')
+    assert.ok(requests.length === 9, 'Native tool call completed a second model turn')
     assert.ok(!JSON.stringify(requests).includes('PRIVATE_CANARY_DO_NOT_LOAD'))
     const messages=requests[0].input.filter((v:any)=>v.role==='user')
     assert.ok(messages.some((m:any)=>m.content.some((c:any)=>c.text===JSON.stringify({event:'task_activated',taskId:proposal.id}))))
@@ -79,9 +90,15 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     assert.deepEqual(tools.filter((t: any) => t.type === 'function').map((t: any) => t.name).sort(), ['list_mcp_resource_templates', 'list_mcp_resources', 'read_mcp_resource', 'request_user_input'])
     const namespaces = tools.filter((t: any) => t.type === 'namespace')
     assert.equal(namespaces.length, 1); assert.equal(namespaces[0].name, 'mcp__ez')
-    assert.deepEqual(namespaces[0].tools.map((t: any) => t.name).sort(), ['complete', 'context', 'note', 'report', 'send'])
-    assert.match(JSON.stringify(requests[5].input), /inactive or expired/)
-    assert.equal(sends.length, 1); assert.equal(sends[0].conversationId, 'contact-a')
+    assert.deepEqual(namespaces[0].tools.map((t: any) => t.name).sort(), ['complete', 'context', 'note', 'read_attachment', 'report', 'send'])
+    assert.match(JSON.stringify(requests.at(-1).input), /inactive or expired/)
+    assert.ok(JSON.stringify(requests).includes('Shop opens at 7am.'))
+    assert.ok(JSON.stringify(requests).includes('data:image/'), 'Native CLI forwards MCP images into vision input: '+JSON.stringify(requests.map(request=>request.input)))
+    assert.ok(JSON.stringify(requests).includes('durationSeconds'), 'Native input includes video frame metadata')
+    assert.ok(JSON.stringify(requests).includes('Shop closes at 6pm.'))
+    const videoTurn=requests[4].input
+    assert.ok(JSON.stringify(videoTurn).includes('data:image/'), 'Native CLI receives sampled video frames as vision input')
+    assert.equal(sends.length, 1);assert.equal(Buffer.from(sends[0].audio.data,'base64').toString(),'OggSfixture OpusHead'); assert.equal(sends[0].conversationId, 'contact-a')
     assert.equal((await tasks.get(proposal.id))!.state, 'completed')
   } finally {
     child?.kill(); clearInterval(timer); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r()))

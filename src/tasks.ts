@@ -7,6 +7,7 @@ import { EventSources, sourceCall, type SourceEvent } from './event-sources.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { requireOwnerExecution } from './execution-authority.js'
 import { ownsRun } from './identity.js'
+import {MAX_INCOMING_ATTACHMENT_BYTES,readChatAttachment} from './files.js'
 import {readTaskAttachment,type TaskAttachment} from './task-attachments.js'
 
 export type TaskCapability = { id: string; description: string; command: string; args: string[]; output?:'file' }
@@ -23,7 +24,7 @@ export type Task = {
   purpose: string; context: string; createdAt: number; expiresAt: number
   state: 'pending' | 'active' | 'revoked' | 'completed'
   grant?: string; initialRunDispatched?: true
-  notes: string[]; operations: Record<string, { text: string; attachmentId?:string; state: 'uncertain' | 'accepted'; receipt?: unknown }>
+  notes: string[]; operations: Record<string, { text: string; attachmentId?:string; voice?:true; state: 'uncertain' | 'accepted'; receipt?: unknown }>
   capabilityOperations?: Record<string, { capabilityId: string; inputHash: string; lease: string; attachment?:TaskAttachment; state: 'authorized' | 'completed' }>
   publicBudget?: PublicBudget
 }
@@ -45,7 +46,7 @@ export async function atomicTaskFile(file: string, value: unknown) {
 }
 export class Tasks {
   private work: Promise<unknown> = Promise.resolve()
-  constructor(readonly controlDir: string) {}
+  constructor(readonly controlDir: string, private speech?: (text:string) => Promise<{buffer:Buffer;mimeType:string}>) {}
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.work.then(fn, fn); this.work = next.catch(() => {}); return next
   }
@@ -267,6 +268,21 @@ export class Tasks {
         expiresAt: task.untilRevoked ? null : task.expiresAt, notes: task.notes, operations: task.untilRevoked ? Object.fromEntries(Object.entries(task.operations).filter(([key])=>key.startsWith(`${run.id}_`))) : task.operations,
         incoming }
       }
+      if (command === 'read_attachment') {
+        if (!run.external || typeof args.incomingId !== 'string' || !run.external.eventIds.includes(args.incomingId) || !incoming.some(event => event.id === args.incomingId)) throw Error('Document is outside this incoming task run')
+        const source = (await new EventSources(this.controlDir).available(task.owner)).find(item => item.id === task.sourceId && item.bindingId === task.bindingId)
+        if (!source) throw Error('Task source changed')
+        const maximum = Math.ceil(MAX_INCOMING_ATTACHMENT_BYTES / 3) * 4
+        const file = await sourceCall(source.socketPath, 'task-document', {accountId:task.accountId,conversationId:contact,incomingId:args.incomingId}, maximum + 1000)
+        if (!file || typeof file.name !== 'string' || file.name.length > 255 || typeof file.data !== 'string' || file.data.length > maximum || !/^[a-f0-9]{64}$/.test(file.sha256)) throw Error('Invalid incoming document')
+        const bytes = Buffer.from(file.data,'base64')
+        if (bytes.toString('base64') !== file.data || createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw Error('Incoming document changed')
+        const result = await readChatAttachment(this.controlDir,file.name,bytes)
+        const current = await new RunStore(this.controlDir).get(runId)
+        if (!current || current.status !== 'running') throw Error('Task run cancelled')
+        await this.authorize(current)
+        return {incomingId:args.incomingId,sha256:file.sha256,...result}
+      }
       if (command === 'capability_begin' || command === 'capability_result') {
         const selected = task.capabilities?.find(item => item.id === args.id)
         if (!selected || !bounded(args.input, 1000)) throw new Error('Channel capability is not authorized or has invalid input')
@@ -306,6 +322,8 @@ export class Tasks {
         return { queued: item.id }
       }
       if (command !== 'send' || typeof args.key !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(args.key)) throw new Error('Invalid task send')
+      if (args.voice !== undefined && typeof args.voice !== 'boolean') throw new Error('Invalid voice flag')
+      if (args.voice && (args.attachmentId !== undefined || args.text.length > 1000)) throw new Error('Voice replies require at most 1000 characters and no attachment')
       let attachment:TaskAttachment|undefined
       if(args.attachmentId!==undefined) {
         const operation=Object.entries(task.capabilityOperations??{}).find(([key,value])=>key.startsWith(`${run.id}_`)&&value.lease===args.attachmentId&&value.state==='completed')?.[1]
@@ -316,10 +334,15 @@ export class Tasks {
       const providerKey = `${task.id}_${task.untilRevoked ? createHash('sha256').update(key).digest('hex') : key}`
       const prior = Object.hasOwn(task.operations, key) ? task.operations[key] : undefined
       if (prior) {
-        if (prior.text !== args.text || prior.attachmentId!==args.attachmentId) throw new Error('Message key already used for different text or attachment')
+        if (prior.text !== args.text || prior.attachmentId!==args.attachmentId || Boolean(prior.voice)!==Boolean(args.voice)) throw new Error('Message key already used for different text or attachment')
         return prior // Uncertain sends are never blindly retried.
       }
       const source = await this.source(task)
+      if(args.voice) {
+        const head=await sourceCall(source.socketPath,'events-head')
+        if(head.taskVoice!==true)throw Error('This channel does not support voice replies')
+        if(!this.speech)throw Error('Speech synthesis is not configured')
+      }
       if(attachment) {
         const head=await sourceCall(source.socketPath,'events-head')
         if(head.taskAttachments!==true)throw Error('This channel does not support task attachments')
@@ -334,14 +357,22 @@ export class Tasks {
         task.operations=Object.fromEntries(Object.entries(task.operations).filter(([item,value])=>active.some(prefix=>item.startsWith(prefix))||value.state==='uncertain'))
       }
       if (Object.keys(task.operations).filter(k=>!task.untilRevoked || k.startsWith(`${run.id}_`)).length >= 30) throw new Error('Task message limit reached; report to the owner')
-      const message={text:args.text,...(attachment?{attachmentId:attachment.id}:{})}
+      const message={text:args.text,...(args.voice?{voice:true as const}:{}),...(attachment?{attachmentId:attachment.id}:{})}
+      // Synthesis happens before the provider is contacted, so its failure is a
+      // definite non-send the engine may correct, not an uncertain operation.
+      const audio = args.voice ? await this.speech!(args.text) : undefined
+      if(audio && (audio.mimeType!=='audio/ogg' || audio.buffer.length>256000 || audio.buffer.subarray(0,4).toString()!=='OggS'))throw Error('Voice audio exceeds channel limits or has invalid format')
       task.operations = { ...task.operations, [key]: { ...message, state: 'uncertain' } }
       await this.save(task)
       try {
+        const current = await new RunStore(this.controlDir).get(run.id)
+        if (!current || current.status !== 'running') throw new Error('Task run ended before voice dispatch')
+        await this.authorize(current)
+        if ((await new RunStore(this.controlDir).get(run.id))?.status !== 'running') throw new Error('Task run ended before dispatch')
         if (task.expiresAt <= Date.now()) throw new Error('Task expired before dispatch')
         const receipt = await sourceCall(source.socketPath, 'task-send', {
           accountId: task.accountId, conversationId: contact, text: args.text, key: providerKey,
-          ...(attachment?{attachment}:{}),
+          ...(attachment?{attachment}:{}), ...(audio?{audio:{data:audio.buffer.toString('base64'),mimeType:audio.mimeType}}:{}),
         })
         if (receipt.accountId !== task.accountId || receipt.conversationId !== contact || receipt.key !== providerKey || receipt.state !== 'accepted')
           throw new Error('Uncertain provider receipt')
