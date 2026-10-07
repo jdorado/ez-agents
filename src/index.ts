@@ -27,7 +27,7 @@ import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch } from './control-state.js'
 import { ApprovalStore } from './approval.js'
-import { startExecutorJob, terminateJob, opencodeDataHome } from './executor.js'
+import { startExecutorJob, terminateJob, opencodeDataHome, claudeConfigHome } from './executor.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
@@ -741,7 +741,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const delivery = await runs.deliveryStatus()
     const ai = await control.aiState(aiMenu.initial)
     const selected = ai.presets.find((p) => p.id === ai.selectedId)!
-    const discovered = await discoverDefaults(config.workspace, { codexHome, nativeCodexFallback: true })
+    const discovered = await discoverDefaults(config.workspace, { codexHome, claudeHome: claudeConfigHome(config.controlDir), nativeCodexFallback: true })
     const displayedSelected = statusPreset(selected, discovered)
     const scheduled = all.filter(run => run.scheduled && run.status === 'running').length
     const queued = all.filter(run => run.status === 'queued').length

@@ -146,7 +146,27 @@ export const readCodexCatalog = async (codexHome: string, run?: (args: string[],
   try { return JSON.parse(await readFile(join(codexHome, 'models_cache.json'), 'utf8')) } catch { return {} }
 }
 
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[], curationDir?: string, codexRunner?: (args: string[], env: NodeJS.ProcessEnv) => Promise<string>): Promise<ModelChoice[]> => {
+// Claude has no catalog command; its installed help is the native metadata for
+// the selectable model aliases and effort levels. No session or inference runs.
+// Unparseable or unavailable help keeps the client default, never guessed names.
+export const claudeCatalogModels = async (run?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
+  const fallback = [{ cli: 'claude', name: 'claude · client default', efforts: [] as string[] }]
+  let help: string
+  try {
+    help = run ? await run(['--help']) : await (async () => {
+      const invocation = executorInvocation('claude', ['--help'])
+      return (await promisify(execFile)(invocation.command, invocation.args, { env: executorEnvironment(), timeout: 8000, maxBuffer: 1024 * 1024 })).stdout
+    })()
+  } catch { return fallback }
+  const option = (flag: string) => help.split(/\r?\n(?=\s*(?:-\w, )?--)/).find((block) => block.trimStart().replace(/^-\w, /, '').startsWith(`${flag} `))?.replace(/\s+/g, ' ') ?? ''
+  const aliases = [...(option('--model').match(/\(e\.g\. ([^)]*)\)/)?.[1] ?? '').matchAll(/'([a-z][a-z0-9-]{0,31})'/g)].map((match) => match[1])
+  const levels = (option('--effort').match(/\(([a-z][a-z0-9, -]*)\)\s*$/)?.[1] ?? '').split(',').map((level) => level.trim())
+    .filter((level) => safe(level) && allowedEffort(level, undefined, 'claude'))
+  if (!aliases.length) return fallback
+  return [...fallback, ...[...new Set(aliases)].map((alias) => ({ cli: 'claude', model: alias, name: `claude · ${alias}`, efforts: levels }))]
+}
+
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[], curationDir?: string, codexRunner?: (args: string[], env: NodeJS.ProcessEnv) => Promise<string>, claudeRunner?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -179,8 +199,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
     }))
     models.push(...(desktop.length ? desktop : [{ cli: 'codex-gui', name: 'codex-gui · desktop', efforts: [] }]))
   }
-  // Other adapters expose the authenticated client's default, not a guessed catalog.
-  if (await available('claude')) models.push({ cli: 'claude', name: 'claude · client default', efforts: [] })
+  if (await available('claude')) models.push(...await claudeCatalogModels(claudeRunner))
   const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
   if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, allow))
   // Pi has separate provider configuration. OpenCode's catalog cannot
