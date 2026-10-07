@@ -55,7 +55,9 @@ still owns which models it advertises; Core never guesses newly released aliases
 Grok/Codex/OpenCode/Claude support explicit listed model/effort choices. Claude has
 no catalog command, so the installed `claude --help` is its native metadata: the
 documented model aliases and `--effort` levels are listed alongside the client
-default; unparseable help keeps the client default only. Other installed clients
+default; unparseable help keeps the client default only. A versioned model name (for example
+`claude-sonnet-5-5`) is offered by adding a `claude` entry to the agent's curated
+`control/ai-models.json`; the alias `sonnet` always means the client's current Sonnet. Other installed clients
 offer their own default only in this slice. OpenCode lists the installed `opencode models`
 catalog with the whitelisted executor environment, so only models the relay can actually
 run are offered; provider variants become selectable efforts (`--variant`).

@@ -633,6 +633,21 @@ test('private channel model choices do not consume owner preset slots', async ()
   } finally { await rm(dir, {recursive:true, force:true}) }
 })
 
+test('detected presets do not count against the saved AI cap', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-cap-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    const initial = initialPreset('codex')
+    await store.captureChoice(initial)
+    for (let n = 1; n < 11; n++) await store.savePreset({...initial, id:`saved-${n}`, name:`Saved ${n}`})
+    await store.syncClientPresets(initial, ['claude', 'grok'].map(cli => ({id:`detected_${cli}`, cli, name:`${cli} · client default`})))
+    assert.equal((await store.status()).ai!.presets.length, 13)
+    const next = {id:'one-more', name:'One more', cli:'claude', model:'sonnet', effort:'medium'}
+    await store.savePreset(next)
+    await assert.rejects(store.savePreset({...next, id:'too-many', name:'Too many'}), /at most 12/)
+  } finally { await rm(dir, {recursive:true, force:true}) }
+})
+
 test('Claude catalog projects only aliases and efforts from the installed native help', async () => {
   const help = `Options:
   --effort <level>                      Effort level for the current session
