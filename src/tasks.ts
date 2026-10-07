@@ -296,7 +296,7 @@ export class Tasks {
         const root=join(this.controlDir,'task-applications');await mkdir(root,{recursive:true,mode:0o700})
         let count=0
         for(const file of await readdir(root))if(/^[a-f0-9]{64}\.json$/.test(file)) {
-          const value=JSON.parse(await readFile(join(root,file),'utf8'));if(value.expiresAt<=Date.now())await unlink(join(root,file));else count++
+          const value=await readFile(join(root,file),'utf8').then(JSON.parse,()=>null);if(!value || !(value.expiresAt>Date.now()))await unlink(join(root,file)).catch(()=>{});else count++
         }
         if(count>=128)throw Error('Too many task application launches')
         const expiresAt=Math.min(Date.now()+20*60*1000,task.expiresAt)
