@@ -31,3 +31,19 @@ test('only bounded literal commands and fresh typed packets enter admission',()=
  assert.throws(()=>combinePreflight([{schemaVersion:1,...packet(true),observedAt:'2000-01-01T00:00:00Z'}]),/stale/)
  assert.equal(combinePreflight([{schemaVersion:1,...packet(false)},{schemaVersion:1,...packet(true)}]).eligible,true)
 })
+
+test('manual preflight before the first tick preserves future recurrence',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'schedule-preflight-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const scheduler=new Scheduler(dir,async()=>packet(true)),runs=new RunStore(dir)
+ const owner={telegramUserId:42,telegramChatId:42,pairedAt:new Date().toISOString()}
+ const s=await scheduler.save({id:'manual',name:'Manual',text:'Work',enabled:true,owner,
+  execution:{sessionId:randomUUID(),preset:{id:'test',name:'test',cli:'codex',model:'fixture-model'}},
+  trigger:{everySeconds:60,start:new Date(Date.now()+60000).toISOString()},
+  preflight:{on:'eligible',checks:[{alias:'provider-work',args:[]}]}})
+ const next=await scheduler.pendingOccurrence(s)
+ const manual=await scheduler.trigger(s.id,s.revision,'first',owner,runs)
+ assert.equal(await scheduler.pendingOccurrence(s),next)
+ await runs.patch(manual.id,{status:'completed'})
+ await scheduler.tick(owner,runs,next!)
+ assert.equal((await runs.list()).length,2)
+})

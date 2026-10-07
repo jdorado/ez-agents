@@ -169,7 +169,7 @@ export class Scheduler {
     if(s.revision!==revision || !s.enabled || !s.preflight) throw Error('Schedule preflight is unavailable')
     const receipt=await this.checkPreflight(id,revision)
     const cursor=join(this.dir,`${s.id}.${s.revision}.cursor`)
-    const previous=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {next:null};throw e})
+    const previous=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(async e=>{if(e.code==='ENOENT')return {next:await this.pendingOccurrence(s)};throw e})
     const admitted=receipt.eligible && (s.preflight.on!=='changed' || previous.preflight?.fingerprint!==receipt.fingerprint)
     return {receipt,admitted,previous,cursor}
   }

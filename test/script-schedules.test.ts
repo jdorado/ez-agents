@@ -112,6 +112,23 @@ test('agent registers and schedules a script natively; script runs cannot change
   assert.equal(nested.entry, join('scripts', 'guard.mjs'))
 })
 
+test('script CLI creates, preserves and explicitly clears preflight gates', async t => {
+ const f=await setup();t.after(()=>rm(f.root,{recursive:true,force:true}))
+ const ledger=await serveTestLedger(f.dir);t.after(()=>ledger.stop())
+ await f.scripts.save({id:'guard',owner:f.owner,workspace:f.workspace,entry:'scripts/guard.mjs',interpreter:'node',args:[],timeoutSeconds:60},true)
+ const preflight={on:'eligible',checks:[{alias:'provider-work',args:[]}]},file=join(f.root,'preflight.json')
+ await writeFile(file,JSON.stringify(preflight))
+ const env={...process.env,EZ_CONTROL_DIR:f.dir,EZ_RUN_ID:'',EZ_AGENT_WORKSPACE:f.workspace}
+ const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env,cwd:f.workspace})).stdout)
+ const options=['--script','guard','--at','2027-09-09T09:00:00+04:00']
+ const created=await cli('create','gated',...options,'--preflight-file',file)
+ assert.deepEqual(created.preflight,preflight)
+ const edited=await cli('edit','gated',...options,'--name','Renamed')
+ assert.deepEqual(edited.preflight,preflight)
+ const cleared=await cli('edit','gated',...options,'--clear-preflight')
+ assert.equal(cleared.preflight,undefined)
+})
+
 test('script schedules run with zero LLM invocations, exact revision receipts, isolation and fail-safe integrity', async t => {
   const f = await setup(); t.after(() => rm(f.root, { recursive: true, force: true }))
   const savedEnv = { PATH: process.env.PATH, TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN, EZ_TEST_SECRET: process.env.EZ_TEST_SECRET }

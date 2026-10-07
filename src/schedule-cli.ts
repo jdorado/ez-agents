@@ -166,11 +166,12 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       v.cron ? {cron:v.cron,timezone:v.timezone!,start,until:v.until} : {everySeconds:Number(v['every-seconds']),start,until:v.until}
     if(v['clear-preflight'] && v['preflight-file']) throw Error('Choose one preflight operation')
     const previousSchedule = action === 'edit' ? await scheduler.get(id!) : undefined
+    const preflight = v['clear-preflight'] ? undefined : v['preflight-file'] ? JSON.parse(await readFile(v['preflight-file'],'utf8')) : previousSchedule?.preflight
     const origin = caller?.application ?? caller?.delivery
     const delivery = previousSchedule ? previousSchedule.delivery : (origin ? {bindingId:origin.bindingId,scope:origin.scope} : undefined)
     if (!delivery && !owner.telegramChatId) throw new Error('Create the schedule from an authenticated channel turn to bind its reply destination')
     if (v.script) {
-      result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || v.script,
+      result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || v.script,preflight,
         originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:'',when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
         script:{id:v.script,args:v.arg ?? []}},action==='create'))
       console.log(JSON.stringify(result,null,2));return
@@ -182,7 +183,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const preset = executionOverrides(base.cli, base, v.model, v.effort)
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
-      preflight:v['clear-preflight'] ? undefined : v['preflight-file'] ? JSON.parse(await readFile(v['preflight-file'],'utf8')) : previousSchedule?.preflight,
+      preflight,
       originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
       execution:{sessionId:previous?.sessionId || randomUUID(),preset}},action==='create'))
   }else{

@@ -1,12 +1,6 @@
 # Plugin-backed scheduled preflight
 
-Objective: empty or unchanged provider work does not start an LLM session; eligible work uses the schedule's saved execution settings.
-
-Constraints: one native scheduler; installed plugin calls only; provider/domain checks stay outside core; fail closed on incomplete/invalid reads; literal owner-configured arguments and no provider text in prompts.
-
-Owner: native scheduler admission and broker authorization in core; read-only eligibility commands in provider/product plugins. Reuse the native plugin broker rather than another poller or queue.
-
-Proof: packed container smoke shows empty skip, eligible dispatch, unchanged skip, unavailable/invalid provider block, saved model preservation and single active occurrence. Stop only on missing authority, never a discoverable setup issue.
+Empty or unchanged provider work can skip a scheduled session. Eligible work uses the schedule's saved execution settings. Core owns admission; installed read-only plugin commands own provider eligibility. Preflight requires the bound plugin broker used by isolated deployments; unavailable broker or provider reads fail closed.
 
 A schedule's `preflight` is `{ "on": "eligible" | "changed", "checks": [{ "alias": "registered-read-only-command", "args": ["literal", "arguments"] }] }`.
 The plugin emits `{ "schemaVersion": 1, "eligible": boolean, "fingerprint": "sha256 hex", "observedAt": "ISO timestamp", "count": integer }`.
