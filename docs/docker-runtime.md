@@ -272,6 +272,22 @@ workspace (a tenant farm), while allowing explicitly shared and additional
 workspace grants and leaving `$HOME` readable for the host CLI.
 Codex then uses `danger-full-access` so it does not apply a nested Seatbelt.
 
+## Claude Code auth
+
+Isolated agents run the image Claude Code with `CLAUDE_CONFIG_DIR` set to the
+agent-bound `control/cli/claude`; settings, memory, plugins and sessions stay
+there. Log the agent in once inside its relay, which writes its own
+`.credentials.json` there and never shares or copies the operator login:
+
+```sh
+docker compose exec -it -u "${EZ_RUNTIME_UID:-1000}:${EZ_RUNTIME_GID:-1000}" relay \
+  sh -c 'CLAUDE_CONFIG_DIR="$EZ_CONTROL_DIR/cli/claude" claude auth login'
+```
+
+Without that login, Claude turns fail closed with the native "not logged in"
+error. Host-capable agents use the same agent-bound directory but share the
+installer login in place (`CLAUDE_SECURESTORAGE_CONFIG_DIR` empty).
+
 ## OpenCode auth
 
 Isolated agents run the image OpenCode with `XDG_DATA_HOME` set to the
