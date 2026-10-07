@@ -93,6 +93,12 @@ same candidate again and apply the new job; do not edit the old receipt. Only
 Finish the requesting turn after queuing either operation. Verify the main relay
 before requesting a separate plugin upgrade.
 
+Codex version discovery parses machine-readable stdout separately from package
+manager notices on stderr. Invalid stdout fails with a named discovery error;
+it is never repaired by stripping arbitrary lines. A historical generic JSON
+parse error alone does not establish which command or output stream caused it.
+Reconcile the job's completed stages and installed state before retrying.
+
 ## Agent interface
 
 Telegram `/status` shows the relay's loaded version, fresh host version and
