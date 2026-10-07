@@ -413,6 +413,17 @@ export const startExecutorJob = async (
     // runs unlabelled, so this matches the Codex auth-link check, not
     // resolveIsolation().
     if (process.env.EZ_ISOLATION !== 'isolated') environment.CLAUDE_SECURESTORAGE_CONFIG_DIR = ''
+    // Optional owner-provisioned long-lived token (`claude setup-token`). It
+    // never refreshes, so one file can be copied to every agent without the
+    // agents invalidating each other's OAuth session.
+    const token = await readFile(path.join(home, 'oauth-token'), 'utf8').then(value => value.trim(), (error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined
+      throw error
+    })
+    if (token !== undefined) {
+      if (!/^[A-Za-z0-9._-]{20,512}$/.test(token)) throw new Error('Invalid Claude token binding')
+      environment.CLAUDE_CODE_OAUTH_TOKEN = token
+    }
   }
   if (!host && !gui && key === 'opencode') {
     // Point OpenCode at the agent-bound data home (cli/opencode/auth.json)

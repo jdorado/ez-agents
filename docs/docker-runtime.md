@@ -284,7 +284,14 @@ docker compose exec -it -u "${EZ_RUNTIME_UID:-1000}:${EZ_RUNTIME_GID:-1000}" rel
   sh -c 'CLAUDE_CONFIG_DIR="$EZ_CONTROL_DIR/cli/claude" claude auth login'
 ```
 
-Without that login, Claude turns fail closed with the native "not logged in"
+To share one login across many agents without logging in one by one, create a
+long-lived token once with `claude setup-token` and copy it to each agent's
+`control/cli/claude/oauth-token` (mode `600`). It does not refresh, so agents
+cannot invalidate each other's session the way copied `.credentials.json`
+files can. The file's contents reach only the Claude process as
+`CLAUDE_CODE_OAUTH_TOKEN`; a malformed file fails the run closed.
+
+Without any login, Claude turns fail closed with the native "not logged in"
 error. Host-capable agents use the same agent-bound directory but share the
 installer login in place (`CLAUDE_SECURESTORAGE_CONFIG_DIR` empty).
 

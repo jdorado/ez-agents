@@ -378,7 +378,7 @@ test('Claude runs with agent-bound configuration, shared login and the agent dir
   t.after(() => rm(root, { recursive: true, force: true }))
   const bin = path.join(root, 'bin'), workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), shared = path.join(root, 'shared')
   await mkdir(bin); await mkdir(workspace)
-  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nrequire('fs').writeFileSync('observed.json',JSON.stringify({args:process.argv.slice(2),config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,prompt:require('fs').readFileSync(0,'utf8')}))`, { mode: 0o700 })
+  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nrequire('fs').writeFileSync('observed.json',JSON.stringify({args:process.argv.slice(2),config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,token:process.env.CLAUDE_CODE_OAUTH_TOKEN,prompt:require('fs').readFileSync(0,'utf8')}))`, { mode: 0o700 })
   const previous = { PATH: process.env.PATH, EZ_ISOLATION: process.env.EZ_ISOLATION, EZ_EXECUTOR_TRANSPORT: process.env.EZ_EXECUTOR_TRANSPORT }
   t.after(() => { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value })
   process.env.PATH = bin + path.delimiter + process.env.PATH
@@ -395,5 +395,17 @@ test('Claude runs with agent-bound configuration, shared login and the agent dir
     assert.equal(observed.prompt, 'hello')
     for (const directory of [controlDir, shared]) assert.equal(observed.args[observed.args.indexOf(directory) - 1], '--add-dir')
     assert.deepEqual(observed.args.slice(-4), ['--model', 'opus', '--effort', 'high'])
+    assert.equal(observed.token, undefined)
   }
+  const run = async (runId: string) => {
+    await ownerRun(controlDir, runId)
+    const job = await startExecutorJob(['hello'], { workspace, controlDir, binDir: bin, cli: 'claude', runId, timeoutMs: 5000, repairEnabled: false })
+    assert.equal(await new Promise(resolve => job.child.once('close', resolve)), 0); await job.cleanup()
+    return JSON.parse(await readFile(path.join(workspace, 'observed.json'), 'utf8'))
+  }
+  await writeFile(path.join(controlDir, 'cli', 'claude', 'oauth-token'), 'sk-ant-oat01-fixture_token-value\n', { mode: 0o600 })
+  assert.equal((await run('r_claude_token')).token, 'sk-ant-oat01-fixture_token-value')
+  await writeFile(path.join(controlDir, 'cli', 'claude', 'oauth-token'), 'bad token\n--flag', { mode: 0o600 })
+  await ownerRun(controlDir, 'r_claude_bad_token')
+  await assert.rejects(startExecutorJob(['hello'], { workspace, controlDir, binDir: bin, cli: 'claude', runId: 'r_claude_bad_token', timeoutMs: 5000, repairEnabled: false }), /Invalid Claude token binding/)
 })
