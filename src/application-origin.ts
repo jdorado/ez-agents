@@ -2,6 +2,7 @@ export type ApplicationOrigin = {
   bindingId: string
   scope: string
   requestId: string
+  taskAccess?: string
   followTelegram?: boolean
   inputText?: string
   attachmentHash?: string
@@ -12,6 +13,7 @@ export const applicationId = (value: unknown): value is string =>
 export const validApplicationOrigin = (value: unknown): value is ApplicationOrigin => {
   const origin = value as ApplicationOrigin | undefined
   return !!origin && /^[a-f0-9-]{36}$/.test(origin.bindingId) && applicationId(origin.scope) && applicationId(origin.requestId) &&
+    (origin.taskAccess === undefined || /^[a-f0-9]{64}$/.test(origin.taskAccess)) &&
     (origin.followTelegram === undefined || typeof origin.followTelegram === 'boolean') &&
     (origin.inputText === undefined || (typeof origin.inputText === 'string' && origin.inputText.length <= 16000)) &&
     (origin.attachmentHash === undefined || /^[a-f0-9]{64}$/.test(origin.attachmentHash)) &&

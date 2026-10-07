@@ -1,7 +1,7 @@
 import test from 'node:test'
 import { request as httpRequest } from 'node:http'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, chown, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
@@ -434,4 +434,19 @@ test('shareTelegram bindings list Telegram intake and admit one run with context
   const finished=await runs.create({id:'tg_finished_1',chatId:42,telegramUserId:42,texts:['Done already'],ownerId:ownerId(owned),ownerEpoch:ownerEpoch(owned)})
   await runs.patch(finished.id,{status:'completed'})
   assert.equal((await attach(finished.id,sharedToken,{context:{}})).status,409)
+})
+
+test('administrator task grant replacement preserves the runtime file owner', {skip:process.getuid?.()!==0},async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'ez-app-grant-owner-'))
+  try {
+    const who=await owner(dir),bindings=new ApplicationBindings(dir)
+    await bindings.register('voice',token(),who)
+    const file=join(dir,'application-bindings.json')
+    await chown(file,20000,20000)
+    await bindings.taskLaunch('voice',{command:'voice',args:['launch','--task'],tasks:['task_'+'a'.repeat(32)]})
+    const saved=await stat(file)
+    assert.equal(saved.uid,20000);assert.equal(saved.gid,20000);assert.equal(saved.mode&0o777,0o600)
+    await bindings.taskLaunch('voice',null)
+    const disabled=await stat(file);assert.equal(disabled.uid,20000);assert.equal(disabled.gid,20000)
+  }finally{await rm(dir,{recursive:true,force:true})}
 })

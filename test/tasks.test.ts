@@ -395,3 +395,42 @@ test('incoming documents use shared staging and never expose another event or ow
  await assert.rejects(f.tasks.workerCall(run.id,'read_attachment',{incomingId:'/etc/passwd'}),/outside/)
  f.rows([{...row,conversationId:'contact-b'}]);await assert.rejects(f.tasks.workerCall(run.id,'read_attachment',{incomingId:'1'}),/correspondence/)
 })
+
+test('explicit application launch continues restricted task; cross-task, owner mode, revocation and replay changes fail closed',async t=>{
+  const {ApplicationBindings,ApplicationChannel}=await import('../src/application-channel.js')
+  const {initialPreset}=await import('../src/ai.js')
+  const f=await fixture(t), {taskId,run}=await f.activate(), owner=(await f.control.status()).owner!
+  const bindings=new ApplicationBindings(f.dir), binding=(await bindings.register('browser','x'.repeat(48),owner))!
+  const token='a'.repeat(64),ticketHash=createHash('sha256').update(token).digest('hex')
+  await assert.rejects(f.tasks.workerCall(run.id,'application_launch',{application:'browser',ticketHash}),/not authorized/)
+  await bindings.taskLaunch('browser',{command:'fixture',args:['launch','--task'],tasks:[taskId]})
+  const grant=await f.tasks.workerCall(run.id,'application_launch',{application:'browser',ticketHash}) as {taskId:string;expiresAt:number}
+  assert.equal(grant.taskId,taskId)
+  assert(!(await readFile(join(f.dir,'task-applications',ticketHash+'.json'),'utf8')).includes(token))
+  const admission=await f.tasks.authorizeApplicationLaunch(run.id,ticketHash)
+  assert.deepEqual(admission.launch,{command:'fixture',args:['launch','--task'],tasks:[taskId]})
+  await assert.rejects(f.tasks.authorizeApplicationLaunch('owner',ticketHash))
+  const app=new ApplicationChannel({controlDir:f.dir,initial:initialPreset('codex'),wake(){},async cancel(){}})
+  const input={requestId:'voice-test',scope:'task:'+taskId,text:'When is the booking?',taskToken:token}
+  await assert.rejects(app.submit(binding.bindingId,{...input,followOwner:true}),/Invalid application task/)
+  await assert.rejects(app.submit(binding.bindingId,{...input,scope:'task:other'}),/scope/)
+  const delegated=await app.submit(binding.bindingId,input)
+  assert.equal(delegated.taskId,taskId);assert.equal(delegated.version,2)
+  assert.equal((await app.submit(binding.bindingId,input)).id,delegated.id)
+  await assert.rejects(app.submit(binding.bindingId,{...input,text:'Changed request'}),/conflicts/)
+  await f.runs.patch(delegated.id,{status:'running'})
+  const context=await f.tasks.workerCall(delegated.id,'context',{}) as {notes:string[];request:string;context:string}
+  assert.match(context.context,/Two people/);assert.equal(context.request,input.text)
+  await f.tasks.workerCall(delegated.id,'note',{text:'Discussion-only voice result'})
+  const reply=await f.tasks.workerCall(delegated.id,'send',{key:'answer',text:'7pm'}) as {receipt:{queued:string}}
+  assert.equal(f.sends.length,0)
+  const outbox=(await f.runs.pendingOutbox()).find(x=>x.id===reply.receipt.queued)!
+  await app.deliver(delegated,outbox)
+  assert.deepEqual((await app.snapshot(binding.bindingId,delegated.id)).messages.map(m=>m.text),['7pm'])
+  const other=(await bindings.register('other','y'.repeat(48),owner))!
+  await bindings.taskLaunch('other',{command:'fixture',args:['launch'],tasks:'all'})
+  await assert.rejects(app.submit(other.bindingId,{...input,requestId:'other'}),/revoked/)
+  await bindings.taskLaunch('browser',null)
+  await assert.rejects(f.tasks.authorize(delegated),/revoked/)
+  await assert.rejects(app.snapshot(binding.bindingId,delegated.id),/revoked/)
+})

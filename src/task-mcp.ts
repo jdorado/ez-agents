@@ -1,10 +1,13 @@
+import {randomBytes,createHash} from 'node:crypto'
 import { createInterface } from 'node:readline'
 import { taskCall } from './task-rpc.js'
-import { runTaskCapability } from './task-capability.js'
+import { runTaskCapability,launchTaskApplication } from './task-capability.js'
 import type { TaskCapability } from './tasks.js'
-const [controlDir, runId, toolsHome, capabilityJson='[]'] = process.argv.slice(2)
+const [controlDir, runId, toolsHome, capabilityJson='[]', applicationsJson='[]'] = process.argv.slice(2)
 const capabilities = JSON.parse(capabilityJson) as TaskCapability[]
+const applications=JSON.parse(applicationsJson) as string[]
 const descriptions: Record<string, string> = {
+  ...(applications.length ? {browser_link:`Create a short-lived single-use browser conversation link for this discussion. Applications: ${applications.join(", ")}. Return the exact link as text to this same discussion; the link is a private bearer credential.`} : {}),
   context: 'Read the owner-approved purpose and shareable context, task notes, receipts, and untrusted correspondence.',
   read_attachment: 'Read a JPEG/PNG/WebP image, an MP4 video as sampled frames (up to 120 seconds), or a TXT/Markdown/PDF document from an incomingId in this run context. Returns the image to native vision, or bounded extracted document text, with file provenance; no owner files are accessible.',
   send: 'Send text, or set voice=true for a spoken reply (at most 1000 characters). Optionally use an attachmentId returned by an approved file capability to this conversation. Reuse the same key for the same message. Uncertain means do not retry with a new key.',
@@ -16,8 +19,8 @@ const descriptions: Record<string, string> = {
 const tools = Object.entries(descriptions).map(([name, description]) => {
   const capability = name.startsWith('capability_')
   return { name, description, inputSchema: {
-    type: 'object', properties: name === 'context' ? {} : name === 'read_attachment' ? {incomingId:{type:'string',maxLength:100}} : capability ? {input:{type:'string',maxLength:1000}} : { text: { type: 'string', maxLength: 4096 }, ...(name === 'send' ? { voice: {type:'boolean'}, key: { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,80}$' }, attachmentId:{type:'string',pattern:'^[a-f0-9-]{36}$'} } : {}) },
-    required: name === 'context' ? [] : name === 'read_attachment' ? ['incomingId'] : capability ? ['input'] : name === 'send' ? ['text', 'key'] : ['text'], additionalProperties: false,
+    type: 'object', properties: name==='browser_link' ? {application:{type:'string',enum:applications}} : name === 'context' ? {} : name === 'read_attachment' ? {incomingId:{type:'string',maxLength:100}} : capability ? {input:{type:'string',maxLength:1000}} : { text: { type: 'string', maxLength: 4096 }, ...(name === 'send' ? { voice: {type:'boolean'}, key: { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,80}$' }, attachmentId:{type:'string',pattern:'^[a-f0-9-]{36}$'} } : {}) },
+    required: name==='browser_link' ? ['application'] : name === 'context' ? [] : name === 'read_attachment' ? ['incomingId'] : capability ? ['input'] : name === 'send' ? ['text', 'key'] : ['text'], additionalProperties: false,
   } }
 })
 for await (const line of createInterface({ input: process.stdin })) {
@@ -34,10 +37,15 @@ for await (const line of createInterface({ input: process.stdin })) {
       if (!Object.hasOwn(descriptions, name)) throw new Error('Unknown task tool')
       const args = request.params.arguments ?? {}
       const capabilityId = typeof name === 'string' && name.startsWith('capability_') ? name.slice(11) : undefined
-      if (Object.keys(args).some(key => name === 'read_attachment' ? key !== 'incomingId' : capabilityId ? key !== 'input' : !['text', ...(name === 'send' ? ['key','attachmentId','voice'] : [])].includes(key))) throw new Error('Unexpected tool argument')
+      if (Object.keys(args).some(key => name==='browser_link' ? key!=='application' : name === 'read_attachment' ? key !== 'incomingId' : capabilityId ? key !== 'input' : !['text', ...(name === 'send' ? ['key','attachmentId','voice'] : [])].includes(key))) throw new Error('Unexpected tool argument')
       try {
         let data: unknown
-        if (capabilityId) {
+        if(name==='browser_link') {
+          if(!applications.includes(args.application))throw Error('Application is not authorized')
+          const token=randomBytes(32).toString('hex'),ticketHash=createHash('sha256').update(token).digest('hex')
+          const grant=await taskCall(controlDir,runId,'worker','application_launch',{application:args.application,ticketHash}) as {launch:{command:string;args:string[]};taskId:string;expiresAt:number}
+          data=await launchTaskApplication(toolsHome,grant.launch,{taskId:grant.taskId,taskToken:token,expiresAt:grant.expiresAt},runId)
+        } else if (capabilityId) {
           const begun = await taskCall(controlDir,runId,'worker','capability_begin',{id:capabilityId,input:args.input}) as {capability:TaskCapability;lease:string}
           const result = await runTaskCapability(toolsHome || undefined,begun.capability,args.input,{controlDir,runId,lease:begun.lease})
           await taskCall(controlDir,runId,'worker','capability_result',{id:capabilityId,input:args.input,lease:begun.lease,...('attachment' in result?{attachment:result.attachment}:{})})

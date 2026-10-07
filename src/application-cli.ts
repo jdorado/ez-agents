@@ -8,11 +8,12 @@ import { applicationId } from './application-origin.js'
 
 async function main() {
   const { values } = parseArgs({ options: {
+    'task-launch-command': {type:'string'}, 'task-launch-args':{type:'string'}, 'task-launch-tasks':{type:'string'}, 'disable-task-launch':{type:'boolean'},
     owner: {type:'string'}, id: {type:'string'}, 'token-file': {type:'string'}, revoke: {type:'boolean'}, list: {type:'boolean'}, help: {type:'boolean'},
     'owner-id': {type:'string'}, rotate: {type:'boolean'}, 'share-owner': {type:'boolean'}, 'share-active': {type:'boolean'},
     'import-scope': {type:'string'}, 'native-session': {type:'string'}, cli: {type:'string'}, 'share-telegram': {type:'boolean'},
   } })
-  if (values.help) { console.log('ezenciel-agents-application --id CHANNEL --token-file PRIVATE_FILE [--owner-id VERIFIED_OWNER_ID] [--share-owner] [--rotate] | --id CHANNEL --revoke | --list | --id CHANNEL --import-scope SCOPE --native-session ID --cli CLI'); return }
+  if (values.help) { console.log('ezenciel-agents-application --id CHANNEL --token-file PRIVATE_FILE [--owner-id VERIFIED_OWNER_ID] [--share-owner] [--rotate] | --id CHANNEL --task-launch-command COMMAND --task-launch-args JSON --task-launch-tasks JSON | --id CHANNEL --disable-task-launch | --id CHANNEL --revoke | --list | --id CHANNEL --import-scope SCOPE --native-session ID --cli CLI'); return }
   if (process.env.EZ_RUN_ID) throw new Error('Application authority is configured by the installing administrator outside agent turns')
   const config = loadControlConfig(), control = new ControlStore(config.controlDir, config.pairingTtlMs)
   if (values.owner && values['owner-id']) throw new Error('Choose one owner registration form')
@@ -25,6 +26,11 @@ async function main() {
   const bindings = new ApplicationBindings(config.controlDir)
   if (values.list) { console.log(JSON.stringify((await bindings.list()).map(({id,bindingId}) => ({id,bindingId})))); return }
   if (!values.id || !applicationId(values.id)) throw new Error('Application ID required')
+  if(values['task-launch-command'] || values['disable-task-launch']) {
+    if(values['token-file'] || values.revoke || values.rotate || values['import-scope'] || (values['task-launch-command'] && values['disable-task-launch']))throw Error('Task launch settings cannot be combined with registration')
+    await bindings.taskLaunch(values.id,values['disable-task-launch'] ? null : {command:values['task-launch-command']!,args:JSON.parse(values['task-launch-args'] ?? '[]'),tasks:JSON.parse(values['task-launch-tasks'] ?? 'null')})
+    console.log(JSON.stringify({ok:true,id:values.id,taskLaunch:!values['disable-task-launch']}));return
+  }
   if (values['import-scope']) {
     const binding = (await bindings.list()).find(item => item.id === values.id)
     if (!binding || !sameOwner(binding.owner, owner) || !applicationId(values['import-scope']) || !values['native-session'] || !/^[a-zA-Z0-9_-]{1,160}$/.test(values['native-session']) || !values.cli) throw new Error('Current application binding, scope, native session and CLI required')

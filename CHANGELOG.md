@@ -7,6 +7,9 @@
 
 ## Unreleased
 
+- Add short-lived browser conversation links for explicitly granted restricted discussions, retaining each task’s context and tool permissions.
+- Preserve the existing runtime file owner when an administrator replaces discussion application grants, keeping private mode 0600 and preventing restricted task startup failures.
+- Forward only the existing broker and delivery socket paths to the trusted task MCP subprocess, allowing scoped browser launch through the isolated installed launcher without exposing a tool registry.
 - Audit restricted native tools on Codex 0.160.1 and retain the exact version gate.
 - Extend the existing speech renderer with OpenRouter TTS and Ogg Opus/WAV encoding.
 - Allow authorized task replies to use core-rendered voice on supporting channels, with post-synthesis authorization and unchanged uncertain-send protection.
