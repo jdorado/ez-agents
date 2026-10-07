@@ -114,13 +114,16 @@ test('root preparation leaves private plugin updates readable by the installer',
  await exec('setpriv',['--reuid=20001','--regid=20002','--clear-groups','--no-new-privs',process.execPath,'-e',script]);
 });
 function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},latest='0.160.0'}={}) {
- const calls=[];let failed=false;
+ const calls=[];let failed=false,brokerImage='sha256:'+'a'.repeat(64);
  const execute=async(command,args,opts)=>{
   calls.push([command,...args]);if(args.includes('view'))return JSON.stringify(latest);if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
   if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
-  if(args.includes('ps'))return stopped?'':'container-id';
-  if(args[0]==='inspect')return 'sha256:'+'a'.repeat(64);
+  if(args.includes('ps'))return stopped?'':'a'.repeat(64);
+  if(args.some(arg=>arg.includes('EZ_BROKER_STRUCTURAL_READINESS_FAILED'))) {const [hostSha256,registrySha256,configSha256]=args.slice(-3);return JSON.stringify({version:1,ready:true,hostSha256,registrySha256,configSha256,plugins:[]});}
+  if(args[0]==='image'&&args[1]==='inspect')return 'sha256:'+'b'.repeat(64);
+  if(args.includes('--force-recreate'))brokerImage=(await fs.readFile(args[args.lastIndexOf('--env-file')+1],'utf8')).trim().split('=')[1];
+  if(args[0]==='inspect')return brokerImage;
   if(args[0]==='volume'&&args[1]==='ls')return 'existing';
   if(args[0]==='volume')return JSON.stringify([{Name:args[2]}]);
   if(args[0]==='run')await fs.writeFile(opts.outputFile,'retained-private-state',{mode:0o600});
@@ -384,22 +387,55 @@ test('plugin updates register additive command routes on an unchanged deployment
  const dispatch=await prepareCommand(f.home,'query',[]);assert.deepEqual(dispatch.argv.slice(-4),['node','sample','/app/bin/example.mjs','query']);
  assert(r.calls.some(call=>call.includes('up')));
 });
-test('isolated plugin replacement refreshes broker version inventory after registry activation',async t=>{
+test('isolated plugin replacement recreates only the pinned broker and verifies activation and rollback',async t=>{
  const f=await fixture(t,'plugin');
  await fs.appendFile(path.join(f.config.deploymentDir,'docker.env'),'EZ_EXECUTOR_TRANSPORT=local\n');
  const job=await queued(f),r=runtime(f),execute=r.execute;
  let observed;
  r.execute=async(command,args,options)=>{
-  if(args.includes('restart')&&args.at(-1)==='plugin-broker') observed=(await read(path.join(f.home,'registry.json'))).plugins.sample.manifest.version;
+  if(args.some(arg=>arg.includes('EZ_BROKER_STRUCTURAL_READINESS_FAILED'))) observed=(await read(path.join(f.home,'registry.json'))).plugins.sample.manifest.version;
+  if(args.includes('--force-recreate')) {
+   assert.equal(args.at(-1),'plugin-broker');
+   for(const flag of ['--no-deps','--no-build','--wait'])assert(args.includes(flag));
+   assert.equal(args[args.indexOf('--pull')+1],'never');
+   assert.equal(await fs.readFile(args[args.lastIndexOf('--env-file')+1],'utf8'),'EZ_RELAY_IMAGE=sha256:'+ 'a'.repeat(64)+'\n');
+  }
   return execute(command,args,options);
  };
  assert.equal((await perform(f.home,job,r)).status,'completed');
- assert.equal(observed,'0.1.1');
- assert.equal(r.calls.filter(call=>call.includes('restart')).length,1);
+ assert.equal(observed,'0.1.1');assert.equal(job.brokerReadiness.ready,true);
  const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
  assert.equal((await perform(f.home,interrupted,r)).status,'rolled-back');
- assert.equal(observed,'0.1.0');
- assert.equal(r.calls.filter(call=>call.includes('restart')).length,2);
+ assert.equal(observed,'0.1.0');assert.equal(interrupted.rollbackBrokerReadiness.ready,true);
+ assert.equal(r.calls.filter(call=>call.includes('--force-recreate')).length,2);
+ assert(!r.calls.some(call=>call.includes('restart')||call[0]==='stopHost'));
+});
+for(const boundary of ['recreate','probe','readback'])test(`isolated broker ${boundary} failure cannot complete an update`,async t=>{
+ const f=await fixture(t,'plugin');await fs.appendFile(path.join(f.config.deploymentDir,'docker.env'),'EZ_EXECUTOR_TRANSPORT=local\n');
+ const job=await queued(f),r=runtime(f),base=r.execute;
+ r.execute=async(c,a,o)=>{
+  if(boundary==='recreate'&&a.includes('--force-recreate')||boundary==='probe'&&a.some(arg=>arg.includes('EZ_BROKER_STRUCTURAL_READINESS_FAILED')))throw Error('Synthetic broker failure');
+  if(boundary==='readback'&&a.some(arg=>arg.includes('EZ_BROKER_STRUCTURAL_READINESS_FAILED')))return JSON.stringify({version:1,ready:true,hostSha256:'0'.repeat(64)});
+  return base(c,a,o);
+ };
+ const result=await perform(f.home,job,r);
+ assert.equal(result.status,'recovery-required');assert(result.error);assert(result.recoveryError);
+ assert.equal((await read(path.join(f.home,'registry.json'))).plugins.sample.manifest.version,'0.1.0');
+});
+test('main isolated activation and retained-relay rollback also refresh the broker',async t=>{
+ const f=await fixture(t);await fs.appendFile(path.join(f.config.deploymentDir,'docker.env'),'EZ_EXECUTOR_TRANSPORT=local\n');
+ const job=await queued(f),r=runtime(f);
+ assert.equal((await perform(f.home,job,r)).status,'completed');assert.equal(job.brokerReadiness.ready,true);
+ const base=r.execute;r.execute=async(c,a,o)=>a[0]==='inspect'&&a.includes('{{json .}}')?JSON.stringify({Image:'sha256:'+'a'.repeat(64),State:{Running:true,Health:{Status:'healthy'}}}):base(c,a,o);
+ const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
+ assert.equal((await perform(f.home,interrupted,r)).status,'rolled-back');
+ assert.equal(interrupted.rollbackBrokerReadiness.ready,true);
+ assert.equal(r.calls.filter(call=>call.includes('--force-recreate')).length,2);
+ assert.equal(r.calls.filter(call=>call.includes('up')&&call.at(-1)==='relay').length,1);
+});
+test('host-capable updates never inspect, recreate or probe an isolated broker',async t=>{
+ const f=await fixture(t,'plugin'),r=runtime(f);assert.equal((await perform(f.home,await queued(f),r)).status,'completed');
+ assert(!r.calls.some(call=>call.includes('plugin-broker')||call.some(arg=>arg.includes('EZ_BROKER_STRUCTURAL_READINESS_FAILED'))));
 });
 test('plugin update preserves a created but never running service as stopped',async t=>{
  const f=await fixture(t,'plugin'),job=await queued(f),r=runtime(f),execute=r.execute;

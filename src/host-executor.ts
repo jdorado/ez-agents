@@ -195,30 +195,39 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 await new Tasks(agent.controlDir).authorize(run, false)
               } else await authorizeRun(agent.controlDir, path.basename(base))
               const opts=request.options as ExecutorOptions
-              if (run?.scheduled) {
-                assertScheduledModel(run.execution?.preset.model)
-                if (opts.model !== run.execution!.preset.model) throw new Error('Scheduled run model does not match its saved task model')
+              // Script occurrences come from the authorized run record, never the request.
+              if (run?.script) {
+                if (!run.scheduled) throw new Error('Script runs require a scheduled occurrence')
+                const options:ExecutorOptions={workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),
+                  runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
+                  script:{...run.script,scheduleId:run.scheduled.id,scheduleRevision:run.scheduled.revision,dueAt:run.scheduled.dueAt}}
+                job=await launch(request.texts,options)
+              } else {
+                if (run?.scheduled) {
+                  assertScheduledModel(run.execution?.preset.model)
+                  if (opts.model !== run.execution!.preset.model) throw new Error('Scheduled run model does not match its saved task model')
+                }
+                const cli = opts.cli || installation.cli
+                resolveExecutor(cli)
+                const provider = cli === 'codex' && opts.provider
+                  ? (agent.codexProviders ?? []).map(validateCodexProvider).find(candidate=>candidate.id===opts.provider)
+                  : undefined
+                if (opts.provider && !provider) throw new Error('Selected Codex provider is not installed for this agent')
+                const model = opts.model
+                if (provider && !model) throw new Error('Selected Codex provider requires a declared model')
+                if (provider && model && !provider.models.includes(model)) throw new Error('Selected model is not declared for this Codex provider')
+                if (!provider && model && (agent.codexProviders ?? []).some(binding=>binding.models.includes(model)))
+                  throw new Error('Selected Codex provider is required for this model')
+                // Admission and execution must use the same catalog snapshot. A
+                // transient native-client probe failure must not reject a model
+                // that the host just advertised to the relay and application.
+                if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
+                const options:ExecutorOptions={workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
+                  runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
+                  sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
+                  promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled)}
+                job=await launch(request.texts,options)
               }
-              const cli = opts.cli || installation.cli
-              resolveExecutor(cli)
-              const provider = cli === 'codex' && opts.provider
-                ? (agent.codexProviders ?? []).map(validateCodexProvider).find(candidate=>candidate.id===opts.provider)
-                : undefined
-              if (opts.provider && !provider) throw new Error('Selected Codex provider is not installed for this agent')
-              const model = opts.model
-              if (provider && !model) throw new Error('Selected Codex provider requires a declared model')
-              if (provider && model && !provider.models.includes(model)) throw new Error('Selected model is not declared for this Codex provider')
-              if (!provider && model && (agent.codexProviders ?? []).some(binding=>binding.models.includes(model)))
-                throw new Error('Selected Codex provider is required for this model')
-              // Admission and execution must use the same catalog snapshot. A
-              // transient native-client probe failure must not reject a model
-              // that the host just advertised to the relay and application.
-              if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
-              const options:ExecutorOptions={workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
-                runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
-                sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
-                promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled)}
-              job=await launch(request.texts,options)
               active.set(base,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})
               if(signal.aborted)terminateJob(job.child)

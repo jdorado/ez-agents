@@ -6,6 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { parseEnv } from 'node:util';
+import { tmpdir } from 'node:os';
 import { atomic, compose, snapshot, checkFolders } from '../plugins/manager.mjs';
 import { read, state, eligibility, jobPath, cleanupStaleBackups } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
@@ -62,9 +63,42 @@ export async function relayServices(config) {
   const env = await fs.readFile(path.join(config.deploymentDir,'docker.env'),'utf8').catch(() => '');
   return parseEnv(env).EZ_EXECUTOR_TRANSPORT === 'local' ? ['relay','plugin-broker'] : ['relay'];
 }
-async function refreshBroker(config, run) {
-  if ((await relayServices(config)).includes('plugin-broker'))
-    await run('docker', [...relayArgs(config), 'restart', 'plugin-broker']);
+// Explicitly rebind single-file mounts after atomic replacement. Pin the running image
+// while recreating only the broker with this deployment's Compose identity.
+export async function refreshBroker(config, run=execute, image) {
+  if (!(await relayServices(config)).includes('plugin-broker')) return null;
+  const args=relayArgs(config);
+  if(image===undefined) {
+    const id=(await run('docker',[...args,'ps','-q','plugin-broker'],{stdoutOnly:true,timeout:15000})).trim();
+    if(!/^[a-f0-9]{12,64}$/i.test(id))throw Error('Expected one installed isolated broker');
+    image=(await run('docker',['inspect','--format','{{.Image}}',id],{stdoutOnly:true,timeout:15000})).trim();
+  }
+  if(!/^sha256:[a-f0-9]{64}$/.test(image))throw Error('Cannot pin broker image');
+  const temporary=await fs.mkdtemp(path.join(tmpdir(),'ez-broker-refresh-'));
+  try {
+    const pin=path.join(temporary,'image.env');
+    await fs.writeFile(pin,`EZ_RELAY_IMAGE=${image}\n`,{mode:0o600});
+    await run('docker',[...args,'--env-file',pin,'up','-d','--no-deps','--force-recreate','--no-build','--pull','never','--wait','--wait-timeout','90','plugin-broker']);
+    const current=(await run('docker',[...args,'ps','-q','plugin-broker'],{stdoutOnly:true,timeout:15000})).trim();
+    if(!/^[a-f0-9]{12,64}$/i.test(current)||(await run('docker',['inspect','--format','{{.Image}}',current],{stdoutOnly:true,timeout:15000})).trim()!==image)
+      throw Error('Recreated broker image does not match the intended installed image');
+    const hostConfig=config.hostConfig||path.join(config.deploymentDir,'host-executor.json');
+    const home=path.dirname(hostConfig)===config.deploymentDir
+      ? (await read(hostConfig)).agents?.find(agent=>agent.workspace===config.workspace)?.toolsHome : undefined;
+    if(typeof home!=='string'||!path.isAbsolute(home))throw Error('Missing broker registry binding');
+    const files=[hostConfig,path.join(home,'registry.json'),path.join(home,'config.json')];
+    const hashes=await Promise.all(files.map(async file=>digest(await fs.readFile(file))));
+    // Supply trusted read-only code so rollback can check an older image that
+    // predates this diagnostic. Its validators still come from that image.
+    const diagnostic=await fs.readFile(new URL('../../docker/broker-readiness.mjs',import.meta.url),'utf8');
+    const probe=JSON.parse(await run('docker',[...args,'exec','-T','plugin-broker','node','--import','/app/node_modules/tsx/dist/loader.mjs',
+      '--input-type=module','-e',diagnostic,...hashes],{stdoutOnly:true,timeout:60000}));
+    if(probe.version!==1||probe.ready!==true||probe.hostSha256!==hashes[0]||probe.registrySha256!==hashes[1]||probe.configSha256!==hashes[2])
+      throw Error('Invalid isolated broker readiness readback');
+    // A concurrent writer invalidates the readback; never silently accept it.
+    for(let i=0;i<files.length;i++)if(digest(await fs.readFile(files[i]))!==hashes[i])throw Error('Broker binding changed during verification');
+    return probe;
+  }finally {await fs.rm(temporary,{recursive:true,force:true});}
 }
 const healthCodes = new Set(['RELAY_UNREADABLE','RELAY_NOT_POLLING','RELAY_STALE','HOST_UNREADABLE','HOST_STALE','PLUGIN_BROKER_UNREADABLE']);
 async function healthEvidence(config,run) {
@@ -143,7 +177,11 @@ export async function perform(home,job,hooks) {
       await textAtomic(envFile,env);
       await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),root);
       await hooks.startHost(root);
-      await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build',...(await relayServices(config))]);
+      await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build','relay']);
+      if((await relayServices(config)).includes('plugin-broker')) {
+        const brokerImage=(await run('docker',['image','inspect','--format','{{.Id}}',image],{stdoutOnly:true})).trim();
+        job.brokerReadiness=await refreshBroker(config,run,brokerImage);
+      }
     } else {
       const old=next.old.record,r=await read(path.join(home,'registry.json'));
       const secrets=await read(path.join(home,'packages',job.target,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
@@ -163,7 +201,7 @@ export async function perform(home,job,hooks) {
       r.plugins[job.target]=candidate;
       for(const alias of Object.keys(candidate.manifest.commands))r.commands[alias]=job.target;
       await atomic(path.join(home,'registry.json'),r);
-      await refreshBroker(config,run);
+      job.brokerReadiness=await refreshBroker(config,run);
       job.runtimeVerified=running;
     }
     job.status='completed';job.endedAt=new Date().toISOString();await save();
@@ -195,12 +233,13 @@ export async function recover(home,job,hooks) {
         await textAtomic(path.join(config.deploymentDir,'docker.env'),job.rollback.env);
         await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),job.rollback.packageRoot);
         await hooks.startHost(job.rollback.packageRoot);
-        if(!retained)await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build',...(await relayServices(config))]);
+        if(!retained)await run('docker',[...relayArgs(config),'up','-d','--wait','--wait-timeout','90','--no-build','relay']);
+        job.rollbackBrokerReadiness=await refreshBroker(config,run,pinned);
       } else {
         const b=job.rollback;
         await run('docker',[...pluginArgs(b.record),'stop']);
         await atomic(b.record.compose,b.compose);await atomic(path.join(home,'registry.json'),b.registry);
-        await refreshBroker(config,run);
+        job.rollbackBrokerReadiness=await refreshBroker(config,run);
         if(b.running)await run('docker',[...pluginArgs(b.record),'up','-d','--wait','--wait-timeout','90','--no-build']);
       }
       job.status='rolled-back';

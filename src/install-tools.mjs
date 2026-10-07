@@ -16,13 +16,14 @@ export const hostEnvironment=()=>Object.fromEntries(['HOME','PATH','LANG','LC_AL
 async function atomic(file,value) {
   const tmp=file+'.'+randomUUID()+'.tmp';await fs.writeFile(tmp,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});await fs.rename(tmp,file);
 }
-export function run(command,args,{cwd,log,timeout=15000}={}) {
+export function run(command,args,{cwd,log,timeout=15000,stdoutOnly=false}={}) {
   return new Promise((resolve,reject)=>{
-    const child=spawn(command,args,{cwd,env:hostEnvironment(),stdio:['ignore',log??'pipe',log??'pipe']});let output='';
-    for(const stream of [child.stdout,child.stderr])stream?.on('data',b=>output=(output+b).slice(-200000));
+    const child=spawn(command,args,{cwd,env:hostEnvironment(),stdio:['ignore',log??'pipe',log??'pipe']});let output='',stdout='';
+    child.stdout?.on('data',b=>{output=(output+b).slice(-200000);if(stdoutOnly)stdout=(stdout+b).slice(-200000);});
+    child.stderr?.on('data',b=>output=(output+b).slice(-200000));
     const timer=setTimeout(()=>child.kill('SIGTERM'),timeout);
     child.once('error',e=>{clearTimeout(timer);reject(e);});
-    child.once('close',code=>{clearTimeout(timer);if(code!==0)reject(Error(`${command} failed (${code})${log===undefined?': '+output.trim():''}`));else resolve(output.trim());});
+    child.once('close',code=>{clearTimeout(timer);if(code!==0)reject(Error(`${command} failed (${code})${log===undefined?': '+output.trim():''}`));else resolve((stdoutOnly?stdout:output).trim());});
   });
 }
 export const defaultHome=()=>path.join(process.env.XDG_DATA_HOME||path.join(homedir(),'.local/share'),'ez');
@@ -115,7 +116,9 @@ export async function migrateLedger({ deployment } = {}) {
 }
 
 export async function latestCodexVersion(invoke,manager={command:"npm",args:[]}) {
-  const version=JSON.parse(await invoke(manager.command,[...manager.args,'view','@openai/codex@latest','version','--json','--registry','https://registry.npmjs.org/']));
+  const output=await invoke(manager.command,[...manager.args,'view','@openai/codex@latest','version','--json','--registry','https://registry.npmjs.org/'],{stdoutOnly:true});
+  let version;
+  try {version=JSON.parse(output);}catch {throw Error('Codex version discovery returned invalid JSON on stdout');}
   if(typeof version!=='string'||!/^\d+\.\d+\.\d+$/.test(version))throw Error('Invalid latest Codex version');
   return version;
 }
