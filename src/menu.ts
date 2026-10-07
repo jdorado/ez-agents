@@ -6,6 +6,7 @@ import { InlineKeyboard, type Context } from 'grammy'
 import { ControlStore, type ControlGuard } from './control-state.js'
 import { chatPreset, installed, persistedPreset, presetLabel, presetProvider, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
+import { claudeConfigHome } from './executor.js'
 
 export const mainCommands = [
   { command: 'new', description: 'New conversation' },
@@ -38,8 +39,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
   // directory, but the default catalog probed the process home instead. Bind it
   // to the same agent-bound home so /ai lists the models Codex can actually run.
   else if (codexHome && catalog === readModels) catalog = () => readModels(undefined, isInstalled, codexHome, undefined, opencodeDataHome, undefined, process.env.EZ_CONTROL_DIR)
-  // Both native homes are bound under the same agent control/cli directory.
-  const claudeHome = codexHome && path.join(path.dirname(codexHome), 'claude')
+  const claudeHome = process.env.EZ_CONTROL_DIR ? claudeConfigHome(process.env.EZ_CONTROL_DIR) : undefined
   const refresh = async () => control.syncClientPresets(initial, host ? [] : await discoverDefaults(workspace, { codexHome, claudeHome }))
   const validate = async (preset: AiPreset) => {
     assertEffort(preset.effort, preset.model, preset.cli)

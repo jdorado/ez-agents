@@ -409,7 +409,9 @@ export const startExecutorJob = async (
     // storage dir makes Claude use its default credential store (macOS
     // Keychain entry or ~/.claude/.credentials.json) in place, so token
     // refreshes stay shared rather than diverging through a copy. Isolated
-    // agents keep their own login inside CLAUDE_CONFIG_DIR.
+    // agents keep their own login inside CLAUDE_CONFIG_DIR. The host executor
+    // runs unlabelled, so this matches the Codex auth-link check, not
+    // resolveIsolation().
     if (process.env.EZ_ISOLATION !== 'isolated') environment.CLAUDE_SECURESTORAGE_CONFIG_DIR = ''
   }
   if (!host && !gui && key === 'opencode') {

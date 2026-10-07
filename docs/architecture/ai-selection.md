@@ -34,8 +34,10 @@ Legacy unbound sessions require the owner's explicit `/new`.
 Like Codex's `CODEX_HOME`, Claude runs with an agent-bound `CLAUDE_CONFIG_DIR`
 (`control/cli/claude`): settings, memory, plugins and sessions belong to the
 agent, never the operator's `~/.claude`. Host-capable agents share only the
-installer login by setting `CLAUDE_SECURESTORAGE_CONFIG_DIR` empty, so Claude
-reads and refreshes its default credential store in place. Isolated agents log in
+installer's OAuth/subscription login by setting `CLAUDE_SECURESTORAGE_CONFIG_DIR`
+empty, so Claude reads and refreshes its default credential store in place. API
+key, `apiKeyHelper` or provider `env` setups in the operator's `~/.claude` are
+not shared; put them in the agent-bound directory instead. Isolated agents log in
 inside their own config directory. Claude conversations started before this
 binding live in the operator's `~/.claude` and need `/new`.
 
