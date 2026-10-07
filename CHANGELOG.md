@@ -1,11 +1,16 @@
 # Changelog
 
-- Private QA: MP4 attachments supply bounded sampled frames to native vision; speech remains in the provider-sourced incoming transcript.
-- Private QA: scoped JPEG/PNG/WebP reads return native MCP image content through the existing shared attachment path.
+## 0.1.0-beta.48
 
-- Private QA: restricted incoming TXT/PDF reading through shared Telegram attachment staging; bounded source-only MCP tool, no owner filesystem access.
-
-## Unreleased
+- Skip empty or unchanged scheduled work through owner-configured installed read-only plugin preflight. Invalid or unavailable reads fail closed; saved execution settings and recurring timing remain intact. The bound plugin broker is required.
+- Run explicitly registered workspace scripts through the existing native scheduler without starting a model. Preserve registration revision/hash, cancellation, timeout, isolated environment and run receipts.
+- Run Claude Code with an agent-bound configuration and native model/effort discovery. Older Claude sessions need `/new`; host login sharing supports OAuth only, and isolated agents log in separately.
+- Keep owner channels responsive with configurable scheduled concurrency, default six.
+- Expose bounded, sanitized owner run and delivery evidence through native controls.
+- Repair transient plugin admission and isolated broker readiness after atomic binding changes; include isolated executor utilities.
+- Keep Codex version discovery JSON separate from stderr notices.
+- Validate Docker CI against audited Codex 0.160.1 instead of a moving registry tag; managed native version selection is unchanged.
+- Read scoped TXT/PDF and JPEG/PNG/WebP attachments through the shared native MCP path. MP4 attachments supply bounded sampled frames to native vision; speech remains in the provider-sourced incoming transcript.
 
 - Add short-lived browser conversation links for explicitly granted restricted discussions, retaining each task’s context and tool permissions.
 - Preserve the existing runtime file owner when an administrator replaces discussion application grants, keeping private mode 0600 and preventing restricted task startup failures.
@@ -13,6 +18,8 @@
 - Audit restricted native tools on Codex 0.160.1 and retain the exact version gate.
 - Extend the existing speech renderer with OpenRouter TTS and Ogg Opus/WAV encoding.
 - Allow authorized task replies to use core-rendered voice on supporting channels, with post-synthesis authorization and unchanged uncertain-send protection.
+
+Beta limits: live fresh-host/reboot acceptance remains pending. Claude host OAuth login sharing and human voice/media exchanges retain their documented live-QA limitations. Publication does not establish an installed-agent upgrade or activate new schedule gates.
 
 ## 0.1.0-beta.47
 
