@@ -272,7 +272,7 @@ export class Scheduler {
             preflight=checked.receipt
             if(!checked.admitted) {await atomic(cursor,{next:future,preflight});continue}
             const current=await this.get(s.id);if(!current.enabled || current.revision!==s.revision)continue
-          } catch {const prior=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {};throw e});await atomic(cursor,{next:future,preflight:{...prior.preflight,state:'unavailable',observedAt:new Date().toISOString()}});continue}
+          } catch (error) {console.error('Schedule preflight unavailable',s.id,error instanceof Error ? error.message : 'Unknown error');const prior=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {};throw e});await atomic(cursor,{next:future,preflight:{...prior.preflight,state:'unavailable',observedAt:new Date().toISOString()}});continue}
         }
         const dueAt = new Date(next).toISOString()
         await runs.create({id:scheduledRunId(s,next),
