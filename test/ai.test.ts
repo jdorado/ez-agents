@@ -632,3 +632,28 @@ test('private channel model choices do not consume owner preset slots', async ()
     assert.deepEqual((await store.applicationSession(scope))?.preset, readback.preset)
   } finally { await rm(dir, {recursive:true, force:true}) }
 })
+
+test('Claude catalog projects only aliases and efforts from the installed native help', async () => {
+  const help = `Options:
+  --effort <level>                      Effort level for the current session
+                                        (low, medium, high, xhigh, max)
+  --model <model>                       Model for the current session. Provide
+                                        an alias for the latest model (e.g.
+                                        'fable', 'opus', or 'sonnet') or a
+                                        model's full name.
+  -n, --name <name>                     Set a display name ('ignored')
+`
+  const calls: string[][] = []
+  const models = await readModels('/nonexistent', async cli => cli === 'claude', undefined, undefined, undefined, undefined, undefined, undefined,
+    async (args) => { calls.push(args); return help })
+  assert.deepEqual(calls, [['--help']])
+  assert.deepEqual(models, [
+    { cli: 'claude', name: 'claude · client default', efforts: [] },
+    ...['fable', 'opus', 'sonnet'].map(model => ({ cli: 'claude', model, name: `claude · ${model}`, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] })),
+  ])
+  for (const unavailable of [async () => { throw new Error('not runnable') }, async () => 'Usage: claude'])
+    assert.deepEqual(await readModels('/nonexistent', async cli => cli === 'claude', undefined, undefined, undefined, undefined, undefined, undefined, unavailable),
+      [{ cli: 'claude', name: 'claude · client default', efforts: [] }])
+  await validateSelection({ id: 'c', name: 'c', cli: 'claude', model: 'opus', effort: 'xhigh' }, models, async () => true)
+  await assert.rejects(validateSelection({ id: 'c', name: 'c', cli: 'claude', model: 'opus-guess' }, models, async () => true), /not in the installed client catalog/)
+})

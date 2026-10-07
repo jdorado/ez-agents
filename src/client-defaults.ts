@@ -78,7 +78,7 @@ export const grokSettings = (text: string): { model?: string; effort?: string } 
 }
 
 export const discoverDefaults = async (cwd: string, options: {
-  home?: string; codexHome?: string; nativeCodexFallback?: boolean; available?: typeof installed; run?: typeof command; codex?: typeof codexDefaults
+  home?: string; codexHome?: string; claudeHome?: string; nativeCodexFallback?: boolean; available?: typeof installed; run?: typeof command; codex?: typeof codexDefaults
 } = {}): Promise<AiPreset[]> => {
   const home = options.home ?? homedir()
   const available = options.available ?? installed
@@ -99,7 +99,8 @@ export const discoverDefaults = async (cwd: string, options: {
         model = value(config.model); effort = value(config.effort)
       } else if (cli === 'claude') {
         // Match Claude's documented user -> project -> local settings precedence.
-        const settings = Object.assign({}, await json(join(home, '.claude/settings.json')),
+        // User settings come from the agent-bound CLAUDE_CONFIG_DIR when bound.
+        const settings = Object.assign({}, await json(join(options.claudeHome ?? join(home, '.claude'), 'settings.json')),
           await json(join(cwd, '.claude/settings.json')), await json(join(cwd, '.claude/settings.local.json')))
         model = value(settings.model); effort = value(settings.effortLevel)
       } else if (cli === 'opencode') {

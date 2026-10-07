@@ -38,14 +38,16 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
   // directory, but the default catalog probed the process home instead. Bind it
   // to the same agent-bound home so /ai lists the models Codex can actually run.
   else if (codexHome && catalog === readModels) catalog = () => readModels(undefined, isInstalled, codexHome, undefined, opencodeDataHome, undefined, process.env.EZ_CONTROL_DIR)
-  const refresh = async () => control.syncClientPresets(initial, host ? [] : await discoverDefaults(workspace, { codexHome }))
+  // Both native homes are bound under the same agent control/cli directory.
+  const claudeHome = codexHome && path.join(path.dirname(codexHome), 'claude')
+  const refresh = async () => control.syncClientPresets(initial, host ? [] : await discoverDefaults(workspace, { codexHome, claudeHome }))
   const validate = async (preset: AiPreset) => {
     assertEffort(preset.effort, preset.model, preset.cli)
     if (preset.id === initial.id) return
     if (preset.id.startsWith('detected_')) {
       if (host) await validateSelection(preset, await catalog(), async name => (await catalog()).some(model => model.cli === name))
       else {
-        const detected = await discoverDefaults(workspace, { codexHome })
+        const detected = await discoverDefaults(workspace, { codexHome, claudeHome })
         if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. Refresh available AIs and select the updated choice.')
       }
     } else await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)

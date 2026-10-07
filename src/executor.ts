@@ -161,6 +161,8 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
         args.push('--session-id', opts.sessionId)
       }
       args.push('--print', '--dangerously-skip-permissions')
+      for (const directory of [opts.controlDir, opts.sharedWorkspace, ...(opts.additionalWorkspaces ?? []), opts.toolsHome])
+        if (directory) args.push('--add-dir', directory)
       if (opts.model) args.push('--model', opts.model)
       if (opts.effort) args.push('--effort', opts.effort)
       return args
@@ -291,6 +293,9 @@ export const opencodeDataHome = (controlDir: string): string | undefined => {
   } catch { return undefined }
 }
 
+// Agent-bound Claude Code configuration directory (CLAUDE_CONFIG_DIR).
+export const claudeConfigHome = (controlDir: string): string => path.join(controlDir, 'cli', 'claude')
+
 // Pi resolves its provider/model catalog from an agent dir (settings.json,
 // auth.json). Only a path is ever returned, never a secret.
 export const piAgentDir = (controlDir: string): string | undefined => {
@@ -393,6 +398,19 @@ export const startExecutorJob = async (
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
     environment.CODEX_HOME = home
+  }
+  if (!host && !gui && key === 'claude') {
+    // Mirror the Codex binding: agent-bound settings, memory, plugins and
+    // sessions; never the user's personal ~/.claude configuration.
+    const home = claudeConfigHome(options.controlDir)
+    await mkdir(home, {recursive:true,mode:0o700})
+    environment.CLAUDE_CONFIG_DIR = home
+    // Host-capable agents share the installer login only. An empty secure
+    // storage dir makes Claude use its default credential store (macOS
+    // Keychain entry or ~/.claude/.credentials.json) in place, so token
+    // refreshes stay shared rather than diverging through a copy. Isolated
+    // agents keep their own login inside CLAUDE_CONFIG_DIR.
+    if (process.env.EZ_ISOLATION !== 'isolated') environment.CLAUDE_SECURESTORAGE_CONFIG_DIR = ''
   }
   if (!host && !gui && key === 'opencode') {
     // Point OpenCode at the agent-bound data home (cli/opencode/auth.json)

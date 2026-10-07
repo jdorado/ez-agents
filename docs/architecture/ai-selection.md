@@ -31,6 +31,14 @@ cross-turn, command, file and unrelated requests are declined rather than being
 guessed or forwarded to a hidden task UI.
 Legacy unbound sessions require the owner's explicit `/new`.
 
+Like Codex's `CODEX_HOME`, Claude runs with an agent-bound `CLAUDE_CONFIG_DIR`
+(`control/cli/claude`): settings, memory, plugins and sessions belong to the
+agent, never the operator's `~/.claude`. Host-capable agents share only the
+installer login by setting `CLAUDE_SECURESTORAGE_CONFIG_DIR` empty, so Claude
+reads and refreshes its default credential store in place. Isolated agents log in
+inside their own config directory. Claude conversations started before this
+binding live in the operator's `~/.claude` and need `/new`.
+
 References used for the adapter contract:
 
 - [Codex non-interactive execution](https://learn.chatgpt.com/docs/non-interactive-mode)
@@ -42,7 +50,10 @@ environment and the execution-bound `CODEX_HOME`; discovery starts no session
 or inference. Only visible model names and supported efforts are projected.
 Unavailable discovery retains the native cache. The installed native version
 still owns which models it advertises; Core never guesses newly released aliases.
-Grok/Codex/OpenCode support explicit listed model/effort choices. Other installed clients
+Grok/Codex/OpenCode/Claude support explicit listed model/effort choices. Claude has
+no catalog command, so the installed `claude --help` is its native metadata: the
+documented model aliases and `--effort` levels are listed alongside the client
+default; unparseable help keeps the client default only. Other installed clients
 offer their own default only in this slice. OpenCode lists the installed `opencode models`
 catalog with the whitelisted executor environment, so only models the relay can actually
 run are offered; provider variants become selectable efforts (`--variant`).
@@ -64,8 +75,8 @@ Refresh available AIs repeats default discovery. Active/default
 presets and queued snapshots are preserved; discovery only refreshes unused
 detected entries.
 Codex uses its native `config/read` interface; Grok reads its documented user
-model/effort settings (or `models` for the default model). Claude reads user and
-workspace JSON settings; OpenCode reports resolved config. Unknown defaults and
+model/effort settings (or `models` for the default model). Claude reads the agent-bound
+user settings and workspace JSON settings; OpenCode reports resolved config. Unknown defaults and
 opaque wrappers remain explicitly “client default”. No credentials are stored,
 no inference runs, no new dependency, and no cross-CLI session transfer.
 

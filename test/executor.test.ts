@@ -372,3 +372,28 @@ test('external local owner chat preserves literal input and admission rejects fo
     if(prior.transport===undefined)delete process.env.EZ_EXECUTOR_TRANSPORT;else process.env.EZ_EXECUTOR_TRANSPORT=prior.transport
   }
 })
+
+test('Claude runs with agent-bound configuration, shared login and the agent directories', {skip:process.platform==='win32'}, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-claude-home-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const bin = path.join(root, 'bin'), workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), shared = path.join(root, 'shared')
+  await mkdir(bin); await mkdir(workspace)
+  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nrequire('fs').writeFileSync('observed.json',JSON.stringify({args:process.argv.slice(2),config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,prompt:require('fs').readFileSync(0,'utf8')}))`, { mode: 0o700 })
+  const previous = { PATH: process.env.PATH, EZ_ISOLATION: process.env.EZ_ISOLATION, EZ_EXECUTOR_TRANSPORT: process.env.EZ_EXECUTOR_TRANSPORT }
+  t.after(() => { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value })
+  process.env.PATH = bin + path.delimiter + process.env.PATH
+  delete process.env.EZ_EXECUTOR_TRANSPORT
+  for (const isolation of [undefined, 'isolated']) {
+    if (isolation) process.env.EZ_ISOLATION = isolation; else delete process.env.EZ_ISOLATION
+    await ownerRun(controlDir, `r_claude_${isolation ?? 'host'}`)
+    const job = await startExecutorJob(['hello'], { workspace, controlDir, binDir: bin, cli: 'claude', runId: `r_claude_${isolation ?? 'host'}`, timeoutMs: 5000,
+      sessionId: '00000000-0000-4000-8000-000000000000', sharedWorkspace: shared, model: 'opus', effort: 'high', repairEnabled: false })
+    assert.equal(await new Promise(resolve => job.child.once('close', resolve)), 0); await job.cleanup()
+    const observed = JSON.parse(await readFile(path.join(workspace, 'observed.json'), 'utf8'))
+    assert.equal(observed.config, path.join(controlDir, 'cli', 'claude'))
+    assert.equal(observed.storage, isolation ? undefined : '')
+    assert.equal(observed.prompt, 'hello')
+    for (const directory of [controlDir, shared]) assert.equal(observed.args[observed.args.indexOf(directory) - 1], '--add-dir')
+    assert.deepEqual(observed.args.slice(-4), ['--model', 'opus', '--effort', 'high'])
+  }
+})
