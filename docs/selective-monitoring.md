@@ -179,7 +179,7 @@ agent-owned: the owner supplies only necessary confirmation, QR scan if needed,
 and the test contact/message. Do not bypass a missing grant by polling the inbox
 in an unrestricted scheduled owner session or sending through the raw CLI.
 
-Task `send` accepts `voice: true` for spoken replies up to 1,000 characters on sources advertising `taskVoice`. It uses the relay’s configured speech renderer, rechecks authorization after generation, and preserves the same uncertain-send key contract. Audio failure does not send text or retry. Voice and file attachments cannot be combined.
+Task `send` accepts `voice: true` for spoken replies up to 1,000 characters on sources advertising `taskVoice`. It uses the relay’s configured speech renderer, rechecks authorization after generation, and preserves the same uncertain-send key contract. Synthesis failure happens before the provider is contacted: it returns an error, sends no text and stores no operation, so the same key may be retried. Voice and file attachments cannot be combined.
 
 ### Incoming files and images
 

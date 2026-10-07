@@ -86,3 +86,9 @@ test('video read uses bounded native frames and removes temporary decoder files'
  assert.ok(result.images?.every(image=>image.mimeType==='image/jpeg'));assert.ok(result.durationSeconds!<=120)
  assert.deepEqual(await readdir(path.join(dir,'attachments')),[]);assert.ok(!(await readdir(dir)).some(name=>name.startsWith('video-')))
 })
+
+test('HEIF stills and audio-only M4A are not treated as MP4 video', () => {
+  const box = (brand: string) => Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from(`ftyp${brand}`), Buffer.alloc(12)])
+  for (const brand of ['heic', 'avif', 'mif1', 'M4A ']) assert.equal(detectFileType(box(brand)), 'unknown')
+  for (const brand of ['isom', 'mp42']) assert.equal(detectFileType(box(brand)), 'mp4')
+})

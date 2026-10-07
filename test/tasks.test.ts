@@ -365,13 +365,14 @@ test('voice reuses task send authority and receipt keys, rechecks the account af
   assert.equal(f.sends.length,1)
 })
 
-test('voice generation failure persists uncertainty and sends no text', async t => {
+test('voice generation failure is a definite non-send: no text, no stored operation, same key retryable', async t => {
   let generated=0
-  const f=await fixture(t,false,async () => { generated++;throw new Error('provider failed') })
-  const {run}=await f.activate()
-  assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true}) as {state:string}).state,'uncertain')
-  await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true})
-  assert.equal(generated,1);assert.equal(f.sends.length,0)
+  const f=await fixture(t,false,async () => { if(++generated===1)throw new Error('provider failed'); return {buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'} })
+  const {run, taskId}=await f.activate()
+  await assert.rejects(f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true}),/provider failed/)
+  assert.equal(f.sends.length,0);assert.equal(Object.hasOwn((await f.tasks.get(taskId))!.operations,'failed'),false)
+  assert.equal((await f.tasks.workerCall(run.id,'send',{text:'Spoken fixture',key:'failed',voice:true}) as {state:string}).state,'accepted')
+  assert.equal(generated,2);assert.equal(f.sends.length,1)
 })
 
 

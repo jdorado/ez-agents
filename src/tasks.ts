@@ -358,11 +358,13 @@ export class Tasks {
       }
       if (Object.keys(task.operations).filter(k=>!task.untilRevoked || k.startsWith(`${run.id}_`)).length >= 30) throw new Error('Task message limit reached; report to the owner')
       const message={text:args.text,...(args.voice?{voice:true as const}:{}),...(attachment?{attachmentId:attachment.id}:{})}
+      // Synthesis happens before the provider is contacted, so its failure is a
+      // definite non-send the engine may correct, not an uncertain operation.
+      const audio = args.voice ? await this.speech!(args.text) : undefined
+      if(audio && (audio.mimeType!=='audio/ogg' || audio.buffer.length>256000 || audio.buffer.subarray(0,4).toString()!=='OggS'))throw Error('Voice audio exceeds channel limits or has invalid format')
       task.operations = { ...task.operations, [key]: { ...message, state: 'uncertain' } }
       await this.save(task)
       try {
-        const audio = args.voice ? await this.speech!(args.text) : undefined
-        if(audio && (audio.mimeType!=='audio/ogg' || audio.buffer.length>256000 || audio.buffer.subarray(0,4).toString()!=='OggS'))throw Error('Voice audio exceeds channel limits or has invalid format')
         const current = await new RunStore(this.controlDir).get(run.id)
         if (!current || current.status !== 'running') throw new Error('Task run ended before voice dispatch')
         await this.authorize(current)
