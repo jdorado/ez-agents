@@ -1,6 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, writeFile, rename, open, unlink } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, open, unlink, stat, chown } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ControlStore, sessionTitle, telegramOwner, type ControlGuard, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
@@ -16,7 +16,11 @@ import { SpeechCreditsDepletedError } from './audio.js'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const applicationScope = (bindingId: string, scope: string) => hash(JSON.stringify([bindingId, scope]))
-type Binding = { id: string; bindingId: string; tokenHash: string; owner: Owner; shareTelegram?: boolean }
+export type TaskLaunch = { command: string; args: string[]; tasks: "all" | string[] }
+export const validTaskLaunch = (v: unknown): v is TaskLaunch => {
+  const x=v as TaskLaunch; return !!x && Object.keys(x).every(k=>["command","args","tasks"].includes(k)) && /^[a-zA-Z0-9_-]{1,100}$/.test(x.command) && Array.isArray(x.args) && x.args.length>0 && x.args.length<=8 && (x.tasks==="all" || (Array.isArray(x.tasks) && x.tasks.length>0 && x.tasks.length<=128 && x.tasks.every(t=>/^task_[a-f0-9]{32}$/.test(t)))) && x.args.every(a=>typeof a==="string" && a.length<=200 && !/[\x00-\x1f\x7f]/.test(a))
+}
+export type Binding = { id: string; bindingId: string; tokenHash: string; owner: Owner; shareTelegram?: boolean; taskLaunch?: TaskLaunch }
 
 export function validateApplicationRegistration(id: string, token: string | null): void {
   if (!applicationId(id) || (token !== null && !/^[A-Za-z0-9_-]{43,200}$/.test(token))) throw new Error('Use a simple application ID and a random token of at least 256 bits encoded as base64url')
@@ -27,7 +31,7 @@ export class ApplicationBindings {
   async list(): Promise<Binding[]> {
     try {
       const bindings = JSON.parse(await readFile(join(this.controlDir, 'application-bindings.json'), 'utf8'))
-      if (!Array.isArray(bindings) || bindings.some(binding => !applicationId(binding?.id) || !/^[a-f0-9-]{36}$/.test(binding.bindingId) || !/^[a-f0-9]{64}$/.test(binding.tokenHash) || !validOwner(binding.owner) || (binding.shareTelegram !== undefined && typeof binding.shareTelegram !== 'boolean')) || ['tokenHash','id','bindingId'].some(key => new Set(bindings.map(b => b[key])).size !== bindings.length)) throw new Error('Invalid application binding state')
+      if (!Array.isArray(bindings) || bindings.some(binding => !applicationId(binding?.id) || !/^[a-f0-9-]{36}$/.test(binding.bindingId) || !/^[a-f0-9]{64}$/.test(binding.tokenHash) || !validOwner(binding.owner) || (binding.taskLaunch !== undefined && !validTaskLaunch(binding.taskLaunch)) || (binding.shareTelegram !== undefined && typeof binding.shareTelegram !== 'boolean')) || ['tokenHash','id','bindingId'].some(key => new Set(bindings.map(b => b[key])).size !== bindings.length)) throw new Error('Invalid application binding state')
       return bindings
     } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
   }
@@ -51,6 +55,23 @@ export class ApplicationBindings {
       return binding
     } finally { await lock.close(); await unlink(`${file}.lock`) }
   }
+  async taskLaunch(id: string, launch: TaskLaunch | null): Promise<void> {
+    if (launch !== null && !validTaskLaunch(launch)) throw Error('Invalid task launch command')
+    const file=join(this.controlDir,'application-bindings.json'), lock=await open(`${file}.lock`,'wx',0o600)
+    try {
+      const bindings=await this.list(), binding=bindings.find(b=>b.id===id)
+      const owner=(await new ControlStore(this.controlDir,900000).status()).owner
+      if(!binding || !sameOwner(binding.owner,owner))throw Error('Application authority revoked')
+      if(launch)binding.taskLaunch=launch; else delete binding.taskLaunch
+      const previous=await stat(file),tmp=`${file}.${randomUUID()}.tmp`
+      try {
+        await writeFile(tmp,JSON.stringify(bindings),{mode:0o600,flag:'wx'})
+        const created=await stat(tmp)
+        if(created.uid!==previous.uid || created.gid!==previous.gid)await chown(tmp,previous.uid,previous.gid)
+        await rename(tmp,file)
+      }finally{await unlink(tmp).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error})}
+    }finally{await lock.close();await unlink(`${file}.lock`)}
+  }
   async authenticate(token: string): Promise<Binding> {
     if (!/^[A-Za-z0-9_-]{43,200}$/.test(token)) throw new Error('Unauthorized application')
     const fingerprint = Buffer.from(hash(token), 'hex')
@@ -65,6 +86,7 @@ export class ApplicationBindings {
     const owner = (await new ControlStore(this.controlDir, 900000).status()).owner
     const binding = (await this.list()).find(item => item.bindingId === origin.bindingId)
     if (!binding || !sameOwner(binding.owner, owner) || !ownsRun(owner, run)) throw new Error('Application authority revoked')
+    if(run.application?.taskAccess)await new Tasks(this.controlDir).applicationAccess(run.application.taskAccess,binding.bindingId)
   }
 }
 
@@ -224,6 +246,17 @@ export class ApplicationChannel {
         if ('followTelegram' in rest) throw new Error('Invalid application request: choose one conversation option')
         input = {...rest, followTelegram: followOwner}
       }
+      if(input && typeof input==='object' && 'taskToken' in input) {
+        const v=input as Record<string,unknown>
+        if(Object.keys(v).some(k=>!['requestId','scope','text','taskToken'].includes(k)) || !applicationId(v.requestId) || typeof v.text!=='string' || !v.text.trim() || v.text.length>16000 || typeof v.taskToken!=='string' || !/^[a-f0-9]{64}$/.test(v.taskToken))throw Error('Invalid application task request')
+        const ticketHash=hash(v.taskToken), access=await new Tasks(this.options.controlDir).applicationAccess(ticketHash,bindingId)
+        const scope='task:'+access.task.id
+        if(v.scope!==scope)throw Error('Invalid application task scope')
+        const id=`r_app_${hash(JSON.stringify([bindingId,v.requestId]))}`, existing=await this.runs.get(id)
+        if(existing){await this.bindings.authorize(existing);if(existing.application?.taskAccess!==ticketHash || existing.texts[0]!==v.text || existing.taskId!==access.task.id)throw Error('Application request ID conflicts with prior task');return existing}
+        const run=await this.runs.create({id,ownerId:ownerId(access.task.owner),ownerEpoch:ownerEpoch(access.task.owner),taskId:access.task.id,texts:[v.text],execution:access.execution,application:{bindingId,scope,requestId:v.requestId,taskAccess:ticketHash}})
+        this.options.wake();return run
+      }
       const value = input as { requestId?: unknown; scope?: unknown; text?: unknown; attachment?: { name?: unknown; data?: unknown }; context?: Record<string, unknown>; expectedNativeSessionId?: unknown; activateTelegram?: unknown; followTelegram?: unknown; ai?: { cli?: unknown; provider?: unknown; model?: unknown; effort?: unknown } }
       if (!value || !applicationId(value.requestId) || !applicationId(value.scope) || typeof value.text !== 'string' || (!value.text.trim() && value.attachment === undefined) || value.text.length > 16000 || Object.keys(value).some(key => !['requestId','scope','text','attachment','context','expectedNativeSessionId','activateTelegram','followTelegram','ai'].includes(key))) throw new Error('Invalid application request')
       if (value.expectedNativeSessionId !== undefined && (typeof value.expectedNativeSessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/.test(value.expectedNativeSessionId))) throw new Error('Invalid application native session assertion')
@@ -298,6 +331,13 @@ export class ApplicationChannel {
       const url = new URL(request.url ?? '/', 'http://localhost'), path = url.pathname
       if (request.method === 'GET' && path === '/v1/registration') {
         send(200, {ownerId: ownerId(binding.owner), bindingId: binding.bindingId, channel: binding.id}); return
+      }
+      if(request.method==='POST' && path==='/v1/registration') {
+        let raw='';for await(const chunk of request){raw+=chunk;if(Buffer.byteLength(raw)>1024)throw Error('Invalid application task request')}
+        const v=JSON.parse(raw)
+        if(Object.keys(v).length!==1 || typeof v.taskToken!=='string' || !/^[a-f0-9]{64}$/.test(v.taskToken))throw Error('Invalid application task request')
+        const access=await new Tasks(this.options.controlDir).applicationAccess(hash(v.taskToken),binding.bindingId)
+        send(200,{taskId:access.task.id,expiresAt:access.expiresAt,purpose:access.task.purpose});return
       }
       if (path === '/v1/telegram' && request.method === 'GET') {
         if ([...url.searchParams.keys()].length) throw new Error('Invalid application Telegram request')

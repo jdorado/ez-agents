@@ -27,11 +27,11 @@ async function atomic(path: string, data: unknown) {
   try { await fd.writeFile(JSON.stringify(data)); await fd.sync() } finally { await fd.close() }
   await rename(tmp, path)
 }
-export function sourceCall(socketPath: string, command: string, args = {}): Promise<any> {
+export function sourceCall(socketPath: string, command: string, args = {}, maxResponseBytes = 256000): Promise<any> {
   return new Promise((resolve, reject) => {
     const req = request({ socketPath, path: '/', method: 'POST', timeout: 3000 }, res => {
       let body = ''
-      res.on('data', chunk => { body += chunk; if (Buffer.byteLength(body) > 256000) req.destroy(new Error('Event-source response too large')) })
+      res.on('data', chunk => { body += chunk; if (Buffer.byteLength(body) > maxResponseBytes) req.destroy(new Error('Event-source response too large')) })
       res.on('error', () => reject(new Error('Event-source response interrupted')))
       res.on('end', () => {
         try { const result = JSON.parse(body); if (res.statusCode !== 200 || result.ok !== true) throw new Error(); resolve(result.data) }

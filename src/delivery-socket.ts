@@ -11,6 +11,7 @@ import { deliveredMessages } from './message-history.js'
 import { readOnlyOwner, requireOwnerExecution } from './execution-authority.js'
 import { telegramOwner } from './control-state.js'
 import { Scheduler } from './scheduler.js'
+import {Tasks} from './tasks.js'
 import { runEvidence, type EvidenceOptions } from './run-evidence.js'
 
 // Stateless pipe transport. The relay owns the runs/outbox ledger in process
@@ -38,6 +39,7 @@ export type DeliverySocketOp =
   | { op: 'get'; payload: { runId: string } }
   | { op: 'list'; payload?: Record<string, never> }
   | { op: 'patch'; payload: { runId: string; change: Record<string, unknown> } }
+  | { op: 'taskApplication'; payload: {runId:string;ticketHash:string} }
   | { op: 'authorize'; payload: { runId: string } }
   | { op: 'receipt'; payload: { context: unknown; id: string } }
   | { op: 'history'; payload: { runId: string; limit?: number; messageId?: number } }
@@ -317,6 +319,10 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         if (typeof payload.runId !== 'string' || !payload.runId) throw new Error('Run ID is required')
         if (!payload.change || typeof payload.change !== 'object') throw new Error('Patch change is required')
         return runs.patch(payload.runId, payload.change as never)
+      }
+      case 'taskApplication': {
+        const p=op.payload as {runId:string;ticketHash:string}
+        return new Tasks(controlDir).authorizeApplicationLaunch(p.runId,p.ticketHash)
       }
       case 'authorize': {
         const runId = (op.payload as { runId?: unknown } | undefined)?.runId

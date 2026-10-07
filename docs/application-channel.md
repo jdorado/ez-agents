@@ -20,7 +20,7 @@ unfinished run returns 409, missing speech configuration 503, and provider
 failure 502. Depleted Gemini credits return 503 with
 `code: speech_credits_depleted`. Audio responses have `Cache-Control: no-store`.
 
-Configure `GEMINI_API_KEY` on the relay. The existing speech renderer uses
+Configure `GEMINI_API_KEY` on the relay. Alternatively select `EZ_SPEECH_PROVIDER=openrouter`, supply `OPENROUTER_API_KEY` privately on the relay, and set `EZ_SPEECH_MODEL` (default `fish-audio/s2.1-pro-free:free`). The same renderer converts provider MP3 to the channel’s WAV or Ogg Opus format; provider failures do not select another provider. The existing speech renderer uses
 `gemini-3.8-flash-lite-tts`; Telegram still receives Ogg Opus. Applications should
 send `{"language":"en"}` or `{"language":"es"}` to select
 `EZ_SPEECH_VOICE_EN` or `EZ_SPEECH_VOICE_ES` (both default to Kore). Telegram
@@ -451,3 +451,34 @@ outgoing file downloads remain unsupported by this HTTP channel.
 
 Private scope model selections are stored on that scope’s native-session binding.
 They do not add entries to the owner’s saved AI menu or consume its preset limit.
+
+## Restricted discussion browser handoff
+
+A trusted application may host a browser conversation for existing exact-contact
+tasks without inheriting the owner’s workspace or general tools. Outside native
+turns, the installing administrator explicitly grants an installed launch command:
+
+```sh
+ezenciel-agents-application --id browser --task-launch-command voice \
+  --task-launch-args '["launch","--task"]' --task-launch-tasks '["task_0123456789abcdef0123456789abcdef"]'
+```
+
+Use `--task-launch-tasks '"all"'` only with owner approval for all active
+exact-contact discussions. `--disable-task-launch` revokes this handoff while
+keeping the application binding. Wildcard public tasks cannot launch links.
+The restricted native model sees `browser_link` with the approved application
+names; it cannot choose another task, command arguments or identity. The trusted
+broker executes the installed command with a 20-minute task bearer through private
+stdin. The model receives only the resulting short-lived HTTPS browser link.
+This is an explicit mutating capability, separate from read-only channel queries.
+
+The backend checks its task bearer with `POST /v1/registration` and
+`{taskToken}`. It submits `{requestId,scope:"task:TASK_ID",text,taskToken}` to
+`/v1/runs`. Core derives the exact task and contact, binds the original grant and
+application, rechecks owner/source/account/expiry/revocation, and uses the same
+restricted native task executor and task notes. Task requests cannot select
+owner history, AI, files or native sessions. `send` replies to the application
+inbox as text; it does not send an additional channel message. The task bearer
+is hashed in core storage, stays in the trusted backend and expires no later
+than the task. Changed retries and cross-task/application use fail closed.
+No contributor becomes an installation owner.

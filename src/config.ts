@@ -26,6 +26,9 @@ export type Config = ControlConfig & {
   applicationPort?: number
   applicationHost?: string
   geminiApiKey?: string
+  speechProvider?: 'gemini' | 'openrouter'
+  speechModel?: string
+  openrouterApiKey?: string
   speechVoiceEn?: string
   speechVoiceEs?: string
   openaiApiKey?: string
@@ -70,6 +73,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
   const codexSandbox = env.EZ_CODEX_SANDBOX?.trim()
   if (codexSandbox && codexSandbox !== 'external') throw new Error('EZ_CODEX_SANDBOX must be external or unset')
   if (codexSandbox && (env.EZ_CHANNEL_BACKEND_URL || transport !== 'local')) throw new Error('External Codex sandbox requires native local execution')
+  if (env.EZ_SPEECH_PROVIDER && !['gemini','openrouter'].includes(env.EZ_SPEECH_PROVIDER)) throw new Error('Invalid EZ_SPEECH_PROVIDER')
   return {
     ...loadControlConfig(env),
     telegramEnabled,
@@ -88,6 +92,9 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     channelBackendUrl: env.EZ_CHANNEL_BACKEND_URL?.trim(),
     channelBackendToken: env.EZ_CHANNEL_BACKEND_TOKEN?.trim(),
     geminiApiKey: env.GEMINI_API_KEY?.trim(),
+    speechProvider: env.EZ_SPEECH_PROVIDER as Config['speechProvider'],
+    speechModel: env.EZ_SPEECH_MODEL?.trim(),
+    openrouterApiKey: env.OPENROUTER_API_KEY?.trim(),
     speechVoiceEn: env.EZ_SPEECH_VOICE_EN?.trim(),
     speechVoiceEs: env.EZ_SPEECH_VOICE_ES?.trim(),
     openaiApiKey: env.OPENAI_API_KEY?.trim(),

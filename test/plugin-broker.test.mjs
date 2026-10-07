@@ -213,3 +213,36 @@ test('scheduled preflight uses authoritative configuration and rejects writes or
     assert.equal((await request(f.socket,payload)).ok,false);
   } finally {abort.abort();await serving;process.env.PATH=previousPath;}
 });
+
+test('task launch broker admits only its fixed application command and writes no bearer into receipts',async t=>{
+  const {createServer}=await import('node:http');
+  const {Tasks}=await import('../src/tasks.js');const {EventSources}=await import('../src/event-sources.js');
+  const {ApplicationBindings}=await import('../src/application-channel.js');const {serveTestLedger}=await import('./helpers/ledger.js');
+  const f=await fixture(t), runs=new RunStore(f.controlDir), control=new ControlStore(f.controlDir,900000);
+  const sourceSocket=path.join(f.root,'source.sock');const provider=createServer(async(req,res)=>{
+    let raw='';for await(const c of req)raw+=c;const v=JSON.parse(raw);
+    res.end(JSON.stringify({ok:true,data:v.command==='events-head'?{cursor:0,accountId:'fixture-account',taskProtocol:'message-v1'}:{}}));
+  });await new Promise(r=>provider.listen(sourceSocket,r));
+  const tasks=new Tasks(f.controlDir),owner=(await control.status()).owner;
+  await new EventSources(f.controlDir).register('fixture',sourceSocket,owner);
+  const task=await tasks.ownerCall(f.runId,'start',{sourceId:'fixture',conversationId:'discussion-a',purpose:'Synthetic discussion',context:'Only synthetic records',hours:1});
+  const taskRun='event_'+hash(task.id);await runs.patch(taskRun,{status:'running'});
+  const bindings=new ApplicationBindings(f.controlDir);await bindings.register('browser','z'.repeat(48),owner);
+  await bindings.taskLaunch('browser',{command:'sample',args:['launch','--task'],tasks:[task.id]});
+  const token='c'.repeat(64),ticketHash=hash(token),grant=await tasks.workerCall(taskRun,'application_launch',{application:'browser',ticketHash});
+  const input={taskId:task.id,taskToken:token,expiresAt:grant.expiresAt};
+  const ledger=await serveTestLedger(f.controlDir);
+  const binding=await loadPluginBrokerBinding({home:f.home,workspace:f.workspace,controlDir:f.controlDir,socket:f.socket,hostConfig:f.hostConfig,timeoutMs:10000});
+  const oldPath=process.env.PATH;process.env.PATH=f.fake+path.delimiter+oldPath;
+  const abort=new AbortController(),serving=servePluginBroker(binding,abort.signal);
+  try{
+    await waitForSocket(f.socket);
+    const denied=await request(f.socket,{version:1,id:randomUUID(),operation:'resolve',runId:taskRun,alias:'sample'});assert.equal(denied.ok,false);
+    const launch=await request(f.socket,{version:1,id:randomUUID(),operation:'task-launch',runId:taskRun,stdin:JSON.stringify(input)});
+    assert.equal(launch.ok,true,launch.error);assert.equal(launch.stdout,'broker-ok');assert.equal(launch.receipt.status,'completed');
+    const receipt=await fs.readFile(launch.receiptPath,'utf8');assert(!receipt.includes(token));assert(!receipt.includes('taskToken'));
+    const wrong=await request(f.socket,{version:1,id:randomUUID(),operation:'task-launch',runId:f.runId,stdin:JSON.stringify(input)});assert.equal(wrong.ok,false);
+    await bindings.taskLaunch('browser',null);
+    const revoked=await request(f.socket,{version:1,id:randomUUID(),operation:'task-launch',runId:taskRun,stdin:JSON.stringify(input)});assert.equal(revoked.ok,false);
+  }finally{abort.abort();await serving;process.env.PATH=oldPath;await ledger.stop();provider.closeAllConnections();await new Promise(r=>provider.close(r));}
+});

@@ -178,3 +178,16 @@ After revocation/expiry no subsequent reply may dispatch. Keep these checks
 agent-owned: the owner supplies only necessary confirmation, QR scan if needed,
 and the test contact/message. Do not bypass a missing grant by polling the inbox
 in an unrestricted scheduled owner session or sending through the raw CLI.
+
+Task `send` accepts `voice: true` for spoken replies up to 1,000 characters on sources advertising `taskVoice`. It uses the relay’s configured speech renderer, rechecks authorization after generation, and preserves the same uncertain-send key contract. Synthesis failure happens before the provider is contacted: it returns an error, sends no text and stores no operation, so the same key may be retried. Voice and file attachments cannot be combined.
+
+### Incoming files and images
+
+The restricted MCP `read_attachment` tool accepts only an `incomingId` from the
+current run's correspondence. The channel supplies private bounded bytes through
+`task-document`, bound to its account and exact conversation. Core reuses
+`stageChatAttachment` validation (10 MiB) and returns UTF-8 TXT/Markdown or
+PDF text via Poppler, at most 256000 bytes. JPEG/PNG/WebP images return their
+original bounded pixels as MCP image content to the native engine, never an
+extra inference call or a base64 text prompt. It never accepts an owner file path.
+MP4 clips up to 10 MiB and 120 seconds return at most eight sampled JPEG frames, 640 pixels wide and at most 1 MiB combined, through the same native image content. Speech transcripts supplied by the source remain in incoming context. The audited native CLI accepts text and images, not raw video/audio; sampled frames do not capture every motion. Scanned PDFs with no text layer need OCR and return a clear limitation.
