@@ -98,6 +98,11 @@ script must not read private databases, call providers directly or acquire
 credentials. A script run can read schedule and script state but cannot change
 registrations or schedules.
 
+A script runs with the agent's runtime identity and file access, but not inside
+a native engine's own sandbox (for example host Codex `workspace-write`); register
+only code the agent would be allowed to run itself. An interpreter inside the
+workspace is rejected because it would be unhashed code.
+
 Each registration has a bounded timeout (default 900 seconds, maximum 21600)
 that does not affect agent runs. Timeout and `cancel` stop the process and its
 children. Failed, timed-out or interrupted script runs are not retried, do not

@@ -67,6 +67,9 @@ test('script registration confines the entry point, rejects shell strings and re
   await assert.rejects(f.scripts.save({ ...base, id: 'shell', entry: 'scripts/guard.mjs', interpreter: 'sh;rm' }, true), /not a shell command/)
   await assert.rejects(f.scripts.save({ ...base, id: 'missing', entry: 'scripts/guard.mjs', interpreter: 'no-such-interpreter-ez' }, true), /not installed/)
   await assert.rejects(f.scripts.save({ ...base, id: 'Bad ID', entry: 'scripts/guard.mjs' }, true), /Script ID/)
+  // An interpreter inside the workspace would be unhashed code.
+  await writeFile(join(f.workspace, 'run.sh'), '#!/bin/sh\n'); await chmod(join(f.workspace, 'run.sh'), 0o755)
+  await assert.rejects(f.scripts.save({ ...base, id: 'local', entry: 'scripts/guard.mjs', interpreter: join(f.workspace, 'run.sh') }, true), /outside the agent workspace/)
   // Another owner's registration cannot be scheduled.
   const other = { ...f.owner, generation: '00000000-0000-4000-8000-000000000000', pairedAt: new Date(Date.parse(f.owner.pairedAt) + 1000).toISOString() }
   await assert.rejects(f.scheduler.save({ id: 'stranger', name: 'x', text: '', owner: other, enabled: true, trigger: { at: '2027-01-01T00:00:00Z' }, script: { id: 'guard', args: [] } }, true), /outside this owner binding/)
@@ -103,6 +106,9 @@ test('agent registers and schedules a script natively; script runs cannot change
     ['edit', 'actual-book-freshness-guard', '--script', 'book-freshness', '--now'], ['pause', 'daily'], ['trigger', 'daily', '--key', 'k']])
     await assert.rejects(exec(process.execPath, [bin, ...args], asScript), /Script runs cannot change scripts or schedules/)
   assert.equal(JSON.parse((await exec(process.execPath, [bin, 'script', 'show', 'book-freshness'], asScript)).stdout).id, 'book-freshness')
+  // A relative --file resolves from the caller's directory, stored relative to the workspace.
+  const nested = JSON.parse((await exec(process.execPath, [bin, 'script', 'register', 'nested', '--file', 'guard.mjs', '--interpreter', 'node'], { env, cwd: join(f.workspace, 'scripts') })).stdout)
+  assert.equal(nested.entry, join('scripts', 'guard.mjs'))
 })
 
 test('script schedules run with zero LLM invocations, exact revision receipts, isolation and fail-safe integrity', async t => {

@@ -54,12 +54,16 @@ export const validScriptRunRef = (value: unknown): value is ScriptRunRef => {
   } catch { return false }
 }
 
-export const resolveInterpreter = async (interpreter: string, pathValue = process.env.PATH): Promise<string> => {
+// The interpreter must be an installed runtime, not unhashed workspace code.
+export const resolveInterpreter = async (interpreter: string, pathValue = process.env.PATH, workspace?: string): Promise<string> => {
   assertInterpreter(interpreter)
   const candidates = path.isAbsolute(interpreter) ? [interpreter]
     : (pathValue ?? '').split(path.delimiter).filter(Boolean).map(directory => path.join(directory, interpreter))
   for (const candidate of candidates) {
-    try { await access(candidate, fsConstants.X_OK); if ((await stat(candidate)).isFile()) return candidate } catch { /* next */ }
+    let real: string
+    try { await access(candidate, fsConstants.X_OK); if (!(await stat(candidate)).isFile()) continue; real = await realpath(candidate) } catch { continue }
+    if (workspace && real.startsWith(await realpath(workspace) + path.sep)) throw new Error('Interpreter must be an installed runtime outside the agent workspace')
+    return candidate
   }
   throw new Error(`Interpreter ${interpreter} is not installed on the executor PATH`)
 }
@@ -128,7 +132,7 @@ export class Scripts {
     if (!validOwner(input.owner)) throw new Error('Script registration requires the paired owner')
     const previous = create ? undefined : await this.owned(input.id, input.owner)
     const { file, relative } = await workspaceEntry(input.workspace, input.entry)
-    await resolveInterpreter(assertInterpreter(input.interpreter), input.pathValue)
+    await resolveInterpreter(assertInterpreter(input.interpreter), input.pathValue, input.workspace)
     const now = new Date().toISOString()
     const s: ScriptRegistration = { version: 1, id: input.id, revision: randomUUID(), owner: input.owner, entry: relative,
       interpreter: input.interpreter, args: assertScriptArgs(input.args), sha256: await fileSha256(file),
@@ -156,7 +160,7 @@ export class Scripts {
     if (s.revision !== ref.revision || s.sha256 !== ref.sha256) throw new Error(`Script ${ref.id} registration changed after this run was queued`)
     const { file } = await workspaceEntry(workspace, s.entry)
     if (await fileSha256(file) !== s.sha256) throw new Error(`Script ${ref.id} entry point changed since registration; inspect it and run an explicit registration update`)
-    const command = await resolveInterpreter(s.interpreter, pathValue)
+    const command = await resolveInterpreter(s.interpreter, pathValue, workspace)
     return { command, args: [file, ...s.args, ...ref.args], registration: s }
   }
 }

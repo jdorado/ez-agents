@@ -76,7 +76,7 @@ export const executorEnvironment = (environment: NodeJS.ProcessEnv = process.env
 }
 
 export const executorJobEnv = (
-  options: Pick<ExecutorOptions, 'runId' | 'controlDir' | 'binDir' | 'toolsHome' | 'repairEnabled'>,
+  options: Pick<ExecutorOptions, 'runId' | 'controlDir' | 'binDir' | 'toolsHome' | 'repairEnabled'> & { workspace?: string },
   environment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv => {
   const base = executorEnvironment(environment)
@@ -86,6 +86,7 @@ export const executorJobEnv = (
     PATH: pathValue,
     EZ_RUN_ID: options.runId,
     EZ_CONTROL_DIR: options.controlDir,
+    ...(options.workspace ? { EZ_AGENT_WORKSPACE: options.workspace } : {}),
     EZ_DELIVERY_SOCKET: deliverySocketPath(options.controlDir),
     EZ_REPAIR_ENABLED: String(options.repairEnabled !== false),
     ...(options.toolsHome ? {BUILDX_CONFIG:path.join(options.toolsHome,'buildx')} : {}),

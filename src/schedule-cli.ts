@@ -1,6 +1,7 @@
 import { needsFailureReview, failureStamp, redactFailure } from './failure.js'
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { loadControlConfig } from './config.js'
 import { ControlStore, sameOwner } from './control-state.js'
@@ -117,7 +118,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       const previous=id==='update' ? await scripts.owned(scriptId,owner) : undefined
       if(id==='register' && (!v.file || !v.interpreter))throw new Error('Register requires --file and --interpreter')
       const timeout=v['timeout-seconds']===undefined ? previous?.timeoutSeconds ?? DEFAULT_SCRIPT_TIMEOUT_SECONDS : Number(v['timeout-seconds'])
-      result=await scripts.save({id:scriptId,owner,workspace,entry:v.file ?? previous!.entry,interpreter:v.interpreter ?? previous!.interpreter,
+      result=await scripts.save({id:scriptId,owner,workspace,entry:v.file ? resolve(v.file) : previous!.entry,interpreter:v.interpreter ?? previous!.interpreter,
         args:v.arg ?? previous?.args ?? [],timeoutSeconds:timeout,pathValue:executorEnvironment().PATH},id==='register')
     }else throw new Error('Unknown script action; use --help')
   }else if(action==='evidence'){
