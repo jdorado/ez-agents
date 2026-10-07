@@ -11,6 +11,8 @@ import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
+import { Scripts } from './scripts.js'
+import { redactFailure } from './failure.js'
 import { ownedScheduledTasks, scheduledTaskDetailText, scheduledTasksText } from './scheduled-tasks.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
 import {removeTaskAttachments} from './task-attachments.js'
@@ -235,14 +237,23 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       try {
         const launchStarted = performance.now()
         const started = await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
-        if (!started.execution && !run.taskId) throw new Error('Legacy queued work has no pinned AI. Resend the request after /new.')
+        // A registered script occurrence: no model, prompt or native session.
+        const script = run.script && run.scheduled
+          ? { registration: await new Scripts(config.controlDir).owned(run.script.id, owner), ref: run.script, scheduled: run.scheduled }
+          : undefined
+        if (run.script && !script) throw new Error('Script runs require a scheduled occurrence')
+        if (!started.execution && !run.taskId && !script) throw new Error('Legacy queued work has no pinned AI. Resend the request after /new.')
         const startsOwnSession = Boolean(run.external || run.taskId || run.scheduled)
         const session = startsOwnSession
           ? { sessionId: randomUUID(), hasStarted: false, nativeSessionId: undefined }
           : await control.executionSession(started.execution!)
-        const selected = run.taskId ? (started.execution?.preset.cli === 'codex' ? started.execution.preset : initialPreset('codex')) : started.execution!.preset
-        if (run.scheduled) assertScheduledModel(selected.model)
-        const { child, cleanup } = await launch(texts, {
+        const selected = script ? initialPreset('codex') : run.taskId ? (started.execution?.preset.cli === 'codex' ? started.execution.preset : initialPreset('codex')) : started.execution!.preset
+        if (run.scheduled && !script) assertScheduledModel(selected.model)
+        const { child, cleanup } = await launch(texts, script ? {
+          workspace: config.workspace, timeoutMs: 0, repairEnabled: config.repairEnabled, runId: started.id,
+          controlDir: config.controlDir, binDir,
+          script: { ...script.ref, scheduleId: script.scheduled.id, scheduleRevision: script.scheduled.revision, dueAt: script.scheduled.dueAt },
+        } : {
           workspace: config.workspace,
           timeoutMs: config.executorTimeoutMs,
           repairEnabled: config.repairEnabled,
@@ -265,9 +276,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const executionStarted = performance.now()
         // Attach before disk writes: a fast child can close while PID persistence
         // is pending, and Node drains its remaining pipes during process close.
-        let failureReason = 'executor-exit', errorTail = '', interrupted = false
+        let failureReason = 'executor-exit', errorTail = '', interrupted = false, outputTail = '', timedOut = false
+        // Script output is bounded diagnostics for run inspection, never chat.
+        if (script) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { outputTail = (outputTail + chunk).slice(-16384) })
+        const scriptTimer = script ? setTimeout(() => { timedOut = true; terminateJob(child) }, script.registration.timeoutSeconds * 1000) : undefined
+        child.once('close', () => clearTimeout(scriptTimer))
         child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
           errorTail = (errorTail + chunk).slice(-16384)
+          if (script) outputTail = (outputTail + chunk).slice(-16384)
           if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
           if (chunk.includes('Host executor client interrupted by')) {
             failureReason = 'host-executor-transport-interrupted'
@@ -288,7 +304,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         console.info('run started', {
           run_id: started.id,
           pid: child.pid,
-          cli: selected.cli,
+          cli: script ? 'script' : selected.cli,
+          ...(script ? { script: script.ref.id, script_revision: script.ref.revision } : {}),
           session: session.sessionId,
           isResume: session.hasStarted,
         })
@@ -306,8 +323,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               try {
                 await cleanup()
                 if (code === 0 && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(session.sessionId)
-                const cancelled = ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id))
-                await runs.patch(started.id, { status: cancelled ? 'cancelled' : code === 0 ? 'completed' : 'failed', endedAt: new Date().toISOString(), exitCode: code, ...(code !== 0 && !cancelled ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
+                const cancelled = !timedOut && (ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id)))
+                if (timedOut) failureReason = 'script-timeout'
+                const failed = !cancelled && (code !== 0 || timedOut)
+                await runs.patch(started.id, { status: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', endedAt: new Date().toISOString(), exitCode: code,
+                  ...(script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
+                  ...(failed ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(timedOut ? `Script exceeded its ${script!.registration.timeoutSeconds}s timeout and was terminated` : errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
                 await releaseExternal(run)
               } catch (error) {
                 await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })

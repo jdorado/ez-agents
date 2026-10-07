@@ -11,10 +11,15 @@ const ownsSchedule = (owner: Owner, schedule: Schedule) =>
 // Saved schedules created under an earlier model policy remain inspectable. The
 // executor will apply the same defaults (and enforce its current policy) when
 // it starts the run; an outdated saved selection must not hide every menu row.
-const displayedPreset = (schedule: Schedule) => {
-  try { return executionDefaults(schedule.execution.preset.cli, schedule.execution.preset) }
-  catch { return schedule.execution.preset }
+const displayedPreset = (execution: NonNullable<Schedule['execution']>) => {
+  try { return executionDefaults(execution.preset.cli, execution.preset) }
+  catch { return execution.preset }
 }
+
+// Script schedules have no AI preset; show what core actually invokes.
+const engineLabel = (schedule: ActiveSchedule) => schedule.script
+  ? `Script · ${schedule.script.id} · ${schedule.scriptRevision ? `rev ${schedule.scriptRevision.slice(0, 8)}` : 'not registered'}`
+  : presetLabel(displayedPreset(schedule.execution!))
 
 const weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -25,6 +30,7 @@ const time = (value: number | string) => {
 }
 
 const preview = (schedule: Schedule) => {
+  if (schedule.script) return schedule.script.args.length ? `Arguments: ${schedule.script.args.join(' ')}`.slice(0, 140) : 'No saved arguments'
   const sentence = schedule.text.trim().replace(/\s+/gu,' ').split(/(?<=[.!?])\s/u)[0]
   const chars = Array.from(sentence)
   return chars.length > 140 ? chars.slice(0,139).join('')+'…' : sentence
@@ -46,15 +52,13 @@ export const ownedScheduledTasks = (schedules: ActiveSchedule[], owner: Owner) =
 export const scheduledTasksText = (schedules: ActiveSchedule[], owner: Owner) => {
   const owned = ownedScheduledTasks(schedules, owner)
   if (!owned.length) return '📅 Scheduled tasks\n\nNo active scheduled tasks.'
-  return [`📅 Scheduled tasks · ${owned.length} active`, 'All times UTC. Use /tasks 1 for task details.', ...owned.map((schedule, index) => {
-    const preset = displayedPreset(schedule)
-    return `${index + 1} · ${schedule.name}\n  ${currentState(schedule)}\n  Next · ${schedule.nextAt === null ? '—' : time(schedule.nextAt)}\n  Last · ${lastRun(schedule)}\n  ${presetLabel(preset)}\n  ${preview(schedule)}`
-  })].join('\n\n')
+  return [`📅 Scheduled tasks · ${owned.length} active`, 'All times UTC. Use /tasks 1 for task details.', ...owned.map((schedule, index) =>
+    `${index + 1} · ${schedule.name}\n  ${currentState(schedule)}\n  Next · ${schedule.nextAt === null ? '—' : time(schedule.nextAt)}\n  Last · ${lastRun(schedule)}\n  ${engineLabel(schedule)}\n  ${preview(schedule)}`
+  )].join('\n\n')
 }
 
 export const scheduledTaskDetailText = (schedule: ActiveSchedule, number: number, total?: number) => {
-  const preset = displayedPreset(schedule)
-  const instructions = schedule.text.trim()
+  const instructions = schedule.script ? preview(schedule) : schedule.text.trim()
   const capped = instructions.length > 2000 ? instructions.slice(0, 2000) + '… (truncated; full text lives in the workspace)' : instructions
   return [
     `📅 ${number}${total === undefined ? '' : ` of ${total}`} · ${schedule.name}`,
@@ -66,10 +70,10 @@ export const scheduledTaskDetailText = (schedule: ActiveSchedule, number: number
     'Last run',
     lastRun(schedule),
     '',
-    'Engine',
-    presetLabel(preset),
+    schedule.script ? 'Execution' : 'Engine',
+    engineLabel(schedule),
     '',
-    'Instructions',
+    schedule.script ? 'Script arguments' : 'Instructions',
     capped,
   ].join('\n')
 }

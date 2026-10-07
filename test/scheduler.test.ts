@@ -167,7 +167,7 @@ test('missing models cannot be saved, dispatched or triggered; legacy settings r
  const file=join(f.dir,'schedules/test.json')
  await writeFile(file,JSON.stringify({...saved,execution:missing.execution}))
  const legacy=await f.scheduler.get(saved.id)
- assert.equal(legacy.execution.preset.model,undefined)
+ assert.equal(legacy.execution!.preset.model,undefined)
  await f.scheduler.tick(f.owner,f.runs,f.now)
  assert.equal((await f.runs.list()).length,0)
  assert.equal(await f.scheduler.pendingOccurrence(legacy),next,'blocked dispatch must preserve the pending occurrence')

@@ -7,6 +7,7 @@ import { validScheduledOrigin, type ScheduledOrigin } from './scheduler.js'
 import type { IncomingItem } from './inbox.js'
 import { assertId } from './identity.js'
 import { isExecutionChoice, type ExecutionChoice } from './ai.js'
+import type { ScriptRunRef } from './scripts.js'
 import {authorizeDeliveryContext,currentDeliveryOwner,type DeliveryContext} from './delivery-context.mjs'
 
 export type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
@@ -44,6 +45,11 @@ export type RunRecord = {
   application?: ApplicationOrigin
   telegramApplication?: ApplicationOrigin
   delivery?: { bindingId: string; scope: string }
+  // Registered script occurrence (no execution preset or native session).
+  script?: ScriptRunRef
+  // Bounded, redacted script stdout/stderr tail; diagnostic, never delivered.
+  output?: string
+  timedOut?: boolean
 }
 
 export type OutboxItemType = 'message' | 'reaction' | 'document' | 'voice' | 'approval'
@@ -144,6 +150,7 @@ export class RunStore {
     taskId?: string
     application?: ApplicationOrigin
     delivery?: { bindingId: string; scope: string }
+    script?: ScriptRunRef
   }, exclusiveSchedule = false): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     if (input.id) {
@@ -175,6 +182,7 @@ export class RunStore {
       application: input.application,
       delivery: input.delivery,
       scheduled: input.scheduled,
+      ...(input.script ? { script: input.script } : {}),
       status: 'queued',
       createdAt: new Date().toISOString(),
     }
@@ -190,7 +198,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut'>>,
   ): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     const run = store.get(id)
