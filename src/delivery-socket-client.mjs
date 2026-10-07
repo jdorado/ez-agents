@@ -67,6 +67,8 @@ const exchange = (connect, envelope, timeoutMs, target) => new Promise((resolve,
   socket.write(encode(envelope))
 })
 
+export const callLocalSocket = (socketPath, envelope, timeoutMs = 130000) => exchange(() => createConnection(socketPath), envelope, timeoutMs, socketPath)
+
 const readEndpoint = async controlDir => {
   try {
     const value = JSON.parse(await readFile(path.join(controlDir, endpointName), 'utf8'))

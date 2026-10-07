@@ -17,7 +17,7 @@ async function main() {
   const { values:v, positionals:[action='list',id] } = parseArgs({allowPositionals:true,options:{
     cli:{type:'string'}, model:{type:'string'}, effort:{type:'string'},
     all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
-    name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
+    'preflight-file':{type:'string'},'clear-preflight':{type:'boolean'},name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
     cron:{type:'string'}, timezone:{type:'string'}, 'every-seconds':{type:'string'}, start:{type:'string'}, until:{type:'string'}, help:{type:'boolean'},
   }})
   if(v.help){console.log(`ezenciel-agents-schedule list | runs | show ID | pause ID | resume ID | remove ID | cancel RUN_ID
@@ -28,6 +28,7 @@ async function main() {
   create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE)
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
     [--cli EXECUTOR] [--model MODEL] [--effort <native-effort>]
+    [--preflight-file FILE | --clear-preflight]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
 Context reads the current run only.
 Evidence exports sanitized current-owner Telegram operational metadata only.
@@ -78,7 +79,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const interruptedRunIds=held.filter(r=>r.interrupted).map(r=>r.id)
     const failedReviewRunIds=held.filter(r=>!r.interrupted).map(r=>r.id)
     const next=s.enabled && !held.length ? await scheduler.pendingOccurrence(s) : null
-    return {...s,interruptedRunIds,failedReviewRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString(),
+    return {...s,preflightReceipt:await scheduler.preflightReceipt(s),interruptedRunIds,failedReviewRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString(),
       ...(held.length ? {recovery:'Inspect the failed run and explicitly edit this schedule to resume; pause/resume does not clear the stop.'} : {})}
   }
   let result:unknown
@@ -122,6 +123,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const start=v.start || new Date(Date.now()+1000).toISOString()
     const trigger:Trigger=v.now ? {at:new Date(Date.now()+1000).toISOString()} : v.at ? {at:v.at} :
       v.cron ? {cron:v.cron,timezone:v.timezone!,start,until:v.until} : {everySeconds:Number(v['every-seconds']),start,until:v.until}
+    if(v['clear-preflight'] && v['preflight-file']) throw Error('Choose one preflight operation')
     const previousSchedule = action === 'edit' ? await scheduler.get(id!) : undefined
     const origin = caller?.application ?? caller?.delivery
     const delivery = previousSchedule ? previousSchedule.delivery : (origin ? {bindingId:origin.bindingId,scope:origin.scope} : undefined)
@@ -133,6 +135,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const preset = executionOverrides(base.cli, base, v.model, v.effort)
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
+      preflight:v['clear-preflight'] ? undefined : v['preflight-file'] ? JSON.parse(await readFile(v['preflight-file'],'utf8')) : previousSchedule?.preflight,
       originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
       execution:{sessionId:previous?.sessionId || randomUUID(),preset}},action==='create'))
   }else{

@@ -1,3 +1,4 @@
+import { combinePreflight } from './schedule-preflight.js';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createServer } from 'node:net';
@@ -223,23 +224,24 @@ const managerCommand = async (binding, args, signal, runId) => new Promise((reso
   });
 });
 
-const invokePlugin = async (binding, request, signal) => {
+const invokePlugin = async (binding, request, signal, scheduledPreflight = false) => {
   const startedAt = new Date().toISOString();
   let plugin = request.alias;
   let revision = request.revision;
   let result;
   let failure;
   try {
-    await authorize(binding, request.runId);
+    if (!scheduledPreflight) await authorize(binding, request.runId);
     const current = await registry(binding.home);
     const selected = recordForAlias(current, request.alias);
+    if (scheduledPreflight && (!selected.command.exposure || selected.command.exposure.changesRecords !== false || selected.command.exposure.sendsExternally !== false)) throw Error('Scheduled preflight requires an explicitly read-only plugin command');
     plugin = selected.plugin;
     revision = selected.record.revision;
     if (selected.record.revision !== request.revision) throw Error('Plugin changed; discover again');
     const command = await prepareCommand(binding.home, request.alias, request.args, {
       revision: request.revision,
       invocation: true,
-      environment: { EZ_CONTROL_DIR: binding.controlDir, EZ_RUN_ID: request.runId, EZ_DELIVERY_SOCKET: process.env.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir) },
+      environment: { EZ_CONTROL_DIR: binding.controlDir, ...(scheduledPreflight ? {} : {EZ_RUN_ID: request.runId}), EZ_DELIVERY_SOCKET: process.env.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir) },
     });
     try {
       result = await dockerRun(command.argv, {
@@ -282,6 +284,11 @@ const invokePlugin = async (binding, request, signal) => {
 
 export async function validateBrokerRequest(request, workspace) {
   if (!request || typeof request !== 'object' || request.version !== 1 || !REQUEST_ID.test(request.id)) throw Error('Invalid plugin broker request');
+  if(request.operation === 'preflight') {
+    validId(request.scheduleId,RUN_ID,'schedule ID'); validId(request.revision,/^[a-f0-9-]{36}$/,'schedule revision');
+    if(Object.keys(request).some(k=>!['version','id','operation','scheduleId','revision'].includes(k))) throw Error('Unexpected schedule preflight field');
+    return request;
+  }
   if (!['resolve', 'invoke', 'manager'].includes(request.operation)) throw Error('Unknown plugin broker operation');
   validId(request.runId, RUN_ID, 'plugin run ID');
   if (request.operation === 'manager') {
@@ -328,6 +335,18 @@ export async function servePluginBroker(binding, signal = new AbortController().
       (async () => {
         try {
           await validateBrokerRequest(request, binding.workspace);
+          if (request.operation === 'preflight') {
+            const condition=await (await import('./delivery-socket-client.mjs')).callDeliverySocket(deliverySocketPath(binding.controlDir),{op:'schedulePreflight',payload:{scheduleId:request.scheduleId,revision:request.revision}});
+            const values=[];
+            for(const check of condition.checks) {
+              const selected=recordForAlias(await registry(binding.home),check.alias);
+              const result=await invokePlugin(binding,{alias:check.alias,args:check.args,revision:selected.record.revision,runId:`preflight_${request.scheduleId}`,id:randomUUID()},abort.signal,true);
+              if(!result.ok || result.code!==0) throw Error('Scheduled plugin preflight unavailable');
+              values.push(JSON.parse(result.stdout));
+            }
+            response(socket,{version:1,id:request.id,ok:true,result:combinePreflight(values)});
+            return;
+          }
           if (request.operation === 'resolve') {
             await authorize(binding, request.runId);
             const selected = recordForAlias(await registry(binding.home), request.alias);

@@ -1,3 +1,4 @@
+import { validPreflight, installedPreflight, type Preflight, type PreflightReceipt } from './schedule-preflight.js'
 import { assertEffort, assertScheduledModel } from './model-policy.js'
 import { needsFailureReview } from './failure.js'
 import { mkdir, readFile, readdir, writeFile, rename, link, rm } from 'node:fs/promises'
@@ -14,6 +15,7 @@ import { RunStore, type RunRecord } from './runs.js'
 export type Schedule = {
   originRunId?: string
   when?: 'unreviewed-failures'
+  preflight?: Preflight
   version: 1; id: string; revision: string; name: string; text: string; trigger: Trigger; enabled: boolean
   owner: Owner; execution: ExecutionChoice
   delivery?: { bindingId: string; scope: string }
@@ -45,12 +47,12 @@ const atomic = async (file: string, value: unknown, exclusive = false) => {
 }
 export class Scheduler {
   private dir: string
-  constructor(private controlDir: string) { this.dir = join(controlDir,'schedules') }
+  constructor(private controlDir: string, private checkPreflight = installedPreflight) { this.dir = join(controlDir,'schedules') }
   private async ensure() { await mkdir(this.dir,{recursive:true,mode:0o700}) }
   async get(id: string): Promise<Schedule> {
     const s = JSON.parse(await readFile(join(this.dir,assertId(id)+'.json'),'utf8')) as Schedule
     if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt,originRunId:s.originRunId}) ||
-      (s.when !== undefined && s.when !== 'unreviewed-failures') || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' || !s.text.trim() ||
+      (s.when !== undefined && s.when !== 'unreviewed-failures') || (s.preflight !== undefined && !validPreflight(s.preflight)) || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' || !s.text.trim() ||
       !validOwner(s.owner) || !isExecutionChoice(s.execution) ||
       (s.delivery !== undefined && !validApplicationOrigin({...s.delivery, requestId: s.id})))
       throw new Error('Invalid schedule record')
@@ -110,6 +112,7 @@ export class Scheduler {
   async save(input: Omit<Schedule,'version'|'revision'>, exclusive = false): Promise<Schedule> {
     await this.ensure(); assertId(input.id)
     if (input.when !== undefined && input.when !== 'unreviewed-failures') throw new Error('Unknown schedule condition')
+    if(input.preflight !== undefined && !validPreflight(input.preflight)) throw Error('Invalid schedule preflight')
     const execution: ExecutionChoice = {...input.execution, preset: persistedPreset(input.execution.preset)}
     if (!input.name || !input.text?.trim() || !isExecutionChoice(execution)) throw new Error('Schedule needs name, text and an AI selection')
     assertScheduledModel(execution.preset.model)
@@ -129,11 +132,25 @@ export class Scheduler {
         }
         // Publish the cursor first so a crash cannot expose a new revision with
         // a missing cursor that falls back to the trigger's historical start.
-        await atomic(join(this.dir,`${s.id}.${s.revision}.cursor`),{next})
+        const prior=await this.preflightReceipt(previous)
+        await atomic(join(this.dir,`${s.id}.${s.revision}.cursor`),{next,...(JSON.stringify(previous.preflight)===JSON.stringify(s.preflight) && prior ? {preflight:prior} : {})})
       }
     }
     await atomic(join(this.dir,s.id+'.json'),s,exclusive)
     return s
+  }
+  async preflight(id:string, revision:string) {
+    const s=await this.get(id)
+    if(s.revision!==revision || !s.enabled || !s.preflight) throw Error('Schedule preflight is unavailable')
+    const receipt=await this.checkPreflight(id,revision)
+    const cursor=join(this.dir,`${s.id}.${s.revision}.cursor`)
+    const previous=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {next:null};throw e})
+    const admitted=receipt.eligible && (s.preflight.on!=='changed' || previous.preflight?.fingerprint!==receipt.fingerprint)
+    return {receipt,admitted,previous,cursor}
+  }
+  async preflightReceipt(s:Schedule) {
+    try {return JSON.parse(await readFile(join(this.dir,`${s.id}.${s.revision}.cursor`),'utf8')).preflight}
+    catch(e) {if((e as NodeJS.ErrnoException).code==='ENOENT')return undefined;throw e}
   }
   async enable(id: string, enabled: boolean): Promise<Schedule> {
     const s = await this.get(id)
@@ -177,11 +194,20 @@ export class Scheduler {
     const all=await runs.list()
     if (all.some(r=>holdsSchedule(s,r))) throw new Error('Inspect the held occurrence and edit the schedule before retrying')
     if (s.when === 'unreviewed-failures' && !all.some(r=>needsFailureReview(r) && ownsRun(owner,r) && (!r.scheduled || r.scheduled.pairedAt===owner.pairedAt))) throw new Error('Schedule condition is not met')
+    let checked: Awaited<ReturnType<Scheduler['preflight']>> | undefined
+    if(s.preflight) {
+      checked=await this.preflight(s.id,s.revision)
+      if(!checked.receipt.eligible) throw Error('Schedule preflight has no eligible work')
+      const current=await this.get(s.id)
+      if(!current.enabled || current.revision!==s.revision) throw Error('Schedule changed during preflight')
+    }
     const dueAt=new Date().toISOString()
-    return runs.create({id:runId,ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
+    const run=await runs.create({id:runId,ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
       ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
       texts:[`[schedule ${s.id} due ${dueAt}]`,s.text],execution:{...s.execution,sessionId:randomUUID()},
       scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId ? {originRunId:s.originRunId} : {})}},true)
+    if(checked) await atomic(checked.cursor,{...checked.previous,preflight:checked.receipt})
+    return run
   }
   async recover(runs: RunStore) {
     for (const run of await runs.list()) {
@@ -213,6 +239,15 @@ export class Scheduler {
         if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && ownsRun(owner, r) && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
           await atomic(cursor,{next:future}); continue
         }
+        let preflight: PreflightReceipt | undefined
+        if(s.preflight) {
+          try {
+            const checked=await this.preflight(s.id,s.revision)
+            preflight=checked.receipt
+            if(!checked.admitted) {await atomic(cursor,{next:future,preflight});continue}
+            const current=await this.get(s.id);if(!current.enabled || current.revision!==s.revision)continue
+          } catch {const prior=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {};throw e});await atomic(cursor,{next:future,preflight:{...prior.preflight,state:'unavailable',observedAt:new Date().toISOString()}});continue}
+        }
         const dueAt = new Date(next).toISOString()
         await runs.create({id:scheduledRunId(s,next),
           ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
@@ -220,7 +255,7 @@ export class Scheduler {
           texts:[`[schedule ${s.id} due ${dueAt}]`, s.text],execution:s.execution,
           scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}},true)
         // A restart between run creation and this cursor write sees the same occurrence ID.
-        await atomic(cursor,{next:future})
+        await atomic(cursor,{next:future,...(preflight ? {preflight} : {})})
       } catch (error) { console.error('Schedule dispatch failed',s.id,error instanceof Error ? error.message : 'Unknown error') }
     }
   }
