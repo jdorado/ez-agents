@@ -70,6 +70,7 @@ test('script registration confines the entry point, rejects shell strings and re
   // An interpreter inside the workspace would be unhashed code.
   await writeFile(join(f.workspace, 'run.sh'), '#!/bin/sh\n'); await chmod(join(f.workspace, 'run.sh'), 0o755)
   await assert.rejects(f.scripts.save({ ...base, id: 'local', entry: 'scripts/guard.mjs', interpreter: join(f.workspace, 'run.sh') }, true), /outside the agent workspace/)
+  await assert.rejects(f.scripts.save({ ...base, id: 'local', entry: 'scripts/guard.mjs', interpreter: 'run.sh', pathValue: '.' }, true), /not installed/)
   // Another owner's registration cannot be scheduled.
   const other = { ...f.owner, generation: '00000000-0000-4000-8000-000000000000', pairedAt: new Date(Date.parse(f.owner.pairedAt) + 1000).toISOString() }
   await assert.rejects(f.scheduler.save({ id: 'stranger', name: 'x', text: '', owner: other, enabled: true, trigger: { at: '2027-01-01T00:00:00Z' }, script: { id: 'guard', args: [] } }, true), /outside this owner binding/)

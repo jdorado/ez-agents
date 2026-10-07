@@ -58,7 +58,8 @@ export const validScriptRunRef = (value: unknown): value is ScriptRunRef => {
 export const resolveInterpreter = async (interpreter: string, pathValue = process.env.PATH, workspace?: string): Promise<string> => {
   assertInterpreter(interpreter)
   const candidates = path.isAbsolute(interpreter) ? [interpreter]
-    : (pathValue ?? '').split(path.delimiter).filter(Boolean).map(directory => path.join(directory, interpreter))
+    // Relative PATH entries would resolve against a different cwd at spawn time.
+    : (pathValue ?? '').split(path.delimiter).filter(directory => path.isAbsolute(directory)).map(directory => path.join(directory, interpreter))
   for (const candidate of candidates) {
     let real: string
     try { await access(candidate, fsConstants.X_OK); if (!(await stat(candidate)).isFile()) continue; real = await realpath(candidate) } catch { continue }
