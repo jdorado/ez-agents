@@ -209,6 +209,9 @@ test('scheduled preflight uses authoritative configuration and rejects writes or
     registry.plugins.sample.manifest.commands.sample.exposure={receivesExternalContent:true,changesRecords:false,sendsExternally:false,requiresReview:false};
     await fs.writeFile(file,JSON.stringify(registry));
     const accepted=await request(f.socket,payload);assert.equal(accepted.ok,true);assert.equal(accepted.result.eligible,true);
+    await fs.writeFile(path.join(f.fake,'docker'), `#!${process.execPath}\nprocess.stdout.write('SECRET-token-xyz');\n`, {mode:0o700});
+    const invalid=await request(f.socket,payload);assert.equal(invalid.ok,false);
+    assert.equal(invalid.error,'Scheduled plugin preflight returned invalid output');assert(!JSON.stringify(invalid).includes('SECRET-token-xyz'));
     await scheduler.save({...schedule,enabled:false});
     assert.equal((await request(f.socket,payload)).ok,false);
   } finally {abort.abort();await serving;process.env.PATH=previousPath;}

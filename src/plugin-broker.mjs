@@ -360,7 +360,7 @@ export async function servePluginBroker(binding, signal = new AbortController().
               const selected=recordForAlias(await registry(binding.home),check.alias);
               const result=await invokePlugin(binding,{alias:check.alias,args:check.args,revision:selected.record.revision,runId:`preflight_${request.scheduleId}`,id:randomUUID()},abort.signal,true);
               if(!result.ok || result.code!==0) throw Error('Scheduled plugin preflight unavailable');
-              values.push(JSON.parse(result.stdout));
+              try { values.push(JSON.parse(result.stdout)); } catch { throw Error('Scheduled plugin preflight returned invalid output'); }
             }
             response(socket,{version:1,id:request.id,ok:true,result:combinePreflight(values)});
             return;
