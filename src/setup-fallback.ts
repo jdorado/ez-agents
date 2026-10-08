@@ -98,7 +98,8 @@ export const startupObserver = () => {
         rejection = { category: r.category, ...(r.resetAt ? { resetAt: r.resetAt } : {}) }
       return
     }
-    if (event?.type === 'thread.started' || event?.type === 'system' || event?.type === 'result') return
+    if (event?.type === 'thread.started' || event?.type === 'result' ||
+        (event?.type === 'system' && event.subtype === 'init')) return
     if (event?.type === 'rate_limit_event') {
       const info = event.rate_limit_info
       if (info?.status === 'rejected') rejection = { category: 'quota', ...(epochSeconds(info.resetsAt) ? { resetAt: epochSeconds(info.resetsAt) } : {}) }

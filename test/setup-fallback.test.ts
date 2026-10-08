@@ -28,6 +28,8 @@ test('startup observer advances only on typed rejection before any work',()=>{
   assert.equal(observe({type:'assistant',message:{content:[{type:'tool_use'}]}},{type:'assistant',error:'rate_limit'}).workBegan,true)
   assert.equal(observe({type:'assistant',error:'unknown'}).workBegan,true)
   assert.equal(observe('plain text').workBegan,true)
+  for (const subtype of ['hook_started','hook_progress','hook_response','unknown'])
+    assert.equal(observe({type:'system',subtype},{type:'assistant',error:'rate_limit'}).workBegan,true)
   // Ez transport summaries (Codex native session, host-forwarded Claude) and session metadata.
   assert.deepEqual(observe({type:'thread.started',thread_id:'t'},startupLine({workBegan:false,rejection:{category:'cli-unavailable'}})),{workBegan:false,rejection:{category:'cli-unavailable'}})
   assert.equal(observe(startupLine({workBegan:true}),startupLine({workBegan:false,rejection:{category:'quota'}})).workBegan,true)
@@ -96,7 +98,7 @@ test('a quota rejection before work advances within the same occurrence, skippin
 })
 
 test('failure after work began, access denial and unknown failures stop without replay',async()=>{
-  for(const [name,lines,category] of [['partial',[work,quota],'after-work-began'],['denied',[{type:'assistant',error:'authentication_failed'}],'access-denied'],['silent',[],'uncertain']] as const){
+  for(const [name,lines,category] of [['partial',[work,quota],'after-work-began'],['hook',[{type:'system',subtype:'hook_started'},quota],'after-work-began'],['denied',[{type:'assistant',error:'authentication_failed'}],'access-denied'],['silent',[],'uncertain']] as const){
     const f=await fixture(name,[{lines:[...lines],code:1}])
     try{
       const run=await f.done()
@@ -163,7 +165,7 @@ test('host transport admits only the active task setup, forwards only Claude sta
     await runs.patch(id,{status:'running',attempts:[{preset:claudeA,quotaScope:'claude',outcome:'running'}]})
     server=serveHostExecutor({cli:'claude',agents:[{name:'t',workspace,controlDir,binDir:join(root,'bin')}]},abort.signal,async(_texts,options)=>{
       launched.push({cli:options.cli,model:options.model})
-      const lines=options.model==='opus'?[JSON.stringify({type:'system'}),JSON.stringify({type:'assistant',error:'rate_limit',message:{content:[{type:'text',text:'secret tool output'}]}})].join('\n')+'\n':''
+      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({type:'assistant',error:'rate_limit',message:{content:[{type:'text',text:'secret tool output'}]}})].join('\n')+'\n':''
       const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(lines)});process.exit(1)`])
       return {child,cleanup:async()=>{},stdout:''}
     },async()=>[])
