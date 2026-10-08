@@ -113,22 +113,26 @@ test('failure after work began, access denial and unknown failures stop without 
 })
 
 const revoked={type:'system',subtype:'api_error',error:{status:401,message:'OAuth access token has been revoked.'}}
+const retry={type:'system',subtype:'api_retry',error_status:401,error:'authentication_failed',attempt:1,max_retries:10,retry_delay_ms:624}
 
 test('revoked-login metadata followed by a quota rejection does not mark work as started',()=>{
-  assert.deepEqual(observe({type:'system',subtype:'init'},revoked,
+  assert.deepEqual(observe({type:'system',subtype:'init'},revoked,retry,
     {type:'rate_limit_event',rate_limit_info:{status:'rejected',resetsAt:1791475200}},
     {...quota,isApiErrorMessage:true,message:{model:'<synthetic>',content:[{type:'text',text:'session limit'}],usage:{input_tokens:0,output_tokens:0}}}),
     {workBegan:false,rejection:{category:'quota',resetAt:'2026-10-08T16:00:00.000Z'}})
   assert.deepEqual(observe(revoked),{workBegan:false,rejection:{category:'login-unavailable'}})
+  assert.deepEqual(observe(retry),{workBegan:false,rejection:{category:'login-unavailable'}})
   assert.equal(observe(work,revoked).workBegan,true)
+  assert.equal(observe(work,retry).workBegan,true)
   assert.equal(observe({type:'system',subtype:'api_error',error:{status:403}},quota).rejection?.category,'access-denied')
   assert.equal(observe({type:'system',subtype:'api_error',error:{status:null}},quota).workBegan,true)
+  assert.equal(observe({...retry,error_status:null},quota).workBegan,true)
 })
 
 test('unavailable login advances to a saved account and the next occurrence uses the unchanged chain',async()=>{
   const profiles=['claude2','claude3','claude4']
   const fallbacks=[claudeB,...profiles.map((authProfile,i)=>({...claudeA,id:`profile-${i}`,authProfile,effort:'high'}))]
-  const f=await fixture('login-recovery',[{lines:[revoked],code:1},{lines:[work],code:0},
+  const f=await fixture('login-recovery',[{lines:[revoked,retry],code:1},{lines:[work],code:0},
     {lines:[{type:'assistant',error:'authentication_failed'}],code:1},{lines:[work],code:0}],fallbacks,{...claudeA,effort:'high'})
   try{
     const first=await f.done()
@@ -263,7 +267,7 @@ test('host transport admits only the active task setup and profile, forwards onl
     await runs.patch(id,{status:'running',attempts:[{preset:primary,quotaScope:'claude',outcome:'running'}]})
     server=serveHostExecutor({cli:'claude',agents:[{name:'t',workspace,controlDir,binDir:join(root,'bin')}]},abort.signal,async(_texts,options)=>{
       launched.push({cli:options.cli,model:options.model,authProfile:options.authProfile})
-      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({...revoked,error:{...revoked.error,message:'secret provider diagnostic'}})].join('\n')+'\n':''
+      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({...revoked,error:{...revoked.error,message:'secret provider diagnostic'}}),JSON.stringify({...retry,error:'secret provider diagnostic'})].join('\n')+'\n':''
       const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(lines)});process.exit(1)`])
       return {child,cleanup:async()=>{},stdout:''}
     },async()=>[{cli:'claude',authProfile:'work',model:'opus',name:'Work',efforts:[]}])

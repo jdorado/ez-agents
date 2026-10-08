@@ -113,8 +113,8 @@ export const startupObserver = () => {
     }
     // Native API retry/error metadata is not model output. Do not inspect error
     // prose; only typed HTTP status can establish a rejected startup.
-    if (event?.type === 'system' && event.subtype === 'api_error') {
-      const category = httpRejection(event.error?.status)
+    if (event?.type === 'system' && ['api_error', 'api_retry'].includes(event.subtype)) {
+      const category = httpRejection(event.subtype === 'api_retry' ? event.error_status : event.error?.status)
       if (category) { reject({ category }); return }
     }
     const category = event?.type === 'assistant' && typeof event.error === 'string' ? claudeErrors[event.error] : undefined
