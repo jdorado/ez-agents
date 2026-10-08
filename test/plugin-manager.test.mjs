@@ -672,3 +672,27 @@ test('bounded lock admission times out without stealing an interrupted lock',asy
  await assert.rejects(locked(f.home,async()=>assert.fail('must not enter'),{waitMs:50}),/Registry busy/);
  assert.equal(await fs.readFile(file,'utf8'),'preserved');
 });
+
+
+test('cancelled plugin upgrade drain preserves live invocation and releases admission lock',async t=>{
+ const f=await fixture(t),controller=new AbortController();
+ const directory=path.join(f.home,'command-invocations');await fs.mkdir(directory,{recursive:true});
+ const lease=path.join(directory,'00000000-0000-4000-8000-000000000000.json');
+ await fs.writeFile(lease,JSON.stringify({pid:process.pid,container:'active-call'}));
+ let activated=false;
+ const drain=locked(f.home,async()=>{activated=true;},{drainInvocations:true,signal:controller.signal});
+ for(let n=0;n<100&&!await fs.access(path.join(f.home,'registry.lock')).then(()=>true,()=>false);n++)await new Promise(resolve=>setTimeout(resolve,10));
+ controller.abort();await assert.rejects(drain,{name:'AbortError'});assert.equal(activated,false);
+ await fs.access(lease);await assert.rejects(fs.access(path.join(f.home,'registry.lock')),{code:'ENOENT'});
+});
+
+
+test('native call cancelled while admission is closed never acquires an invocation lease',async t=>{
+ const f=await fixture(t),controller=new AbortController();await fs.mkdir(f.home,{recursive:true});
+ let entered,release;const ready=new Promise(resolve=>entered=resolve),hold=new Promise(resolve=>release=resolve);
+ const activation=locked(f.home,async()=>{entered();await hold;});await ready;
+ const call=prepareCommand(f.home,'sample',[],{invocation:true,signal:controller.signal});
+ controller.abort();await assert.rejects(call,{name:'AbortError'});
+ await assert.rejects(fs.access(path.join(f.home,'command-invocations')),{code:'ENOENT'});
+ release();await activation;
+});

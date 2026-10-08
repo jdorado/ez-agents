@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { atomic, locked } from '../plugins/manager.mjs';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
 import { state, read, jobs, jobPath, check, prepare, submit, missing, cleanupStaleBackups } from './control.mjs';
-import { perform, environment } from './runtime.mjs';
+import { perform, environment, brokerNeedsRefresh } from './runtime.mjs';
 
 const reservedProviderKeys=new Set(['HOME','LANG','LC_ALL','LOGNAME','PATH','SHELL','TERM','TMPDIR','USER','CODEX_HOME','NODE_OPTIONS']);
 const providerEnvironmentKey=value=>{
@@ -52,6 +52,11 @@ export async function withIdleUpgrade(control,job,signal,apply,{isIdle=idle,wait
     if(!signal.aborted)return await apply();
   } finally {await fs.rm(pause,{force:true});}
 }
+// Plugin replacement drains command leases at activation, not native turns.
+export async function withUpgrade(control,job,signal,apply,options) {
+  if(job.target==='main'||options?.requiresIdle)return withIdleUpgrade(control,job,signal,apply,options);
+  if(!signal.aborted)return apply();
+}
 export async function queueAutomatic(home,available) {
   const existing=await jobs(home);
   if(existing.some(job=>['queued','applying','recovery-required'].includes(job.status)))return null;
@@ -94,6 +99,15 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     await waitForHostHeartbeat(agent.controlDir,child,()=>error);
   };
   const pause=path.join(agent.controlDir,'upgrade-pause.json');
+  const refreshRequirement=async job=>{
+    if(job.target==='main')return false;
+    try {return await brokerNeedsRefresh((await state(home)).config);}
+    catch(error) {
+      job.status=job.status==='applying'?'recovery-required':'failed';job.error=error.message;
+      await atomic(path.join(jobPath(home,job.id),'job.json'),job);
+      return null;
+    }
+  };
   const beat=setInterval(()=>{void atomic(path.join(directory,'supervisor.json'),{pid:process.pid,at:Date.now()}).catch(()=>{});},1000);
   try {
     await atomic(path.join(directory,'supervisor.json'),{pid:process.pid,at:Date.now()});
@@ -107,8 +121,11 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     await sleep(1200);
     const interrupted=(await jobs(home)).find(j=>j.status==='applying');
     if(interrupted){
-      await atomic(pause,{id:interrupted.id});const result=await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));await fs.rm(pause,{force:true});
-      if(result.status==='completed'&&interrupted.target==='main')return;
+      const refreshPluginBroker=await refreshRequirement(interrupted);
+      const result=refreshPluginBroker===null?undefined:interrupted.target==='main'
+        ? await (async()=>{await atomic(pause,{id:interrupted.id});try{return await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));}finally{await fs.rm(pause,{force:true});}})()
+        : await withUpgrade(agent.controlDir,interrupted,signal,()=>perform(home,interrupted,{stopHost,startHost,signal,refreshPluginBroker}),{requiresIdle:refreshPluginBroker});
+      if(result?.status==='completed'&&interrupted.target==='main')return;
     }
     const isolated=host.isolation==='isolated'
     if(!isolated && !child)await startHost((await state(home)).config.packageRoot);
@@ -117,15 +134,19 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       if(!isolated && child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
       const pending=(await jobs(home)).find(j=>j.status==='queued');
       if(pending) {
-        const result=await withIdleUpgrade(agent.controlDir,pending,signal,async()=>{
+        const refreshPluginBroker=await refreshRequirement(pending);
+        if(refreshPluginBroker===null)continue;
+        const apply=async()=>{
           try {
-            return await locked(home,async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));return perform(home,latest,{stopHost,startHost});});
+            const activate=async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));return perform(home,latest,{stopHost,startHost,signal,refreshPluginBroker});};
+            return pending.target==='main'?await locked(home,activate):await activate();
           } catch(error) {
             // A pre-switch rejection is terminal. Applying jobs keep their journal for recovery.
             const latest=await read(path.join(jobPath(home,pending.id),'job.json'));
             if(latest.status==='queued'){latest.status='failed';latest.error=error.message;await atomic(path.join(jobPath(home,pending.id),'job.json'),latest);}else throw error;
           }
-        });
+        };
+        const result=await withUpgrade(agent.controlDir,pending,signal,apply,{requiresIdle:refreshPluginBroker});
         if(result?.status==='completed') {
           if(pending.target==='main')return;
           nextCheck=0;

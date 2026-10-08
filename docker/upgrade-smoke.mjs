@@ -14,7 +14,7 @@ const exec=promisify(execFile),root=await fs.realpath(await fs.mkdtemp(path.join
 const source=path.join(root,'source'),home=path.join(root,'tools'),mind=path.join(root,'mind'),control=path.join(root,'control');
 const input=path.resolve(process.env.EZ_WHATSAPP_SOURCE||new URL('../../ez_whatsapp',import.meta.url).pathname);
 const bin=new URL('../bin/ezenciel-agents-tools.mjs',import.meta.url).pathname;
-const call=async(...args)=>JSON.parse((await exec(process.execPath,[bin,'--home',home,...args],{maxBuffer:4*1024*1024})).stdout);
+const call=async(...args)=>JSON.parse((await exec(process.execPath,[bin,'--home',home,...args],{cwd:mind,maxBuffer:4*1024*1024})).stdout);
 let record;
 try {
  for(const dir of [source,mind,control])await fs.mkdir(dir);

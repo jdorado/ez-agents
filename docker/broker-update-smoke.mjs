@@ -6,8 +6,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { atomic, snapshot } from '../src/plugins/manager.mjs';
-import { execute, refreshBroker } from '../src/updates/runtime.mjs';
+import { atomic, snapshot, publishBrokerPlugins } from '../src/plugins/manager.mjs';
+import { execute, refreshBroker, verifyBroker, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 const docker=(...args)=>execFileSync('docker',args,{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:120000}).trim();
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 if(process.argv[2]!=='--inside') {
@@ -69,6 +69,20 @@ if(process.argv[2]!=='--inside') {
   assert.equal((await mounted()).trim(),ready.hostSha256);assert.equal((await prepare()).trim(),'prepared');
   assert.equal(ready.plugins[0].revision,b.revision);
   console.log(JSON.stringify({stage:'activation',oldBroker,newBroker,relay,hostSha256:ready.hostSha256,registrySha256:ready.registrySha256,revision:b.revision}));
+  // With the current host binding already approving both revisions, plugin-only
+  // activation/rollback must leave the broker socket and relay intact.
+  await publish(a);await publishBrokerPlugins(home,controlDir);
+  const pluginRollback=await verifyBroker(config);
+  assert.equal(pluginRollback.plugins[0].revision,a.revision);
+  assert.equal(await container('plugin-broker'),newBroker);assert.equal(await container('relay'),relay);
+  assert.equal(await brokerNeedsRefresh(config),false);assert.equal((await prepare()).trim(),'prepared');
+  await publish(b);await publishBrokerPlugins(home,controlDir);
+  const pluginActivation=await verifyBroker(config);
+  assert.equal(pluginActivation.plugins[0].revision,b.revision);
+  assert.equal(await container('plugin-broker'),newBroker);assert.equal(await container('relay'),relay);
+  assert.equal((await prepare()).trim(),'prepared');
+  console.log('PASS plugin activation/rollback: current registry accepted; broker and relay IDs preserved');
+
   await atomic(hostConfig,host([a.revision]));
   await assert.rejects(refreshBroker(config),/STRUCTURAL_READINESS_FAILED/);await assert.rejects(prepare(),/not pinned/);
   console.log('PASS unapproved B remains rejected after recreation');
