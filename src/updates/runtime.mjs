@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { parseEnv } from 'node:util';
 import { tmpdir } from 'node:os';
-import { atomic, compose, snapshot, checkFolders } from '../plugins/manager.mjs';
+import { atomic, compose, snapshot, checkFolders, locked, publishBrokerPlugins } from '../plugins/manager.mjs';
 import { read, state, eligibility, jobPath, cleanupStaleBackups } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
 import { extract, digest } from './artifact.mjs';
@@ -82,24 +82,44 @@ export async function refreshBroker(config, run=execute, image) {
     const current=(await run('docker',[...args,'ps','-q','plugin-broker'],{stdoutOnly:true,timeout:15000})).trim();
     if(!/^[a-f0-9]{12,64}$/i.test(current)||(await run('docker',['inspect','--format','{{.Image}}',current],{stdoutOnly:true,timeout:15000})).trim()!==image)
       throw Error('Recreated broker image does not match the intended installed image');
-    const hostConfig=config.hostConfig||path.join(config.deploymentDir,'host-executor.json');
-    const home=path.dirname(hostConfig)===config.deploymentDir
-      ? (await read(hostConfig)).agents?.find(agent=>agent.workspace===config.workspace)?.toolsHome : undefined;
-    if(typeof home!=='string'||!path.isAbsolute(home))throw Error('Missing broker registry binding');
-    const files=[hostConfig,path.join(home,'registry.json'),path.join(home,'config.json')];
-    const hashes=await Promise.all(files.map(async file=>digest(await fs.readFile(file))));
-    // Supply trusted read-only code so rollback can check an older image that
-    // predates this diagnostic. Its validators still come from that image.
-    const diagnostic=await fs.readFile(new URL('../../docker/broker-readiness.mjs',import.meta.url),'utf8');
-    const probe=JSON.parse(await run('docker',[...args,'exec','-T','plugin-broker','node','--import','/app/node_modules/tsx/dist/loader.mjs',
-      '--input-type=module','-e',diagnostic,...hashes],{stdoutOnly:true,timeout:60000}));
-    if(probe.version!==1||probe.ready!==true||probe.hostSha256!==hashes[0]||probe.registrySha256!==hashes[1]||probe.configSha256!==hashes[2])
-      throw Error('Invalid isolated broker readiness readback');
-    // A concurrent writer invalidates the readback; never silently accept it.
-    for(let i=0;i<files.length;i++)if(digest(await fs.readFile(files[i]))!==hashes[i])throw Error('Broker binding changed during verification');
-    return probe;
+    return verifyBroker(config,run);
   }finally {await fs.rm(temporary,{recursive:true,force:true});}
 }
+// A plugin update normally leaves this single-file binding unchanged. If an
+// operator replaced it (for example to approve new network pins), recreation
+// remains necessary and must retain the existing full-turn drain.
+export async function brokerNeedsRefresh(config,run=execute) {
+  if (!(await relayServices(config)).includes('plugin-broker')) return false;
+  const hostConfig=config.hostConfig||path.join(config.deploymentDir,'host-executor.json');
+  const expected=digest(await fs.readFile(hostConfig));
+  const script="const fs=require('fs'),crypto=require('crypto');console.log(crypto.createHash('sha256').update(fs.readFileSync(process.env.EZ_PLUGIN_BROKER_HOST_CONFIG)).digest('hex'));";
+  const mounted=(await run('docker',[...relayArgs(config),'exec','-T','plugin-broker','node','-e',script],{stdoutOnly:true,timeout:15000})).trim();
+  if(!/^[a-f0-9]{64}$/.test(mounted))throw Error('Invalid broker host binding fingerprint');
+  return mounted!==expected;
+}
+// Plugin upgrades change the directory-mounted registry, not the broker's
+// single-file host binding. Verify the live broker without replacing its socket.
+export async function verifyBroker(config,run=execute) {
+  if (!(await relayServices(config)).includes('plugin-broker')) return null;
+  const args=relayArgs(config);
+  const hostConfig=config.hostConfig||path.join(config.deploymentDir,'host-executor.json');
+  const home=path.dirname(hostConfig)===config.deploymentDir
+    ? (await read(hostConfig)).agents?.find(agent=>agent.workspace===config.workspace)?.toolsHome : undefined;
+  if(typeof home!=='string'||!path.isAbsolute(home))throw Error('Missing broker registry binding');
+  const files=[hostConfig,path.join(home,'registry.json'),path.join(home,'config.json')];
+  const hashes=await Promise.all(files.map(async file=>digest(await fs.readFile(file))));
+  // Supply trusted read-only code so rollback can check an older image that
+  // predates this diagnostic. Its validators still come from that image.
+  const diagnostic=await fs.readFile(new URL('../../docker/broker-readiness.mjs',import.meta.url),'utf8');
+  const probe=JSON.parse(await run('docker',[...args,'exec','-T','plugin-broker','node','--import','/app/node_modules/tsx/dist/loader.mjs',
+    '--input-type=module','-e',diagnostic,...hashes],{stdoutOnly:true,timeout:60000}));
+  if(probe.version!==1||probe.ready!==true||probe.hostSha256!==hashes[0]||probe.registrySha256!==hashes[1]||probe.configSha256!==hashes[2])
+    throw Error('Invalid isolated broker readiness readback');
+  // A concurrent writer invalidates the readback; never silently accept it.
+  for(let i=0;i<files.length;i++)if(digest(await fs.readFile(files[i]))!==hashes[i])throw Error('Broker binding changed during verification');
+  return probe;
+}
+
 const healthCodes = new Set(['RELAY_UNREADABLE','RELAY_NOT_POLLING','RELAY_STALE','HOST_UNREADABLE','HOST_STALE','PLUGIN_BROKER_UNREADABLE']);
 async function healthEvidence(config,run) {
   const id=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
@@ -140,6 +160,17 @@ export async function perform(home,job,hooks) {
   const next=await eligibility(home,job.target,root,job.automatic);
   if(next.old.root!==job.previousRoot||next.old.pkg.version!==job.previousVersion)throw Error('Stale upgrade job');
   job.status='applying';job.root=root;job.startedAt=new Date().toISOString();await save();
+  const complete=async()=>{
+    job.status='completed';job.endedAt=new Date().toISOString();await save();
+    try { job.cleanup=await cleanupStaleBackups(home);await save(); }
+    catch(error) { job.cleanupError=error.message;await save().catch(()=>{}); }
+    return job;
+  };
+  const fail=async(error,recoveryHooks)=>{
+    let message=error.message;
+    if(job.target==='main'&&job.rollback&&/is unhealthy/.test(message))message+=await healthEvidence(config,run).catch(()=> '');
+    job.error=message;await save();return recover(home,job,recoveryHooks);
+  };
   try {
     if(job.target==='main') {
       job.packageManager=await packageManager(root,run);await save();
@@ -183,38 +214,44 @@ export async function perform(home,job,hooks) {
         job.brokerReadiness=await refreshBroker(config,run,brokerImage);
       }
     } else {
-      const old=next.old.record,r=await read(path.join(home,'registry.json'));
+      const old=next.old.record;
       const secrets=await read(path.join(home,'packages',job.target,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
       const s=await snapshot(root),candidate={...old,source:root,revision:s.revision,manifest:s.manifest,deployment:s.deployment,sharedRevisions:s.sharedRevisions};
       for (const key of old.sharedEnabled || []) if (sharedIdentity(old, key).fingerprint !== sharedIdentity(candidate, key).fingerprint) throw Error('Shared worker changed; disable this client and coordinate an explicit shared worker upgrade before updating');
       await checkFolders(config,candidate,home);
       const stage={...candidate,compose:path.join(dir,'compose.json')};await atomic(stage.compose,await compose(config,stage,secrets,home));
       for(const [service,spec] of Object.entries(stage.deployment.services))await run('docker',[...pluginArgs(stage),spec.image?'pull':'build',service]);
-      const running=Boolean((await run('docker',[...pluginArgs(old),'ps','--status','running','-q'])).trim());
-      job.rollback={record:old,registry:structuredClone(r),compose:await read(old.compose),running};await save();
-      await run('docker',[...pluginArgs(old),'stop']);
-      const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
-      const volumes=new Set(Object.values(old.deployment.services).flatMap(s=>Object.keys(s.volumes||{})));
-      for(const name of volumes)await backupVolume(run,old,name,backup);
-      await atomic(old.compose,await compose(config,candidate,secrets,home));
-      if(running)await run('docker',[...pluginArgs(candidate),'up','-d','--wait','--wait-timeout','90','--no-build']);
-      r.plugins[job.target]=candidate;
-      for(const alias of Object.keys(candidate.manifest.commands))r.commands[alias]=job.target;
-      await atomic(path.join(home,'registry.json'),r);
-      job.brokerReadiness=await refreshBroker(config,run);
-      job.runtimeVerified=running;
+      return await locked(home,async()=>{
+        try {
+          const current=await eligibility(home,job.target,root,job.automatic);
+          if(current.old.root!==job.previousRoot||current.old.pkg.version!==job.previousVersion||JSON.stringify(current.old.record)!==JSON.stringify(old)||JSON.stringify((await state(home)).config)!==JSON.stringify(config))throw Error('Stale upgrade job');
+          if(await brokerNeedsRefresh(config,run)&&!hooks.refreshPluginBroker)throw Error('Broker host binding changed; retry the plugin update after native work drains');
+          const r=await read(path.join(home,'registry.json'));
+          const running=Boolean((await run('docker',[...pluginArgs(old),'ps','--status','running','-q'])).trim());
+          job.rollback={record:old,registry:structuredClone(r),compose:await read(old.compose),running};await save();
+          await run('docker',[...pluginArgs(old),'stop']);
+          const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
+          const volumes=new Set(Object.values(old.deployment.services).flatMap(s=>Object.keys(s.volumes||{})));
+          for(const name of volumes)await backupVolume(run,old,name,backup);
+          await atomic(old.compose,await compose(config,candidate,secrets,home));
+          if(running)await run('docker',[...pluginArgs(candidate),'up','-d','--wait','--wait-timeout','90','--no-build']);
+          r.plugins[job.target]=candidate;
+          for(const alias of Object.keys(candidate.manifest.commands))r.commands[alias]=job.target;
+          await atomic(path.join(home,'registry.json'),r);
+          job.brokerReadiness=hooks.refreshPluginBroker?await refreshBroker(config,run):await verifyBroker(config,run);
+          await publishBrokerPlugins(home,agent.controlDir);
+          job.runtimeVerified=running;
+          return await complete();
+        } catch(error) { return fail(error,{...hooks,registryLocked:true}); }
+      },{drainInvocations:true,signal:hooks.signal});
     }
-    job.status='completed';job.endedAt=new Date().toISOString();await save();
-    try { job.cleanup=await cleanupStaleBackups(home);await save(); }
-    catch(error) { job.cleanupError=error.message;await save().catch(()=>{}); }
-    return job;
-  }catch(error){
-    let message=error.message;
-    if(job.target==='main'&&job.rollback&&/is unhealthy/.test(message))message+=await healthEvidence(config,run).catch(()=> '');
-    job.error=message;await save();return recover(home,job,hooks);
-  }
+    return await complete();
+  }catch(error){return fail(error,hooks);}
+
 }
 export async function recover(home,job,hooks) {
+  if(job.target!=='main'&&job.rollback&&!hooks.registryLocked)
+    return locked(home,()=>recover(home,job,{...hooks,registryLocked:true}),{drainInvocations:true,signal:hooks.signal});
   const run=hooks.execute||execute,{config}=await state(home);
   try {
     if(job.rollback) {
@@ -239,7 +276,8 @@ export async function recover(home,job,hooks) {
         const b=job.rollback;
         await run('docker',[...pluginArgs(b.record),'stop']);
         await atomic(b.record.compose,b.compose);await atomic(path.join(home,'registry.json'),b.registry);
-        job.rollbackBrokerReadiness=await refreshBroker(config,run);
+        job.rollbackBrokerReadiness=hooks.refreshPluginBroker?await refreshBroker(config,run):await verifyBroker(config,run);
+        await publishBrokerPlugins(home,(await state(home)).agent.controlDir);
         if(b.running)await run('docker',[...pluginArgs(b.record),'up','-d','--wait','--wait-timeout','90','--no-build']);
       }
       job.status='rolled-back';

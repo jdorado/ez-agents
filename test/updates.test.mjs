@@ -9,11 +9,11 @@ import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
-import { perform, environment, packageManager, backupStateDirectory, execute } from '../src/updates/runtime.mjs';
+import { perform, environment, packageManager, backupStateDirectory, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
-import { providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade } from '../src/updates/supervisor.mjs';
+import { providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade, withUpgrade } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
 
 test('structured runtime output excludes warnings but failures retain diagnostics',async()=>{
@@ -120,6 +120,7 @@ function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},l
   if(args.at(-1)==='--version')return '10.30.3';
   if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
   if(args.includes('ps'))return stopped?'':'a'.repeat(64);
+  if(args.some(arg=>arg.includes("const fs=require('fs'),crypto=require('crypto')")))return digest(await fs.readFile(path.join(f.config.deploymentDir,'host-executor.json')));
   if(args.some(arg=>arg.includes('EZ_BROKER_STRUCTURAL_READINESS_FAILED'))) {const [hostSha256,registrySha256,configSha256]=args.slice(-3);return JSON.stringify({version:1,ready:true,hostSha256,registrySha256,configSha256,plugins:[]});}
   if(args[0]==='image'&&args[1]==='inspect')return 'sha256:'+'b'.repeat(64);
   if(args.includes('--force-recreate'))brokerImage=(await fs.readFile(args[args.lastIndexOf('--env-file')+1],'utf8')).trim().split('=')[1];
@@ -387,7 +388,7 @@ test('plugin updates register additive command routes on an unchanged deployment
  const dispatch=await prepareCommand(f.home,'query',[]);assert.deepEqual(dispatch.argv.slice(-4),['node','sample','/app/bin/example.mjs','query']);
  assert(r.calls.some(call=>call.includes('up')));
 });
-test('isolated plugin replacement recreates only the pinned broker and verifies activation and rollback',async t=>{
+test('isolated plugin replacement preserves the live broker and verifies activation and rollback',async t=>{
  const f=await fixture(t,'plugin');
  await fs.appendFile(path.join(f.config.deploymentDir,'docker.env'),'EZ_EXECUTOR_TRANSPORT=local\n');
  const job=await queued(f),r=runtime(f),execute=r.execute;
@@ -407,10 +408,11 @@ test('isolated plugin replacement recreates only the pinned broker and verifies 
  const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
  assert.equal((await perform(f.home,interrupted,r)).status,'rolled-back');
  assert.equal(observed,'0.1.0');assert.equal(interrupted.rollbackBrokerReadiness.ready,true);
- assert.equal(r.calls.filter(call=>call.includes('--force-recreate')).length,2);
+ assert.equal(r.calls.filter(call=>call.includes('--force-recreate')).length,0);
  assert(!r.calls.some(call=>call.includes('restart')||call[0]==='stopHost'));
+ assert.equal((await read(path.join(f.agent.controlDir,'plugin-broker-plugins.json'))).plugins[0].version,'0.1.0');
 });
-for(const boundary of ['recreate','probe','readback'])test(`isolated broker ${boundary} failure cannot complete an update`,async t=>{
+for(const boundary of ['probe','readback'])test(`isolated broker ${boundary} failure cannot complete an update`,async t=>{
  const f=await fixture(t,'plugin');await fs.appendFile(path.join(f.config.deploymentDir,'docker.env'),'EZ_EXECUTOR_TRANSPORT=local\n');
  const job=await queued(f),r=runtime(f),base=r.execute;
  r.execute=async(c,a,o)=>{
@@ -697,4 +699,55 @@ for(const mode of ['exact','wrong-image','unhealthy']) test(`recovery reuses onl
  assert.equal(calls.some(c=>c.includes('up')),mode!=='exact');
  assert.equal(calls.some(c=>c.includes('stop')),mode!=='exact');
  assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
+});
+
+
+test('plugin upgrade builds during a native turn, then gates and drains calls for activation',async t=>{
+ const f=await fixture(t,'plugin'),job=await queued(f),r=runtime(f),execute=r.execute;
+ await fs.mkdir(path.join(f.agent.controlDir,'host-executor'));
+ await atomic(path.join(f.agent.controlDir,'host-executor/task.running.json'),{pid:process.pid});
+ let built,continueBuild;
+ const building=new Promise(resolve=>built=resolve),hold=new Promise(resolve=>continueBuild=resolve);
+ r.execute=async(command,args,options)=>{
+  if(args.includes('build')) {
+   await assert.rejects(fs.access(path.join(f.home,'registry.lock')),{code:'ENOENT'});
+   built();await hold;
+  }
+  return execute(command,args,options);
+ };
+ const upgrade=withUpgrade(f.agent.controlDir,job,new AbortController().signal,()=>perform(f.home,job,r),{isIdle:async()=>false});
+ await building;
+ const oldCall=await prepareCommand(f.home,'sample',[],{invocation:true});
+ continueBuild();
+ for(let n=0;n<100&&!await fs.access(path.join(f.home,'registry.lock')).then(()=>true,()=>false);n++)await new Promise(resolve=>setTimeout(resolve,10));
+ await fs.access(path.join(f.home,'registry.lock'));
+ assert(!r.calls.some(call=>call.includes('stop')));
+ let admitted=false;
+ const nextCall=prepareCommand(f.home,'sample',[],{invocation:true}).then(command=>{admitted=true;return command;});
+ await new Promise(resolve=>setTimeout(resolve,50));assert.equal(admitted,false);
+ await oldCall.release();
+ assert.equal((await upgrade).status,'completed');
+ const command=await nextCall;assert.equal(command.revision,(await read(path.join(f.home,'registry.json'))).plugins.sample.revision);await command.release();
+ await fs.access(path.join(f.agent.controlDir,'host-executor/task.running.json'));
+ await assert.rejects(fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')),{code:'ENOENT'});
+ assert(!r.calls.some(call=>call[0]==='stopHost'||call.includes('--force-recreate')));
+});
+
+test('core upgrades still defer for active work; cancelled plugin admission never applies',async t=>{
+ const root=await fs.mkdtemp(path.join(tmpdir(),'ez-plugin-admission-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const controller=new AbortController();let applied=0;
+ await withUpgrade(root,{id:'core',target:'main'},controller.signal,async()=>applied++,{isIdle:async()=>false});assert.equal(applied,0);
+ controller.abort();await withUpgrade(root,{id:'plugin',target:'sample'},controller.signal,async()=>applied++);assert.equal(applied,0);
+});
+
+
+test('changed single-file broker binding retains full native drain and broker recreation',async t=>{
+ const f=await fixture(t,'plugin'),job=await queued(f),r=runtime(f);
+ await fs.appendFile(path.join(f.config.deploymentDir,'docker.env'),'EZ_EXECUTOR_TRANSPORT=local\n');
+ const execute=r.execute;r.execute=async(c,a,o)=>a.some(arg=>arg.includes("const fs=require('fs'),crypto=require('crypto')"))?'0'.repeat(64):execute(c,a,o);
+ assert.equal(await brokerNeedsRefresh(f.config,r.execute),true);
+ let applied=false;
+ await withUpgrade(f.agent.controlDir,job,new AbortController().signal,async()=>{applied=true;},{requiresIdle:true,isIdle:async()=>false});assert.equal(applied,false);
+ assert.equal((await perform(f.home,job,{...r,refreshPluginBroker:true})).status,'completed');
+ assert.equal(r.calls.filter(call=>call.includes('--force-recreate')).length,1);
 });
