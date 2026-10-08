@@ -55,6 +55,47 @@ Paused, stale-owner, overlapping or held tasks and unmet conditions cannot be
 triggered. Historical deferred tasks keep their source context
 available through `ezenciel-agents-schedule context`.
 
+## Ordered setup fallback
+
+An agent task may list up to three fallback setups after its saved one, for
+example `claude · opus → claude · sonnet → codex · gpt-6-sol`:
+
+```sh
+ezenciel-agents-schedule create --name Daily --cli claude --model opus \
+  --cron '0 9 * * *' --timezone Asia/Dubai --text 'Prepare the daily report.' \
+  --fallback cli=claude,model=sonnet,effort=medium --fallback cli=codex,model=gpt-6-sol
+```
+
+`edit` keeps the saved fallbacks unless `--fallback` replaces them or
+`--clear-fallbacks` removes them. Setups must be distinct and each needs a model.
+
+Core advances to the next setup only with typed evidence that nothing ran: the
+CLI is not installed or executable, or the provider rejected the turn before any
+model output, tool or hook item (quota/rate limit, billing, overload, server
+error, unavailable model or bad request). It stops, without replay, on access
+denial (authentication, account or organization), cancellation, relay shutdown,
+a schedule edit, a policy or unknown error, an interrupted transport, or any
+failure after work began. Evidence comes from structured events only: Codex
+native-session `codexErrorInfo` and Claude `stream-json` error fields (scheduled
+Claude runs use `--output-format stream-json`; the host forwards only a compact
+startup summary). Other engines advance only when their CLI is unavailable.
+
+A quota rejection skips the remaining setups in the same quota scope: the native
+client (`claude`, `codex` including desktop and custom Codex providers, `grok`)
+or the upstream provider for OpenCode/Pi models. A different credential alone is
+never treated as an independent allowance. Each setup runs at most once per
+occurrence.
+
+Every attempt keeps the same run ID, occurrence, schedule revision, workspace,
+delivery binding and scheduled concurrency slot, in a fresh native session.
+`run RUN_ID` shows `attempts`: each setup, quota scope, outcome, failure category
+(`cli-unavailable`, `quota`, `provider-rejected`, `access-denied`,
+`after-work-began`, `uncertain`, or `same-quota-scope` for a skipped setup), exit
+code and reported reset time. If every setup is unavailable the run fails with
+reason `setups-unavailable`, a summary of each setup, and an owner notice on
+Telegram-bound tasks. Core never purchases credits, enables overage or consumes
+reset credits; the next regular occurrence runs normally.
+
 ## Registered script schedules
 
 A schedule has one execution type. **Agent** schedules run the saved prompt with

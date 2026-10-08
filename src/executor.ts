@@ -98,6 +98,10 @@ export const executorJobEnv = (
 
 export const grokJobEnv = executorJobEnv
 
+// The selected native CLI is not installed or not executable. Nothing ran, so a
+// scheduled occurrence may advance to its next setup.
+export class CliUnavailableError extends Error {}
+
 // Package binDir is Ez tools (ezenciel-agents-message). Native CLIs come from the
 // host PATH so one agent's wrapper cannot retarget another agent's CODEX_HOME.
 export const resolveHostCommand = (command: string, pathValue = process.env.PATH): string => {
@@ -110,14 +114,14 @@ export const resolveHostCommand = (command: string, pathValue = process.env.PATH
       return candidate
     } catch { /* try the next PATH entry */ }
   }
-  throw new Error(`Native CLI ${command} is not executable on the host PATH`)
+  throw new CliUnavailableError(`Native CLI ${command} is not executable on the host PATH`)
 }
 export type CliAdapter = {
   name: string
   command: string
   description: string
   buildArgs: (
-    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'additionalWorkspaces' | 'codexAutoCompactTokens' | 'codexSandbox' | 'codexProvider'> & { controlDir?: string },
+    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'additionalWorkspaces' | 'codexAutoCompactTokens' | 'codexSandbox' | 'codexProvider' | 'nativeSession'> & { controlDir?: string },
     promptFile: string,
     promptText: string,
   ) => string[]
@@ -164,6 +168,9 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
         args.push('--session-id', opts.sessionId)
       }
       args.push('--print', '--dangerously-skip-permissions')
+      // Scheduled runs stream structured events so core can tell a provider
+      // rejection before work from a failure after work began.
+      if (opts.nativeSession) args.push('--output-format', 'stream-json', '--verbose')
       for (const directory of [opts.controlDir, opts.sharedWorkspace, ...(opts.additionalWorkspaces ?? []), opts.toolsHome])
         if (directory) args.push('--add-dir', directory)
       if (opts.model) args.push('--model', opts.model)

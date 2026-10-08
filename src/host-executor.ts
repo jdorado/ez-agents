@@ -7,7 +7,9 @@ import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath }
 import path from 'node:path'
 import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
-import { startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
+import { CliUnavailableError, startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
+import { activeSetup } from './runs.js'
+import { startupLine, startupObserver } from './setup-fallback.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
 import { readModels, sameEngine, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
@@ -48,6 +50,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       new Set(installation.agents.map(a=>a.controlDir)).size !== installation.agents.length)
     throw new Error('Each agent requires a separate workspace and control directory')
   const active = new Map<string, ChildProcess>()
+  // A fallback attempt reuses its run ID; claim it only after the prior attempt's cleanup.
+  const claimed = new Set<string>()
   const tasks = new Set<Promise<void>>()
   let catalogRefresh: Promise<void> | undefined
   const locks: string[] = []
@@ -148,6 +152,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
         for (const file of await readdir(directory)) {
           if (!file.endsWith('.request.json') || !isHostRunId(file.slice(0,-13))) continue
           const id=file.slice(0,-13)
+          if (claimed.has(path.join(directory,id))) continue
           let run
           try {
             run = await readRun(agent.controlDir, id)
@@ -170,6 +175,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             activeWorkspaces.set(agent, workspace)
           }
           workspace.lanes.set(id, scheduled)
+          claimed.add(base)
           // Keep plugin workspace invocations excluded until all native jobs finish.
           const releaseWorkspace = async () => {
             workspace.lanes.delete(id)
@@ -179,11 +185,12 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             }
           }
           try { await rename(base+'.request.json',base+'.running.json') }
-          catch (error) { await releaseWorkspace(); throw error }
+          catch (error) { claimed.delete(base); await releaseWorkspace(); throw error }
           const task=(async()=>{
             let job: Awaited<ReturnType<typeof startExecutorJob>> | undefined
             let cancellation: ReturnType<typeof setInterval> | undefined
             let writes=Promise.resolve()
+            let observeClaude=false
             const emit=(event:unknown)=>{writes=writes.then(()=>appendFile(base+'.events',JSON.stringify(event)+'\n',{mode:0o600}))}
             try {
               try { await readFile(base+'.cancel'); throw new Error('Cancelled') } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
@@ -203,15 +210,17 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                   script:{...run.script,scheduleId:run.scheduled.id,scheduleRevision:run.scheduled.revision,dueAt:run.scheduled.dueAt}}
                 job=await launch(request.texts,options)
               } else {
-                if (run?.scheduled) {
-                  assertScheduledModel(run.execution?.preset.model)
-                  if (opts.model !== run.execution!.preset.model) throw new Error('Scheduled run model does not match its saved task model')
-                }
                 const cli = opts.cli || installation.cli
+                if (run?.scheduled) {
+                  const setup = activeSetup(run)
+                  assertScheduledModel(setup?.model)
+                  if (opts.model !== setup!.model || cli !== setup!.cli) throw new Error('Scheduled run model does not match its saved task model')
+                  observeClaude = cli === 'claude'
+                }
                 resolveExecutor(cli)
                 // The credential home comes from the authorized run's captured
                 // choice; a request can never move it to another account.
-                const captured = run?.execution?.preset
+                const captured = run?.scheduled ? activeSetup(run) : run?.execution?.preset
                 if ((opts.authProfile !== undefined || (captured?.cli === cli && captured.authProfile !== undefined)) &&
                     !(captured && sameEngine(captured, {cli, authProfile: opts.authProfile})))
                   throw new Error('Run auth profile does not match its captured AI selection')
@@ -237,7 +246,14 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               active.set(base,job.child)
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid}),{mode:0o600})
               if(signal.aborted)terminateJob(job.child)
-              job.child.stdout?.on('data',chunk=>emit({stream:'stdout',text:chunk.toString()}))
+              // Scheduled Claude streams every event; forward only the startup summary.
+              const startup = observeClaude ? startupObserver() : undefined
+              let summary = ''
+              job.child.stdout?.setEncoding('utf8').on('data',(chunk:string)=>{
+                if (!startup) return emit({stream:'stdout',text:chunk})
+                startup.write(chunk)
+                if (startup.summary() !== summary) { summary = startup.summary(); emit({stream:'stdout',text:summary+'\n'}) }
+              })
               job.child.stderr?.on('data',chunk=>emit({stream:'stderr',text:chunk.toString()}))
               cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{})},250)
               const code=await new Promise<number>(resolve=>job!.child.once('close',code=>resolve(code??1)))
@@ -245,7 +261,9 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await job.cleanup()
               job = undefined
               emit({stream:'exit',code})
-            } catch (error) { emit({stream:'stderr',text:'Host CLI execution failed: '+redactFailure(error instanceof Error ? error.message : 'Unknown error')+'\n'}); emit({stream:'exit',code:1}) }
+            } catch (error) {
+              if (error instanceof CliUnavailableError) emit({stream:'stdout',text:startupLine({workBegan:false,rejection:{category:'cli-unavailable'}})+'\n'})
+              emit({stream:'stderr',text:'Host CLI execution failed: '+redactFailure(error instanceof Error ? error.message : 'Unknown error')+'\n'}); emit({stream:'exit',code:1}) }
             finally {
               if(cancellation)clearInterval(cancellation)
               await job?.cleanup().catch(() => {})
@@ -255,6 +273,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await rm(base+'.cancel',{force:true})
               active.delete(base)
               await releaseWorkspace()
+              claimed.delete(base)
             }
           })()
           tasks.add(task); void task.finally(()=>tasks.delete(task))

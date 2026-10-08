@@ -6,7 +6,8 @@ import { normalizeReactionEmoji } from './reaction.js'
 import { validScheduledOrigin, type ScheduledOrigin } from './scheduler.js'
 import type { IncomingItem } from './inbox.js'
 import { assertId } from './identity.js'
-import { isExecutionChoice, type ExecutionChoice } from './ai.js'
+import { isExecutionChoice, type AiPreset, type ExecutionChoice } from './ai.js'
+import type { SetupAttempt } from './setup-fallback.js'
 import type { ScriptRunRef } from './scripts.js'
 import {authorizeDeliveryContext,currentDeliveryOwner,type DeliveryContext} from './delivery-context.mjs'
 
@@ -32,6 +33,8 @@ export type RunRecord = {
   pid?: number
   blockReason?: string
   execution?: ExecutionChoice
+  // Ordered task setups tried for this occurrence; the last one is active.
+  attempts?: SetupAttempt[]
   replyOnly?: boolean
   exitCode?: number | null
   failureReason?: string
@@ -129,6 +132,14 @@ const pruneTerminals = (controlDir: string): void => {
   }
 }
 
+// The setup the current attempt runs with: the latest recorded attempt, else the
+// saved choice. Only a setup saved on the task itself is ever admitted.
+export const activeSetup = (run: Pick<RunRecord, 'attempts' | 'execution'>): AiPreset | undefined => {
+  if (!run.execution) return undefined
+  const preset = [...run.attempts ?? []].reverse().find(attempt => attempt.outcome !== 'skipped')?.preset ?? run.execution.preset
+  return [run.execution.preset, ...run.execution.fallbacks ?? []].find(candidate => JSON.stringify(candidate) === JSON.stringify(preset))
+}
+
 export const newRunId = (): string => `r_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`
 
 export class RunStore {
@@ -198,7 +209,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut' | 'attempts'>>,
   ): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     const run = store.get(id)

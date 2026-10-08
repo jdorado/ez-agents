@@ -8,7 +8,7 @@ import { type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './contro
 import { validApplicationOrigin } from './application-origin.js'
 import { ApplicationBindings } from './application-channel.js'
 import { assertId, ownsRun } from './identity.js'
-import { type ExecutionChoice, isExecutionChoice, persistedPreset } from './ai.js'
+import { type AiPreset, type ExecutionChoice, isExecutionChoice, persistedPreset } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { Scripts, assertScriptArgs, assertScriptId, type ScriptRunRef } from './scripts.js'
@@ -139,8 +139,13 @@ export class Scheduler {
       if (!input.execution) throw new Error('Schedule needs name, text and an AI selection')
       const execution: ExecutionChoice = {...input.execution, preset: persistedPreset(input.execution.preset)}
       if (!input.name || !input.text?.trim() || !isExecutionChoice(execution)) throw new Error('Schedule needs name, text and an AI selection')
-      assertScheduledModel(execution.preset.model)
-      assertEffort(execution.preset.effort, execution.preset.model, execution.preset.cli)
+      const setups = [execution.preset, ...execution.fallbacks ?? []]
+      for (const preset of setups) {
+        assertScheduledModel(preset.model)
+        assertEffort(preset.effort, preset.model, preset.cli)
+      }
+      const key = (p: AiPreset) => JSON.stringify([p.cli, p.provider, p.model, p.effort])
+      if (new Set(setups.map(key)).size !== setups.length) throw new Error('Task setups must be distinct')
       s = {...input, execution, trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
     }
     const now = Date.now()

@@ -27,7 +27,8 @@ import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch } from './control-state.js'
 import { ApprovalStore } from './approval.js'
-import { startExecutorJob, terminateJob, opencodeDataHome, claudeConfigHome } from './executor.js'
+import { CliUnavailableError, startExecutorJob, terminateJob, opencodeDataHome, claudeConfigHome } from './executor.js'
+import { advances, nextSetup, quotaScope, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
@@ -38,7 +39,7 @@ import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
 import { createConversationMenu } from './conversation-menu.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
-import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset } from './ai.js'
+import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset, type AiPreset } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 import { runPromptSuffix } from './prompt-suffix.js'
 import { softwareStatus } from './software-status.js'
@@ -236,6 +237,26 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         await releaseExternal(run)
         return
       }
+      // Shared by a first launch and a fallback launch that cannot start.
+      const startFailed = async (error: unknown) => {
+        if (!run.scheduled && activeTypingTimer) {
+          clearInterval(activeTypingTimer)
+          activeTypingTimer = null
+        }
+        if (run.scheduled) background.delete(run.id)
+        const unavailable = error instanceof SetupsUnavailableError
+        await runs.patch(run.id, { status: 'failed', failureReason: unavailable ? 'setups-unavailable' : 'executor-start', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
+        await releaseExternal(run)
+        console.error('run start failed', run.id, safeError(error))
+        if (bot && !run.application && !run.delivery && run.chatId !== undefined)
+          await sendChat(run.chatId, unavailable ? `Run ${run.id} could not start. ${safeError(error)}` : `Run ${run.id} failed to start. Check the local relay log.`)
+        setImmediate(() => {
+          void runs
+            .nextQueued()
+            .then((next) => next && startJob(next))
+            .catch(console.error)
+        })
+      }
       try {
         const launchStarted = performance.now()
         const started = await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString() })
@@ -251,122 +272,194 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           : await control.executionSession(started.execution!)
         const selected = script ? initialPreset('codex') : run.taskId ? (started.execution?.preset.cli === 'codex' ? started.execution.preset : initialPreset('codex')) : started.execution!.preset
         if (run.scheduled && !script) assertScheduledModel(selected.model)
-        const { child, cleanup } = await launch(texts, script ? {
-          workspace: config.workspace, timeoutMs: 0, repairEnabled: config.repairEnabled, runId: started.id,
-          controlDir: config.controlDir, binDir,
-          script: { ...script.ref, scheduleId: script.scheduled.id, scheduleRevision: script.scheduled.revision, dueAt: script.scheduled.dueAt },
-        } : {
-          workspace: config.workspace,
-          timeoutMs: config.executorTimeoutMs,
-          repairEnabled: config.repairEnabled,
-          runId: started.id,
-          controlDir: config.controlDir,
-          binDir,
-          cli: selected.cli,
-          model: selected.model,
-          effort: selected.effort,
-          provider: selected.provider,
-          authProfile: selected.authProfile,
-          codexAutoCompactTokens: config.codexAutoCompactTokens,
-          codexSandbox: !run.taskId && selected.cli === 'codex' ? config.codexSandbox : undefined,
-          sessionId: session.nativeSessionId || session.sessionId,
-          isResume: session.hasStarted,
-          promptSuffix: runPromptSuffix(started),
-          taskRun: Boolean(run.taskId),
-          nativeSession: Boolean(run.scheduled),
-          onSession: run.external || run.taskId ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
-        })
-        const executionStarted = performance.now()
-        // Attach before disk writes: a fast child can close while PID persistence
-        // is pending, and Node drains its remaining pipes during process close.
-        let failureReason = 'executor-exit', errorTail = '', interrupted = false, outputTail = '', timedOut = false
-        // Script output is bounded diagnostics for run inspection, never chat.
-        if (script) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { outputTail = (outputTail + chunk).slice(-16384) })
-        const scriptTimer = script ? setTimeout(() => { timedOut = true; terminateJob(child) }, script.registration.timeoutSeconds * 1000) : undefined
-        child.once('close', () => clearTimeout(scriptTimer))
-        child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
-          errorTail = (errorTail + chunk).slice(-16384)
-          if (script) outputTail = (outputTail + chunk).slice(-16384)
-          if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
-          if (chunk.includes('Host executor client interrupted by')) {
-            failureReason = 'host-executor-transport-interrupted'
-            interrupted = true
-          }
-          if (chunk.trim()) console.error('executor stderr', started.id, chunk.trim())
-        })
-        console.info('run timing', { run_id: run.id, phase: 'launch',
-          queue_ms: Math.max(0, Date.parse(started.startedAt!) - Date.parse(run.createdAt)),
-          startup_ms: Math.round(executionStarted - launchStarted), resumed: session.hasStarted })
-        if (run.scheduled) background.set(run.id,child)
-        else activeChild = child
-        const finished = new Promise<number | null>((resolve) => {
-          if (child.exitCode !== null || child.signalCode !== null) resolve(child.exitCode)
-          else child.once('close', resolve)
-        })
-        await runs.patch(started.id, { pid: child.pid })
-        console.info('run started', {
-          run_id: started.id,
-          pid: child.pid,
-          cli: script ? 'script' : selected.cli,
-          ...(script ? { script: script.ref.id, script_revision: script.ref.revision } : {}),
-          session: session.sessionId,
-          isResume: session.hasStarted,
-        })
-
-        if (!run.scheduled && activeTypingTimer) clearInterval(activeTypingTimer)
-        if (bot && run.chatId !== undefined && !run.application && !run.external && !run.taskId && !run.scheduled) activeTypingTimer = setInterval(() => {
-          if (performance.now() - executionStarted < 30000) void bot.api.sendChatAction(run.chatId!, 'typing').catch(() => {})
-        }, 4000)
-
-        const completion = finished.then((code) => {
-          console.info('run timing', { run_id: run.id, phase: 'execution',
-            execution_ms: Math.round(performance.now() - executionStarted), exit_code: code })
-          return (async () => {
-            await withStartLock(async () => {
-              try {
-                await cleanup()
-                if (code === 0 && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(session.sessionId)
-                const cancelled = !timedOut && (ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id)))
-                if (timedOut) failureReason = 'script-timeout'
-                const failed = !cancelled && (code !== 0 || timedOut)
-                await runs.patch(started.id, { status: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', endedAt: new Date().toISOString(), exitCode: code,
-                  ...(script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
-                  ...(failed ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(timedOut ? `Script exceeded its ${script!.registration.timeoutSeconds}s timeout and was terminated` : errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
-                await releaseExternal(run)
-              } catch (error) {
-                await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
-                console.error('Session completion failed', safeError(error))
-              } finally {
-                if (run.scheduled) background.delete(run.id)
-                else {
-                  activeChild = null
-                  if (activeTypingTimer) clearInterval(activeTypingTimer)
-                  activeTypingTimer = null
-                }
-              }
-            })
-            console.info('run ended', { run_id: started.id, code })
-            const next = await runs.nextQueued()
-            if (next && !shuttingDown) await startJob(next)
-          })().catch((error) => console.error('Run completion failed', error.message))
-        })
-        completions.add(completion)
-        void completion.finally(() => completions.delete(completion))
-      } catch (error) {
-        if (!run.scheduled && activeTypingTimer) {
-          clearInterval(activeTypingTimer)
-          activeTypingTimer = null
+        // A scheduled occurrence may name ordered fallback setups. They share this
+        // run, workspace and concurrency slot; each is tried at most once.
+        const candidates = run.scheduled && !script ? setupCandidates(started.execution!) : [selected]
+        const ordered = candidates.length > 1
+        let attempts: SetupAttempt[] = []
+        const settle = (change: Partial<SetupAttempt>) => {
+          attempts = [...attempts.slice(0, -1), { ...attempts[attempts.length - 1], ...change, endedAt: new Date().toISOString() }]
         }
-        await runs.patch(run.id, { status: 'failed', failureReason: 'executor-start', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
-        await releaseExternal(run)
-        console.error('run start failed', run.id, safeError(error))
-        if (bot && !run.application && !run.delivery && run.chatId !== undefined) await sendChat(run.chatId, `Run ${run.id} failed to start. Check the local relay log.`)
-        setImmediate(() => {
-          void runs
-            .nextQueued()
-            .then((next) => next && startJob(next))
-            .catch(console.error)
-        })
+        // Advance only after an eligible pre-work failure of a current, uncancelled
+        // occurrence. Setups in an exhausted quota scope are skipped and recorded.
+        const advance = async (): Promise<AiPreset | undefined> => {
+          let preset: AiPreset | undefined
+          const current = !shuttingDown && !await scheduler.cancelled(run.id) ? (await control.status()).owner : undefined
+          if (current && ownsRun(current, run) && await scheduler.current(run, current)) {
+            const next = nextSetup(candidates, attempts)
+            attempts = [...attempts, ...next.skipped]
+            if (!next.preset) {
+              await runs.patch(run.id, { attempts })
+              throw new SetupsUnavailableError(unavailableSummary(attempts))
+            }
+            preset = next.preset
+          }
+          await runs.patch(run.id, { attempts })
+          return preset
+        }
+        // Each attempt is a fresh native session; a rejected Claude attempt already claimed its ID.
+        const launchSetup = async (preset: AiPreset): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; preset: AiPreset }> => {
+          for (;;) {
+            const sessionId = attempts.length ? randomUUID() : session.nativeSessionId || session.sessionId
+            if (ordered) {
+              attempts = [...attempts, { preset, quotaScope: quotaScope(preset), outcome: 'running', startedAt: new Date().toISOString() }]
+              await runs.patch(run.id, { attempts })
+            }
+            try {
+              return { ...await launch(texts, script ? {
+                workspace: config.workspace, timeoutMs: 0, repairEnabled: config.repairEnabled, runId: started.id,
+                controlDir: config.controlDir, binDir,
+                script: { ...script.ref, scheduleId: script.scheduled.id, scheduleRevision: script.scheduled.revision, dueAt: script.scheduled.dueAt },
+              } : {
+                workspace: config.workspace,
+                timeoutMs: config.executorTimeoutMs,
+                repairEnabled: config.repairEnabled,
+                runId: started.id,
+                controlDir: config.controlDir,
+                binDir,
+                cli: preset.cli,
+                model: preset.model,
+                effort: preset.effort,
+                provider: preset.provider,
+                authProfile: preset.authProfile,
+                codexAutoCompactTokens: config.codexAutoCompactTokens,
+                codexSandbox: !run.taskId && preset.cli === 'codex' ? config.codexSandbox : undefined,
+                sessionId,
+                isResume: session.hasStarted,
+                promptSuffix: runPromptSuffix(started),
+                taskRun: Boolean(run.taskId),
+                nativeSession: Boolean(run.scheduled),
+                onSession: run.external || run.taskId ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
+              }), preset }
+            } catch (error) {
+              if (ordered && !(error instanceof CliUnavailableError)) {
+                settle({ outcome: 'failed', category: 'uncertain' })
+                await runs.patch(run.id, { attempts })
+              }
+              if (!ordered || !(error instanceof CliUnavailableError)) throw error
+              settle({ outcome: 'failed', category: 'cli-unavailable' })
+              const next = await advance()
+              if (!next) throw error
+              preset = next
+            }
+          }
+        }
+        const watch = async ({ child, cleanup, preset }: Awaited<ReturnType<typeof launchSetup>>): Promise<void> => {
+          const executionStarted = performance.now()
+          // Attach before disk writes: a fast child can close while PID persistence
+          // is pending, and Node drains its remaining pipes during process close.
+          let failureReason = 'executor-exit', errorTail = '', interrupted = false, outputTail = '', timedOut = false
+          // Script output is bounded diagnostics for run inspection, never chat.
+          if (script) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { outputTail = (outputTail + chunk).slice(-16384) })
+          // Structured startup events decide whether a failed setup may advance.
+          const startup = ordered ? startupObserver() : undefined
+          if (startup) child.stdout?.setEncoding('utf8').on('data', startup.write)
+          const scriptTimer = script ? setTimeout(() => { timedOut = true; terminateJob(child) }, script.registration.timeoutSeconds * 1000) : undefined
+          child.once('close', () => clearTimeout(scriptTimer))
+          child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+            errorTail = (errorTail + chunk).slice(-16384)
+            if (script) outputTail = (outputTail + chunk).slice(-16384)
+            if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
+            if (chunk.includes('Host executor client interrupted by')) {
+              failureReason = 'host-executor-transport-interrupted'
+              interrupted = true
+            }
+            if (chunk.trim()) console.error('executor stderr', started.id, chunk.trim())
+          })
+          console.info('run timing', { run_id: run.id, phase: 'launch',
+            queue_ms: Math.max(0, Date.parse(started.startedAt!) - Date.parse(run.createdAt)),
+            startup_ms: Math.round(executionStarted - launchStarted), resumed: session.hasStarted })
+          if (run.scheduled) background.set(run.id,child)
+          else activeChild = child
+          const finished = new Promise<number | null>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) resolve(child.exitCode)
+            else child.once('close', resolve)
+          })
+          await runs.patch(started.id, { pid: child.pid })
+          console.info('run started', {
+            run_id: started.id,
+            pid: child.pid,
+            cli: script ? 'script' : preset.cli,
+            ...(script ? { script: script.ref.id, script_revision: script.ref.revision } : {}),
+            ...(ordered ? { setup: attempts.length } : {}),
+            session: session.sessionId,
+            isResume: session.hasStarted,
+          })
+
+          if (!run.scheduled && activeTypingTimer) clearInterval(activeTypingTimer)
+          if (bot && run.chatId !== undefined && !run.application && !run.external && !run.taskId && !run.scheduled) activeTypingTimer = setInterval(() => {
+            if (performance.now() - executionStarted < 30000) void bot.api.sendChatAction(run.chatId!, 'typing').catch(() => {})
+          }, 4000)
+
+          const free = () => {
+            if (run.scheduled) background.delete(run.id)
+            else {
+              activeChild = null
+              if (activeTypingTimer) clearInterval(activeTypingTimer)
+              activeTypingTimer = null
+            }
+          }
+          const finalize = async (code: number | null, cancelled: boolean, failed: boolean) => {
+            await runs.patch(started.id, { status: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', endedAt: new Date().toISOString(), exitCode: code,
+              ...(script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
+              ...(failed ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(timedOut ? `Script exceeded its ${script!.registration.timeoutSeconds}s timeout and was terminated` : errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
+            await releaseExternal(run)
+          }
+          const completion = finished.then((code) => {
+            console.info('run timing', { run_id: run.id, phase: 'execution',
+              execution_ms: Math.round(performance.now() - executionStarted), exit_code: code })
+            return (async () => {
+              let eligible = false
+              await withStartLock(async () => {
+                try {
+                  await cleanup()
+                  if (code === 0 && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(session.sessionId)
+                  const cancelled = !timedOut && (ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id)))
+                  if (timedOut) failureReason = 'script-timeout'
+                  const observed = startup?.result()
+                  const rejected = observed?.rejection && !observed.workBegan ? observed.rejection : undefined
+                  // A rejection before work is a failure even when the CLI exits 0.
+                  const failed = !cancelled && (code !== 0 || timedOut || Boolean(rejected))
+                  if (startup) {
+                    settle({ outcome: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', exitCode: code,
+                      ...(failed ? { category: rejected?.category ?? (observed!.workBegan ? 'after-work-began' : 'uncertain') } : {}),
+                      ...(failed && rejected?.resetAt ? { resetAt: rejected.resetAt } : {}) })
+                    await runs.patch(run.id, { attempts })
+                    eligible = failed && !interrupted && advances(rejected)
+                  }
+                  if (!eligible) await finalize(code, cancelled, failed)
+                } catch (error) {
+                  eligible = false
+                  await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
+                  console.error('Session completion failed', safeError(error))
+                } finally {
+                  // An advancing occurrence keeps its concurrency slot for the next setup.
+                  if (!eligible) free()
+                }
+              })
+              console.info('run ended', { run_id: started.id, code, ...(eligible ? { advancing: true } : {}) })
+              // Re-check cancellation and shutdown under the start lock, so a stop
+              // that already snapshotted children never misses the next setup.
+              if (eligible) return withStartLock(async () => {
+                try {
+                  const next = await advance()
+                  if (next) return await watch(await launchSetup(next))
+                  const cancelled = await scheduler.cancelled(run.id)
+                  await finalize(code, cancelled, !cancelled)
+                  free()
+                  setImmediate(() => { void runs.nextQueued().then(queued => { if (queued && !shuttingDown) return startJob(queued) }).catch(console.error) })
+                } catch (error) { await startFailed(error) }
+              })
+              const next = await runs.nextQueued()
+              if (next && !shuttingDown) await startJob(next)
+            })().catch((error) => console.error('Run completion failed', error.message))
+          })
+          completions.add(completion)
+          void completion.finally(() => completions.delete(completion))
+        }
+        await watch(await launchSetup(selected))
+      } catch (error) {
+        await startFailed(error)
       }
     })
   }

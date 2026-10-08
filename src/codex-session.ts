@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { terminateJob, validateCodexProvider, type CodexProviderBinding } from './executor.js'
+import { codexRejection, codexResetAt, startupLine } from './setup-fallback.js'
 
 type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;additionalWorkspaces?:string[];model?:string;effort?:string;prompt:string;codexSandbox?:'external';codexProvider?:CodexProviderBinding}
 type Message = {id?:number;method?:string;params?:any;result?:any;error?:{message:string;code?:number}}
@@ -17,7 +18,7 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
   const provider = options.codexProvider ? validateCodexProvider(options.codexProvider) : undefined
   const child=io.launch?.() ?? spawn('codex',['app-server','--stdio','--disable','memories','--enable','skip_host_skill_discovery'],{cwd:options.workspace,env:process.env,stdio:['pipe','pipe','pipe']})
   const emit=io.emit ?? (line=>process.stdout.write(line+'\n'))
-  let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=false
+  let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=false,workBegan=false,resetAt:string|undefined
   let resolveDone!:(code:number)=>void
   const done=new Promise<number>(resolve=>{resolveDone=resolve})
   const pending=new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
@@ -38,7 +39,10 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     finish(0)
   }
   child.stderr?.pipe(process.stderr)
-  child.on('error',fail)
+  child.on('error',error=>{
+    if((error as NodeJS.ErrnoException).code==='ENOENT')emit(startupLine({workBegan:false,rejection:{category:'cli-unavailable'}}))
+    fail(error)
+  })
   child.stdin?.on('error',fail)
   child.once('close',()=>{
     for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Codex app-server closed'))}
@@ -57,16 +61,23 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
       // Never turn an unexpected approval/elicitation request into permission.
       send({id:message.id,error:{code:-32601,message:`Unsupported unattended request: ${message.method}`}});fail(new Error(`Codex requires attention: ${message.method}`));return
     }
+    if(message.method==='account/rateLimits/updated')resetAt=codexResetAt(message.params?.rateLimits) ?? resetAt
     if(message.params?.threadId!==threadId)return
     if(message.method==='turn/started'){activeTurn=message.params.turn.id;sawTurn=true}
+    // Any item beyond the echoed input means the provider accepted the turn.
+    if(message.method==='item/started' && message.params.item?.type!=='userMessage' && !workBegan){workBegan=true;emit(startupLine({workBegan}))}
     if(message.method==='thread/goal/updated')settled(message.params.goal)
     if(message.method==='thread/goal/cleared')settled(null)
     if(message.method==='turn/completed'){
       if(activeTurn===message.params.turn.id)activeTurn=undefined
       if(message.params.turn.status!=='completed'){
         if(message.params.turn.status==='interrupted')finish(130)
-        else fail(new Error(redactFailure(typeof message.params.turn.error?.message==='string'
+        else {
+          const category=workBegan ? undefined : codexRejection(message.params.turn.error?.codexErrorInfo)
+          if(category)emit(startupLine({workBegan,rejection:{category,...(category==='quota' && resetAt ? {resetAt} : {})}}))
+          fail(new Error(redactFailure(typeof message.params.turn.error?.message==='string'
           ? message.params.turn.error.message : 'Native turn failed without error details')))
+        }
         return
       }
       // Completion of a turn is not completion of a native goal. The native

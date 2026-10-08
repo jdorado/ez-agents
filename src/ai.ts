@@ -5,12 +5,14 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { homedir } from 'node:os'
 import { join, delimiter } from 'node:path'
-import { executorEnvironment, executorInvocation, executorKey, resolveExecutor } from './executor.js'
+import { CliUnavailableError, executorEnvironment, executorInvocation, executorKey, resolveExecutor } from './executor.js'
 import { desktopCodexPath } from './desktop-bridge.js'
 import { AUTH_PROFILE_CLIS, claudeAuthEnvironment, cliHome, isAuthProfile, listAuthProfiles } from './auth-profile.js'
 
 export type AiPreset = { id: string; name: string; cli: string; provider?: string; authProfile?: string; model?: string; effort?: string }
-export type ExecutionChoice = { sessionId: string; preset: AiPreset }
+// Optional ordered fallbacks are tried only for a scheduled occurrence that never started work.
+export type ExecutionChoice = { sessionId: string; preset: AiPreset; fallbacks?: AiPreset[] }
+export const MAX_FALLBACKS = 3
 export type ModelChoice = { cli: string; provider?: string; authProfile?: string; model?: string; name: string; efforts: string[] }
 type Engine = { cli?: string; authProfile?: string }
 // A native conversation belongs to one client and one credential home.
@@ -31,7 +33,8 @@ export const isPreset = (p: unknown): p is AiPreset => {
 }
 export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
   const c = v as ExecutionChoice | undefined
-  return Boolean(c && /^[0-9a-f-]{36}$/i.test(c.sessionId) && isPreset(c.preset))
+  return Boolean(c && /^[0-9a-f-]{36}$/i.test(c.sessionId) && isPreset(c.preset) &&
+    (c.fallbacks === undefined || (Array.isArray(c.fallbacks) && c.fallbacks.length > 0 && c.fallbacks.length <= MAX_FALLBACKS && c.fallbacks.every(isPreset))))
 }
 export const presetLabel = (p: AiPreset) => `${p.cli}${p.authProfile ? `@${p.authProfile}` : ''}${p.provider ? ` (${p.provider})` : ''} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
 // OpenCode encodes its provider in the native provider/model identifier.
@@ -263,7 +266,8 @@ export const opencodeProviderAllowlist = (env: NodeJS.ProcessEnv = process.env):
 
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {
   assertEffort(p.effort, p.model, p.cli)
-  if (!isPreset(p) || !(await available(p.cli))) throw new Error('This CLI is not installed.')
+  if (!isPreset(p)) throw new Error('This CLI is not installed.')
+  if (!(await available(p.cli))) throw new CliUnavailableError('This CLI is not installed.')
   if (!p.provider && !p.authProfile && !p.model && !p.effort) return
   if (p.authProfile && !p.provider && !p.model && !p.effort) {
     if (!catalog.some((m) => sameEngine(m, p))) throw new Error('This auth profile is not provisioned for the selected CLI.')
