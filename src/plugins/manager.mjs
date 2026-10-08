@@ -78,7 +78,8 @@ async function activeInvocations(home) {
   const directory=invocationDirectory(home),files=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
   for(const file of files) {
     if(!/^[0-9a-f-]{36}\.json$/.test(file))throw Error('Invalid command invocation lease; inspect before recovery');
-    const lease=await json(path.join(directory,file));
+    const lease=await json(path.join(directory,file)).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
+    if(!lease)continue;
     if(!Number.isSafeInteger(lease.pid)||lease.pid<1||typeof lease.container!=='string'||!lease.container)throw Error('Invalid command invocation lease; inspect before recovery');
     try {process.kill(lease.pid,0);return true;} catch(error) {if(error.code!=='ESRCH'&&error.code!=='EPERM')throw error;}
     const state=await run(['container','inspect',lease.container],{capture:true});
@@ -94,21 +95,31 @@ async function invocationLease(home,container) {
   await stewardOwned(file);
   return async()=>{await fs.rm(file,{force:true});};
 }
-export async function locked(home, fn, {allowInvocations=false, waitMs=0}={}) {
+export async function locked(home, fn, {allowInvocations=false, waitMs=0, upgradeWaitMs=0, drainInvocations=false, signal}={}) {
   const lock = path.join(home,'registry.lock');
   let handle;
-  const deadline=Date.now()+waitMs;
+  const started=Date.now();
   while(!handle) {
+    signal?.throwIfAborted();
     try { handle=await fs.open(lock,'wx',0o600); }
     catch(error) {
       if(error.code!=='EEXIST')throw error;
-      if(Date.now()>=deadline)throw Error('Registry busy; inspect registry.lock before recovering an interrupted manager');
+      const owner=await json(lock).catch(()=>null);
+      const limit=owner?.kind==='plugin-upgrade'&&upgradeWaitMs?upgradeWaitMs:waitMs;
+      if(Date.now()-started>=limit)throw Error('Registry busy; inspect registry.lock before recovering an interrupted manager');
       await new Promise(resolve=>setTimeout(resolve,25));
     }
   }
   try {
-    await handle.writeFile(JSON.stringify({pid:process.pid}));
-    if(!allowInvocations&&await activeInvocations(home))throw Error('Plugin commands are active; retry the registry or lifecycle change after they finish');
+    await handle.writeFile(JSON.stringify({pid:process.pid,...(drainInvocations?{kind:'plugin-upgrade'}:{})}));
+    // Keep admission closed while already-started calls release their leases.
+    // This is a lifecycle barrier, not an agent-turn drain or a command retry.
+    while(!allowInvocations&&await activeInvocations(home)) {
+      if(!drainInvocations)throw Error('Plugin commands are active; retry the registry or lifecycle change after they finish');
+      signal?.throwIfAborted();
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    signal?.throwIfAborted();
     return await fn();
   }
   finally { await handle.close(); await fs.rm(lock); }
@@ -474,8 +485,16 @@ export async function registry(home) {
   for(const [alias,plugin] of Object.entries(r.commands)) if(!r.plugins[plugin]?.deployment?.commands?.[alias]) throw Error('Corrupt command registry');
   return r;
 }
+// Relay status reads this generated inventory without Docker/registry access.
+export async function publishBrokerPlugins(home,controlDir) {
+  const r=await registry(home);
+  const plugins=Object.values(r.plugins).map(record=>({id:record.manifest.id,version:record.manifest.version}));
+  const file=path.join(controlDir,'plugin-broker-plugins.json');
+  await atomic(file,{version:1,at:new Date().toISOString(),plugins});
+  await stewardOwned(file);
+}
 // The lock protects admission and compose refresh, never a persistent connection.
-export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false,environment=process.env}={}) {
+export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false,environment=process.env,signal}={}) {
   strings(args);
   return locked(home,async()=>{
     const config=await json(path.join(home,'config.json')),r=await registry(home);
@@ -505,7 +524,7 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     const invocationRelease=invocation?await invocationLease(home,container):undefined;
     const release=(invocationRelease||contextFile)?(async()=>{try{if(contextFile)await fs.rm(contextFile,{force:true});}finally{await invocationRelease?.();}}):undefined;
     return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),...(contextFile?['--file',contextFile]:[]),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
-  },{allowInvocations:true,waitMs:5000});
+  },{allowInvocations:true,waitMs:5000,upgradeWaitMs:invocation?300000:0,signal});
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
   if(standalone && hostConfig) throw Error('Standalone setup cannot bind a relay host config');

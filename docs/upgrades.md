@@ -16,7 +16,7 @@ automatic channel for core and plugins without a saved policy. Existing explicit
 stable or manual policies are preserved. The owner may select either per target.
 The main target and installed plugins version independently.
 
-Queued upgrades leave channel admission open while native work runs. The supervisor pauses admission only after work is idle and releases that pause if a turn raced the check.
+Core upgrades leave channel admission open while native work runs, then pause it after work is idle and recheck races. Plugin upgrades build while native work continues. Activation closes the existing registry admission lock, drains in-flight plugin command leases, and replaces the plugin under that lock. New native plugin calls wait for admission; an outdated revision fails before provider execution and must be rediscovered. No admitted provider operation is replayed. The shared broker and native sessions remain running. Core upgrades still require the full native-work drain. A plugin update also retains that drain if an operator replaced the broker’s single-file host binding (for example to approve new network pins), because that case still requires broker recreation.
 
 The owner chooses the saved update policy. The host supervisor owns
 interruption-safe replacement. There is one host service per agent, not a second
@@ -153,9 +153,7 @@ is required. Stable automation excludes prereleases, major changes and 0.x minor
 changes. Beta policy permits compatible prereleases. Downgrades are rejected;
 rollback is a recovery operation for the previous installation only.
 
-`apply` records one durable queued job. **The agent must finish its turn after
-queuing it.** It must not wait for completion in that same turn. The supervisor
-pauses new run admission, drains already-started work, then consumes the job.
+`apply` records one durable queued job. **For a core upgrade, the agent must finish its turn after queuing it** so the supervisor can drain native work. A plugin upgrade can complete while that turn continues; only plugin-call admission is held during activation. Calls already executing finish first.
 One job at a time; an unresolved recovery blocks new upgrades. The agent processes
 multiple requested packages over successive update requests.
 
@@ -294,12 +292,8 @@ Actual update transactions retain their existing admission, drain and rollback r
 
 ### Isolated broker readiness
 
-Isolated activation and rollback explicitly recreate only `plugin-broker` with
-`--no-deps --force-recreate --no-build --pull never --wait`. Plugin-only refresh
-pins the installed broker image ID; main activation uses the newly built image
-and rollback uses the recorded old image. This refreshes the narrow read-only
-host-configuration file mount after atomic replacement. The relay and native
-sessions are preserved during plugin-only refresh. Host-capable updates do not
+Isolated core activation and rollback explicitly recreate only `plugin-broker` with
+`--no-deps --force-recreate --no-build --pull never --wait`. Core activation uses the newly built image and rollback uses the recorded old image to refresh the single-file host binding. Plugin-only activation and rollback change directory-mounted registry files, verify the existing broker in place, and refresh its generated plugin-version inventory. They preserve the broker socket, relay and native sessions. Host-capable updates do not
 start a broker. Existing update admission and drain remain authoritative.
 
 Socket health is liveness only. Before reporting completion, the updater runs
