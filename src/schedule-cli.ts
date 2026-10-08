@@ -8,7 +8,7 @@ import { ControlStore, sameOwner } from './control-state.js'
 import { ApplicationBindings } from './application-channel.js'
 import type { RunRecord } from './runs.js'
 import { callDeliverySocket, socketPathFor } from './delivery-socket.js'
-import { initialPreset, isPreset, presetLabel, MAX_FALLBACKS, type AiPreset } from './ai.js'
+import { initialPreset, isPreset, presetLabel, type AiPreset } from './ai.js'
 import { executionOverrides } from './model-policy.js'
 import { holdsSchedule, Scheduler, executionType } from './scheduler.js'
 import { Scripts, fileSha256, workspaceEntry, DEFAULT_SCRIPT_TIMEOUT_SECONDS } from './scripts.js'
@@ -17,17 +17,18 @@ import { provisionedHome } from './auth-profile.js'
 import { ownsRun } from './identity.js'
 import { type Trigger } from './schedule-time.js'
 
-// `cli=claude,model=sonnet,effort=medium` names one fallback setup.
+// Each fallback selects its own native engine, credential home and model.
 const fallbackSetup = (spec: string, index: number): AiPreset => {
   const fields = Object.fromEntries(spec.split(',').map(part => {
     const at = part.indexOf('=')
-    if (at < 1) throw new Error('Fallback uses cli=EXECUTOR,model=MODEL[,effort=EFFORT][,provider=ID]')
+    if (at < 1) throw new Error('Fallback uses cli=EXECUTOR,model=MODEL[,auth-profile=NAME][,effort=EFFORT][,provider=ID]')
     return [part.slice(0, at), part.slice(at + 1)]
   }))
-  if (Object.keys(fields).some(key => !['cli','model','effort','provider'].includes(key)) || !fields.cli || !fields.model)
-    throw new Error('Fallback uses cli=EXECUTOR,model=MODEL[,effort=EFFORT][,provider=ID]')
+  if (Object.keys(fields).some(key => !['cli','model','auth-profile','effort','provider'].includes(key)) || !fields.cli || !fields.model)
+    throw new Error('Fallback uses cli=EXECUTOR,model=MODEL[,auth-profile=NAME][,effort=EFFORT][,provider=ID]')
   const base = initialPreset(fields.cli)
-  const preset = executionOverrides(base.cli, {...base, ...(fields.provider ? {provider: fields.provider} : {})}, fields.model, fields.effort)
+  const preset = executionOverrides(base.cli, {...base, ...(fields.provider ? {provider: fields.provider} : {}),
+    ...(fields['auth-profile'] !== undefined ? {authProfile: fields['auth-profile']} : {})}, fields.model, fields.effort)
   const named = {...preset, id: `fallback-${index + 1}`, name: presetLabel(preset).slice(0, 80)}
   if (!isPreset(named)) throw new Error('Invalid fallback setup')
   return named
@@ -49,7 +50,7 @@ async function main() {
   create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE | --script SCRIPT_ID [--arg=VALUE ...])
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
     [--cli EXECUTOR] [--auth-profile NAME] [--model MODEL] [--effort <native-effort>]
-    [--fallback cli=EXECUTOR,model=MODEL[,effort=EFFORT][,provider=ID] ... | --clear-fallbacks]
+    [--fallback cli=EXECUTOR,model=MODEL[,auth-profile=NAME][,effort=EFFORT][,provider=ID] ... | --clear-fallbacks]
     [--preflight-file FILE | --clear-preflight]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
   script list | show SCRIPT_ID | remove SCRIPT_ID
@@ -71,10 +72,11 @@ Failures default to unreviewed owner runs. Review records a diagnosis; it never 
 A conditional review schedule consumes no model run when there are no unreviewed failures.
 New tasks capture the selected engine settings; edit preserves existing settings unless overridden.
 Every task requires a concrete saved model. Supply --model if the selected settings have none; existing tasks never fall back to chat or client defaults.
-Fallbacks (at most ${MAX_FALLBACKS}, in order) run only when the previous setup's CLI is unavailable or its provider
+Fallbacks run in the saved order only when the previous setup's CLI is unavailable or its provider
 rejected the turn before any work began. Access denial, unknown errors, cancellation and failure after work began stop
-the chain; nothing is replayed. A quota rejection skips later setups of the same client or provider (quota scope),
-even with different credentials. The run records each attempt, setup, failure category and any reported reset time.
+the chain; nothing is replayed. A quota rejection skips later setups of the same native login profile
+or upstream provider. Named profiles must be owner-provisioned logins for separate accounts; Ez never enables overage.
+The run records each attempt, setup, failure category and any reported reset time.
 Trigger runs an existing task once with its saved instructions, AI and delivery binding in a fresh session. Reuse the request key after an uncertain result; the regular schedule is unchanged.
 Creates a scheduled task. Instructions are text, never shell commands.
 Use --now to run once. Run completion is not delivery proof.
@@ -207,7 +209,8 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const preset = executionOverrides(base.cli, v['auth-profile'] === undefined ? base : {...base, authProfile:v['auth-profile']}, v.model, v.effort)
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
     const fallbacks = v['clear-fallbacks'] ? undefined : v.fallback ? v.fallback.map(fallbackSetup) : previous?.fallbacks
-    if (preset.authProfile !== undefined) await provisionedHome(config.controlDir, preset.cli, preset.authProfile)
+    for (const setup of [preset, ...fallbacks ?? []])
+      if (setup.authProfile !== undefined) await provisionedHome(config.controlDir, setup.cli, setup.authProfile)
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
       preflight,
       originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,

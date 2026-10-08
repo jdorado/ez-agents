@@ -49,9 +49,12 @@ test('codex errors map to categories; policy and context errors never advance',(
   for(const info of ['cyberPolicy','contextWindowExceeded','other',{httpConnectionFailed:{httpStatusCode:null}},undefined]) assert.equal(codexRejection(info),undefined)
 })
 
-test('a quota rejection skips later setups in the same scope, even with different credentials',()=>{
+test('a quota rejection skips models in the same login scope; named accounts have separate scopes',()=>{
   assert.equal(quotaScope(claudeA),quotaScope(claudeB))
   assert.equal(quotaScope({...codexA,provider:'bridge'}),quotaScope(codexB))
+  assert.equal(quotaScope({...claudeA,authProfile:'work'}),quotaScope({...claudeB,authProfile:'work'}))
+  assert.notEqual(quotaScope(claudeA),quotaScope({...claudeA,authProfile:'work'}))
+  assert.notEqual(quotaScope({...codexA,authProfile:'work'}),quotaScope({...codexB,authProfile:'personal'}))
   assert.equal(quotaScope({id:'p',name:'p',cli:'pi',model:'opencode-go/m'}),quotaScope({id:'o',name:'o',cli:'opencode',model:'opencode-go/x'}))
   const first={preset:claudeA,quotaScope:'claude',outcome:'failed' as const,category:'quota' as const}
   const next=nextSetup([claudeA,claudeB,codexA,codexB],[first])
@@ -117,6 +120,52 @@ test('each scheduled attempt launches with its own captured auth profile',async(
   }finally{await f.close()}
 })
 
+test('four Claude accounts advance in order on quota rejection before work',async()=>{
+  const profiles=['claude2','claude3','claude4']
+  const fallbacks=profiles.map((authProfile,i)=>({...claudeA,id:`fallback-${i}`,authProfile,effort:'high'}))
+  const f=await fixture('four-accounts',[{lines:[quota],code:1},{lines:[quota],code:1},{lines:[quota],code:1},{lines:[work],code:0}],fallbacks,{...claudeA,effort:'high'})
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'completed')
+    assert.deepEqual(f.launches.map(l=>[l.cli,l.authProfile,l.model,l.effort]),
+      [undefined,...profiles].map(profile=>['claude',profile,'opus','high']))
+    assert.equal(new Set(f.launches.map(l=>l.sessionId)).size,4)
+    assert.ok(f.launches.every(l=>l.runId===run.id))
+    assert.deepEqual(run.attempts!.map(a=>[a.quotaScope,a.outcome]),[
+      ['claude','failed'],['claude@claude2','failed'],['claude@claude3','failed'],['claude@claude4','completed']])
+  }finally{await f.close()}
+})
+
+test('arbitrary mixed setup lists preserve CLI, provider, model and effort per attempt',async()=>{
+  const candidates:AiPreset[]=[claudeA,
+    {...codexA,authProfile:'work',effort:'xhigh'},
+    {...setup('desktop','codex-gui','gpt-6-sol'),effort:'high'},
+    {...setup('open','opencode','anthropic/claude-sonnet'),provider:'anthropic',effort:'high'},
+    {...setup('pi','pi','openai/gpt-6-sol'),effort:'medium'},
+    {...setup('grok','grok','grok-4'),effort:'low'}]
+  const f=await fixture('mixed',candidates.map((_,i)=>i<candidates.length-1?{unavailable:true}:{code:0}),candidates.slice(1),candidates[0])
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'completed')
+    assert.deepEqual(f.launches.map(l=>[l.cli,l.authProfile,l.provider,l.model,l.effort]),
+      candidates.map(p=>[p.cli,p.authProfile,p.provider,p.model,p.effort]))
+    assert.deepEqual(run.attempts!.map(a=>a.preset),candidates)
+    assert.equal(new Set(f.launches.map(l=>l.sessionId)).size,candidates.length)
+  }finally{await f.close()}
+})
+
+test('an account chain stops when a quota failure follows model or hook work',async()=>{
+  for(const event of [work,{type:'system',subtype:'hook_started'}]){
+    const f=await fixture('account-no-replay',[{lines:[event,quota],code:1}],[{...claudeA,authProfile:'claude2'}])
+    try{
+      const run=await f.done()
+      assert.equal(run.status,'failed')
+      assert.equal(f.launches.length,1)
+      assert.equal(run.attempts![0].category,'after-work-began')
+    }finally{await f.close()}
+  }
+})
+
 test('cancellation stops the chain',async()=>{
   const f=await fixture('cancel',[{lines:[quota],hold:true}])
   try{
@@ -140,14 +189,14 @@ test('when every setup is unavailable the run reports each setup clearly',async(
   }finally{await f.close()}
 })
 
-test('schedules reject duplicate or excess setups and the socket cannot rewrite attempts',async()=>{
+test('schedules reject duplicate or invalid setups and the socket cannot rewrite attempts',async()=>{
   const dir=await mkdtemp(join(tmpdir(),'ez-fallback-validate-')),control=new ControlStore(dir,1000),scheduler=new Scheduler(dir)
   try{
     await control.requestPairing(101,101);await control.approveOwner(101)
     const owner=(await control.status()).owner!,base={id:'t',name:'T',text:'Work',owner,enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}}
     const execution=(fallbacks:AiPreset[])=>({sessionId:'00000000-0000-4000-8000-000000000000',preset:claudeA,fallbacks})
     await assert.rejects(scheduler.save({...base,execution:execution([{...claudeA,id:'copy'}])}),/distinct/)
-    await assert.rejects(scheduler.save({...base,execution:execution([claudeB,codexA,codexB,setup('x','codex','other')])}),/AI selection/)
+    await assert.rejects(scheduler.save({...base,execution:execution([{...claudeB,cli:'unknown'}])}),/AI selection/)
     await assert.rejects(scheduler.save({...base,execution:execution([{...codexA,model:undefined}])}),/explicit model/)
     const forged=[{preset:setup('forged','claude','opus-max'),quotaScope:'claude',outcome:'running' as const}]
     assert.equal(activeSetup({execution:execution([claudeB]),attempts:forged}),undefined)
@@ -242,4 +291,38 @@ test('schedule CLI saves ordered fallbacks, preserves them on edit and clears th
   assert.equal((await cli('edit','chain','--cli','claude','--model','opus',...when,'--clear-fallbacks')).execution.fallbacks,undefined)
   await assert.rejects(exec(process.execPath,[bin,'create','bad','--cli','claude','--model','opus',...when,'--fallback','cli=codex'],{env}),/cli=EXECUTOR,model=MODEL/)
   await assert.rejects(exec(process.execPath,[bin,'create','dup','--cli','claude','--model','opus',...when,'--fallback','cli=claude,model=opus'],{env}),/distinct/)
+})
+
+test('schedule CLI saves arbitrary profile/model/effort combinations and validates every profile',async t=>{
+  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),{fileURLToPath}=await import('node:url')
+  const {mkdir}=await import('node:fs/promises'),{serveTestLedger}=await import('./helpers/ledger.js')
+  const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
+  const dir=await mkdtemp(join(tmpdir(),'ez-fallback-profiles-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+  const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
+  const control=new ControlStore(dir,1000);await control.requestPairing(101,101);await control.approveOwner(101)
+  for(const profile of ['claude2','claude3','claude4'])await mkdir(join(dir,'cli','profiles',profile,'claude'),{recursive:true})
+  await mkdir(join(dir,'cli','profiles','work','codex'),{recursive:true})
+  const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:''}
+  const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
+  const when=['--at','2027-09-09T09:00:00+04:00','--text','Work']
+  const tuples=[
+    ['claude','claude2',undefined,'opus','high'],['claude','claude3',undefined,'sonnet','medium'],
+    ['claude','claude4',undefined,'opus','xhigh'],['codex','work',undefined,'gpt-6-sol','xhigh'],
+    ['codex-gui',undefined,undefined,'gpt-6-astra','high'],['opencode',undefined,'anthropic','anthropic/claude-sonnet','high'],
+    ['pi',undefined,undefined,'openai/gpt-6-sol','medium'],['grok',undefined,undefined,'grok-4','low']]
+  const flags=tuples.flatMap(([cli,profile,provider,model,effort])=>['--fallback',
+    `cli=${cli},model=${model},effort=${effort}${profile?`,auth-profile=${profile}`:''}${provider?`,provider=${provider}`:''}`])
+  const saved=await cli('create','chain','--cli','claude','--model','opus','--effort','high',...when,...flags)
+  assert.deepEqual(saved.execution.fallbacks.map((p:AiPreset)=>[p.cli,p.authProfile,p.provider,p.model,p.effort]),tuples)
+  assert.deepEqual((await cli('edit','chain',...when)).execution,saved.execution)
+  const base=[bin,'create','bad','--cli','claude','--model','opus',...when,'--fallback']
+  for(const [spec,error] of [
+    ['cli=claude,model=opus,auth-profile=missing',/not provisioned/],
+    ['cli=claude,model=opus,auth-profile=../escape',/Invalid fallback/],
+    ['cli=grok,model=grok-4,auth-profile=work',/Invalid fallback/],
+    ['cli=claude,model=opus,effort=not valid',/Invalid reasoning effort/],
+    ['cli=claude,model=opus,auth-profile=',/Invalid fallback/],
+    ['cli=unknown,model=fixture',/Unsupported executor/],
+  ] as const)await assert.rejects(exec(process.execPath,[...base,spec],{env}),error)
+  await assert.rejects(exec(process.execPath,[...base,'cli=claude,model=opus,auth-profile=claude2','--fallback','cli=claude,model=opus,auth-profile=claude2'],{env}),/distinct/)
 })

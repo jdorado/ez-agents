@@ -22,15 +22,16 @@ export const advances = (rejection?: StartupRejection): boolean => Boolean(rejec
 
 export const setupCandidates = (execution: ExecutionChoice): AiPreset[] => [execution.preset, ...(execution.fallbacks ?? [])]
 
-// Allowance is metered per provider account, not per credential file. Setups on
-// the same native client share a scope; OpenCode/Pi share their upstream
-// provider. A different credential alone never proves independent allowance.
+// The owner provisions native profiles for separate provider accounts. Models
+// in one login share its quota scope; another named login may be tried once.
+// OpenCode/Pi still share their upstream provider scope.
 export const quotaScope = (preset: AiPreset): string => {
   if (['opencode', 'pi'].includes(preset.cli)) {
     const provider = preset.cli === 'pi' ? preset.model?.split('/')[0] : presetProvider(preset)
     return provider ? `provider:${provider}` : preset.cli
   }
-  return preset.cli === 'codex-gui' ? 'codex' : preset.cli
+  const cli = preset.cli === 'codex-gui' ? 'codex' : preset.cli
+  return preset.authProfile ? `${cli}@${preset.authProfile}` : cli
 }
 
 // The next untried setup, skipping those whose quota scope already rejected
