@@ -3,9 +3,9 @@ import { presetLabel, presetProvider, type AiPreset, type ExecutionChoice } from
 // Ordered task setups for one scheduled occurrence. Core advances only on typed
 // evidence that the engine never started work: a missing CLI or a provider
 // rejection before any model output or tool item. Anything else stops the chain.
-export type StartupCategory = 'cli-unavailable' | 'quota' | 'provider-rejected' | 'access-denied'
+export type StartupCategory = 'cli-unavailable' | 'login-unavailable' | 'quota' | 'provider-rejected' | 'access-denied'
 export type StartupRejection = { category: StartupCategory; resetAt?: string }
-export type AttemptCategory = StartupCategory | 'after-work-began' | 'uncertain' | 'same-quota-scope'
+export type AttemptCategory = StartupCategory | 'after-work-began' | 'uncertain' | 'same-quota-scope' | 'same-login-scope'
 export type SetupAttempt = {
   preset: AiPreset
   quotaScope: string
@@ -17,7 +17,7 @@ export type SetupAttempt = {
   endedAt?: string
 }
 
-const categories: StartupCategory[] = ['cli-unavailable', 'quota', 'provider-rejected', 'access-denied']
+const categories: StartupCategory[] = ['cli-unavailable', 'login-unavailable', 'quota', 'provider-rejected', 'access-denied']
 export const advances = (rejection?: StartupRejection): boolean => Boolean(rejection && rejection.category !== 'access-denied')
 
 export const setupCandidates = (execution: ExecutionChoice): AiPreset[] => [execution.preset, ...(execution.fallbacks ?? [])]
@@ -34,16 +34,17 @@ export const quotaScope = (preset: AiPreset): string => {
   return preset.authProfile ? `${cli}@${preset.authProfile}` : cli
 }
 
-// The next untried setup, skipping those whose quota scope already rejected
-// this occurrence. Each candidate is tried at most once.
+// The next untried setup, skipping a login that already rejected authentication
+// or quota for this occurrence. Each candidate is tried at most once.
 export const nextSetup = (candidates: AiPreset[], attempts: SetupAttempt[]): { skipped: SetupAttempt[]; preset?: AiPreset } => {
-  const exhausted = new Set(attempts.filter(a => a.category === 'quota').map(a => a.quotaScope))
+  const exhausted = new Map(attempts.filter(a => a.category === 'quota' || a.category === 'login-unavailable')
+    .map(a => [a.quotaScope, a.category === 'quota' ? 'same-quota-scope' as const : 'same-login-scope' as const]))
   const skipped: SetupAttempt[] = []
   for (const preset of candidates.slice(attempts.length)) {
     const scope = quotaScope(preset)
     if (!exhausted.has(scope)) return { skipped, preset }
     const at = new Date().toISOString()
-    skipped.push({ preset, quotaScope: scope, outcome: 'skipped', category: 'same-quota-scope', startedAt: at, endedAt: at })
+    skipped.push({ preset, quotaScope: scope, outcome: 'skipped', category: exhausted.get(scope), startedAt: at, endedAt: at })
   }
   return { skipped }
 }
@@ -58,20 +59,23 @@ const epochSeconds = (value: unknown): string | undefined =>
 
 const claudeErrors: Record<string, StartupCategory> = {
   rate_limit: 'quota', billing_error: 'quota',
-  authentication_failed: 'access-denied', oauth_org_not_allowed: 'access-denied', account_on_hold: 'access-denied',
+  authentication_failed: 'login-unavailable', oauth_org_not_allowed: 'access-denied', account_on_hold: 'access-denied',
   verification_required: 'access-denied', cloud_credential_error: 'access-denied',
   overloaded: 'provider-rejected', server_error: 'provider-rejected', model_not_found: 'provider-rejected', invalid_request: 'provider-rejected',
 }
 
+const httpRejection = (status: unknown): StartupCategory | undefined =>
+  typeof status !== 'number' ? undefined : status === 401 ? 'login-unavailable' : status === 429 ? 'quota' :
+    status === 403 ? 'access-denied' : [400, 404].includes(status) || status >= 500 ? 'provider-rejected' : undefined
+
 // Codex app-server `codexErrorInfo` of a failed turn.
 export const codexRejection = (info: unknown): StartupCategory | undefined => {
   if (info === 'usageLimitExceeded' || info === 'rateLimitExceeded') return 'quota'
-  if (info === 'unauthorized') return 'access-denied'
+  if (info === 'unauthorized') return 'login-unavailable'
   if (['serverOverloaded', 'internalServerError', 'badRequest', 'flexUnavailable'].includes(info as string)) return 'provider-rejected'
   if (!info || typeof info !== 'object') return undefined
   const status = (Object.values(info)[0] as { httpStatusCode?: unknown } | undefined)?.httpStatusCode
-  if (typeof status !== 'number') return undefined
-  return status === 429 ? 'quota' : [401, 403].includes(status) ? 'access-denied' : [400, 404].includes(status) || status >= 500 ? 'provider-rejected' : undefined
+  return httpRejection(status)
 }
 
 // The latest reset among exhausted Codex rate-limit windows.
@@ -88,6 +92,7 @@ export const startupLine = (state: { workBegan: boolean; rejection?: StartupReje
 // is not known pre-work metadata counts as work, so ambiguity never advances.
 export const startupObserver = () => {
   let buffer = '', workBegan = false, rejection: StartupRejection | undefined
+  const reject = (value: StartupRejection) => { if (rejection?.category !== 'access-denied') rejection = value }
   const line = (text: string) => {
     if (!text.trim()) return
     let event: any
@@ -96,18 +101,24 @@ export const startupObserver = () => {
       if (event.workBegan === true) workBegan = true
       const r = event.rejection
       if (r && categories.includes(r.category) && (r.resetAt === undefined || Number.isFinite(Date.parse(r.resetAt))))
-        rejection = { category: r.category, ...(r.resetAt ? { resetAt: r.resetAt } : {}) }
+        reject({ category: r.category, ...(r.resetAt ? { resetAt: r.resetAt } : {}) })
       return
     }
     if (event?.type === 'thread.started' || event?.type === 'result' ||
         (event?.type === 'system' && event.subtype === 'init')) return
     if (event?.type === 'rate_limit_event') {
       const info = event.rate_limit_info
-      if (info?.status === 'rejected') rejection = { category: 'quota', ...(epochSeconds(info.resetsAt) ? { resetAt: epochSeconds(info.resetsAt) } : {}) }
+      if (info?.status === 'rejected') reject({ category: 'quota', ...(epochSeconds(info.resetsAt) ? { resetAt: epochSeconds(info.resetsAt) } : {}) })
       return
     }
+    // Native API retry/error metadata is not model output. Do not inspect error
+    // prose; only typed HTTP status can establish a rejected startup.
+    if (event?.type === 'system' && ['api_error', 'api_retry'].includes(event.subtype)) {
+      const category = httpRejection(event.subtype === 'api_retry' ? event.error_status : event.error?.status)
+      if (category) { reject({ category }); return }
+    }
     const category = event?.type === 'assistant' && typeof event.error === 'string' ? claudeErrors[event.error] : undefined
-    if (category) rejection = { category, ...(category === 'quota' && rejection?.resetAt ? { resetAt: rejection.resetAt } : {}) }
+    if (category) reject({ category, ...(category === 'quota' && rejection?.resetAt ? { resetAt: rejection.resetAt } : {}) })
     else workBegan = true
   }
   return {
