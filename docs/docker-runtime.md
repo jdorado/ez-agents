@@ -295,6 +295,34 @@ Without any login, Claude turns fail closed with the native "not logged in"
 error. Host-capable agents use the same agent-bound directory but share the
 installer login in place (`CLAUDE_SECURESTORAGE_CONFIG_DIR` empty).
 
+## Auth profiles
+
+One agent can keep several owner-provisioned Codex or Claude logins, for example
+a work and a personal account. Each named profile is a separate native home,
+`control/cli/profiles/<name>/<cli>` (`CODEX_HOME` or `CLAUDE_CONFIG_DIR`), with
+its own credentials, configuration and native sessions. The unnamed default
+keeps the bindings above unchanged. Create the empty home and get the exact
+native login command with:
+
+```sh
+ezenciel-agents-ai profile add --cli claude --auth-profile work
+```
+
+Then the owner logs in once with the printed command, inside the relay for
+isolated agents. Claude may instead use a `claude setup-token` token in that
+home's `oauth-token` (mode `600`). Ez never reads, copies or prints the
+credential. A named profile never links the host login or another home: an
+unprovisioned or logged-out profile fails closed with the native error.
+`ezenciel-agents-ai profiles` reports each home's login status (logged in,
+method, credential file names) from the native CLI without tokens or account
+identifiers.
+
+Select a profile with `ezenciel-agents-ai select --cli claude --auth-profile work`,
+the profile entries in Choose AI, or `ezenciel-agents-schedule create ...
+--auth-profile work`. A conversation is bound to its CLI and profile; changing
+profile starts a new native conversation, and a run whose request names another
+profile than its captured choice is rejected before launch.
+
 ## OpenCode auth
 
 Isolated agents run the image OpenCode with `XDG_DATA_HOME` set to the

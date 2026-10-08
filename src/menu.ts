@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { InlineKeyboard, type Context } from 'grammy'
 import { ControlStore, type ControlGuard } from './control-state.js'
-import { chatPreset, installed, persistedPreset, presetLabel, presetProvider, readModels, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
+import { chatPreset, installed, persistedPreset, presetLabel, presetProvider, readModels, sameChoice, sameEngine, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 import { claudeConfigHome } from './executor.js'
 
@@ -25,7 +25,7 @@ export const mainKeyboard = () => new InlineKeyboard()
 const clientLabel = (cli: string) => cli === 'codex-gui' ? 'codex-gui (desktop)' : cli
 
 const matchesModel = (preset: AiPreset, model: ModelChoice) =>
-  model.cli === preset.cli && model.provider === preset.provider && (preset.model === undefined || model.model === preset.model) &&
+  sameEngine(model, preset) && model.provider === preset.provider && (preset.model === undefined || model.model === preset.model) &&
   (preset.effort === undefined || model.efforts.includes(preset.effort))
 
 // Short-lived opaque button IDs: no model names or executable arguments from callbacks.
@@ -66,7 +66,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const state = (await control.status()).ai
     if (!state) throw new Error('AI settings not initialized')
     const current = state.presets.find((p) => p.id === state.selectedId)!
-    const fresh = current.cli !== preset.cli || presetProvider(current) !== presetProvider(preset) || Boolean(session && !session.cli)
+    const fresh = !sameEngine(current, preset) || presetProvider(current) !== presetProvider(preset) || Boolean(session && !session.cli)
     if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Refresh available AIs before trying again.')
     return { preset, fresh }
   }
@@ -127,9 +127,9 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const state = (await control.status()).ai
     if (!state) throw new Error('AI settings not initialized')
     const candidate: AiPreset = { id: randomBytes(8).toString('hex'),
-      name: `${model.name}${effort ? ` · ${effort}` : ''}`.slice(0, 80), cli: model.cli, provider:model.provider, model: model.model, effort }
+      name: `${model.name}${effort ? ` · ${effort}` : ''}`.slice(0, 80), cli: model.cli, provider:model.provider, ...(model.authProfile ? {authProfile:model.authProfile} : {}), model: model.model, effort }
     const stored = persistedPreset(candidate)
-    const existing = state.presets.find((preset) => preset.cli === stored.cli && preset.provider === stored.provider && preset.model === stored.model && preset.effort === stored.effort)
+    const existing = state.presets.find((preset) => sameChoice(preset, stored))
     const preset = existing ?? candidate
     await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
     // Private scopes persist their selection on the session, not the owner menu.
