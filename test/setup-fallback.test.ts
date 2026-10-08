@@ -61,7 +61,7 @@ test('a quota rejection skips later setups in the same scope, even with differen
 })
 
 type Script={lines?:unknown[];code?:number;unavailable?:boolean;hold?:boolean}
-const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB])=>{
+const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA)=>{
   const dir=await mkdtemp(join(tmpdir(),`ez-fallback-${name}-`)),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
   const launches:ExecutorOptions[]=[],admitted:(AiPreset|undefined)[]=[],sent:string[]=[]
   const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(_texts,options)=>{
@@ -75,7 +75,7 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
   relay.bot.api.config.use(async(_prev,method,payload)=>{if(method==='sendMessage')sent.push((payload as {text:string}).text);return {ok:true,result:{message_id:42}} as never})
   await control.requestPairing(101,101);await control.approveOwner(101)
   const owner=(await control.status()).owner!
-  const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:claudeA,fallbacks},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
+  const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,fallbacks},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
   const run=await scheduler.trigger(saved.id,saved.revision,'fallback-'+name,owner,runs)
   await relay.drainSources()
   return {dir,runs,scheduler,relay,run,launches,admitted,sent,done:async()=>{await until(async()=>['completed','failed','cancelled'].includes((await runs.get(run.id))!.status));return (await runs.get(run.id))!},
@@ -106,6 +106,15 @@ test('failure after work began, access denial and unknown failures stop without 
       assert.deepEqual(run.attempts!.map(a=>[a.preset.id,a.outcome,a.category]),[['claude-a','failed',category]],name)
     }finally{await f.close()}
   }
+})
+
+test('each scheduled attempt launches with its own captured auth profile',async()=>{
+  const primary={...claudeA,authProfile:'work'}
+  const f=await fixture('profile',[{lines:[{type:'assistant',error:'model_not_found'}],code:1},{lines:[work],code:0}],[claudeB],primary)
+  try{
+    assert.equal((await f.done()).status,'completed')
+    assert.deepEqual(f.launches.map(l=>[l.cli,l.model,l.authProfile]),[['claude','opus','work'],['claude','sonnet',undefined]])
+  }finally{await f.close()}
 })
 
 test('cancellation stops the chain',async()=>{
@@ -151,44 +160,50 @@ test('schedules reject duplicate or excess setups and the socket cannot rewrite 
   }finally{await rm(dir,{recursive:true,force:true})}
 })
 
-test('host transport admits only the active task setup, forwards only Claude startup summaries',async()=>{
+test('host transport admits only the active task setup and profile, forwards only Claude startup summaries',async()=>{
   const root=await mkdtemp(join(tmpdir(),'ez-fallback-host-')),workspace=join(root,'mind'),controlDir=join(root,'control'),directory=join(controlDir,'host-executor')
   const {mkdir,writeFile,readFile}=await import('node:fs/promises'),{serveHostExecutor}=await import('../src/host-executor.js')
-  const abort=new AbortController(),launched:{cli?:string;model?:string}[]=[]
+  const abort=new AbortController(),launched:{cli?:string;model?:string;authProfile?:string}[]=[],oldPath=process.env.PATH
+  const primary={...claudeA,authProfile:'work'}
   let server:Promise<void>|undefined
   try{
-    await mkdir(workspace,{recursive:true});await mkdir(directory,{recursive:true})
+    await mkdir(workspace,{recursive:true});await mkdir(directory,{recursive:true});await mkdir(join(root,'bin'))
+    await writeFile(join(root,'bin','claude'),'#!/bin/sh\nexit 0\n',{mode:0o700})
+    process.env.PATH=join(root,'bin')+':'+oldPath
     const control=new ControlStore(controlDir,900_000);await control.requestPairing(101,101);await control.approveOwner(101)
     const owner=(await control.status()).owner!,runs=new RunStore(controlDir),id='r_schedule_fallback'
-    await runs.create({id,chatId:101,telegramUserId:101,texts:['work'],execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:claudeA,fallbacks:[claudeB]},
+    await runs.create({id,chatId:101,telegramUserId:101,texts:['work'],execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,fallbacks:[claudeB]},
       scheduled:{id:'daily',revision:'rev',dueAt:new Date().toISOString(),pairedAt:owner.pairedAt}})
-    await runs.patch(id,{status:'running',attempts:[{preset:claudeA,quotaScope:'claude',outcome:'running'}]})
+    await runs.patch(id,{status:'running',attempts:[{preset:primary,quotaScope:'claude',outcome:'running'}]})
     server=serveHostExecutor({cli:'claude',agents:[{name:'t',workspace,controlDir,binDir:join(root,'bin')}]},abort.signal,async(_texts,options)=>{
-      launched.push({cli:options.cli,model:options.model})
-      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({type:'assistant',error:'rate_limit',message:{content:[{type:'text',text:'secret tool output'}]}})].join('\n')+'\n':''
+      launched.push({cli:options.cli,model:options.model,authProfile:options.authProfile})
+      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({type:'assistant',error:'model_not_found',message:{content:[{type:'text',text:'secret tool output'}]}})].join('\n')+'\n':''
       const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(lines)});process.exit(1)`])
       return {child,cleanup:async()=>{},stdout:''}
-    },async()=>[])
+    },async()=>[{cli:'claude',authProfile:'work',model:'opus',name:'Work',efforts:[]}])
     const events=async()=>{for(let n=0;n<150;n++){try{const text=await readFile(join(directory,id+'.events'),'utf8');if(text.includes('"stream":"exit"'))return text}catch{};await new Promise(r=>setTimeout(r,20))}throw new Error('No exit event')}
     const request=(options:object)=>writeFile(join(directory,id+'.request.json'),JSON.stringify({texts:['work'],options}))
     for(let n=0;n<100 && !await readFile(join(directory,'heartbeat.json')).then(()=>true,()=>false);n++)await new Promise(r=>setTimeout(r,20))
-    await request({cli:'claude',model:'opus'})
+    await request({cli:'claude',model:'opus',authProfile:'work'})
     const first=await events()
     const summaries=first.trim().split('\n').map(l=>JSON.parse(l)).filter(e=>e.stream==='stdout').flatMap(e=>e.text.trim().split('\n').map((l:string)=>JSON.parse(l)))
     assert.ok(summaries.every((e:{type:string})=>e.type==='ez.startup'))
-    assert.deepEqual(summaries.at(-1),{type:'ez.startup',workBegan:false,rejection:{category:'quota'}})
+    assert.deepEqual(summaries.at(-1),{type:'ez.startup',workBegan:false,rejection:{category:'provider-rejected'}})
     assert.doesNotMatch(first,/secret tool output/)
     const {rm:remove}=await import('node:fs/promises');await remove(join(directory,id+'.events'))
     // The relay advances: the next attempt reuses the run ID.
-    await runs.patch(id,{attempts:[{preset:claudeA,quotaScope:'claude',outcome:'failed',category:'quota'},{preset:claudeB,quotaScope:'claude',outcome:'running'}]})
+    await runs.patch(id,{attempts:[{preset:primary,quotaScope:'claude',outcome:'failed',category:'provider-rejected'},{preset:claudeB,quotaScope:'claude',outcome:'running'}]})
     await request({cli:'claude',model:'sonnet'})
     await events();await remove(join(directory,id+'.events'))
-    assert.deepEqual(launched.map(l=>[l.cli,l.model]),[['claude','opus'],['claude','sonnet']])
+    assert.deepEqual(launched.map(l=>[l.cli,l.model,l.authProfile]),[['claude','opus','work'],['claude','sonnet',undefined]])
+    await request({cli:'claude',model:'sonnet',authProfile:'work'})
+    assert.match(await events(),/auth profile does not match its captured AI selection/)
+    await remove(join(directory,id+'.events'))
     // A request for a setup other than the active attempt is refused before launch.
     await request({cli:'claude',model:'opus'})
     assert.match(await events(),/does not match its saved task model/)
     assert.equal(launched.length,2)
-  }finally{abort.abort();await server;await rm(root,{recursive:true,force:true})}
+  }finally{abort.abort();await server;process.env.PATH=oldPath;await rm(root,{recursive:true,force:true})}
 })
 
 test('Codex native session reports typed pre-work rejection and work start',async(t)=>{

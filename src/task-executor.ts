@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { readRun } from './delivery-socket.js'
 import {ApplicationBindings} from './application-channel.js'
 import { Tasks } from './tasks.js'
+import { provisionedHome } from './auth-profile.js'
 import { executorEnvironment, executorInvocation, terminateJob, type ExecutorOptions } from './executor.js'
 
 // This adapter is deliberately version-pinned: a new native tool default needs
@@ -58,8 +59,8 @@ export async function startTaskExecutor(options: ExecutorOptions) {
     const catalogInvocation = executorInvocation('codex', ['debug', 'models', '--bundled'])
     const catalog = await promisify(execFile)(catalogInvocation.command, catalogInvocation.args, { env: environment, maxBuffer: 4 * 1024 * 1024 })
     await writeFile(join(temporary, 'models.json'), JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))), { mode: 0o600 })
-    const auth = process.env.EZ_ISOLATION === 'isolated'
-      ? join(options.controlDir, 'cli', 'codex', 'auth.json')
+    const auth = process.env.EZ_ISOLATION === 'isolated' || options.authProfile !== undefined
+      ? join(await provisionedHome(options.controlDir, 'codex', options.authProfile), 'auth.json')
       : join(homedir(), '.codex', 'auth.json')
     await symlink(auth, join(home, 'auth.json'))
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),

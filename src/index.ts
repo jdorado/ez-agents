@@ -321,6 +321,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
                 model: preset.model,
                 effort: preset.effort,
                 provider: preset.provider,
+                authProfile: preset.authProfile,
                 codexAutoCompactTokens: config.codexAutoCompactTokens,
                 codexSandbox: !run.taskId && preset.cli === 'codex' ? config.codexSandbox : undefined,
                 sessionId,

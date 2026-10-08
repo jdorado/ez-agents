@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url'
 import { DESKTOP_UNAVAILABLE } from './desktop-bridge.js'
 import { macosWorkspaceProfile, workspaceSiblingDenies } from './workspace-confine.js'
 import { Scripts, type ScriptRunRef } from './scripts.js'
+import { claudeAuthEnvironment, cliHome, provisionedHome } from './auth-profile.js'
 
 export type ExecutorOptions = {
   repairEnabled?: boolean
@@ -35,6 +36,8 @@ export type ExecutorOptions = {
   model?: string
   effort?: string
   provider?: string
+  // Named owner-provisioned credential home; unset keeps the agent default.
+  authProfile?: string
   codexSandbox?: 'external'
   codexAutoCompactTokens?: number
   codexProvider?: CodexProviderBinding
@@ -301,7 +304,7 @@ export const opencodeDataHome = (controlDir: string): string | undefined => {
 }
 
 // Agent-bound Claude Code configuration directory (CLAUDE_CONFIG_DIR).
-export const claudeConfigHome = (controlDir: string): string => path.join(controlDir, 'cli', 'claude')
+export const claudeConfigHome = (controlDir: string, authProfile?: string): string => cliHome(controlDir, 'claude', authProfile)
 
 // Pi resolves its provider/model catalog from an agent dir (settings.json,
 // auth.json). Only a path is ever returned, never a secret.
@@ -343,6 +346,8 @@ export const startExecutorJob = async (
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
   if (options.script && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startScriptJob(options as ExecutorOptions & { script: ScriptLaunch })
   options = executionDefaults(executorKey(options.cli), options)
+  // Named credential homes are owner-provisioned; fail closed before any launch state.
+  if (options.authProfile !== undefined) await provisionedHome(options.controlDir, executorKey(options.cli), options.authProfile)
   // Routing is caller-owned: a restricted task run goes to the task runner
   // unless the host transport must ship it across the boundary first.
   if (options.taskRun && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
@@ -384,7 +389,7 @@ export const startExecutorJob = async (
   }
   if (!host && !gui && command === 'codex') {
     // Share the existing authentication, never the user's memory/config/sessions.
-    const base = path.join(options.controlDir, 'cli', 'codex')
+    const base = await provisionedHome(options.controlDir, 'codex', options.authProfile)
     const home = nativeSession ? path.join(base,'tasks',options.runId) : base
     await mkdir(home, {recursive:true,mode:0o700})
     if(nativeSession){
@@ -394,9 +399,10 @@ export const startExecutorJob = async (
       try{await writeFile(path.join(home,'config.toml'),await readFile(path.join(base,'config.toml')),{flag:'wx',mode:0o600})}
       catch(error){if(!['ENOENT','EEXIST'].includes((error as NodeJS.ErrnoException).code || ''))throw error}
     }
-    // Isolated agents keep auth in this CODEX_HOME. Host-capable may link the
-    // installer login. Never replace an existing binding.
-    const authLinks = process.env.EZ_ISOLATION === 'isolated'
+    // Isolated agents and named profiles keep auth in this CODEX_HOME. The
+    // host-capable default may link the installer login. Never replace an
+    // existing binding.
+    const authLinks = process.env.EZ_ISOLATION === 'isolated' || options.authProfile !== undefined
       ? nativeSession ? [[path.join(home, 'auth.json'), path.join(base, 'auth.json')]] : []
       : [[path.join(base, 'auth.json'), path.join(homedir(), '.codex', 'auth.json')],
         ...(nativeSession ? [[path.join(home, 'auth.json'), path.join(base, 'auth.json')]] : [])]
@@ -409,28 +415,18 @@ export const startExecutorJob = async (
   if (!host && !gui && key === 'claude') {
     // Mirror the Codex binding: agent-bound settings, memory, plugins and
     // sessions; never the user's personal ~/.claude configuration.
-    const home = claudeConfigHome(options.controlDir)
+    const home = await provisionedHome(options.controlDir, 'claude', options.authProfile)
     await mkdir(home, {recursive:true,mode:0o700})
-    environment.CLAUDE_CONFIG_DIR = home
-    // Host-capable agents share the installer login only. An empty secure
-    // storage dir makes Claude use its default credential store (macOS
+    // Host-capable default homes share the installer login only. An empty
+    // secure storage dir makes Claude use its default credential store (macOS
     // Keychain entry or ~/.claude/.credentials.json) in place, so token
     // refreshes stay shared rather than diverging through a copy. Isolated
-    // agents keep their own login inside CLAUDE_CONFIG_DIR. The host executor
-    // runs unlabelled, so this matches the Codex auth-link check, not
-    // resolveIsolation().
-    if (process.env.EZ_ISOLATION !== 'isolated') environment.CLAUDE_SECURESTORAGE_CONFIG_DIR = ''
-    // Optional owner-provisioned long-lived token (`claude setup-token`). It
-    // never refreshes, so one file can be copied to every agent without the
-    // agents invalidating each other's OAuth session.
-    const token = await readFile(path.join(home, 'oauth-token'), 'utf8').then(value => value.trim(), (error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return undefined
-      throw error
-    })
-    if (token !== undefined) {
-      if (!/^[A-Za-z0-9._-]{20,512}$/.test(token)) throw new Error('Invalid Claude token binding')
-      environment.CLAUDE_CODE_OAUTH_TOKEN = token
-    }
+    // agents and named profiles keep their own login inside CLAUDE_CONFIG_DIR.
+    // The host executor runs unlabelled, so this matches the Codex auth-link
+    // check, not resolveIsolation(). An optional owner-provisioned long-lived
+    // token (`claude setup-token`) never refreshes, so one file can be copied
+    // to every agent without them invalidating each other's OAuth session.
+    Object.assign(environment, await claudeAuthEnvironment(home, options.authProfile))
   }
   if (!host && !gui && key === 'opencode') {
     // Point OpenCode at the agent-bound data home (cli/opencode/auth.json)

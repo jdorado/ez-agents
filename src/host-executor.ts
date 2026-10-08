@@ -11,7 +11,7 @@ import { CliUnavailableError, startExecutorJob, terminateJob, resolveExecutor, v
 import { activeSetup } from './runs.js'
 import { startupLine, startupObserver } from './setup-fallback.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
-import { readModels, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
+import { readModels, sameEngine, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
 import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
@@ -218,6 +218,12 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                   observeClaude = cli === 'claude'
                 }
                 resolveExecutor(cli)
+                // The credential home comes from the authorized run's captured
+                // choice; a request can never move it to another account.
+                const captured = run?.scheduled ? activeSetup(run) : run?.execution?.preset
+                if ((opts.authProfile !== undefined || (captured?.cli === cli && captured.authProfile !== undefined)) &&
+                    !(captured && sameEngine(captured, {cli, authProfile: opts.authProfile})))
+                  throw new Error('Run auth profile does not match its captured AI selection')
                 const provider = cli === 'codex' && opts.provider
                   ? (agent.codexProviders ?? []).map(validateCodexProvider).find(candidate=>candidate.id===opts.provider)
                   : undefined
@@ -230,10 +236,10 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 // Admission and execution must use the same catalog snapshot. A
                 // transient native-client probe failure must not reject a model
                 // that the host just advertised to the relay and application.
-                if (cli !== installation.cli) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
+                if (cli !== installation.cli || opts.authProfile !== undefined) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,authProfile:opts.authProfile,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
                 const options:ExecutorOptions={workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                   runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
-                  sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
+                  sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,authProfile:opts.authProfile,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
                   promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled)}
                 job=await launch(request.texts,options)
               }

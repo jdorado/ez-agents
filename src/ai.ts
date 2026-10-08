@@ -7,12 +7,18 @@ import { homedir } from 'node:os'
 import { join, delimiter } from 'node:path'
 import { CliUnavailableError, executorEnvironment, executorInvocation, executorKey, resolveExecutor } from './executor.js'
 import { desktopCodexPath } from './desktop-bridge.js'
+import { AUTH_PROFILE_CLIS, claudeAuthEnvironment, cliHome, isAuthProfile, listAuthProfiles } from './auth-profile.js'
 
-export type AiPreset = { id: string; name: string; cli: string; provider?: string; model?: string; effort?: string }
+export type AiPreset = { id: string; name: string; cli: string; provider?: string; authProfile?: string; model?: string; effort?: string }
 // Optional ordered fallbacks are tried only for a scheduled occurrence that never started work.
 export type ExecutionChoice = { sessionId: string; preset: AiPreset; fallbacks?: AiPreset[] }
 export const MAX_FALLBACKS = 3
-export type ModelChoice = { cli: string; provider?: string; model?: string; name: string; efforts: string[] }
+export type ModelChoice = { cli: string; provider?: string; authProfile?: string; model?: string; name: string; efforts: string[] }
+type Engine = { cli?: string; authProfile?: string }
+// A native conversation belongs to one client and one credential home.
+export const sameEngine = (a: Engine, b: Engine) => a.cli === b.cli && a.authProfile === b.authProfile
+export const sameChoice = (a: Omit<AiPreset, 'id' | 'name'>, b: Omit<AiPreset, 'id' | 'name'>) =>
+  sameEngine(a, b) && a.provider === b.provider && a.model === b.model && a.effort === b.effort
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
 const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'pi']
 const nativeEffort = (cli: string, effort: string) =>
@@ -22,14 +28,15 @@ export const isPreset = (p: unknown): p is AiPreset => {
   const v = p as AiPreset
   return safe(v.id) && typeof v.name === 'string' && v.name.length > 0 && v.name.length <= 80 &&
     knownClis.includes(v.cli) &&
-    (v.provider === undefined || safe(v.provider)) && (v.model === undefined || safe(v.model)) && (v.effort === undefined || safe(v.effort))
+    (v.provider === undefined || safe(v.provider)) && (v.model === undefined || safe(v.model)) && (v.effort === undefined || safe(v.effort)) &&
+    (v.authProfile === undefined || (isAuthProfile(v.authProfile) && AUTH_PROFILE_CLIS.includes(v.cli)))
 }
 export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
   const c = v as ExecutionChoice | undefined
   return Boolean(c && /^[0-9a-f-]{36}$/i.test(c.sessionId) && isPreset(c.preset) &&
     (c.fallbacks === undefined || (Array.isArray(c.fallbacks) && c.fallbacks.length > 0 && c.fallbacks.length <= MAX_FALLBACKS && c.fallbacks.every(isPreset))))
 }
-export const presetLabel = (p: AiPreset) => `${p.cli}${p.provider ? ` (${p.provider})` : ''} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
+export const presetLabel = (p: AiPreset) => `${p.cli}${p.authProfile ? `@${p.authProfile}` : ''}${p.provider ? ` (${p.provider})` : ''} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
 // OpenCode encodes its provider in the native provider/model identifier.
 export const presetProvider = (p: AiPreset) => p.cli === 'opencode' ? p.model?.split('/')[0] : p.provider
 // The seed delegates model selection to the native client. Project its resolved
@@ -209,7 +216,11 @@ export const readModels = async (home = homedir(), available = installed, codexH
   // establish which models Pi can execute.
   if (!allow && await available('pi')) models.push({ cli: 'pi', name: 'Pi · client default', efforts: [] })
   const curated = await readCuratedModels(curationDir)
-  if (!curated.length) return models
+  const profiles = await listAuthProfiles(curationDir)
+  // Each provisioned profile offers its client's entries under its own home.
+  const withProfiles = (listed: ModelChoice[]) => [...listed, ...profiles.flatMap(({ cli, authProfile }) =>
+    listed.filter((model) => model.cli === cli).map((model) => ({ ...model, authProfile, name: `${authProfile} · ${model.name}`.slice(0, 80) })))]
+  if (!curated.length) return withProfiles(models)
   const scoped: ModelChoice[] = []
   for (const entry of curated) {
     if (!(await available(entry.cli))) continue
@@ -219,7 +230,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
   }
   const key = (m: { cli: string; provider?: string; model?: string }) => `${m.cli}‖${m.provider ?? ''}‖${m.model ?? ''}`
   const curatedKeys = new Set(scoped.map(key))
-  return [...scoped, ...models.filter((m) => !curatedKeys.has(key(m)))]
+  return withProfiles([...scoped, ...models.filter((m) => !curatedKeys.has(key(m)))])
 }
 export const opencodeCatalogModels = async (
   opencodeRunner?: (args: string[]) => Promise<string>,
@@ -257,8 +268,57 @@ export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], ava
   assertEffort(p.effort, p.model, p.cli)
   if (!isPreset(p)) throw new Error('This CLI is not installed.')
   if (!(await available(p.cli))) throw new CliUnavailableError('This CLI is not installed.')
-  if (!p.provider && !p.model && !p.effort) return
-  const model = catalog.find((m) => m.cli === p.cli && m.provider === p.provider && m.model === p.model)
+  if (!p.provider && !p.authProfile && !p.model && !p.effort) return
+  if (p.authProfile && !p.provider && !p.model && !p.effort) {
+    if (!catalog.some((m) => sameEngine(m, p))) throw new Error('This auth profile is not provisioned for the selected CLI.')
+    return
+  }
+  const model = catalog.find((m) => sameEngine(m, p) && m.provider === p.provider && m.model === p.model)
   if (!model || (p.effort && !model.efforts.includes(p.effort)))
     throw new Error('This model/effort is not in the installed client catalog. Refresh the client and try again; no fallback was selected.')
+}
+
+export type AuthProfileStatus = { cli: string; authProfile: string | null; provisioned: boolean; sharesHostLogin: boolean
+  credentialFiles: string[]; loggedIn: boolean | null; method: string | null }
+type StatusRunner = (command: string, args: string[], env: NodeJS.ProcessEnv, cwd: string) => Promise<{ code: number | null; stdout: string; stderr: string }>
+const nativeStatus: StatusRunner = (command, args, env, cwd) => new Promise((resolve) => {
+  const invocation = executorInvocation(command, args)
+  execFile(invocation.command, invocation.args, { env, cwd, timeout: 8000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) =>
+    resolve({ code: error ? (typeof error.code === 'number' ? error.code : null) : 0, stdout: String(stdout), stderr: String(stderr) }))
+})
+const credentialNames: Record<string, string[]> = { codex: ['auth.json'], claude: ['oauth-token', '.credentials.json'] }
+
+// Read-only auth diagnostics per credential home. Native status runs with the
+// same home and credential environment as execution; only whitelisted fields
+// are projected, never tokens, account identifiers or raw native output.
+export const authProfileStatus = async (controlDir: string, available = installed, run = nativeStatus,
+  isolated = process.env.EZ_ISOLATION === 'isolated'): Promise<AuthProfileStatus[]> => {
+  const homes: { cli: string; authProfile?: string }[] = [...AUTH_PROFILE_CLIS.map((cli) => ({ cli })), ...await listAuthProfiles(controlDir)]
+  const statuses: AuthProfileStatus[] = []
+  for (const { cli, authProfile } of homes) {
+    if (!authProfile && !(await available(cli))) continue
+    const home = cliHome(controlDir, cli, authProfile)
+    const provisioned = await access(home).then(() => true, () => false)
+    const credentialFiles: string[] = []
+    for (const name of credentialNames[cli]) if (await access(join(home, name)).then(() => true, () => false)) credentialFiles.push(name)
+    let loggedIn: boolean | null = null, method: string | null = null
+    if (provisioned) {
+      try {
+        if (cli === 'codex') {
+          const result = await run('codex', ['login', 'status'], { ...executorEnvironment(), CODEX_HOME: home }, home)
+          loggedIn = result.code === null ? null : result.code === 0
+          // Codex prints its login status on stderr.
+          const text = result.stdout + result.stderr
+          method = loggedIn ? /chatgpt/i.test(text) ? 'chatgpt' : /api key/i.test(text) ? 'api-key' : 'other' : null
+        } else {
+          const result = await run('claude', ['auth', 'status', '--json'], { ...executorEnvironment(), ...await claudeAuthEnvironment(home, authProfile, isolated) }, home)
+          const status = result.code === null ? undefined : JSON.parse(result.stdout) as { loggedIn?: unknown; authMethod?: unknown }
+          loggedIn = status ? status.loggedIn === true : null
+          method = loggedIn && safe(status?.authMethod) ? status.authMethod : null
+        }
+      } catch { loggedIn = false }
+    }
+    statuses.push({ cli, authProfile: authProfile ?? null, provisioned, sharesHostLogin: !isolated && !authProfile, credentialFiles, loggedIn, method })
+  }
+  return statuses
 }

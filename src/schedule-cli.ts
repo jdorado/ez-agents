@@ -13,6 +13,7 @@ import { executionOverrides } from './model-policy.js'
 import { holdsSchedule, Scheduler, executionType } from './scheduler.js'
 import { Scripts, fileSha256, workspaceEntry, DEFAULT_SCRIPT_TIMEOUT_SECONDS } from './scripts.js'
 import { executorEnvironment } from './executor.js'
+import { provisionedHome } from './auth-profile.js'
 import { ownsRun } from './identity.js'
 import { type Trigger } from './schedule-time.js'
 
@@ -35,7 +36,7 @@ const fallbackSetup = (spec: string, index: number): AiPreset => {
 async function main() {
   const { values:v, positionals:[action='list',id,scriptId] } = parseArgs({allowPositionals:true,options:{
     script:{type:'string'}, arg:{type:'string',multiple:true}, file:{type:'string'}, interpreter:{type:'string'}, 'timeout-seconds':{type:'string'},
-    cli:{type:'string'}, model:{type:'string'}, effort:{type:'string'}, fallback:{type:'string',multiple:true}, 'clear-fallbacks':{type:'boolean'},
+    cli:{type:'string'}, 'auth-profile':{type:'string'}, model:{type:'string'}, effort:{type:'string'}, fallback:{type:'string',multiple:true}, 'clear-fallbacks':{type:'boolean'},
     all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
     'preflight-file':{type:'string'},'clear-preflight':{type:'boolean'},name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
     cron:{type:'string'}, timezone:{type:'string'}, 'every-seconds':{type:'string'}, start:{type:'string'}, until:{type:'string'}, help:{type:'boolean'},
@@ -47,13 +48,14 @@ async function main() {
   review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT
   create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE | --script SCRIPT_ID [--arg=VALUE ...])
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
-    [--cli EXECUTOR] [--model MODEL] [--effort <native-effort>]
+    [--cli EXECUTOR] [--auth-profile NAME] [--model MODEL] [--effort <native-effort>]
     [--fallback cli=EXECUTOR,model=MODEL[,effort=EFFORT][,provider=ID] ... | --clear-fallbacks]
     [--preflight-file FILE | --clear-preflight]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
   script list | show SCRIPT_ID | remove SCRIPT_ID
   script register|update SCRIPT_ID --file WORKSPACE_PATH --interpreter COMMAND [--arg=VALUE ...] [--timeout-seconds N]
-Execution types: agent (prompt, engine, model, effort) or script (registered script ID and saved arguments).
+Execution types: agent (prompt, engine, auth profile, model, effort) or script (registered script ID and saved arguments).
+--auth-profile runs a Codex/Claude task under that provisioned login (ezenciel-agents-ai profiles); --cli alone uses the default login.
 A script registration references an entry point inside the agent workspace and records its SHA-256. Core invokes
 the installed interpreter with the entry point and arguments directly, without a shell or a model. Changed entry-point
 bytes refuse to run until an explicit script update. The hash covers that file only, not imported dependencies.
@@ -180,7 +182,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     if(action==='create' && id && (await scheduler.list()).some(s=>s.id===id))throw new Error('Schedule exists; use edit')
     if([v.now,v.at,v.cron,v['every-seconds']].filter(Boolean).length!==1)throw new Error('Choose exactly one trigger')
     if([v.text,v['text-file'],v.script].filter(Boolean).length!==1)throw new Error('Choose --text, --text-file or --script')
-    if(v.script && (v.cli || v.model || v.effort || v.fallback || v['clear-fallbacks']))throw new Error('Script schedules run no model; --cli, --model, --effort and --fallback do not apply')
+    if(v.script && (v.cli || v['auth-profile'] || v.model || v.effort || v.fallback || v['clear-fallbacks']))throw new Error('Script schedules run no model; --cli, --auth-profile, --model, --effort and --fallback do not apply')
     if(v.fallback && v['clear-fallbacks'])throw new Error('Choose --fallback or --clear-fallbacks')
     if(v.arg && !v.script)throw new Error('--arg applies to script schedules only')
     const start=v.start || new Date(Date.now()+1000).toISOString()
@@ -202,9 +204,10 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const state = await control.status()
     const selected = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
     const base = v.cli ? initialPreset(v.cli) : previous?.preset || selected || initialPreset(process.env.EZ_EXECUTOR_CLI || 'codex')
-    const preset = executionOverrides(base.cli, base, v.model, v.effort)
+    const preset = executionOverrides(base.cli, v['auth-profile'] === undefined ? base : {...base, authProfile:v['auth-profile']}, v.model, v.effort)
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
     const fallbacks = v['clear-fallbacks'] ? undefined : v.fallback ? v.fallback.map(fallbackSetup) : previous?.fallbacks
+    if (preset.authProfile !== undefined) await provisionedHome(config.controlDir, preset.cli, preset.authProfile)
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
       preflight,
       originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
