@@ -2,7 +2,8 @@ import { assertEffort } from './model-policy.js'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { isPreset, persistedPreset, presetProvider, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
+import { isPreset, persistedPreset, presetProvider, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
+import { isAuthProfile } from './auth-profile.js'
 
 export type Owner = {
   id?: string
@@ -58,6 +59,8 @@ export type SessionState = {
   sessionId: string
   hasStarted: boolean
   cli?: string
+  // Bound with cli at creation: a native session never resumes under another home.
+  authProfile?: string
   nativeSessionId?: string
   title?: string
   archived?: boolean
@@ -129,7 +132,8 @@ const isState = (value: unknown): value is ControlState => {
     (s.archived === undefined || typeof s.archived === 'boolean') &&
     (s.applicationScope === undefined || /^[a-f0-9]{64}$/.test(s.applicationScope)) &&
     (s.telegramShared === undefined || typeof s.telegramShared === 'boolean') &&
-    (s.preset === undefined || (isPreset(s.preset) && s.preset.cli === s.cli))
+    (s.authProfile === undefined || (isAuthProfile(s.authProfile) && s.cli !== undefined)) &&
+    (s.preset === undefined || (isPreset(s.preset) && sameEngine(s.preset, s)))
   return (
     candidate.version === 1 &&
     Array.isArray(candidate.pending) &&
@@ -150,9 +154,11 @@ const isState = (value: unknown): value is ControlState => {
 export const sessionTitle = (session: SessionState): string =>
   session.title || `Conversation ${session.sessionId.slice(0, 8)}`
 
+const engineOf = (preset: AiPreset) => ({ cli: preset.cli, ...(preset.authProfile ? { authProfile: preset.authProfile } : {}) })
+
 const rememberPreset = (state: ControlState) => {
   const preset = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
-  if (state.activeSession && preset && state.activeSession.cli === preset.cli)
+  if (state.activeSession && preset && sameEngine(state.activeSession, preset))
     state.activeSession.preset = preset
 }
 
@@ -486,8 +492,8 @@ export class ControlStore {
       const ai = state.ai
       // Older sessions did not record their model. Reuse a known preset for the
       // same CLI; never resume an engine ID through a different client.
-      const preset = session.preset ?? ai?.presets.find(p => p.cli === session.cli)
-      if (!ai || !preset || preset.cli !== session.cli)
+      const preset = session.preset ?? ai?.presets.find(p => sameEngine(p, session))
+      if (!ai || !preset || !sameEngine(preset, session))
         throw new Error('This older conversation has no saved AI binding. Start a new conversation.')
       if (session.hasStarted && ['codex', 'codex-gui', 'opencode'].includes(session.cli!) && !session.nativeSessionId)
         throw new Error('This conversation has no native session ID. Start a new conversation.')
@@ -537,10 +543,11 @@ export class ControlStore {
       const state = await this.readState()
       await requireControlGuard(state, guard)
       if (expectedSession !== undefined && (state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
+      const fallback = state.ai?.presets.find((p) => p.id === state.ai!.defaultId)
       const next: SessionState = {
         sessionId: crypto.randomUUID(),
         hasStarted: false,
-        cli: state.ai?.presets.find((p) => p.id === state.ai!.defaultId)?.cli,
+        ...(fallback ? engineOf(fallback) : {}),
       }
       rememberPreset(state)
       if (state.activeSession) (state.sessions ??= []).push(state.activeSession)
@@ -624,25 +631,25 @@ export class ControlStore {
     const settledPreset = settledAi?.presets.find((p) => p.id === settledAi.selectedId)
     const session = settled.activeSession
     if (settledPreset && session && (session.cli || session.hasStarted) &&
-      !(session.cli === settledPreset.cli && session.hasStarted && session.preset &&
+      !(sameEngine(session, settledPreset) && session.hasStarted && session.preset &&
         presetProvider(session.preset) !== presetProvider(settledPreset)) &&
-      (session.cli !== settledPreset.cli || JSON.stringify(session.preset) === JSON.stringify(settledPreset)) &&
+      (!sameEngine(session, settledPreset) || JSON.stringify(session.preset) === JSON.stringify(settledPreset)) &&
       Boolean(session.title || session.hasStarted || !title?.trim()))
       return { sessionId: session.sessionId, preset: settledPreset }
     return this.withLock(async () => {
       const state = await this.readState()
       state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id, recentIds: [] }
       const preset = state.ai.presets.find((p) => p.id === state.ai!.selectedId)!
-      state.activeSession ??= { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli }
-      if (!state.activeSession.cli && !state.activeSession.hasStarted) state.activeSession.cli = preset.cli
-      if (state.activeSession.cli === preset.cli) {
+      state.activeSession ??= { sessionId: crypto.randomUUID(), hasStarted: false, ...engineOf(preset) }
+      if (!state.activeSession.cli && !state.activeSession.hasStarted) Object.assign(state.activeSession, engineOf(preset))
+      if (sameEngine(state.activeSession, preset)) {
         const previous = state.activeSession.preset
         // A provider change starts a separate native context. Model and effort
         // changes are native turn settings within the existing conversation.
         if (state.activeSession.hasStarted && previous &&
             presetProvider(previous) !== presetProvider(preset)) {
           ;(state.sessions ??= []).push(state.activeSession)
-          state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset }
+          state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, ...engineOf(preset), preset }
         } else {
           state.activeSession.preset = preset
         }
@@ -675,14 +682,14 @@ export class ControlStore {
         state.ai!.selectedId = session.preset!.id
       }
       if (previous?.preset) {
-        if (requested && requested.cli !== previous.cli) throw new Error('Application request conflicts with existing session engine')
+        if (requested && !sameEngine(requested, previous)) throw new Error('Application request conflicts with existing session engine')
         if (requested) previous.preset = requested
         activate(previous)
         if (shareTelegram || requested) await this.writeState(state)
         return { sessionId: previous.sessionId, preset: previous.preset }
       }
       const preset = requested ?? state.ai.presets.find(item => item.id === state.ai!.selectedId)!
-      const session: SessionState = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset, applicationScope: scope }
+      const session: SessionState = { sessionId: crypto.randomUUID(), hasStarted: false, ...engineOf(preset), preset, applicationScope: scope }
       state.sessions.push(session)
       activate(session)
       await this.writeState(state)
@@ -705,7 +712,7 @@ export class ControlStore {
         throw new Error('Application scope is shared; use shared controls')
       const nextPreset = preset ?? state.ai?.presets.find(item => item.id === state.ai!.defaultId)
       if (!nextPreset || !isPreset(nextPreset)) throw new Error('Invalid application AI selection')
-      if (preset && previous?.cli === preset.cli) {
+      if (preset && previous && sameEngine(previous, preset)) {
         previous.preset = persistedPreset(preset)
         await this.writeState(state)
         return previous
@@ -714,7 +721,7 @@ export class ControlStore {
       // the old immutable session ID; private history stays absent from /chats.
       if (previous) previous.archived = true
       const next: SessionState = {sessionId:crypto.randomUUID(), hasStarted:false,
-        cli:nextPreset.cli, preset:persistedPreset(nextPreset), applicationScope:scope}
+        ...engineOf(nextPreset), preset:persistedPreset(nextPreset), applicationScope:scope}
       ;(state.sessions ??= []).push(next)
       await this.writeState(state)
       return next
@@ -725,8 +732,8 @@ export class ControlStore {
     const state = await this.status()
     const session = state.activeSession?.sessionId === choice.sessionId ? state.activeSession
       : state.sessions?.find((s) => s.sessionId === choice.sessionId)
-    if (!session || session.cli !== choice.preset.cli)
-      throw new Error('Conversation has no matching CLI binding. Use New conversation explicitly; files are preserved.')
+    if (!session?.cli || !sameEngine(session, choice.preset))
+      throw new Error('Conversation has no matching CLI binding for this client and auth profile. Use New conversation explicitly; files are preserved.')
     if (session.hasStarted && ['codex', 'codex-gui', 'opencode'].includes(session.cli) && !session.nativeSessionId)
       throw new Error('Native session ID missing. Use New conversation explicitly; no automatic reset.')
     return session
@@ -774,16 +781,16 @@ export class ControlStore {
       assertEffort(preset.effort, preset.model, preset.cli)
       if ((state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Menu expired. Open Choose AI again.')
       const current = ai.presets.find((p) => p.id === ai.selectedId)!
-      if (state.activeSession && (current.cli !== preset.cli || presetProvider(current) !== presetProvider(preset) || !state.activeSession.cli) && !fresh) return false
+      if (state.activeSession && (!sameEngine(current, preset) || presetProvider(current) !== presetProvider(preset) || !state.activeSession.cli) && !fresh) return false
       if (fresh || !state.activeSession) {
         rememberPreset(state)
         if (state.activeSession) (state.sessions ??= []).push(state.activeSession)
-        state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, cli: preset.cli, preset: persistedPreset(preset) }
+        state.activeSession = { sessionId: crypto.randomUUID(), hasStarted: false, ...engineOf(preset), preset: persistedPreset(preset) }
       }
       ai.selectedId = id
       // Persist the conversation's choice now, even if the owner switches chats
       // or restarts before sending another message. Queued choices are snapshots.
-      if (state.activeSession.cli === preset.cli && (!state.activeSession.preset || presetProvider(state.activeSession.preset) === presetProvider(preset)))
+      if (sameEngine(state.activeSession, preset) && (!state.activeSession.preset || presetProvider(state.activeSession.preset) === presetProvider(preset)))
         state.activeSession.preset = persistedPreset(preset)
       ai.recentIds = [id, ...(ai.recentIds ?? []).filter((recentId) => recentId !== id)].slice(0, 3)
       await this.writeState(state)

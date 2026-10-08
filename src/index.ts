@@ -266,6 +266,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           model: selected.model,
           effort: selected.effort,
           provider: selected.provider,
+          authProfile: selected.authProfile,
           codexAutoCompactTokens: config.codexAutoCompactTokens,
           codexSandbox: !run.taskId && selected.cli === 'codex' ? config.codexSandbox : undefined,
           sessionId: session.nativeSessionId || session.sessionId,
