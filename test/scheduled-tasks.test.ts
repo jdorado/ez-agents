@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { Scheduler } from '../src/scheduler.js'
 import { scheduledTaskDetailText, scheduledTasksText } from '../src/scheduled-tasks.js'
 import { RunStore } from '../src/runs.js'
+import type { Trigger } from '../src/schedule-time.js'
 
 const owner = { telegramUserId: 101, telegramChatId: 101, pairedAt: '2026-09-11T00:00:00.000Z' }
 const execution = { sessionId: randomUUID(), preset: { id: 'fixture', name: 'Fixture', cli: 'codex', model: 'fixture-model' } }
@@ -40,7 +41,7 @@ test('scheduled task view is read-only, owner-bound, and shows active task promp
   const active = await scheduler.listActiveReadOnly(await runs.list())
   const text = scheduledTasksText(active, owner)
 
-  assert.equal(text, '📅 Scheduled tasks · 1 active\n\nAll times UTC. Use /tasks 1 for task details.\n\n1 · Daily report\n  ● Active\n  Next · Thu, Jan 1 · 05:00 UTC\n  Last · ✓ Completed · Thu, Jan 1 · 05:04 UTC\n  codex · fixture-model · default effort\n  Read the ledger and send the owner a concise report.')
+  assert.equal(text, '📅 Scheduled tasks · 1 active\n\nNext/last times UTC. Use /tasks 1 for task details.\n\n1 · Daily report\n  ● Active\n  Schedule · Weekdays at 09:00 · Asia/Dubai\n  Next · Thu, Jan 1 · 05:00 UTC\n  Last · ✓ Completed · Thu, Jan 1 · 05:04 UTC\n  Execution · codex (default login) · fixture-model · default effort\n  Read the ledger and send the owner a concise report.')
   assert.match(scheduledTaskDetailText(active.find(schedule => schedule.id === saved.id)!, 1), /Last run\n✓ Completed · Thu, Jan 1 · 05:04 UTC/)
   assert.doesNotMatch(text, /Other owner task|This must never be visible/)
   assert.equal(await readFile(join(scheduleDir, 'owner-task.json'), 'utf8'), before)
@@ -118,7 +119,7 @@ test('a legacy invalid selection does not prevent the active menu from rendering
   await writeFile(file,JSON.stringify(saved))
 
   const active = await scheduler.listActiveReadOnly([])
-  assert.match(scheduledTasksText(active,owner),/codex · gpt-5.6-terra · max/)
+  assert.match(scheduledTasksText(active,owner),/codex \(default login\) · gpt-5.6-terra · max/)
 })
 
 test('detail view truncates long instructions and tolerates invalid timestamps', async t => {
@@ -134,4 +135,25 @@ test('detail view truncates long instructions and tolerates invalid timestamps',
   assert.ok(detail.length < 3000)
   const broken = {...active.find(schedule => schedule.id === saved.id)!,nextAt:'not-a-date',lastRun:{status:'completed',at:'also-bad',currentRevision:true}} as never
   assert.doesNotMatch(scheduledTaskDetailText(broken,1,1),/NaN/)
+})
+
+test('frequency describes saved rules without inventing a uniform interval for arbitrary cron', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'ez-schedule-frequency-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+  const scheduler=new Scheduler(dir),start='2027-01-01T00:00:00Z',timezone='America/New_York'
+  const cases:[Trigger,string][]=[
+    [{at:start},'Once'],[{everySeconds:60,start},'Every minute'],[{everySeconds:90,start},'Every 90 seconds'],
+    [{everySeconds:3600,start},'Every hour'],[{everySeconds:172800,start},'Every 2 days'],
+    [{cron:'*/15 * * * *',timezone,start},'Every 15 minutes · America/New_York'],
+    [{cron:'*/30 * * * *',timezone,start},'Every 30 minutes · America/New_York'],
+    [{cron:'15 * * * *',timezone,start},'Hourly at :15 · America/New_York'],
+    [{cron:'30 9 * * *',timezone,start},'Daily at 09:30 · America/New_York'],
+    [{cron:'*/7 * * * *',timezone,start},'Cron */7 * * * * · America/New_York'],
+    [{cron:'0 9 1 * 1',timezone,start},'Cron 0 9 1 * 1 · America/New_York'],
+  ]
+  for(const [i,[trigger,label]] of cases.entries()){
+    const saved=await scheduler.save({id:`t-${i}`,name:`Task ${i}`,text:'Inspect saved work.',owner,execution,enabled:true,trigger})
+    const active=(await scheduler.listActiveReadOnly([])).find(s=>s.id===saved.id)!
+    assert.ok(scheduledTasksText([active],owner).includes(`Schedule · ${label}\n`))
+    assert.ok(scheduledTaskDetailText(active,1).includes(`Schedule\n${label}\n`))
+  }
 })

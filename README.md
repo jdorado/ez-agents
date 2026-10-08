@@ -172,7 +172,8 @@ transport, with separate agent workspaces and sessions. See
 
 Telegram `/status` shows the running relay and host versions plus installed
 plugin versions. Its read-only **Scheduled tasks** control lists the paired
-owner's active schedules in alphabetical order, with their engine/model/effort,
+owner's active schedules in alphabetical order, with their frequency/timezone
+and ordered CLI/login-profile/model/effort execution path (primary → fallbacks),
 next occurrence or current queued/running state, and a short preview of the
 saved invocation prompt; it never creates, changes or runs a task. The agent's `ez status` adds verified plugin
 runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).

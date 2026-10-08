@@ -328,7 +328,13 @@ The prompt controls diagnosis, authorized recovery and quiet notification behavi
 The Telegram Scheduled tasks menu lists enabled schedules that still have a pending
 occurrence or a queued/running occurrence. Finished one-time tasks, paused
 schedules and revisions stopped for review are hidden. Each entry shows the
-effective engine/model/effort, next occurrence in UTC (or queued/running state),
+frequency with the cron timezone, the saved primary and fallback setups in order
+(CLI, login profile, model and effort), next occurrence in UTC (or queued/running state),
 and the first sentence of its saved invocation
 prompt, limited to 140 characters. This is a read-only view; history and full
-prompts remain available through the scheduling CLI.
+prompts remain available through the scheduling CLI. `/tasks N` shows the same
+frequency and execution path with the saved instructions. Common minute/hourly,
+daily and weekday rules have plain-language labels; other calendar rules show
+the exact cron expression and timezone. Interval rules show their fixed period,
+and one-time tasks show `Once`. This describes the schedule, not a guarantee of
+work when admission/preflight conditions are unmet.
