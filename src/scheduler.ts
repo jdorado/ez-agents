@@ -144,7 +144,7 @@ export class Scheduler {
         assertScheduledModel(preset.model)
         assertEffort(preset.effort, preset.model, preset.cli)
       }
-      const key = (p: AiPreset) => JSON.stringify([p.cli, p.provider, p.model, p.effort])
+      const key = (p: AiPreset) => JSON.stringify([p.cli, p.authProfile, p.provider, p.model, p.effort])
       if (new Set(setups.map(key)).size !== setups.length) throw new Error('Task setups must be distinct')
       s = {...input, execution, trigger:validateTrigger(input.trigger),version:1,revision:randomUUID()}
     }

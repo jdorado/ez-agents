@@ -57,7 +57,7 @@ available through `ezenciel-agents-schedule context`.
 
 ## Ordered setup fallback
 
-An agent task may list up to three fallback setups after its saved one, for
+An agent task may list ordered fallback setups after its saved one, for
 example `claude · opus → claude · sonnet → codex · gpt-6-sol`:
 
 ```sh
@@ -68,6 +68,21 @@ ezenciel-agents-schedule create --name Daily --cli claude --model opus \
 
 `edit` keeps the saved fallbacks unless `--fallback` replaces them or
 `--clear-fallbacks` removes them. Setups must be distinct and each needs a model.
+There is no fixed list-length limit. Each setup captures its own supported CLI,
+model, effort and optional provider; the installed native client owns valid model
+and effort values. The existing failure rules below apply to every setup.
+Each fallback may include `auth-profile=NAME` to select its own owner-provisioned
+Codex or Claude account. Omitting it selects the default login, independently of
+the primary setup. For four separate Claude accounts, provision and log into
+`claude2`, `claude3` and `claude4`, then use:
+
+```sh
+ezenciel-agents-schedule create --name Daily --cli claude --model opus \
+  --cron '0 9 * * *' --timezone Asia/Dubai --text 'Prepare the daily report.' \
+  --fallback cli=claude,model=opus,auth-profile=claude2 \
+  --fallback cli=claude,model=opus,auth-profile=claude3 \
+  --fallback cli=claude,model=opus,auth-profile=claude4
+```
 
 Core advances to the next setup only with typed evidence that nothing ran: the
 CLI is not installed or executable, or the provider rejected the turn before any
@@ -81,10 +96,13 @@ Claude runs use `--output-format stream-json`; the host forwards only a compact
 startup summary). Other engines advance only when their CLI is unavailable.
 
 A quota rejection skips the remaining setups in the same quota scope: the native
-client (`claude`, `codex` including desktop and custom Codex providers, `grok`)
-or the upstream provider for OpenCode/Pi models. A different credential alone is
-never treated as an independent allowance. Each setup runs at most once per
-occurrence.
+client and login profile (`claude`, `codex` including desktop and custom Codex
+providers), `grok`, or the upstream provider for OpenCode/Pi models. A named
+profile selects a separate owner-provisioned account and is eligible for its own
+attempt; changing only the model in the same profile does not reset its scope.
+Do not provision aliases of the same account to obtain more allowance. Ez does
+not infer account independence from credentials or promise that a shared
+organization's allowance is separate. Each setup runs at most once per occurrence.
 
 Every attempt keeps the same run ID, occurrence, schedule revision, workspace,
 delivery binding and scheduled concurrency slot, in a fresh native session.
