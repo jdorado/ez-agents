@@ -318,6 +318,8 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         const payload = (op.payload ?? {}) as { runId?: unknown; change?: unknown }
         if (typeof payload.runId !== 'string' || !payload.runId) throw new Error('Run ID is required')
         if (!payload.change || typeof payload.change !== 'object') throw new Error('Patch change is required')
+        // Setup attempts select what the host admits; only the relay records them.
+        if ('attempts' in payload.change) throw new Error('Setup attempts are relay-owned')
         return runs.patch(payload.runId, payload.change as never)
       }
       case 'taskApplication': {

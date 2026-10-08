@@ -8,7 +8,7 @@ import { ControlStore, sameOwner } from './control-state.js'
 import { ApplicationBindings } from './application-channel.js'
 import type { RunRecord } from './runs.js'
 import { callDeliverySocket, socketPathFor } from './delivery-socket.js'
-import { initialPreset, isPreset } from './ai.js'
+import { initialPreset, isPreset, presetLabel, MAX_FALLBACKS, type AiPreset } from './ai.js'
 import { executionOverrides } from './model-policy.js'
 import { holdsSchedule, Scheduler, executionType } from './scheduler.js'
 import { Scripts, fileSha256, workspaceEntry, DEFAULT_SCRIPT_TIMEOUT_SECONDS } from './scripts.js'
@@ -16,10 +16,26 @@ import { executorEnvironment } from './executor.js'
 import { ownsRun } from './identity.js'
 import { type Trigger } from './schedule-time.js'
 
+// `cli=claude,model=sonnet,effort=medium` names one fallback setup.
+const fallbackSetup = (spec: string, index: number): AiPreset => {
+  const fields = Object.fromEntries(spec.split(',').map(part => {
+    const at = part.indexOf('=')
+    if (at < 1) throw new Error('Fallback uses cli=EXECUTOR,model=MODEL[,effort=EFFORT][,provider=ID]')
+    return [part.slice(0, at), part.slice(at + 1)]
+  }))
+  if (Object.keys(fields).some(key => !['cli','model','effort','provider'].includes(key)) || !fields.cli || !fields.model)
+    throw new Error('Fallback uses cli=EXECUTOR,model=MODEL[,effort=EFFORT][,provider=ID]')
+  const base = initialPreset(fields.cli)
+  const preset = executionOverrides(base.cli, {...base, ...(fields.provider ? {provider: fields.provider} : {})}, fields.model, fields.effort)
+  const named = {...preset, id: `fallback-${index + 1}`, name: presetLabel(preset).slice(0, 80)}
+  if (!isPreset(named)) throw new Error('Invalid fallback setup')
+  return named
+}
+
 async function main() {
   const { values:v, positionals:[action='list',id,scriptId] } = parseArgs({allowPositionals:true,options:{
     script:{type:'string'}, arg:{type:'string',multiple:true}, file:{type:'string'}, interpreter:{type:'string'}, 'timeout-seconds':{type:'string'},
-    cli:{type:'string'}, model:{type:'string'}, effort:{type:'string'},
+    cli:{type:'string'}, model:{type:'string'}, effort:{type:'string'}, fallback:{type:'string',multiple:true}, 'clear-fallbacks':{type:'boolean'},
     all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
     'preflight-file':{type:'string'},'clear-preflight':{type:'boolean'},name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
     cron:{type:'string'}, timezone:{type:'string'}, 'every-seconds':{type:'string'}, start:{type:'string'}, until:{type:'string'}, help:{type:'boolean'},
@@ -32,6 +48,7 @@ async function main() {
   create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE | --script SCRIPT_ID [--arg=VALUE ...])
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
     [--cli EXECUTOR] [--model MODEL] [--effort <native-effort>]
+    [--fallback cli=EXECUTOR,model=MODEL[,effort=EFFORT][,provider=ID] ... | --clear-fallbacks]
     [--preflight-file FILE | --clear-preflight]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
   script list | show SCRIPT_ID | remove SCRIPT_ID
@@ -52,6 +69,10 @@ Failures default to unreviewed owner runs. Review records a diagnosis; it never 
 A conditional review schedule consumes no model run when there are no unreviewed failures.
 New tasks capture the selected engine settings; edit preserves existing settings unless overridden.
 Every task requires a concrete saved model. Supply --model if the selected settings have none; existing tasks never fall back to chat or client defaults.
+Fallbacks (at most ${MAX_FALLBACKS}, in order) run only when the previous setup's CLI is unavailable or its provider
+rejected the turn before any work began. Access denial, unknown errors, cancellation and failure after work began stop
+the chain; nothing is replayed. A quota rejection skips later setups of the same client or provider (quota scope),
+even with different credentials. The run records each attempt, setup, failure category and any reported reset time.
 Trigger runs an existing task once with its saved instructions, AI and delivery binding in a fresh session. Reuse the request key after an uncertain result; the regular schedule is unchanged.
 Creates a scheduled task. Instructions are text, never shell commands.
 Use --now to run once. Run completion is not delivery proof.
@@ -159,7 +180,8 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     if(action==='create' && id && (await scheduler.list()).some(s=>s.id===id))throw new Error('Schedule exists; use edit')
     if([v.now,v.at,v.cron,v['every-seconds']].filter(Boolean).length!==1)throw new Error('Choose exactly one trigger')
     if([v.text,v['text-file'],v.script].filter(Boolean).length!==1)throw new Error('Choose --text, --text-file or --script')
-    if(v.script && (v.cli || v.model || v.effort))throw new Error('Script schedules run no model; --cli, --model and --effort do not apply')
+    if(v.script && (v.cli || v.model || v.effort || v.fallback || v['clear-fallbacks']))throw new Error('Script schedules run no model; --cli, --model, --effort and --fallback do not apply')
+    if(v.fallback && v['clear-fallbacks'])throw new Error('Choose --fallback or --clear-fallbacks')
     if(v.arg && !v.script)throw new Error('--arg applies to script schedules only')
     const start=v.start || new Date(Date.now()+1000).toISOString()
     const trigger:Trigger=v.now ? {at:new Date(Date.now()+1000).toISOString()} : v.at ? {at:v.at} :
@@ -182,10 +204,11 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const base = v.cli ? initialPreset(v.cli) : previous?.preset || selected || initialPreset(process.env.EZ_EXECUTOR_CLI || 'codex')
     const preset = executionOverrides(base.cli, base, v.model, v.effort)
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
+    const fallbacks = v['clear-fallbacks'] ? undefined : v.fallback ? v.fallback.map(fallbackSetup) : previous?.fallbacks
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
       preflight,
       originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
-      execution:{sessionId:previous?.sessionId || randomUUID(),preset}},action==='create'))
+      execution:{sessionId:previous?.sessionId || randomUUID(),preset,...(fallbacks ? {fallbacks} : {})}},action==='create'))
   }else{
     if(!id)throw new Error('ID required')
     if(action==='cancel'){
