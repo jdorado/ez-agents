@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -751,4 +751,31 @@ test('tasks command never reaches the executor on invalid input or foreign sende
     await f.relay.drainInbox(true)
     assert.equal(f.launched.length, 0)
   } finally { await f.close() }
+})
+
+test('tasks list and detail show saved frequency and ordered setup path without changing or launching work',async()=>{
+  const f=await fixture()
+  try{
+    const {Scheduler}=await import('../src/scheduler.js')
+    const control=new ControlStore(f.dir,1000),scheduler=new Scheduler(f.dir)
+    const preset={id:'primary',name:'Primary',cli:'claude',model:'opus',effort:'high'}
+    const fallbacks=[
+      {...preset,id:'second',authProfile:'claude2'},
+      {id:'third',name:'Third',cli:'codex',authProfile:'work',model:'gpt-6-sol',effort:'xhigh'},
+      {id:'fourth',name:'Fourth',cli:'pi',model:'anthropic/claude-sonnet',effort:'medium'}]
+    const saved=await scheduler.save({id:'analyst',name:'Analyst',text:'Read the saved role.',owner:(await control.status()).owner!,
+      execution:{sessionId:randomUUID(),preset,fallbacks},
+      enabled:true,trigger:{cron:'*/30 * * * *',timezone:'America/New_York',start:'2027-01-01T00:00:00Z'}})
+    const path='claude (default login) · opus · high → claude@claude2 · opus · high → codex@work · gpt-6-sol · xhigh → pi · anthropic/claude-sonnet · medium'
+    await f.relay.bot.handleUpdate(message(1,'/tasks'))
+    const list=f.replies.at(-1)!
+    assert.ok(list.includes('Schedule · Every 30 minutes · America/New_York'))
+    assert.ok(list.includes(`Execution · ${path}`))
+    await f.relay.bot.handleUpdate(message(2,'/tasks 1'))
+    const detail=f.replies.at(-1)!
+    assert.ok(detail.includes('Schedule\nEvery 30 minutes · America/New_York'))
+    assert.ok(detail.includes(`Execution path\n${path}`))
+    assert.deepEqual(await scheduler.get(saved.id),saved)
+    assert.equal(f.launched.length,0)
+  }finally{await f.close()}
 })
