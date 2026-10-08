@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Advance scheduled work to its next saved login after a typed authentication rejection before work. Recognize Claude API-error metadata without marking analysis started; account/organization denials, hooks, model/tool work and uncertain outcomes still stop fallback. Preserve the saved chain for the next occurrence.
+
 ## 0.1.0-beta.49
 
 - Upgrade compatible plugins while native work continues, draining in-flight plugin calls for activation and preserving rollback. Core updates still wait for idle.

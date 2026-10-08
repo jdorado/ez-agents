@@ -87,15 +87,17 @@ ezenciel-agents-schedule create --name Daily --cli claude --model opus \
 Core advances to the next setup only with typed evidence that nothing ran: the
 CLI is not installed or executable, or the provider rejected the turn before any
 model output, tool or hook item (quota/rate limit, billing, overload, server
-error, unavailable model or bad request). It stops, without replay, on access
-denial (authentication, account or organization), cancellation, relay shutdown,
+error, unavailable model or bad request), including a missing, expired or revoked
+login (typed authentication failure or HTTP401). Native API-error metadata does
+not count as model/tool work. It stops, without replay, on access
+denial (HTTP403, account or organization restriction), cancellation, relay shutdown,
 a schedule edit, a policy or unknown error, an interrupted transport, or any
 failure after work began. Evidence comes from structured events only: Codex
 native-session `codexErrorInfo` and Claude `stream-json` error fields (scheduled
 Claude runs use `--output-format stream-json`; the host forwards only a compact
 startup summary). Other engines advance only when their CLI is unavailable.
 
-A quota rejection skips the remaining setups in the same quota scope: the native
+A login or quota rejection skips the remaining setups in the same scope: the native
 client and login profile (`claude`, `codex` including desktop and custom Codex
 providers), `grok`, or the upstream provider for OpenCode/Pi models. A named
 profile selects a separate owner-provisioned account and is eligible for its own
@@ -107,8 +109,8 @@ organization's allowance is separate. Each setup runs at most once per occurrenc
 Every attempt keeps the same run ID, occurrence, schedule revision, workspace,
 delivery binding and scheduled concurrency slot, in a fresh native session.
 `run RUN_ID` shows `attempts`: each setup, quota scope, outcome, failure category
-(`cli-unavailable`, `quota`, `provider-rejected`, `access-denied`,
-`after-work-began`, `uncertain`, or `same-quota-scope` for a skipped setup), exit
+(`cli-unavailable`, `login-unavailable`, `quota`, `provider-rejected`, `access-denied`,
+`after-work-began`, `uncertain`, or `same-login-scope`/`same-quota-scope` for a skipped setup), exit
 code and reported reset time. If every setup is unavailable the run fails with
 reason `setups-unavailable`, a summary of each setup, and an owner notice on
 Telegram-bound tasks. Core never purchases credits, enables overage or consumes

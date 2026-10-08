@@ -22,7 +22,7 @@ const observe=(...lines:unknown[])=>{const o=startupObserver();o.write(lines.map
 test('startup observer advances only on typed rejection before any work',()=>{
   assert.deepEqual(observe({type:'system',subtype:'init'},{type:'rate_limit_event',rate_limit_info:{status:'rejected',resetsAt:1791460800}},{type:'assistant',error:'rate_limit',message:{content:[]}},{type:'result',is_error:true}),
     {workBegan:false,rejection:{category:'quota',resetAt:'2026-10-08T12:00:00.000Z'}})
-  assert.equal(observe({type:'assistant',error:'authentication_failed'}).rejection?.category,'access-denied')
+  assert.equal(observe({type:'assistant',error:'authentication_failed'}).rejection?.category,'login-unavailable')
   assert.equal(observe({type:'assistant',error:'model_not_found'}).rejection?.category,'provider-rejected')
   // Real output, unknown errors and unparseable lines all count as work.
   assert.equal(observe({type:'assistant',message:{content:[{type:'tool_use'}]}},{type:'assistant',error:'rate_limit'}).workBegan,true)
@@ -42,10 +42,11 @@ test('only scheduled Claude runs stream structured events',()=>{
 
 test('codex errors map to categories; policy and context errors never advance',()=>{
   assert.equal(codexRejection('usageLimitExceeded'),'quota')
-  assert.equal(codexRejection('unauthorized'),'access-denied')
+  assert.equal(codexRejection('unauthorized'),'login-unavailable')
   assert.equal(codexRejection('serverOverloaded'),'provider-rejected')
   assert.equal(codexRejection({responseTooManyFailedAttempts:{httpStatusCode:429}}),'quota')
   assert.equal(codexRejection({httpConnectionFailed:{httpStatusCode:403}}),'access-denied')
+  assert.equal(codexRejection({httpConnectionFailed:{httpStatusCode:401}}),'login-unavailable')
   for(const info of ['cyberPolicy','contextWindowExceeded','other',{httpConnectionFailed:{httpStatusCode:null}},undefined]) assert.equal(codexRejection(info),undefined)
 })
 
@@ -101,7 +102,7 @@ test('a quota rejection before work advances within the same occurrence, skippin
 })
 
 test('failure after work began, access denial and unknown failures stop without replay',async()=>{
-  for(const [name,lines,category] of [['partial',[work,quota],'after-work-began'],['hook',[{type:'system',subtype:'hook_started'},quota],'after-work-began'],['denied',[{type:'assistant',error:'authentication_failed'}],'access-denied'],['silent',[],'uncertain']] as const){
+  for(const [name,lines,category] of [['partial',[work,quota],'after-work-began'],['hook',[{type:'system',subtype:'hook_started'},quota],'after-work-began'],['denied',[{type:'assistant',error:'oauth_org_not_allowed'},quota],'access-denied'],['silent',[],'uncertain']] as const){
     const f=await fixture(name,[{lines:[...lines],code:1}])
     try{
       const run=await f.done()
@@ -109,6 +110,42 @@ test('failure after work began, access denial and unknown failures stop without 
       assert.deepEqual(run.attempts!.map(a=>[a.preset.id,a.outcome,a.category]),[['claude-a','failed',category]],name)
     }finally{await f.close()}
   }
+})
+
+const revoked={type:'system',subtype:'api_error',error:{status:401,message:'OAuth access token has been revoked.'}}
+
+test('revoked-login metadata followed by a quota rejection does not mark work as started',()=>{
+  assert.deepEqual(observe({type:'system',subtype:'init'},revoked,
+    {type:'rate_limit_event',rate_limit_info:{status:'rejected',resetsAt:1791475200}},
+    {...quota,isApiErrorMessage:true,message:{model:'<synthetic>',content:[{type:'text',text:'session limit'}],usage:{input_tokens:0,output_tokens:0}}}),
+    {workBegan:false,rejection:{category:'quota',resetAt:'2026-10-08T16:00:00.000Z'}})
+  assert.deepEqual(observe(revoked),{workBegan:false,rejection:{category:'login-unavailable'}})
+  assert.equal(observe(work,revoked).workBegan,true)
+  assert.equal(observe({type:'system',subtype:'api_error',error:{status:403}},quota).rejection?.category,'access-denied')
+  assert.equal(observe({type:'system',subtype:'api_error',error:{status:null}},quota).workBegan,true)
+})
+
+test('unavailable login advances to a saved account and the next occurrence uses the unchanged chain',async()=>{
+  const profiles=['claude2','claude3','claude4']
+  const fallbacks=[claudeB,...profiles.map((authProfile,i)=>({...claudeA,id:`profile-${i}`,authProfile,effort:'high'}))]
+  const f=await fixture('login-recovery',[{lines:[revoked],code:1},{lines:[work],code:0},
+    {lines:[{type:'assistant',error:'authentication_failed'}],code:1},{lines:[work],code:0}],fallbacks,{...claudeA,effort:'high'})
+  try{
+    const first=await f.done()
+    assert.equal(first.status,'completed')
+    assert.deepEqual(first.attempts!.map(a=>[a.quotaScope,a.category]),[
+      ['claude','login-unavailable'],['claude','same-login-scope'],['claude@claude2',undefined]])
+    const saved=await f.scheduler.get('daily')
+    assert.deepEqual(saved!.execution!.fallbacks,fallbacks)
+    const second=await f.scheduler.trigger(saved!.id,saved!.revision,'next-occurrence',saved!.owner,f.runs)
+    await f.relay.drainSources()
+    await until(async()=>['completed','failed'].includes((await f.runs.get(second.id))!.status))
+    assert.equal((await f.runs.get(second.id))!.status,'completed')
+    assert.notEqual(first.id,second.id)
+    assert.deepEqual(f.launches.map(l=>[l.authProfile,l.model,l.effort]),[
+      [undefined,'opus','high'],['claude2','opus','high'],[undefined,'opus','high'],['claude2','opus','high']])
+    assert.equal(new Set(f.launches.map(l=>l.sessionId)).size,4)
+  }finally{await f.close()}
 })
 
 test('each scheduled attempt launches with its own captured auth profile',async()=>{
@@ -226,7 +263,7 @@ test('host transport admits only the active task setup and profile, forwards onl
     await runs.patch(id,{status:'running',attempts:[{preset:primary,quotaScope:'claude',outcome:'running'}]})
     server=serveHostExecutor({cli:'claude',agents:[{name:'t',workspace,controlDir,binDir:join(root,'bin')}]},abort.signal,async(_texts,options)=>{
       launched.push({cli:options.cli,model:options.model,authProfile:options.authProfile})
-      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({type:'assistant',error:'model_not_found',message:{content:[{type:'text',text:'secret tool output'}]}})].join('\n')+'\n':''
+      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({...revoked,error:{...revoked.error,message:'secret provider diagnostic'}})].join('\n')+'\n':''
       const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(lines)});process.exit(1)`])
       return {child,cleanup:async()=>{},stdout:''}
     },async()=>[{cli:'claude',authProfile:'work',model:'opus',name:'Work',efforts:[]}])
@@ -237,11 +274,11 @@ test('host transport admits only the active task setup and profile, forwards onl
     const first=await events()
     const summaries=first.trim().split('\n').map(l=>JSON.parse(l)).filter(e=>e.stream==='stdout').flatMap(e=>e.text.trim().split('\n').map((l:string)=>JSON.parse(l)))
     assert.ok(summaries.every((e:{type:string})=>e.type==='ez.startup'))
-    assert.deepEqual(summaries.at(-1),{type:'ez.startup',workBegan:false,rejection:{category:'provider-rejected'}})
-    assert.doesNotMatch(first,/secret tool output/)
+    assert.deepEqual(summaries.at(-1),{type:'ez.startup',workBegan:false,rejection:{category:'login-unavailable'}})
+    assert.doesNotMatch(first,/secret provider diagnostic/)
     const {rm:remove}=await import('node:fs/promises');await remove(join(directory,id+'.events'))
     // The relay advances: the next attempt reuses the run ID.
-    await runs.patch(id,{attempts:[{preset:primary,quotaScope:'claude',outcome:'failed',category:'provider-rejected'},{preset:claudeB,quotaScope:'claude',outcome:'running'}]})
+    await runs.patch(id,{attempts:[{preset:primary,quotaScope:'claude',outcome:'failed',category:'login-unavailable'},{preset:claudeB,quotaScope:'claude',outcome:'running'}]})
     await request({cli:'claude',model:'sonnet'})
     await events();await remove(join(directory,id+'.events'))
     assert.deepEqual(launched.map(l=>[l.cli,l.model,l.authProfile]),[['claude','opus','work'],['claude','sonnet',undefined]])
