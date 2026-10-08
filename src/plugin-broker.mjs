@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { prepareCommand, registry, run as dockerRun, stewardOwned } from './plugins/manager.mjs';
+import { prepareCommand, registry, run as dockerRun, stewardOwned, publishBrokerPlugins } from './plugins/manager.mjs';
 
 const MAX_FRAME = 4 * 1024 * 1024;
 const MAX_ARGS = 100;
@@ -165,15 +165,7 @@ const writeReceipt = async (binding, receipt) => {
 // Installed plugin versions for relay status. Rewritten on broker start and
 // after every management call; the relay reads it without Docker access.
 // Failures stay local so a status snapshot never breaks plugin operations.
-const refreshBrokerPlugins = async binding => {
-  const r = await registry(binding.home);
-  const plugins = Object.values(r.plugins).map(record => ({ id: record.manifest.id, version: record.manifest.version }));
-  const file = path.join(binding.controlDir, 'plugin-broker-plugins.json');
-  const temporary = `${file}.${randomUUID()}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify({ version: 1, at: new Date().toISOString(), plugins }) + '\n', { mode: 0o600, flag: 'wx' });
-  await fs.rename(temporary, file);
-  await stewardOwned(file);
-};
+const refreshBrokerPlugins = binding => publishBrokerPlugins(binding.home,binding.controlDir);
 
 const response = (socket, value) => {
   if (socket.destroyed || !socket.writable) return;
@@ -255,6 +247,7 @@ const invokePlugin = async (binding, request, signal, scheduledPreflight = false
     const command = await prepareCommand(binding.home, request.alias, request.args, {
       revision: request.revision,
       invocation: true,
+      signal,
       environment: { EZ_CONTROL_DIR: binding.controlDir, ...(scheduledPreflight ? {} : {EZ_RUN_ID: request.runId}), EZ_DELIVERY_SOCKET: process.env.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir) },
     });
     try {
