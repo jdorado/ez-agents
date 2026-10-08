@@ -122,7 +122,7 @@ test('catalog offers provisioned profiles only; host refuses a request that chan
   const server = serveHostExecutor({ cli: 'codex', agents: [{ name: 'test', workspace, controlDir, binDir: bin }] }, abort.signal, async (_texts, options) => {
     launched.push(`${options.runId}:${options.authProfile}`)
     return { child: spawn(process.execPath, ['-e', 'process.exit(0)']), cleanup: async () => {}, stdout: '' }
-  })
+  }, async () => catalog)
   try {
     const exit = async (id: string, options: Record<string, unknown>) => {
       await writeFile(path.join(directory, `${id}.request.json`), JSON.stringify({ texts: ['hello'], options }))
