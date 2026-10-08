@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-beta.49
+
+- Upgrade compatible plugins while native work continues, draining in-flight plugin calls for activation and preserving rollback. Core updates still wait for idle.
+- Keep separate named Codex and Claude native login homes, with account-bound conversations, profile-aware model selection and fail-closed admission.
+- Try ordered saved setups for a scheduled task only after a typed failure before work begins. Hooks, model/tool activity, access denial, cancellation and uncertain transport stop fallback; quota rejection skips the same native CLI/provider scope.
+- Preserve each scheduled attempt's captured auth profile and admit only the active setup on the host transport.
+
+Beta limits: live fresh-host/reboot acceptance, two-real-account channel switching and real exhausted-account/provider rejection remain pending. Fallback applies to scheduled agent tasks only; OpenCode/Pi/Grok advance only when their CLI is unavailable. The fallback command does not select named profiles, and different credentials do not establish independent quota allowances. Publication does not establish an installed-agent upgrade or authorize provider/domain writes.
+
 ## 0.1.0-beta.48
 
 - Skip empty or unchanged scheduled work through owner-configured installed read-only plugin preflight. Invalid or unavailable reads fail closed; saved execution settings and recurring timing remain intact. The bound plugin broker is required.
