@@ -73,8 +73,10 @@ A conditional review schedule consumes no model run when there are no unreviewed
 New tasks capture the selected engine settings; edit preserves existing settings unless overridden.
 Every task requires a concrete saved model. Supply --model if the selected settings have none; existing tasks never fall back to chat or client defaults.
 Fallbacks run in the saved order only when the previous setup's CLI is unavailable or its provider
-rejected the turn before any work began, including an unavailable login. Account/organization access denial,
-unknown errors, cancellation and failure after work began stop the chain; nothing is replayed.
+rejected the turn before any work began, including an unavailable login. A Claude usage limit the run ended on
+after work began continues on the next setup in a fresh session, told the stopped session and that its work may be
+partly applied. Account/organization access denial, unknown errors, cancellation and other failures after work
+began stop the chain; nothing is replayed.
 A login or quota rejection skips later setups of the same native login profile
 or upstream provider. Named profiles must be owner-provisioned logins for separate accounts; Ez never enables overage.
 The run records each attempt, setup, failure category and any reported reset time.

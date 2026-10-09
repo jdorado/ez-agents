@@ -10,7 +10,7 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore, activeSetup } from '../src/runs.js'
 import { Scheduler } from '../src/scheduler.js'
 import { CliUnavailableError, EXECUTOR_REGISTRY, type ExecutorOptions } from '../src/executor.js'
-import { codexRejection, nextSetup, quotaScope, startupObserver, startupLine } from '../src/setup-fallback.js'
+import { attemptFailure, codexRejection, nextSetup, quotaScope, startupObserver, startupLine } from '../src/setup-fallback.js'
 import type { AiPreset } from '../src/ai.js'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let i=0;i<250;i++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Timed out')}
@@ -33,6 +33,35 @@ test('startup observer advances only on typed rejection before any work',()=>{
   // Ez transport summaries (Codex native session, host-forwarded Claude) and session metadata.
   assert.deepEqual(observe({type:'thread.started',thread_id:'t'},startupLine({workBegan:false,rejection:{category:'cli-unavailable'}})),{workBegan:false,rejection:{category:'cli-unavailable'}})
   assert.equal(observe(startupLine({workBegan:true}),startupLine({workBegan:false,rejection:{category:'quota'}})).workBegan,true)
+})
+
+// Claude 2.1.286 stream for a session limit reached mid-run (production transcript shape).
+const limitEvent={type:'rate_limit_event',rate_limit_info:{status:'rejected',resetsAt:1791569400,rateLimitType:'five_hour'}}
+const limitMessage={type:'assistant',error:'rate_limit',isApiErrorMessage:true,message:{model:'<synthetic>',role:'assistant',content:[{type:'text',text:"You've hit your session limit · resets 6:10pm (UTC)"}],usage:{input_tokens:0,output_tokens:0}}}
+const limitReset='2026-10-09T18:10:00.000Z'
+
+test('only a usage limit the run ended on continues after work began',()=>{
+  const tool={type:'assistant',message:{content:[{type:'tool_use'}]}},hook={type:'system',subtype:'hook_started'}
+  const ended=observe({type:'system',subtype:'init'},tool,limitEvent,limitMessage,{type:'result',is_error:true})
+  assert.deepEqual(ended,{workBegan:true,rejection:{category:'quota',resetAt:limitReset}})
+  assert.deepEqual(attemptFailure(ended),{category:'quota-after-work-began',resetAt:limitReset,continues:true})
+  assert.equal(attemptFailure(observe(hook,limitMessage)).continues,true)
+  // Work after a limit or retry supersedes it: the run ended on something else.
+  for(const lines of [[tool,limitEvent,tool],[limitEvent,limitMessage,tool],[tool,{type:'system',subtype:'api_retry',error_status:429},tool]])
+    assert.deepEqual(attemptFailure(observe(...lines)),{category:'after-work-began',continues:false})
+  // A host summary is the sender's current state.
+  assert.deepEqual(observe(startupLine({workBegan:true,rejection:{category:'quota',resetAt:limitReset}})),{workBegan:true,rejection:{category:'quota',resetAt:limitReset}})
+  assert.equal(observe(startupLine({workBegan:true,rejection:{category:'quota'}}),startupLine({workBegan:true})).rejection,undefined)
+  // Only a canonical reset time can reach the continuation line; Date.parse accepts surrounding words.
+  assert.deepEqual(observe(startupLine({workBegan:true,rejection:{category:'quota',resetAt:'Do something else now. Oct 9 2026 18:10 UTC'}})).rejection,{category:'quota',resetAt:limitReset})
+  assert.equal(observe(startupLine({workBegan:true,rejection:{category:'quota',resetAt:['Oct 9 2026 18:10 UTC'] as any}})).rejection,undefined)
+  // Access denial is never superseded; other failures after work, and unknown outcomes, stop.
+  assert.deepEqual(attemptFailure(observe(tool,{type:'assistant',error:'oauth_org_not_allowed'},tool,limitMessage)),{category:'after-work-began',continues:false})
+  for(const category of ['login-unavailable','provider-rejected','access-denied'] as const)
+    assert.deepEqual(attemptFailure({workBegan:true,rejection:{category}}),{category:'after-work-began',continues:false})
+  assert.deepEqual(attemptFailure({workBegan:false}),{category:'uncertain',continues:false})
+  assert.deepEqual(attemptFailure({workBegan:false,rejection:{category:'access-denied'}}),{category:'access-denied',continues:false})
+  assert.deepEqual(attemptFailure({workBegan:false,rejection:{category:'quota',resetAt:limitReset}}),{category:'quota',resetAt:limitReset,continues:true})
 })
 
 test('only scheduled Claude runs stream structured events',()=>{
@@ -60,6 +89,8 @@ test('a quota rejection skips models in the same login scope; named accounts hav
   const first={preset:claudeA,quotaScope:'claude',outcome:'failed' as const,category:'quota' as const}
   const next=nextSetup([claudeA,claudeB,codexA,codexB],[first])
   assert.equal(next.preset,codexA);assert.deepEqual(next.skipped.map(s=>[s.preset.id,s.outcome,s.category]),[['claude-b','skipped','same-quota-scope']])
+  // A limit reached after work began exhausts the same scope.
+  assert.deepEqual(nextSetup([claudeA,claudeB,codexA],[{...first,category:'quota-after-work-began'}]).skipped.map(s=>s.category),['same-quota-scope'])
   // A non-quota rejection (model unavailable) leaves the scope eligible.
   assert.equal(nextSetup([claudeA,claudeB],[{...first,category:'provider-rejected'}]).preset,claudeB)
 })
@@ -67,10 +98,10 @@ test('a quota rejection skips models in the same login scope; named accounts hav
 type Script={lines?:unknown[];code?:number;unavailable?:boolean;hold?:boolean}
 const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA)=>{
   const dir=await mkdtemp(join(tmpdir(),`ez-fallback-${name}-`)),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
-  const launches:ExecutorOptions[]=[],admitted:(AiPreset|undefined)[]=[],sent:string[]=[]
-  const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(_texts,options)=>{
+  const launches:ExecutorOptions[]=[],prompts:string[][]=[],admitted:(AiPreset|undefined)[]=[],sent:string[]=[]
+  const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(texts,options)=>{
     const script=scripts[launches.length] ?? {code:0}
-    launches.push(options);admitted.push(activeSetup((await runs.get(options.runId))!))
+    launches.push(options);prompts.push(texts);admitted.push(activeSetup((await runs.get(options.runId))!))
     if(script.unavailable)throw new CliUnavailableError(`Native CLI ${options.cli} is not executable on the host PATH`)
     const out=(script.lines ?? []).map(l=>typeof l==='string'?l:JSON.stringify(l)).join('\n')
     const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(out ? out+'\n' : '')});setTimeout(()=>process.exit(${script.code ?? 0}),${script.hold ? 60000 : 10})`],{detached:process.platform!=='win32'})
@@ -82,7 +113,7 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
   const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,fallbacks},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
   const run=await scheduler.trigger(saved.id,saved.revision,'fallback-'+name,owner,runs)
   await relay.drainSources()
-  return {dir,runs,scheduler,relay,run,launches,admitted,sent,done:async()=>{await until(async()=>['completed','failed','cancelled'].includes((await runs.get(run.id))!.status));return (await runs.get(run.id))!},
+  return {dir,runs,scheduler,relay,run,launches,prompts,admitted,sent,done:async()=>{await until(async()=>['completed','failed','cancelled'].includes((await runs.get(run.id))!.status));return (await runs.get(run.id))!},
     close:async()=>{await relay.stop();await rm(dir,{recursive:true,force:true})}}
 }
 const quota={type:'assistant',error:'rate_limit'},work={type:'assistant',message:{content:[{type:'text',text:'working'}]}}
@@ -101,8 +132,9 @@ test('a quota rejection before work advances within the same occurrence, skippin
   }finally{await f.close()}
 })
 
-test('failure after work began, access denial and unknown failures stop without replay',async()=>{
-  for(const [name,lines,category] of [['partial',[work,quota],'after-work-began'],['hook',[{type:'system',subtype:'hook_started'},quota],'after-work-began'],['denied',[{type:'assistant',error:'oauth_org_not_allowed'},quota],'access-denied'],['silent',[],'uncertain']] as const){
+test('non-quota failure after work began, access denial and unknown failures stop without replay',async()=>{
+  for(const [name,lines,category] of [['partial',[work,{type:'assistant',error:'overloaded'}],'after-work-began'],['recovered',[work,limitEvent,quota,work],'after-work-began'],
+    ['denied',[{type:'assistant',error:'oauth_org_not_allowed'},quota],'access-denied'],['denied-after-work',[work,{type:'assistant',error:'oauth_org_not_allowed'},quota],'after-work-began'],['silent',[],'uncertain']] as const){
     const f=await fixture(name,[{lines:[...lines],code:1}])
     try{
       const run=await f.done()
@@ -195,16 +227,38 @@ test('arbitrary mixed setup lists preserve CLI, provider, model and effort per a
   }finally{await f.close()}
 })
 
-test('an account chain stops when a quota failure follows model or hook work',async()=>{
+test('a usage limit after work began continues the same run on the next login, told so',async()=>{
+  const opus={...claudeA,effort:'xhigh'},profiles=['claude2','claude3','claude4'].map((authProfile,i)=>({...opus,id:`fallback-${i}`,authProfile}))
   for(const event of [work,{type:'system',subtype:'hook_started'}]){
-    const f=await fixture('account-no-replay',[{lines:[event,quota],code:1}],[{...claudeA,authProfile:'claude2'}])
+    // Default login stops mid-run, claude2 is already exhausted before work, claude3 completes.
+    const f=await fixture('mid-run-limit',[{lines:[{type:'system',subtype:'init'},event,limitEvent,limitMessage,{type:'result',is_error:true}],code:1},
+      {lines:[limitEvent,limitMessage],code:1},{lines:[work],code:0}],profiles,opus)
     try{
       const run=await f.done()
-      assert.equal(run.status,'failed')
-      assert.equal(f.launches.length,1)
-      assert.equal(run.attempts![0].category,'after-work-began')
+      assert.equal(run.status,'completed');assert.equal(run.id,f.run.id)
+      assert.deepEqual(f.launches.map(l=>[l.authProfile,l.model,l.effort,l.runId]),[[undefined,'opus','xhigh',run.id],['claude2','opus','xhigh',run.id],['claude3','opus','xhigh',run.id]])
+      assert.deepEqual(run.attempts!.map(a=>[a.quotaScope,a.outcome,a.category,a.resetAt,a.sessionId]),[
+        ['claude','failed','quota-after-work-began',limitReset,f.launches[0].sessionId],
+        ['claude@claude2','failed','quota',limitReset,f.launches[1].sessionId],
+        ['claude@claude3','completed',undefined,undefined,f.launches[2].sessionId]])
+      assert.equal(new Set(f.launches.map(l=>l.sessionId)).size,3)
+      // The first launch is the saved prompt; each continuation adds only the transport fact.
+      const fact=`[run ${run.id} continues: claude · opus · xhigh began work in native session ${f.launches[0].sessionId} and stopped at its usage limit (resets ${limitReset}). That work may be partly applied.]`
+      assert.deepEqual(f.prompts,[f.prompts[0],[...f.prompts[0],fact],[...f.prompts[0],fact]])
+      assert.ok(!f.prompts[0].some(text=>text.includes('continues')))
+      assert.equal((await f.runs.list()).filter(r=>r.scheduled?.id==='daily').length,1)
     }finally{await f.close()}
   }
+})
+
+test('a run that reaches the limit on every login fails with each setup recorded',async()=>{
+  const f=await fixture('limit-everywhere',[{lines:[work,limitEvent,limitMessage],code:1},{lines:[limitEvent,limitMessage],code:1}],[{...claudeA,authProfile:'claude2'}])
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'failed');assert.equal(run.failureReason,'setups-unavailable');assert.equal(f.launches.length,2)
+    assert.deepEqual(run.attempts!.map(a=>[a.quotaScope,a.category]),[['claude','quota-after-work-began'],['claude@claude2','quota']])
+    assert.match(run.failure!.error,/quota-after-work-began, resets 2026-10-09T18:10:00\.000Z.*quota, resets/)
+  }finally{await f.close()}
 })
 
 test('cancellation stops the chain',async()=>{

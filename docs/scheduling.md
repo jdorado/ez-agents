@@ -92,10 +92,18 @@ login (typed authentication failure or HTTP401). Native API-error metadata does
 not count as model/tool work. It stops, without replay, on access
 denial (HTTP403, account or organization restriction), cancellation, relay shutdown,
 a schedule edit, a policy or unknown error, an interrupted transport, or any
-failure after work began. Evidence comes from structured events only: Codex
+other failure after work began. Evidence comes from structured events only: Codex
 native-session `codexErrorInfo` and Claude `stream-json` error fields (scheduled
 Claude runs use `--output-format stream-json`; the host forwards only a compact
 startup summary). Other engines advance only when their CLI is unavailable.
+
+The one failure after work began that continues is a Claude usage limit the run
+ended on (for example "You've hit your session limit"): a typed quota rejection
+with no model, tool or hook activity after it. A native session cannot be resumed
+under another login's configuration home, so the next eligible setup starts a fresh
+session with the saved prompt plus one factual line naming the run, the stopped
+setup, its native session and reset time, and that its work may be partly applied.
+The agent reconciles from its own records; core replays nothing else.
 
 A login or quota rejection skips the remaining setups in the same scope: the native
 client and login profile (`claude`, `codex` including desktop and custom Codex
@@ -110,8 +118,8 @@ Every attempt keeps the same run ID, occurrence, schedule revision, workspace,
 delivery binding and scheduled concurrency slot, in a fresh native session.
 `run RUN_ID` shows `attempts`: each setup, quota scope, outcome, failure category
 (`cli-unavailable`, `login-unavailable`, `quota`, `provider-rejected`, `access-denied`,
-`after-work-began`, `uncertain`, or `same-login-scope`/`same-quota-scope` for a skipped setup), exit
-code and reported reset time. If every setup is unavailable the run fails with
+`quota-after-work-began`, `after-work-began`, `uncertain`, or `same-login-scope`/`same-quota-scope`
+for a skipped setup), exit code, reported reset time and the session ID Ez assigned. If every setup is unavailable the run fails with
 reason `setups-unavailable`, a summary of each setup, and an owner notice on
 Telegram-bound tasks. Core never purchases credits, enables overage or consumes
 reset credits; the next regular occurrence runs normally.

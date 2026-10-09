@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Continue a scheduled occurrence on its next saved login when Claude stops at a usage/session limit after work began. The next setup starts a fresh native session with the saved prompt plus one factual line naming the run, stopped setup, its native session and reset time. Only a typed quota rejection the run ended on continues; work after a limit, access denial, other failures, cancellation and unknown outcomes still stop without replay. Attempts record `quota-after-work-began` and each Ez-assigned session ID.
 - Stop isolated plugin calls hanging silently before reaching the broker when the caller leaves a socket stdin open (native engine shells, async Node spawns). Pipes and files are still read to EOF; a socket that sends nothing for one second is treated as no input. Remove a uniquely named call container whenever Compose exits non-zero, so a call that stops between create and start no longer strands it in `Created`.
 - Advance scheduled work to its next saved login after a typed authentication rejection before work. Recognize Claude API-error metadata without marking analysis started; account/organization denials, hooks, model/tool work and uncertain outcomes still stop fallback. Preserve the saved chain for the next occurrence.
 
