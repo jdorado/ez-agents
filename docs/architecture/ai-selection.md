@@ -3,6 +3,10 @@
 `menu.ts` owns Telegram controls; `ai.ts` projects installed-client metadata.
 `ControlStore` stores saved presets, the next-conversation default and current choice.
 No provider SDK, model fallback, history migration, or second execution loop.
+A missing catalog entry rejects selection without changing the conversation.
+An unsupported effort reports the exact installed model's advertised levels.
+Missing selectable models do not establish that the active native session is
+unavailable, and editing a scheduled task does not change the chat selection.
 
 At intake each journal entry receives an immutable preset and conversation ID.
 Batches cannot cross that boundary. The run copies that choice and invokes the

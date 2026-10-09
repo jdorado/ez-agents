@@ -6,7 +6,7 @@ import { ControlStore, sessionTitle, telegramOwner, type ControlGuard, type Owne
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
 import { ownsRun } from './identity.js'
 import { applicationId, validApplicationOrigin } from './application-origin.js'
-import { isPreset, sameChoice, sameEngine, type AiPreset, type ModelChoice } from './ai.js'
+import { isPreset, sameChoice, catalogSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { MAX_INCOMING_ATTACHMENT_BYTES, stageChatAttachment } from './files.js'
 import { assertEffort } from './model-policy.js'
 import { ApprovalStore } from './approval.js'
@@ -155,7 +155,7 @@ export class ApplicationChannel {
     const owner = await this.sharedBinding(bindingId)
     const controls = this.options.aiControls
     if (!controls) throw new Error('Application controls unavailable')
-    const value = input as {action?: unknown; expectedSession?: unknown; sessionId?: unknown; presetId?: unknown; cli?: unknown; provider?: unknown; model?: unknown; effort?: unknown}
+    const value = input as {action?: unknown; expectedSession?: unknown; sessionId?: unknown; presetId?: unknown; cli?: unknown; provider?: unknown; authProfile?: unknown; model?: unknown; effort?: unknown}
     if (!value || !['new','switch','select','model'].includes(String(value.action)) ||
       !(value.expectedSession === null || (typeof value.expectedSession === 'string' && /^[a-f0-9-]{36}$/.test(value.expectedSession)))) throw new Error('Invalid application control request')
     const fields = {new:[],switch:['sessionId'],select:['presetId'],model:['cli','provider','authProfile','model','effort']}[value.action as 'new'|'switch'|'select'|'model']!
@@ -181,8 +181,7 @@ export class ApplicationChannel {
       await controls.select(preset, expected, guard)
     }
     if (value.action === 'model') {
-      const model = (await controls.catalog()).find(item => sameEngine(item, value as {cli?:string;authProfile?:string}) && item.provider === value.provider && item.model === value.model)
-      if (!model || (value.effort !== undefined && (typeof value.effort !== 'string' || !model.efforts.includes(value.effort)))) throw new Error('Invalid application model selection')
+      const model = catalogSelection(value, await controls.catalog())
       await this.sharedBinding(bindingId)
       const preset = await controls.saveSelection(model, value.effort as string | undefined, guard)
       await this.sharedBinding(bindingId)
@@ -231,8 +230,7 @@ export class ApplicationChannel {
       await controls.validate(preset)
     }
     if (value.action==='model') {
-      const model = (await controls.catalog()).find(item=>sameEngine(item,value as {cli?:string;authProfile?:string}) && item.provider===value.provider && item.model===value.model)
-      if (!model || (value.effort!==undefined && (typeof value.effort!=='string' || !model.efforts.includes(value.effort)))) throw new Error('Invalid application model selection')
+      const model = catalogSelection(value, await controls.catalog())
       preset = await controls.saveSelection(model,value.effort as string|undefined,guard)
     }
     await control.changeApplicationSession(hashedScope,guard,preset)

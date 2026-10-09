@@ -263,6 +263,21 @@ export const opencodeProviderAllowlist = (env: NodeJS.ProcessEnv = process.env):
   return validateOpencodeProviders([...new Set(raw.split(',').map((p) => p.trim()).filter(Boolean))])
 }
 
+// Shared by native menus and application controls; a rejected choice never mutates state.
+export const catalogSelection = (p: {cli?: unknown; provider?: unknown; authProfile?: unknown; model?: unknown; effort?: unknown}, catalog: ModelChoice[]): ModelChoice => {
+  const candidate = {...p, id: 'selection', name: 'Selection'}
+  if (!isPreset(candidate)) throw new Error('Invalid AI selection fields')
+  const model = catalog.find(m => sameEngine(m, candidate) && m.provider === candidate.provider && m.model === candidate.model)
+  if (!model) {
+    if (!catalog.some(m => sameEngine(m, candidate)))
+      throw new Error(`No models advertised for ${candidate.cli}${candidate.authProfile ? `@${candidate.authProfile}` : ''} in the installed client catalog; current selection unchanged.`)
+    throw new Error(`Model ${candidate.model ?? '(client default)'} is not in the installed client catalog for ${candidate.cli}; current selection unchanged.`)
+  }
+  if (candidate.effort !== undefined && !model.efforts.includes(candidate.effort))
+    throw new Error(`Effort ${candidate.effort} is not supported for ${candidate.cli} ${candidate.model ?? '(client default)'}. Supported efforts: ${model.efforts.join(', ') || 'none (omit effort)'}; current selection unchanged.`)
+  return model
+}
+
 export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], available = installed): Promise<void> => {
   assertEffort(p.effort, p.model, p.cli)
   if (!isPreset(p)) throw new Error('This CLI is not installed.')
@@ -272,9 +287,7 @@ export const validateSelection = async (p: AiPreset, catalog: ModelChoice[], ava
     if (!catalog.some((m) => sameEngine(m, p))) throw new Error('This auth profile is not provisioned for the selected CLI.')
     return
   }
-  const model = catalog.find((m) => sameEngine(m, p) && m.provider === p.provider && m.model === p.model)
-  if (!model || (p.effort && !model.efforts.includes(p.effort)))
-    throw new Error('This model/effort is not in the installed client catalog. Refresh the client and try again; no fallback was selected.')
+  catalogSelection(p, catalog)
 }
 
 export type AuthProfileStatus = { cli: string; authProfile: string | null; provisioned: boolean; sharesHostLogin: boolean

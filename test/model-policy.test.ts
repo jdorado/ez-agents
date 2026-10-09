@@ -17,7 +17,7 @@ test('engine defaults stay omitted and explicit native settings survive every ad
   const preset={id:'chosen',name:'Chosen',cli,model:'native-model',effort:'ultra'}
   assert.deepEqual(executionDefaults(cli,preset),preset)
   await validateSelection(preset,[{cli,model:'native-model',name:'Native',efforts:['ultra']}],async()=>true)
-  await assert.rejects(validateSelection({...preset,effort:'unsupported'},[{cli,model:'native-model',name:'Native',efforts:['ultra']}],async()=>true),/installed client catalog/)
+  await assert.rejects(validateSelection({...preset,effort:'unsupported'},[{cli,model:'native-model',name:'Native',efforts:['ultra']}],async()=>true),/Effort unsupported is not supported.*Supported efforts: ultra/)
   assert.throws(()=>executionDefaults(cli,{effort:'bad option'}),/Invalid reasoning effort/)
  }
  assert.deepEqual(executionOverrides('codex',{model:'old',effort:'max'},'new'),{model:'new',effort:undefined})

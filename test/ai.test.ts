@@ -519,7 +519,7 @@ test('opencode model and variant selections validate against the installed catal
   await validateSelection({ id: 'default', name: 'Default', cli: 'opencode', model: 'opencode/big-pickle' }, catalog, available)
   await assert.rejects(
     validateSelection({ id: 'bad', name: 'Bad', cli: 'opencode', model: 'opencode/ling-free', effort: 'max' }, catalog, available),
-    /installed client catalog/)
+    /Effort max is not supported.*low, medium/)
   await assert.rejects(
     validateSelection({ id: 'missing', name: 'Missing', cli: 'opencode', model: 'opencode/unknown' }, catalog, available),
     /installed client catalog/)
@@ -671,4 +671,46 @@ test('Claude catalog projects only aliases and efforts from the installed native
       [{ cli: 'claude', name: 'claude · client default', efforts: [] }])
   await validateSelection({ id: 'c', name: 'c', cli: 'claude', model: 'opus', effort: 'xhigh' }, models, async () => true)
   await assert.rejects(validateSelection({ id: 'c', name: 'c', cli: 'claude', model: 'opus-guess' }, models, async () => true), /not in the installed client catalog/)
+})
+
+test('Telegram Sonnet choice survives restart and reaches the native launch without Opus substitution', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-sonnet-selection-'))
+  const priorPath = process.env.PATH
+  try {
+    const store = new ControlStore(dir, 1000)
+    await store.captureChoice({id:'opus',name:'Opus',cli:'claude',model:'opus',effort:'xhigh'})
+    const models = [{cli:'claude',model:'opus',name:'Opus',efforts:['xhigh']},
+      {cli:'claude',model:'sonnet',name:'Sonnet',efforts:['low','medium','high']}]
+    const menu = createAiMenu(store, 'claude', async()=>models, dir, undefined, async()=>true)
+    const replies: Array<{text:string; buttons:Array<{text:string;callback_data:string}>}> = []
+    const context = (data?:string) => ({callbackQuery:data ? {data} : undefined,answerCallbackQuery:async()=>({}),
+      reply:async(text:string, options?:{reply_markup?:{inline_keyboard?:Array<Array<{text:string;callback_data:string}>>}})=>{
+        replies.push({text,buttons:options?.reply_markup?.inline_keyboard?.flat() ?? []});return {} as never
+      }})
+    const click = async(text:string) => menu.handle(context(replies.at(-1)!.buttons.find(b=>b.text===text)!.callback_data) as never)
+    await menu.list(context() as never)
+    await click('claude');await click('Sonnet');await click('high')
+    const restarted = new ControlStore(dir,1000)
+    const captured = await restarted.captureChoice(menu.initial)
+    assert.equal(captured.preset.model,'sonnet');assert.equal(captured.preset.effort,'high')
+    const before = await restarted.status()
+    await assert.rejects(menu.saveSelection(models[1], 'xhigh'), /Effort xhigh is not supported.*low, medium, high/)
+    await assert.rejects(validateSelection({id:'s',name:'Sonnet',cli:'claude',model:'sonnet',effort:'high'}, [], async()=>true), /No models advertised for claude.*current selection unchanged/)
+    assert.deepEqual(await restarted.status(), before)
+    const {ownerRun} = await import('./helpers/owner-run.js')
+    const {startExecutorJob} = await import('../src/executor.js')
+    await mkdir(join(dir,'bin'))
+    await writeFile(join(dir,'bin','claude'), `#!${process.execPath}\nrequire('fs').writeFileSync('launched.json',JSON.stringify(process.argv.slice(2)));require('fs').readFileSync(0,'utf8')`, {mode:0o700})
+    process.env.PATH = join(dir,'bin') + ':' + priorPath
+    await ownerRun(dir,'r_sonnet_selected')
+    const job = await startExecutorJob(['synthetic request'], {workspace:dir,controlDir:dir,binDir:join(dir,'bin'),runId:'r_sonnet_selected',timeoutMs:5000,repairEnabled:false,
+      cli:captured.preset.cli,model:captured.preset.model,effort:captured.preset.effort,sessionId:captured.sessionId})
+    const closed = new Promise<number|null>(resolve=>job.child.once('close',resolve))
+    assert.equal(await closed,0)
+    assert.deepEqual(JSON.parse(await readFile(join(dir,'launched.json'),'utf8')).slice(-4), ['--model','sonnet','--effort','high'])
+    await job.cleanup()
+  } finally {
+    if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath
+    await rm(dir,{recursive:true,force:true})
+  }
 })
