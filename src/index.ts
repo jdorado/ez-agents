@@ -28,7 +28,7 @@ import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch } from './control-state.js'
 import { ApprovalStore } from './approval.js'
 import { CliUnavailableError, startExecutorJob, terminateJob, opencodeDataHome, claudeConfigHome } from './executor.js'
-import { advances, nextSetup, quotaScope, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
+import { attemptFailure, continuationLine, nextSetup, quotaScope, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
@@ -280,8 +280,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const settle = (change: Partial<SetupAttempt>) => {
           attempts = [...attempts.slice(0, -1), { ...attempts[attempts.length - 1], ...change, endedAt: new Date().toISOString() }]
         }
-        // Advance only after an eligible pre-work failure of a current, uncancelled
-        // occurrence. Setups in an exhausted quota scope are skipped and recorded.
+        // Advance only after an eligible failure (see attemptFailure) of a current,
+        // uncancelled occurrence. Setups in an exhausted scope are skipped and recorded.
         const advance = async (): Promise<AiPreset | undefined> => {
           let preset: AiPreset | undefined
           const current = !shuttingDown && !await scheduler.cancelled(run.id) ? (await control.status()).owner : undefined
@@ -297,16 +297,18 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           await runs.patch(run.id, { attempts })
           return preset
         }
-        // Each attempt is a fresh native session; a rejected Claude attempt already claimed its ID.
+        // Each attempt is a fresh native session: a rejected Claude attempt already
+        // claimed its ID, and a session cannot resume under another login's home.
         const launchSetup = async (preset: AiPreset): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; preset: AiPreset }> => {
           for (;;) {
             const sessionId = attempts.length ? randomUUID() : session.nativeSessionId || session.sessionId
+            const continuation = continuationLine(started.id, attempts)
             if (ordered) {
-              attempts = [...attempts, { preset, quotaScope: quotaScope(preset), outcome: 'running', startedAt: new Date().toISOString() }]
+              attempts = [...attempts, { preset, quotaScope: quotaScope(preset), outcome: 'running', sessionId, startedAt: new Date().toISOString() }]
               await runs.patch(run.id, { attempts })
             }
             try {
-              return { ...await launch(texts, script ? {
+              return { ...await launch(continuation ? [...texts, continuation] : texts, script ? {
                 workspace: config.workspace, timeoutMs: 0, repairEnabled: config.repairEnabled, runId: started.id,
                 controlDir: config.controlDir, binDir,
                 script: { ...script.ref, scheduleId: script.scheduled.id, scheduleRevision: script.scheduled.revision, dueAt: script.scheduled.dueAt },
@@ -421,11 +423,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
                   // A rejection before work is a failure even when the CLI exits 0.
                   const failed = !cancelled && (code !== 0 || timedOut || Boolean(rejected))
                   if (startup) {
-                    settle({ outcome: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', exitCode: code,
-                      ...(failed ? { category: rejected?.category ?? (observed!.workBegan ? 'after-work-began' : 'uncertain') } : {}),
-                      ...(failed && rejected?.resetAt ? { resetAt: rejected.resetAt } : {}) })
+                    const { continues, ...failure } = failed ? attemptFailure(observed!) : { continues: false }
+                    settle({ outcome: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', exitCode: code, ...failure })
                     await runs.patch(run.id, { attempts })
-                    eligible = failed && !interrupted && advances(rejected)
+                    eligible = continues && !interrupted
                   }
                   if (!eligible) await finalize(code, cancelled, failed)
                 } catch (error) {

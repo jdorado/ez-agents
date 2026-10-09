@@ -1,11 +1,12 @@
 import { presetLabel, presetProvider, type AiPreset, type ExecutionChoice } from './ai.js'
 
 // Ordered task setups for one scheduled occurrence. Core advances only on typed
-// evidence that the engine never started work: a missing CLI or a provider
-// rejection before any model output or tool item. Anything else stops the chain.
+// evidence: a missing CLI or a provider rejection before any model output or
+// tool item, or a usage limit the run ended on after work began (continued in a
+// fresh session that is told so). Anything else stops the chain.
 export type StartupCategory = 'cli-unavailable' | 'login-unavailable' | 'quota' | 'provider-rejected' | 'access-denied'
 export type StartupRejection = { category: StartupCategory; resetAt?: string }
-export type AttemptCategory = StartupCategory | 'after-work-began' | 'uncertain' | 'same-quota-scope' | 'same-login-scope'
+export type AttemptCategory = StartupCategory | 'quota-after-work-began' | 'after-work-began' | 'uncertain' | 'same-quota-scope' | 'same-login-scope'
 export type SetupAttempt = {
   preset: AiPreset
   quotaScope: string
@@ -13,12 +14,28 @@ export type SetupAttempt = {
   category?: AttemptCategory
   resetAt?: string
   exitCode?: number | null
+  sessionId?: string
   startedAt?: string
   endedAt?: string
 }
 
 const categories: StartupCategory[] = ['cli-unavailable', 'login-unavailable', 'quota', 'provider-rejected', 'access-denied']
-export const advances = (rejection?: StartupRejection): boolean => Boolean(rejection && rejection.category !== 'access-denied')
+
+// A failed attempt's category and reset time, and whether the occurrence
+// continues on the next setup. Once work began only a quota limit the run ended
+// on continues; access denial, other failures and unknown outcomes stop.
+export const attemptFailure = ({ workBegan, rejection }: { workBegan: boolean; rejection?: StartupRejection }): { category: AttemptCategory; resetAt?: string; continues: boolean } => {
+  const resetAt = rejection?.resetAt ? { resetAt: rejection.resetAt } : {}
+  if (!workBegan) return rejection ? { category: rejection.category, ...resetAt, continues: rejection.category !== 'access-denied' } : { category: 'uncertain', continues: false }
+  return rejection?.category === 'quota' ? { category: 'quota-after-work-began', ...resetAt, continues: true } : { category: 'after-work-began', continues: false }
+}
+
+// Transport fact for a setup that continues an occurrence after an earlier setup
+// stopped at its usage limit once work had begun. Facts only, no guidance.
+export const continuationLine = (runId: string, attempts: SetupAttempt[]): string | undefined => {
+  const limited = attempts.filter(a => a.category === 'quota-after-work-began')
+  return limited.length ? `[run ${runId} continues: ${limited.map(a => `${presetLabel(a.preset)} began work in native session ${a.sessionId} and stopped at its usage limit${a.resetAt ? ` (resets ${a.resetAt})` : ''}`).join('; ')}. That work may be partly applied.]` : undefined
+}
 
 export const setupCandidates = (execution: ExecutionChoice): AiPreset[] => [execution.preset, ...(execution.fallbacks ?? [])]
 
@@ -35,10 +52,10 @@ export const quotaScope = (preset: AiPreset): string => {
 }
 
 // The next untried setup, skipping a login that already rejected authentication
-// or quota for this occurrence. Each candidate is tried at most once.
+// or reached its quota in this occurrence. Each candidate is tried at most once.
 export const nextSetup = (candidates: AiPreset[], attempts: SetupAttempt[]): { skipped: SetupAttempt[]; preset?: AiPreset } => {
-  const exhausted = new Map(attempts.filter(a => a.category === 'quota' || a.category === 'login-unavailable')
-    .map(a => [a.quotaScope, a.category === 'quota' ? 'same-quota-scope' as const : 'same-login-scope' as const]))
+  const exhausted = new Map(attempts.filter(a => ['quota', 'quota-after-work-began', 'login-unavailable'].includes(a.category!))
+    .map(a => [a.quotaScope, a.category === 'login-unavailable' ? 'same-login-scope' as const : 'same-quota-scope' as const]))
   const skipped: SetupAttempt[] = []
   for (const preset of candidates.slice(attempts.length)) {
     const scope = quotaScope(preset)
@@ -90,18 +107,24 @@ export const startupLine = (state: { workBegan: boolean; rejection?: StartupReje
 // Reads structured stdout only: Ez transport summaries (`ez.startup`) and
 // Claude stream-json envelopes. Model text is never inspected. Any event that
 // is not known pre-work metadata counts as work, so ambiguity never advances.
+// The rejection is the one the run ended on: later work supersedes it, except
+// an access denial, which always stops the chain.
 export const startupObserver = () => {
   let buffer = '', workBegan = false, rejection: StartupRejection | undefined
   const reject = (value: StartupRejection) => { if (rejection?.category !== 'access-denied') rejection = value }
+  const work = () => { workBegan = true; if (rejection?.category !== 'access-denied') rejection = undefined }
   const line = (text: string) => {
     if (!text.trim()) return
     let event: any
-    try { event = JSON.parse(text) } catch { workBegan = true; return }
+    try { event = JSON.parse(text) } catch { work(); return }
+    // A summary is the sender's current state; one without a rejection means
+    // work superseded an earlier one.
     if (event?.type === 'ez.startup') {
       if (event.workBegan === true) workBegan = true
       const r = event.rejection
       if (r && categories.includes(r.category) && (r.resetAt === undefined || Number.isFinite(Date.parse(r.resetAt))))
         reject({ category: r.category, ...(r.resetAt ? { resetAt: r.resetAt } : {}) })
+      else if (rejection?.category !== 'access-denied') rejection = undefined
       return
     }
     if (event?.type === 'thread.started' || event?.type === 'result' ||
@@ -119,7 +142,7 @@ export const startupObserver = () => {
     }
     const category = event?.type === 'assistant' && typeof event.error === 'string' ? claudeErrors[event.error] : undefined
     if (category) reject({ category, ...(category === 'quota' && rejection?.resetAt ? { resetAt: rejection.resetAt } : {}) })
-    else workBegan = true
+    else work()
   }
   return {
     write: (chunk: string) => {
