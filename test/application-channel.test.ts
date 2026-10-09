@@ -450,3 +450,27 @@ test('administrator task grant replacement preserves the runtime file owner', {s
     const disabled=await stat(file);assert.equal(disabled.uid,20000);assert.equal(disabled.gid,20000)
   }finally{await rm(dir,{recursive:true,force:true})}
 })
+
+test('empty server Claude catalog rejects Sonnet chat selection without changing Opus xhigh', async t => {
+  const root = await mkdtemp(join(tmpdir(),'ez-app-missing-claude-'))
+  t.after(()=>rm(root,{recursive:true,force:true}))
+  const owned = await owner(root), control = new ControlStore(root,1000)
+  const initial = {id:'opus',name:'Opus',cli:'claude',model:'opus',effort:'xhigh'}
+  await control.captureChoice(initial)
+  const {createAiMenu} = await import('../src/menu.js')
+  let models: import('../src/ai.js').ModelChoice[] = []
+  const menu = createAiMenu(control,'claude',async()=>models,root,undefined,async()=>true)
+  const channel = new ApplicationChannel({controlDir:root,initial,wake:()=>{},cancel:async()=>{},aiControls:menu})
+  const binding = (await channel.bindings.register('app',token(),owned,true))!
+  const before = await control.status()
+  const input = {action:'model',expectedSession:before.activeSession!.sessionId,cli:'claude',model:'sonnet',effort:'high'}
+  await assert.rejects(channel.changeControls(binding.bindingId,input), /No models advertised for claude.*current selection unchanged/)
+  assert.deepEqual(await control.status(),before)
+  models = [{cli:'claude',model:'sonnet',name:'Sonnet',efforts:['low','medium','high']}]
+  await assert.rejects(channel.changeControls(binding.bindingId,{...input,effort:'xhigh'}), /Effort xhigh is not supported.*low, medium, high/)
+  assert.deepEqual(await control.status(),before)
+  await channel.changeControls(binding.bindingId,input)
+  const admitted = await channel.submit(binding.bindingId,{requestId:'sonnet',scope:'chat',text:'Synthetic request',followTelegram:true})
+  assert.equal(admitted.execution!.preset.model,'sonnet')
+  assert.equal(admitted.execution!.preset.effort,'high')
+})
