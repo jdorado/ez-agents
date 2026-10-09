@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { createConnection } from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { fstatSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { installedNativeHelp } from '../src/plugins/native-tasks.mjs';
 
 const MAX_STDIN_BYTES = 1024 * 1024;
+const SOCKET_STDIN_IDLE_MS = 1000;
 const RUN_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const socketPath = process.env.EZ_PLUGIN_BROKER_SOCKET?.trim();
 const runId = process.env.EZ_RUN_ID?.trim();
@@ -50,18 +52,25 @@ const request = (payload, signal = undefined) => new Promise((resolve, reject) =
   socket.on('connect', () => socket.write(JSON.stringify(payload) + '\n'));
 });
 
-const readStdin = async () => {
-  if (process.stdin.isTTY) return '';
+// Pipes and files always end, so read them to EOF. A socket is how Node-based
+// parents (native engine shells, agent scripts) wire child stdio, and they
+// often pass it on without ever closing it. Waiting for that EOF hung calls
+// before the broker was contacted, so a socket that stays silent means no input.
+const readStdin = () => new Promise((resolve, reject) => {
+  if (process.stdin.isTTY) return resolve('');
   const chunks = [];
   let bytes = 0;
-  for await (const chunk of process.stdin) {
+  const idle = fstatSync(0).isSocket() ? setTimeout(() => { process.stdin.destroy(); resolve(''); }, SOCKET_STDIN_IDLE_MS) : undefined;
+  process.stdin.on('data', chunk => {
+    clearTimeout(idle);
     const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += value.length;
-    if (bytes > MAX_STDIN_BYTES) throw Error('plugin stdin exceeds the broker limit');
+    if (bytes > MAX_STDIN_BYTES) { process.stdin.destroy(); return reject(Error('plugin stdin exceeds the broker limit')); }
     chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString('utf8');
-};
+  });
+  process.stdin.once('end', () => { clearTimeout(idle); resolve(Buffer.concat(chunks).toString('utf8')); });
+  process.stdin.once('error', error => { clearTimeout(idle); reject(error); });
+});
 
 const invoke = async (args, stdin) => {
   if (!runId || !RUN_ID.test(runId)) throw Error('EZ_RUN_ID is required for an isolated plugin command');

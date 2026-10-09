@@ -397,11 +397,13 @@ export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,
     child.once('close',async(code,childSignal)=>{process.off('SIGTERM',term);process.off('SIGINT',int);
       clearTimeout(killTimer);
       clearTimeout(timeout);signal?.removeEventListener('abort',term);
-      if(cancelled&&container) {
+      // --rm only removes a container that ran. Compose stopping between
+      // create and start (cancelled, signalled or failed) strands it Created.
+      if(container&&(cancelled||code!==0)) {
         try {
           await removeCommandContainer(container);
         } catch(error) {
-          const uncertain=error instanceof Error?error:Error('Cancelled command container cleanup failed');
+          const uncertain=error instanceof Error?error:Error('Command container cleanup failed');
           uncertain.containerCleanupUncertain=true;return reject(uncertain);
         }
       }
@@ -409,7 +411,7 @@ export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,
       resolve({code:cancelled?130:code??(childSignal?130:1),stdout,stderr});});
   });
 }
-// Compose --rm can race cancellation. Confirm disappearance instead of treating
+// Compose --rm can race this cleanup. Confirm disappearance instead of treating
 // Docker's in-progress removal as either failure or completed cleanup.
 export async function removeCommandContainer(container,execute=run) {
   const cleanup=await execute(['container','rm','--force',container],{capture:true});
@@ -422,7 +424,7 @@ export async function removeCommandContainer(container,execute=run) {
       await new Promise(resolve=>setTimeout(resolve,100));
     }
   }
-  throw Error(`Cancelled command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`);
+  throw Error(`Command container cleanup failed: ${cleanup.stderr||cleanup.stdout}`);
 }
 
 async function checked(args) {

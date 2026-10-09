@@ -33,6 +33,16 @@ for(const cleanup of ['success','failure','already-removed']) test(`cancel remov
  if(cleanup==='failure')assert.match(stderr,/cleanup failed/);
  assert.deepEqual((await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse),[['run'],['container','rm','--force','exact-test-container']]);
 });
+// Compose --rm only removes a container that ran. Compose dying between create
+// and start (signal, broken output pipe, error) must not strand it in Created.
+for(const exit of ['signal','failure','success']) test(`compose exit by ${exit} without manager cancellation ${exit==='success'?'leaves no cleanup call':'removes its created container'}`,async t=>{
+ const root=await fs.mkdtemp(path.join(tmpdir(),'ez-exit-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const log=path.join(root,'calls.jsonl');
+ await fs.writeFile(path.join(root,'docker'),`#!${process.execPath}\nconst fs=require('fs'),a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a[0]==='container')process.exit(0);console.error('Container exact-test-container Created');${exit==='signal'?"process.kill(process.pid,'SIGKILL')":exit==='failure'?'process.exit(1)':'process.exit(0)'}\n`,{mode:0o700});
+ const {stdout}=await exec(process.execPath,['--input-type=module','-e',`import {run} from ${JSON.stringify(new URL('../src/plugins/manager.mjs',import.meta.url).href)};console.log((await run(['run'],{container:'exact-test-container',capture:true})).code)`],{env:{...process.env,PATH:root+path.delimiter+process.env.PATH}});
+ assert.equal(stdout.trim(),exit==='signal'?'130':exit==='failure'?'1':'0');
+ assert.deepEqual((await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse),[['run'],...(exit==='success'?[]:[['container','rm','--force','exact-test-container']])]);
+});
 async function fixture(t) {
  const root=await fs.mkdtemp(path.join(tmpdir(),'ez-tools-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const source=path.join(root,'source'),home=path.join(root,'tools'),deploymentDir=path.join(root,'deployment'),workspace=path.join(deploymentDir,'mind'),control=path.join(deploymentDir,'control'),hostConfig=path.join(deploymentDir,'host-executor.json'),fake=path.join(root,'fake');

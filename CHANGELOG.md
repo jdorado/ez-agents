@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stop isolated plugin calls hanging silently before reaching the broker when the caller leaves a socket stdin open (native engine shells, async Node spawns). Pipes and files are still read to EOF; a socket that sends nothing for one second is treated as no input. Remove a uniquely named call container whenever Compose exits non-zero, so a call that stops between create and start no longer strands it in `Created`.
 - Advance scheduled work to its next saved login after a typed authentication rejection before work. Recognize Claude API-error metadata without marking analysis started; account/organization denials, hooks, model/tool work and uncertain outcomes still stop fallback. Preserve the saved chain for the next occurrence.
 
 ## 0.1.0-beta.49
