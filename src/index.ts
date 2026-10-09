@@ -9,9 +9,9 @@ import { packageVersion } from './version.js'
 import {authorizeDeliveryContext} from './delivery-context.mjs'
 import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
-import { stat } from 'node:fs/promises'
+import { stat, writeFile } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
-import { Scripts } from './scripts.js'
+import { Scripts, DEFAULT_SCRIPT_TIMEOUT_SECONDS } from './scripts.js'
 import { redactFailure } from './failure.js'
 import { ownedScheduledTasks, scheduledTaskDetailText, scheduledTasksText } from './scheduled-tasks.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
@@ -27,10 +27,10 @@ import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch } from './control-state.js'
 import { ApprovalStore } from './approval.js'
-import { CliUnavailableError, startExecutorJob, terminateJob, opencodeDataHome, claudeConfigHome } from './executor.js'
+import { CliUnavailableError, startExecutorJob, attachHostJob, terminateJob, opencodeDataHome, claudeConfigHome } from './executor.js'
 import { attemptFailure, continuationLine, nextSetup, quotaScope, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { assertScheduledModel } from './model-policy.js'
-import { RunStore, type RunRecord } from './runs.js'
+import { RunStore, saveRunHandoff, takeRunHandoff, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
 import { markdownToTelegramHtml, escapeHtml } from './format.js'
 import { sanitizeFileName, stageChatAttachment, workspaceFile } from './files.js'
@@ -84,6 +84,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
   let activeBackend = false
   const ownerStopped = new WeakSet<ChildProcess>()
+  // Host-transport executors outlive this relay; a graceful stop hands them off.
+  const hostTransport = process.env.EZ_EXECUTOR_TRANSPORT === 'host' && !config.channelBackendUrl
+  const childRuns = new WeakMap<ChildProcess, string>()
+  const handedOff = new WeakSet<ChildProcess>()
   let activeChild: ChildProcess | null = null
   let runtimeStarted = false
   let shuttingDown = false
@@ -373,6 +377,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             startup_ms: Math.round(executionStarted - launchStarted), resumed: session.hasStarted })
           if (run.scheduled) background.set(run.id,child)
           else activeChild = child
+          childRuns.set(child, run.id)
           const finished = new Promise<number | null>((resolve) => {
             if (child.exitCode !== null || child.signalCode !== null) resolve(child.exitCode)
             else child.once('close', resolve)
@@ -415,6 +420,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               await withStartLock(async () => {
                 try {
                   await cleanup()
+                  // The next relay records a handed-off run's result.
+                  if (handedOff.has(child)) return
                   if (code === 0 && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(session.sessionId)
                   const cancelled = !timedOut && (ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id)))
                   if (timedOut) failureReason = 'script-timeout'
@@ -1260,11 +1267,84 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   })
   }
 
+  // Watch runs a previous relay handed off until they finish, with the normal
+  // receipts. Never relaunch; existing loops still revoke and cancel them.
+  const adoptHandoff = async (): Promise<void> => {
+    if (!hostTransport) return
+    for (const handed of await takeRunHandoff(config.controlDir)) await withStartLock(async () => {
+      const run = await runs.adopt(handed).catch(() => null)
+      if (!run) return
+      let child: ChildProcess
+      try {
+        // The foreground lane is serial; a second foreground handoff is corrupt.
+        if (!run.scheduled && activeChild) {
+          await writeFile(join(config.controlDir, 'host-executor', run.id + '.cancel'), '', { mode: 0o600 })
+          throw new Error('A second handed-off foreground run was cancelled; its outcome is unknown')
+        }
+        child = await attachHostJob(config.controlDir, run.id)
+      } catch (error) {
+        await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString(), failureReason: 'handoff-adoption', failure: await failureEvidence(config.controlDir, safeError(error)) })
+        return
+      }
+      if (run.scheduled) background.set(run.id, child)
+      else activeChild = child
+      childRuns.set(child, run.id)
+      await runs.patch(run.id, { pid: child.pid })
+      console.info('run adopted', { run_id: run.id, pid: child.pid })
+      let errorTail = '', outputTail = '', failureReason = 'executor-exit', timedOut = false
+      child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { if (run.script) outputTail = (outputTail + chunk).slice(-16384) })
+      child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+        errorTail = (errorTail + chunk).slice(-16384)
+        if (run.script) outputTail = (outputTail + chunk).slice(-16384)
+        if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
+      })
+      // A script keeps its registered bound from its original start.
+      const limit = run.script ? await new Scripts(config.controlDir).get(run.script.id).then(script => script.timeoutSeconds, () => DEFAULT_SCRIPT_TIMEOUT_SECONDS) : 0
+      const timer = limit ? setTimeout(() => { timedOut = true; terminateJob(child) }, Math.max(0, Date.parse(run.startedAt ?? run.createdAt) + limit * 1000 - Date.now())) : undefined
+      const completion = new Promise<number | null>(resolve => child.once('close', resolve)).then(code => withStartLock(async () => {
+        clearTimeout(timer)
+        if (run.scheduled) background.delete(run.id)
+        else if (activeChild === child) activeChild = null
+        if (handedOff.has(child)) return
+        const cancelled = !timedOut && (ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id)))
+        const failed = !cancelled && code !== 0
+        const status = cancelled ? 'cancelled' : failed ? 'failed' : 'completed'
+        if (code === 0 && run.execution && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(run.execution.sessionId)
+        const at = new Date().toISOString(), last = run.attempts?.at(-1)
+        await runs.patch(run.id, { status, endedAt: at, exitCode: code,
+          ...(last?.outcome === 'running' ? { attempts: [...run.attempts!.slice(0, -1), { ...last, outcome: status, exitCode: code, endedAt: at }] } : {}),
+          ...(run.script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
+          ...(failed ? { failureReason: timedOut ? 'script-timeout' : failureReason, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
+        await releaseExternal(run)
+        console.info('run ended', { run_id: run.id, code, adopted: true })
+      })).then(async () => {
+        const next = await runs.nextQueued()
+        if (next && !shuttingDown) await startJob(next)
+      }).catch(error => console.error('Adopted run completion failed', safeError(error)))
+      completions.add(completion)
+      void completion.finally(() => completions.delete(completion))
+    }).catch(error => console.error('Run adoption failed', handed.id, safeError(error)))
+  }
+
   let stopWork: Promise<void> | undefined
   const stop = (): Promise<void> => stopWork ?? (stopWork = (async () => {
     shuttingDown = true
     runtimeStarted = false
     pollingAbort.abort()
+    // Hand off running host work before any wait can outlast the stop grace
+    // period. The lock lets an in-flight launch register; later ones see shutdown.
+    if (hostTransport) await withStartLock(async () => {
+      const handoff = new Map<ChildProcess, RunRecord>()
+      for (const child of [...(activeChild ? [activeChild] : []), ...background.values()]) {
+        const run = childRuns.has(child) ? await runs.get(childRuns.get(child)!) : null
+        if (run?.status === 'running' && child.exitCode === null && child.signalCode === null) handoff.set(child, run)
+      }
+      if (!handoff.size) return
+      try { await saveRunHandoff(config.controlDir, [...handoff.values()]) }
+      catch (error) { console.error('Run handoff failed; stopping host work', safeError(error)); return }
+      // SIGKILL leaves no cancel marker, so the host keeps each executor running.
+      for (const child of handoff.keys()) { handedOff.add(child); child.kill('SIGKILL') }
+    })
     await deliveryServer?.stop().catch(() => {})
     deliveryServer = null
     await applicationChannel.stop()
@@ -1276,8 +1356,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     await Promise.all([sourceWork, intakeWork].map(work => work?.catch(() => {})))
     // Finish registering in-flight launches before taking the child snapshot.
     await withStartLock(async () => {
-      if (activeChild) terminateJob(activeChild)
-      for (const child of background.values()) terminateJob(child)
+      for (const child of [...(activeChild ? [activeChild] : []), ...background.values()]) if (!handedOff.has(child)) terminateJob(child)
       if (activeTypingTimer) clearInterval(activeTypingTimer)
     })
     await Promise.all(completions)
@@ -1308,6 +1387,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const owner = (await control.status()).owner
       if (telegramEnabled && telegramOwner(owner) && !config.channelBackendUrl) await telegramSource!.start(owner!)
       await scheduler.recover(runs)
+      await adoptHandoff()
       sourceTimer = setInterval(() => {
         void drainSources().catch(error => console.error('Event-source drain failed', safeError(error)))
       }, 1000)
@@ -1381,7 +1461,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
     }
   }
-  return { bot: bot!, telegramEnabled, isRunning: () => telegramEnabled ? Boolean(bot?.isRunning()) : runtimeStarted, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests, applicationChannel }
+  return { bot: bot!, telegramEnabled, isRunning: () => telegramEnabled ? Boolean(bot?.isRunning()) : runtimeStarted, start, stop, drainOutbox, drainInbox, drainSources, drainTaskRequests, adoptHandoff, applicationChannel }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

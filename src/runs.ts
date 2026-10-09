@@ -1,6 +1,9 @@
 import { validApplicationOrigin, type ApplicationOrigin } from './application-origin.js'
 import { type FailureEvidence, type FailureReview, validFailureReview, failureStamp, failureEvidence } from './failure.js'
 import { randomBytes } from 'node:crypto'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { isHostRunId } from './host-executor-protocol.js'
 import { validOrigin, type ExternalOrigin } from './event-sources.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { validScheduledOrigin, type ScheduledOrigin } from './scheduler.js'
@@ -86,9 +89,10 @@ export const retainedOutbox = (controlDir: string): StoredOutboxItem[] => [...ou
 // Stateless pipe: the relay owns the ledger in process memory. Cross-process
 // producers (engine children, plugin children, host executor) reach it through
 // the delivery socket (see delivery-socket.ts), never through control/ files.
-// A restart drops in-flight runs and queued items by design; in-flight sends
-// report unknown rather than claiming success. Long-lived relays cap retained
-// terminal records so memory stays bounded.
+// A restart drops in-flight runs and queued items by design (except handed-off
+// host-transport runs, below); in-flight sends report unknown rather than
+// claiming success. Long-lived relays cap retained terminal records so memory
+// stays bounded.
 const MAX_TERMINAL_RUNS = 2000
 const MAX_TERMINAL_OUTBOX = 2000
 
@@ -141,6 +145,43 @@ export const activeSetup = (run: Pick<RunRecord, 'attempts' | 'execution'>): AiP
 }
 
 export const newRunId = (): string => `r_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`
+
+// The one exception to memory-only runs: a graceful relay stop hands its
+// running host-transport runs to the next relay, whose executors outlive it.
+// The next relay adopts and watches them; it never relaunches one.
+const handoffFile = (controlDir: string): string => join(controlDir, 'run-handoff.json')
+const handedRun = (value: unknown): value is RunRecord => {
+  const run = value as RunRecord
+  return Boolean(run && typeof run === 'object' && (run.version === 1 || run.version === 2) && typeof run.id === 'string' && isHostRunId(run.id) &&
+    run.status === 'running' && Array.isArray(run.texts) && run.texts.every(text => typeof text === 'string') && Number.isFinite(Date.parse(run.createdAt)) &&
+    (run.execution === undefined || isExecutionChoice(run.execution)) && (run.scheduled === undefined || validScheduledOrigin(run.scheduled)) &&
+    (run.external === undefined || validOrigin(run.external)) && (run.application === undefined || validApplicationOrigin(run.application)))
+}
+
+export const saveRunHandoff = async (controlDir: string, records: RunRecord[]): Promise<void> => {
+  const file = handoffFile(controlDir), temporary = `${file}.${process.pid}.tmp`
+  await writeFile(temporary, JSON.stringify({ version: 1, runs: records }), { mode: 0o600 })
+  await rename(temporary, file)
+}
+
+// Reads and removes the record. A corrupt record adopts nothing: those
+// executors finish unobserved, exactly like a relay restart without handoff.
+export const takeRunHandoff = async (controlDir: string): Promise<RunRecord[]> => {
+  let raw: string
+  try { raw = await readFile(handoffFile(controlDir), 'utf8') }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+  await rm(handoffFile(controlDir))
+  try {
+    const value = JSON.parse(raw) as { version?: unknown; runs?: unknown }
+    if (value.version !== 1 || !Array.isArray(value.runs) || value.runs.length > 100) throw new Error('Invalid run handoff')
+    const valid = value.runs.filter(handedRun)
+    if (valid.length !== value.runs.length) console.error('Ignoring invalid handed-off runs', value.runs.length - valid.length)
+    return [...new Map(valid.map(run => [run.id, run])).values()]
+  } catch (error) {
+    console.error('Ignoring unreadable run handoff', error instanceof Error ? error.message : 'Unknown error')
+    return []
+  }
+}
 
 export class RunStore {
   constructor(private readonly controlDir: string) {}
@@ -205,6 +246,15 @@ export class RunStore {
   async get(id: string): Promise<RunRecord | null> {
     assertId(id)
     return runsFor(this.controlDir).get(id) ?? null
+  }
+
+  // Re-admit a run from the previous relay's handoff; its executor is already running.
+  async adopt(run: RunRecord): Promise<RunRecord> {
+    if (!handedRun(run)) throw new Error('Invalid handed-off run')
+    const existing = runsFor(this.controlDir).get(run.id)
+    if (existing && existing.status !== 'running') throw new Error('Handed-off run already settled')
+    runsFor(this.controlDir).set(run.id, run)
+    return run
   }
 
   async patch(
