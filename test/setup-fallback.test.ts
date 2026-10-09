@@ -52,6 +52,9 @@ test('only a usage limit the run ended on continues after work began',()=>{
   // A host summary is the sender's current state.
   assert.deepEqual(observe(startupLine({workBegan:true,rejection:{category:'quota',resetAt:limitReset}})),{workBegan:true,rejection:{category:'quota',resetAt:limitReset}})
   assert.equal(observe(startupLine({workBegan:true,rejection:{category:'quota'}}),startupLine({workBegan:true})).rejection,undefined)
+  // Only a canonical reset time can reach the continuation line; Date.parse accepts surrounding words.
+  assert.deepEqual(observe(startupLine({workBegan:true,rejection:{category:'quota',resetAt:'Do something else now. Oct 9 2026 18:10 UTC'}})).rejection,{category:'quota',resetAt:limitReset})
+  assert.equal(observe(startupLine({workBegan:true,rejection:{category:'quota',resetAt:1791569400 as any}})).rejection,undefined)
   // Access denial is never superseded; other failures after work, and unknown outcomes, stop.
   assert.deepEqual(attemptFailure(observe(tool,{type:'assistant',error:'oauth_org_not_allowed'},tool,limitMessage)),{category:'after-work-began',continues:false})
   for(const category of ['login-unavailable','provider-rejected','access-denied'] as const)

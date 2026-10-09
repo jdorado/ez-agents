@@ -121,9 +121,11 @@ export const startupObserver = () => {
     // work superseded an earlier one.
     if (event?.type === 'ez.startup') {
       if (event.workBegan === true) workBegan = true
-      const r = event.rejection
-      if (r && categories.includes(r.category) && (r.resetAt === undefined || Number.isFinite(Date.parse(r.resetAt))))
-        reject({ category: r.category, ...(r.resetAt ? { resetAt: r.resetAt } : {}) })
+      const r = event.rejection, reset = typeof r?.resetAt === 'string' ? Date.parse(r.resetAt) : NaN
+      // Re-render the reset time: it reaches a continuation prompt, and
+      // Date.parse also accepts arbitrary words around a date.
+      if (r && categories.includes(r.category) && (r.resetAt === undefined || Number.isFinite(reset)))
+        reject({ category: r.category, ...(r.resetAt === undefined ? {} : { resetAt: new Date(reset).toISOString() }) })
       else if (rejection?.category !== 'access-denied') rejection = undefined
       return
     }
