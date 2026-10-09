@@ -249,3 +249,49 @@ test('task launch broker admits only its fixed application command and writes no
     const revoked=await request(f.socket,{version:1,id:randomUUID(),operation:'task-launch',runId:taskRun,stdin:JSON.stringify(input)});assert.equal(revoked.ok,false);
   }finally{abort.abort();await serving;process.env.PATH=oldPath;await ledger.stop();provider.closeAllConnections();await new Promise(r=>provider.close(r));}
 });
+
+// Native engines and Node scripts wire child stdin as a socket they may never
+// close. The isolated client must reach the broker instead of waiting for EOF,
+// while pipes and files still deliver their complete input.
+test('isolated client does not wait forever on an inherited open stdin socket', async t => {
+  const { createServer: createSocketServer } = await import('node:net');
+  const { spawn } = await import('node:child_process');
+  const { once } = await import('node:events');
+  const root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'e-')));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const socket = path.join(root, 'b.sock'), invokes = [];
+  const broker = createSocketServer(connection => {
+    let buffer = '';
+    connection.on('data', chunk => {
+      buffer += chunk;
+      if (!buffer.includes('\n')) return;
+      const frame = JSON.parse(buffer);
+      if (frame.operation === 'invoke') invokes.push(frame);
+      connection.end(JSON.stringify(frame.operation === 'resolve' ? { ok: true, revision, capability: 'c'.repeat(64) } : { ok: true, code: 0, stdout: 'ok' }) + '\n');
+    });
+  });
+  await new Promise(resolve => broker.listen(socket, resolve));
+  t.after(() => broker.close());
+  const client = new URL('../bin/ez', import.meta.url).pathname;
+  const env = { PATH: process.env.PATH, EZ_PLUGIN_BROKER_SOCKET: socket, EZ_RUN_ID: 'r_client' };
+  const finish = async child => {
+    let stdout = '';
+    child.stdout.on('data', chunk => stdout += chunk);
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+    const [code, signal] = await once(child, 'close');
+    clearTimeout(timer);
+    return { code, signal, stdout };
+  };
+  const open = spawn(process.execPath, [client, 'sample', 'read'], { env });
+  t.after(() => open.kill('SIGKILL'));
+  assert.deepEqual(await finish(open), { code: 0, signal: null, stdout: 'ok' });
+  assert.deepEqual(invokes.at(-1).args, ['read']);
+  assert.equal(invokes.at(-1).stdin, undefined);
+  const supplied = spawn(process.execPath, [client, 'sample', 'write'], { env });
+  supplied.stdin.end('payload');
+  assert.equal((await finish(supplied)).code, 0);
+  assert.equal(invokes.at(-1).stdin, 'payload');
+  const piped = spawn('/bin/sh', ['-c', '(sleep 1.5; printf late) | "$0" "$1" sample pipe', process.execPath, client], { env, stdio: ['ignore', 'pipe', 'inherit'] });
+  assert.equal((await finish(piped)).code, 0);
+  assert.equal(invokes.at(-1).stdin, 'late');
+});

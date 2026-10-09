@@ -196,8 +196,12 @@ The image pins modern Docker Compose, including its standalone executable, so
 existing operator-created volumes retain their data and driver bindings.
 
 The relay-side `ez` client sends only declared aliases, literal argument arrays,
-bounded stdin, and the active run ID to the broker. The broker re-reads owner
-authority and the registry before every call, pins the discovered revision, and
+bounded stdin, and the active run ID to the broker. It reads a piped or
+redirected stdin to EOF. A socket stdin, which native engine shells and Node
+child processes often leave open, counts as no input unless data arrives within
+one second; write and close it immediately when a command needs input. The
+broker re-reads owner authority and the registry before every call, pins the
+discovered revision, and
 passes only the installed plugin's `run.application.context.plugins[plugin-id]`
 object as `EZ_PLUGIN_CONTEXT`. Missing, revoked, cross-agent, expired, or reused
 admissions fail closed. Timeouts, cancellation and bounded output produce a

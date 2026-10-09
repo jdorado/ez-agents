@@ -307,8 +307,10 @@ never a source of network attachment authority.
 
 Commands run in one-shot client containers against their own service's volumes;
 stdin, stdout, stderr, literal arguments and exit codes are preserved. SIGINT/
-SIGTERM cancel the Docker call and remove its unique client container. The manager
-never retries a provider operation. Service startup/restart is explicit; commands
+SIGTERM cancel the Docker call and remove its unique client container; a Compose
+exit with a non-zero status also removes it, so a call that stopped between
+create and start never remains `Created`. The manager never retries a provider
+operation. Service startup/restart is explicit; commands
 never implicitly start a stopped provider service. Plugin data does not enter the
 relay. The manager sends only a whitelist of Docker client environment variables.
 
