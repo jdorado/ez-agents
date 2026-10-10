@@ -1,17 +1,29 @@
 // File transport across the Docker/host boundary. The host chooses the CLI,
 // workspace and environment; a request cannot choose a command or credentials.
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { isHostRunId } from './host-executor-protocol.js'
-const [control, id] = process.argv.slice(2)
-if (!control || !isHostRunId(id || '')) throw new Error('Invalid executor binding')
+const [control, id, mode] = process.argv.slice(2)
+if (!control || !isHostRunId(id || '') || (mode !== undefined && mode !== '--attach')) throw new Error('Invalid executor binding')
 const directory = path.join(control, 'host-executor')
 await mkdir(directory, {recursive:true, mode:0o700})
-let input = ''
-for await (const chunk of process.stdin) input += chunk
 const base = path.join(directory, id)
-await writeFile(base+'.tmp', input, {mode:0o600, flag:'wx'})
-await rename(base+'.tmp', base+'.request.json')
+if (mode === '--attach') {
+  // A previous relay submitted this run: watch it, never resubmit. Without a
+  // request, claim or event record its outcome is unknown.
+  // Check in lifecycle order: claim renames the request, and the host writes
+  // the exit event before removing the claim, so a live run is always seen.
+  const exists = (suffix: string) => stat(base+suffix).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error })
+  if (!await exists('.request.json') && !await exists('.running.json') && !await exists('.events')) {
+    console.error('Handed-off host run has no request, claim or result; its outcome is unknown')
+    process.exit(1)
+  }
+} else {
+  let input = ''
+  for await (const chunk of process.stdin) input += chunk
+  await writeFile(base+'.tmp', input, {mode:0o600, flag:'wx'})
+  await rename(base+'.tmp', base+'.request.json')
+}
 let interrupted = false
 for (const signal of ['SIGTERM','SIGINT'] as const) process.once(signal, () => {
   if (interrupted) return

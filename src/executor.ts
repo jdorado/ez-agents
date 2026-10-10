@@ -500,6 +500,15 @@ export const startExecutorJob = async (
 
 export const startGrokJob = startExecutorJob
 
+// Watch a host-transport run a previous relay submitted; it is never resubmitted.
+export const attachHostJob = async (controlDir: string, runId: string): Promise<ChildProcess> => {
+  const invocation = executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
+    fileURLToPath(new URL('./host-executor-client.ts', import.meta.url)), controlDir, runId, '--attach'])
+  const child = spawn(invocation.command, invocation.args, { env: executorEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
+  await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+  return child
+}
+
 // Spawn a verified registered script with the executor identity, environment
 // allowlist and workspace confinement. No shell, model, prompt or native session.
 export const startScriptJob = async (

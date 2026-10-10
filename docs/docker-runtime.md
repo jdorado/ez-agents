@@ -141,6 +141,18 @@ An interrupted Telegram poller keeps authorized work and in-flight deliveries
 alive while it retries intake. Run and delivery records are relay memory: a
 relay process restart drops in-flight work by design, Telegram redelivery is the
 intake replay path, and uncertain sends report unknown instead of success.
+Host-capable agents are the exception for running work: their native CLIs run under
+the host transport, so a graceful relay stop (Compose recreate, Docker restart)
+writes those running runs to private `control/run-handoff.json` instead of
+cancelling them. The next relay adopts each one, keeps its concurrency slot and
+schedule hold, accepts its messages and records its exit status; it never
+relaunches a run. A run whose outcome is unknown (no request, claim or result
+record, or an adoption failure) is recorded failed and interrupted, which holds
+its schedule until an explicit edit; the host is asked to cancel it. A request
+the host had not claimed before the relay stopped is failed by the host without
+starting. Records older than 24 hours are ignored, and the file is removed on
+every start. Queued runs and deliveries are still dropped, and messages a run
+sends while no relay is up fail and need a retry.
 A `409 Conflict` still requires the operator to stop the competing poller; it
 remains unhealthy after the startup grace. Pending and uncertain deliveries keep
 their existing receipt semantics; executor stdout is not replayed as a reply.
