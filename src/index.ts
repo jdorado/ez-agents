@@ -9,7 +9,7 @@ import { packageVersion } from './version.js'
 import {authorizeDeliveryContext} from './delivery-context.mjs'
 import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
-import { stat, writeFile } from 'node:fs/promises'
+import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
 import { Scripts, DEFAULT_SCRIPT_TIMEOUT_SECONDS } from './scripts.js'
 import { redactFailure } from './failure.js'
@@ -1268,40 +1268,43 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   }
 
   // Watch runs a previous relay handed off until they finish, with the normal
-  // receipts. Never relaunch; existing loops still revoke and cancel them.
+  // receipts. Never relaunch; existing loops still revoke and cancel them. An
+  // unknown outcome is recorded interrupted, which holds its schedule.
   const adoptHandoff = async (): Promise<void> => {
-    if (!hostTransport) return
-    for (const handed of await takeRunHandoff(config.controlDir)) await withStartLock(async () => {
-      const run = await runs.adopt(handed).catch(() => null)
-      if (!run) return
+    const handed = await takeRunHandoff(config.controlDir)
+    if (!hostTransport) { if (handed.length) console.error('Ignoring run handoff without host transport', handed.length); return }
+    // Admit every record before the first attach, so no trigger races a hold.
+    const admitted = (await Promise.all(handed.map(run => runs.adopt(run).catch(() => null)))).filter((run): run is RunRecord => run !== null)
+    for (const run of admitted) await withStartLock(async () => {
       let child: ChildProcess
       try {
         // The foreground lane is serial; a second foreground handoff is corrupt.
-        if (!run.scheduled && activeChild) {
-          await writeFile(join(config.controlDir, 'host-executor', run.id + '.cancel'), '', { mode: 0o600 })
-          throw new Error('A second handed-off foreground run was cancelled; its outcome is unknown')
-        }
+        if (!run.scheduled && activeChild) throw new Error('A second handed-off foreground run was cancelled; its outcome is unknown')
         child = await attachHostJob(config.controlDir, run.id)
       } catch (error) {
-        await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString(), failureReason: 'handoff-adoption', failure: await failureEvidence(config.controlDir, safeError(error)) })
+        // Never leave an unobserved executor: ask the host to stop it.
+        await mkdir(join(config.controlDir, 'host-executor'), { recursive: true, mode: 0o700 })
+          .then(() => writeFile(join(config.controlDir, 'host-executor', run.id + '.cancel'), '', { mode: 0o600 })).catch(() => {})
+        await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString(), interrupted: true, failureReason: 'handoff-outcome-unknown', failure: await failureEvidence(config.controlDir, safeError(error)) })
         return
       }
+      // Listen before any await so a fast exit cannot be missed.
+      const closed = new Promise<number | null>(resolve => child.once('close', resolve))
+      let errorTail = '', outputTail = '', timedOut = false
+      child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { if (run.script) outputTail = (outputTail + chunk).slice(-16384) })
+      child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
+        errorTail = (errorTail + chunk).slice(-16384)
+        if (run.script) outputTail = (outputTail + chunk).slice(-16384)
+      })
       if (run.scheduled) background.set(run.id, child)
       else activeChild = child
       childRuns.set(child, run.id)
       await runs.patch(run.id, { pid: child.pid })
       console.info('run adopted', { run_id: run.id, pid: child.pid })
-      let errorTail = '', outputTail = '', failureReason = 'executor-exit', timedOut = false
-      child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { if (run.script) outputTail = (outputTail + chunk).slice(-16384) })
-      child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
-        errorTail = (errorTail + chunk).slice(-16384)
-        if (run.script) outputTail = (outputTail + chunk).slice(-16384)
-        if (chunk.includes('Host CLI executor is offline')) failureReason = 'host-executor-offline'
-      })
       // A script keeps its registered bound from its original start.
       const limit = run.script ? await new Scripts(config.controlDir).get(run.script.id).then(script => script.timeoutSeconds, () => DEFAULT_SCRIPT_TIMEOUT_SECONDS) : 0
       const timer = limit ? setTimeout(() => { timedOut = true; terminateJob(child) }, Math.max(0, Date.parse(run.startedAt ?? run.createdAt) + limit * 1000 - Date.now())) : undefined
-      const completion = new Promise<number | null>(resolve => child.once('close', resolve)).then(code => withStartLock(async () => {
+      const completion = closed.then(code => withStartLock(async () => {
         clearTimeout(timer)
         if (run.scheduled) background.delete(run.id)
         else if (activeChild === child) activeChild = null
@@ -1309,12 +1312,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const cancelled = !timedOut && (ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id)))
         const failed = !cancelled && code !== 0
         const status = cancelled ? 'cancelled' : failed ? 'failed' : 'completed'
+        const unknown = errorTail.includes('outcome is unknown'), transport = errorTail.includes('Host executor client interrupted by')
+        const failureReason = timedOut ? 'script-timeout' : unknown ? 'handoff-outcome-unknown' : transport ? 'host-executor-transport-interrupted'
+          : errorTail.includes('Host CLI executor is offline') ? 'host-executor-offline' : 'executor-exit'
         if (code === 0 && run.execution && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(run.execution.sessionId)
         const at = new Date().toISOString(), last = run.attempts?.at(-1)
         await runs.patch(run.id, { status, endedAt: at, exitCode: code,
           ...(last?.outcome === 'running' ? { attempts: [...run.attempts!.slice(0, -1), { ...last, outcome: status, exitCode: code, endedAt: at }] } : {}),
           ...(run.script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
-          ...(failed ? { failureReason: timedOut ? 'script-timeout' : failureReason, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
+          ...(failed ? { failureReason, interrupted: unknown || transport, failure: await failureEvidence(config.controlDir, safeError(errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
         await releaseExternal(run)
         console.info('run ended', { run_id: run.id, code, adopted: true })
       })).then(async () => {
@@ -1323,7 +1329,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }).catch(error => console.error('Adopted run completion failed', safeError(error)))
       completions.add(completion)
       void completion.finally(() => completions.delete(completion))
-    }).catch(error => console.error('Run adoption failed', handed.id, safeError(error)))
+    }).catch(error => console.error('Run adoption failed', run.id, safeError(error)))
   }
 
   let stopWork: Promise<void> | undefined
@@ -1337,7 +1343,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const handoff = new Map<ChildProcess, RunRecord>()
       for (const child of [...(activeChild ? [activeChild] : []), ...background.values()]) {
         const run = childRuns.has(child) ? await runs.get(childRuns.get(child)!) : null
-        if (run?.status === 'running' && child.exitCode === null && child.signalCode === null) handoff.set(child, run)
+        if (run?.status === 'running' && !ownerStopped.has(child) && child.exitCode === null && child.signalCode === null) handoff.set(child, run)
       }
       if (!handoff.size) return
       try { await saveRunHandoff(config.controlDir, [...handoff.values()]) }
@@ -1382,12 +1388,13 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       deliveryServer = await serveDeliverySocket(config.controlDir, handleDeliveryOp, {
         ...(Number.isSafeInteger(deliveryTcpPort) && deliveryTcpPort >= 1024 && deliveryTcpPort <= 65535 ? { tcpPort: deliveryTcpPort } : {}),
       })
+      // Reconcile, then adopt handed-off runs, before any intake can launch work.
+      await scheduler.recover(runs)
+      await adoptHandoff()
       if (config.applicationPort) await applicationChannel.listen(config.applicationPort, config.applicationHost)
       runtimeStarted = true
       const owner = (await control.status()).owner
       if (telegramEnabled && telegramOwner(owner) && !config.channelBackendUrl) await telegramSource!.start(owner!)
-      await scheduler.recover(runs)
-      await adoptHandoff()
       sourceTimer = setInterval(() => {
         void drainSources().catch(error => console.error('Event-source drain failed', safeError(error)))
       }, 1000)

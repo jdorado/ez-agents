@@ -160,20 +160,24 @@ const handedRun = (value: unknown): value is RunRecord => {
 
 export const saveRunHandoff = async (controlDir: string, records: RunRecord[]): Promise<void> => {
   const file = handoffFile(controlDir), temporary = `${file}.${process.pid}.tmp`
-  await writeFile(temporary, JSON.stringify({ version: 1, runs: records }), { mode: 0o600 })
+  await writeFile(temporary, JSON.stringify({ version: 1, writtenAt: new Date().toISOString(), runs: records }), { mode: 0o600 })
   await rename(temporary, file)
 }
 
-// Reads and removes the record. A corrupt record adopts nothing: those
-// executors finish unobserved, exactly like a relay restart without handoff.
-export const takeRunHandoff = async (controlDir: string): Promise<RunRecord[]> => {
-  let raw: string
-  try { raw = await readFile(handoffFile(controlDir), 'utf8') }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
-  await rm(handoffFile(controlDir))
+const HANDOFF_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+// Reads and removes the record. An unreadable, corrupt or stale record adopts
+// nothing: those executors finish unobserved, like a restart without handoff.
+export const takeRunHandoff = async (controlDir: string, now = Date.now()): Promise<RunRecord[]> => {
   try {
-    const value = JSON.parse(raw) as { version?: unknown; runs?: unknown }
-    if (value.version !== 1 || !Array.isArray(value.runs) || value.runs.length > 100) throw new Error('Invalid run handoff')
+    let raw: string
+    try { raw = await readFile(handoffFile(controlDir), 'utf8') }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
+    await rm(handoffFile(controlDir))
+    const value = JSON.parse(raw) as { version?: unknown; writtenAt?: unknown; runs?: unknown }
+    const age = now - Date.parse(typeof value.writtenAt === 'string' ? value.writtenAt : '')
+    if (value.version !== 1 || !(age >= -60_000 && age <= HANDOFF_MAX_AGE_MS)) throw new Error('Invalid or stale run handoff')
+    if (!Array.isArray(value.runs) || value.runs.length > 100) throw new Error('Invalid run handoff')
     const valid = value.runs.filter(handedRun)
     if (valid.length !== value.runs.length) console.error('Ignoring invalid handed-off runs', value.runs.length - valid.length)
     return [...new Map(valid.map(run => [run.id, run])).values()]

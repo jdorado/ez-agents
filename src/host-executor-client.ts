@@ -11,8 +11,10 @@ const base = path.join(directory, id)
 if (mode === '--attach') {
   // A previous relay submitted this run: watch it, never resubmit. Without a
   // request, claim or event record its outcome is unknown.
+  // Check in lifecycle order: claim renames the request, and the host writes
+  // the exit event before removing the claim, so a live run is always seen.
   const exists = (suffix: string) => stat(base+suffix).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error })
-  if (!(await Promise.all(['.request.json','.running.json','.events'].map(exists))).includes(true)) {
+  if (!await exists('.request.json') && !await exists('.running.json') && !await exists('.events')) {
     console.error('Handed-off host run has no request, claim or result; its outcome is unknown')
     process.exit(1)
   }
