@@ -5,6 +5,7 @@ import { mkdir, readFile } from 'node:fs/promises'
 import { authProfileStatus, readModels, presetProvider, sameChoice, sameEngine, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { cliHome } from './auth-profile.js'
 import { ControlStore } from './control-state.js'
+import { resolveIsolation } from './isolation.js'
 
 const usage='Usage: ezenciel-agents-ai list | select --cli <installed-cli> [--auth-profile <name>] [--provider <provider>] [--model <model>] [--effort <effort>] | default | profiles | profile add --cli codex|claude --auth-profile <name>'
 const {values,positionals}=parseArgs({allowPositionals:true,options:{help:{type:'boolean'},cli:{type:'string'},'auth-profile':{type:'string'},provider:{type:'string'},model:{type:'string'},effort:{type:'string'}}})
@@ -15,8 +16,9 @@ if(values.help){
 if (!process.env.EZ_CONTROL_DIR) throw new Error('Use this agent’s bound control directory')
 const controlDir=process.env.EZ_CONTROL_DIR
 const authProfile=values['auth-profile']
-const catalog=():Promise<ModelChoice[]>=>readFile(join(controlDir,'host-executor','models.json'),'utf8')
-  .then(text=>JSON.parse(text)).catch(()=>readModels(undefined,undefined,join(controlDir,'cli','codex'),undefined,undefined,undefined,controlDir))
+const catalog=():Promise<ModelChoice[]>=>resolveIsolation(process.env)==='host-capable'
+  ? readFile(join(controlDir,'host-executor','models.json'),'utf8').then(text=>JSON.parse(text))
+  : readModels(undefined,undefined,join(controlDir,'cli','codex'),undefined,undefined,undefined,controlDir)
 if(positionals[0]==='list')console.log(JSON.stringify(await catalog()))
 else if(positionals[0]==='profiles')console.log(JSON.stringify(await authProfileStatus(controlDir)))
 else if(positionals[0]==='profile' && positionals[1]==='add'){

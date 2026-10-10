@@ -50,12 +50,31 @@ test('an agent can select a declared provider and model without putting the key 
   await writeFile(path.join(binDir,'codex'),'#!/bin/sh\nexit 0\n',{mode:0o700})
   await writeFile(path.join(controlDir,'host-executor','models.json'),JSON.stringify([{cli:'codex',provider:'openrouter',model:'google/gemini-3.8-flash',name:'Gemini',efforts:[]}]))
   const store=new ControlStore(controlDir,900000);await store.aiState(initialPreset('codex'))
-  const env={...process.env,HOME:root,PATH:binDir+path.delimiter+process.env.PATH,EZ_CONTROL_DIR:controlDir,OPENROUTER_API_KEY:'must-not-persist'}
+  const env={...process.env,HOME:root,PATH:binDir+path.delimiter+process.env.PATH,EZ_CONTROL_DIR:controlDir,EZ_EXECUTOR_TRANSPORT:'host',OPENROUTER_API_KEY:'must-not-persist'}
   const bin=fileURLToPath(new URL('../bin/ezenciel-agents-ai.mjs',import.meta.url))
   const result=spawnSync(process.execPath,[bin,'select','--cli','codex','--provider','openrouter','--model','google/gemini-3.8-flash'],{env,encoding:'utf8'})
   assert.equal(result.status,0,result.stderr)
   const state=await store.status(),selected=state.ai?.presets.find(p=>p.id===state.ai?.selectedId)
   assert.equal(selected?.provider,'openrouter');assert.equal(selected?.model,'google/gemini-3.8-flash')
   assert.equal(JSON.stringify(state).includes('must-not-persist'),false)
+ }finally{await rm(root,{recursive:true,force:true})}
+})
+
+
+test('isolated AI CLI ignores a legacy host catalog and discovers its own Sonnet',async()=>{
+ const root=await mkdtemp(path.join(tmpdir(),'ez-ai-local-catalog-'))
+ try{
+  const controlDir=path.join(root,'control'),binDir=path.join(root,'bin')
+  await mkdir(path.join(controlDir,'host-executor'),{recursive:true});await mkdir(binDir)
+  const stale=JSON.stringify([{cli:'codex',model:'host-only',name:'Host only',efforts:[]}])
+  await writeFile(path.join(controlDir,'host-executor','models.json'),stale)
+  await writeFile(path.join(binDir,'claude'),"#!/bin/sh\nprintf '%s\n' \"  --model <model> Model (e.g. 'sonnet', 'opus')\" \"  --effort <level> Effort (low, high)\"\n",{mode:0o700})
+  const env={...process.env,HOME:root,PATH:binDir,EZ_CONTROL_DIR:controlDir,EZ_ISOLATION:'isolated',EZ_EXECUTOR_TRANSPORT:'local'}
+  const bin=fileURLToPath(new URL('../bin/ezenciel-agents-ai.mjs',import.meta.url))
+  const result=spawnSync(process.execPath,[bin,'list'],{env,encoding:'utf8'})
+  assert.equal(result.status,0,result.stderr)
+  const catalog=JSON.parse(result.stdout)
+  assert.ok(catalog.some((m:{cli:string;model:string})=>m.cli==='claude'&&m.model==='sonnet'))
+  assert.ok(!catalog.some((m:{model:string})=>m.model==='host-only'))
  }finally{await rm(root,{recursive:true,force:true})}
 })
