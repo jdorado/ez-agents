@@ -162,7 +162,9 @@ const handedRun = (value: unknown): value is RunRecord => {
 
 export const saveRunHandoff = async (controlDir: string, records: RunRecord[]): Promise<void> => {
   const file = handoffFile(controlDir), temporary = `${file}.${process.pid}.tmp`
-  await writeFile(temporary, JSON.stringify({ version: 1, writtenAt: new Date().toISOString(), runs: records }), { mode: 0o600 })
+  const ids=new Set(records.map(run=>run.id))
+  const receipts=[...outboxFor(controlDir).values()].filter(item=>item.runId&&ids.has(item.runId)&&(item.state==='sent'||item.state==='failed'))
+  await writeFile(temporary, JSON.stringify({ version: 1, writtenAt: new Date().toISOString(), runs: records, receipts }), { mode: 0o600 })
   await rename(temporary, file)
 }
 
@@ -176,12 +178,16 @@ export const takeRunHandoff = async (controlDir: string, now = Date.now()): Prom
     try { raw = await readFile(handoffFile(controlDir), 'utf8') }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error }
     await rm(handoffFile(controlDir))
-    const value = JSON.parse(raw) as { version?: unknown; writtenAt?: unknown; runs?: unknown }
+    const value = JSON.parse(raw) as { version?: unknown; writtenAt?: unknown; runs?: unknown; receipts?: unknown }
     const age = now - Date.parse(typeof value.writtenAt === 'string' ? value.writtenAt : '')
     if (value.version !== 1 || !(age >= -60_000 && age <= HANDOFF_MAX_AGE_MS)) throw new Error('Invalid or stale run handoff')
     if (!Array.isArray(value.runs) || value.runs.length > 100) throw new Error('Invalid run handoff')
     const valid = value.runs.filter(handedRun)
     if (valid.length !== value.runs.length) console.error('Ignoring invalid handed-off runs', value.runs.length - valid.length)
+    const ids=new Set(valid.map(run=>run.id))
+    if(Array.isArray(value.receipts)&&value.receipts.length<=MAX_TERMINAL_OUTBOX){
+      for(const item of value.receipts as StoredOutboxItem[])if(item&&typeof item.id==='string'&&/^[a-zA-Z0-9_-]+$/.test(item.id)&&item.runId&&ids.has(item.runId)&&(item.state==='sent'||item.state==='failed'))outboxFor(controlDir).set(item.id,item)
+    }
     return [...new Map(valid.map(run => [run.id, run])).values()]
   } catch (error) {
     console.error('Ignoring unreadable run handoff', error instanceof Error ? error.message : 'Unknown error')

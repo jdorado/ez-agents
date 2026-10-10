@@ -78,7 +78,7 @@ const readEndpoint = async controlDir => {
   } catch { return null }
 }
 
-export const callDeliverySocket = async (socketPath, op, timeoutMs = 130_000) => {
+const callOnce = async (socketPath, op, timeoutMs) => {
   const id = `${Date.now().toString(36)}_${Math.floor(Math.random() * 0xffffff).toString(16)}`
   try {
     return await exchange(() => createConnection(socketPath), { id, ...op }, timeoutMs, socketPath)
@@ -104,3 +104,17 @@ export const deliverySocketAlive = async (socketPath, timeoutMs = 2000) => {
     return false
   }
 }
+
+// Only retry connection failures during a declared runtime swap. No frame was
+// accepted in that case. Timeouts, provider failures and uncertain writes fail.
+export const callDeliverySocket = async (socketPath, op, timeoutMs = 130_000) => {
+  const until=Date.now()+120000;
+  for(;;){
+    try{return await callOnce(socketPath,op,timeoutMs);}
+    catch(error){
+      if(!error?.connectFailure||op.op!=='enqueue'||Date.now()>=until)throw error;
+      try{await readFile(path.join(path.dirname(socketPath),'upgrade-pause.json'),'utf8');}catch{throw error;}
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
+  }
+};

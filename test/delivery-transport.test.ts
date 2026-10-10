@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, unlink } from 'node:fs/promises'
+import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
@@ -64,9 +64,48 @@ test('a response timeout is not replayed over the loopback endpoint', async t =>
   const dir = await mkdtemp(join(tmpdir(), 'ez-delivery-timeout-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   let calls = 0
-  const server = await serveDeliverySocket(dir, async () => { calls++; return new Promise(() => {}) }, { tcpPort: 0 })
+  const server = await serveDeliverySocket(dir, async () => { calls++; await new Promise(resolve=>setTimeout(resolve,300)); return {accepted:true} }, { tcpPort: 0 })
   t.after(() => server.stop())
   assert.ok(server.endpoint)
   await assert.rejects(callDeliverySocket(deliverySocketPath(dir), { op: 'enqueue' }, 200), /Delivery relay unavailable/)
   assert.equal(calls, 1)
+})
+
+test('shutdown waits for an admitted enqueue before the final delivery drain',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-delivery-admission-'))
+ t.after(()=>rm(dir,{recursive:true,force:true}))
+ let release!:()=>void,entered!:()=>void,accepted=0,drained=0
+ const gate=new Promise<void>(resolve=>{release=resolve}),admitted=new Promise<void>(resolve=>{entered=resolve})
+ const server=await serveDeliverySocket(dir,async()=>{entered();await gate;accepted++;return {accepted:true}},{beforeClose:async()=>{drained=accepted}})
+ const request=callDeliverySocket(deliverySocketPath(dir),{op:'enqueue'})
+ await admitted
+ let stopped=false
+ const stop=server.stop().then(()=>{stopped=true})
+ await new Promise(resolve=>setTimeout(resolve,50))
+ assert.equal(stopped,false)
+ assert.equal(drained,0)
+ release()
+ assert.deepEqual(await request,{accepted:true})
+ await stop
+ assert.equal(drained,1)
+})
+
+
+test('a swap connection failure waits for the relay but an accepted timeout is never retried',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-delivery-swap-'))
+ t.after(()=>rm(dir,{recursive:true,force:true}))
+ await writeFile(join(dir,'upgrade-pause.json'),'{}')
+ const waiting=callDeliverySocket(deliverySocketPath(dir),{op:'enqueue'},1000)
+ await new Promise(r=>setTimeout(r,300))
+ let accepted=0
+ const server=await serveDeliverySocket(dir,async()=>({accepted:++accepted}))
+ t.after(()=>server.stop())
+ assert.deepEqual(await waiting,{accepted:1})
+ assert.equal(accepted,1)
+ await server.stop()
+ let attempted=0
+ const hanging=await serveDeliverySocket(dir,async()=>{attempted++;await new Promise(r=>setTimeout(r,200));return {accepted:true}})
+ t.after(()=>hanging.stop())
+ await assert.rejects(callDeliverySocket(deliverySocketPath(dir),{op:'enqueue'},40),/unavailable/)
+ assert.equal(attempted,1)
 })
