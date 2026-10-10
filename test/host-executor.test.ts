@@ -569,6 +569,25 @@ test('host transport runs a registered script from the run record and refuses ch
   }
 })
 
+test('a native process that settles during launch records completion without hanging the worker',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'ez-fast-native-')),workspace=path.join(root,'mind'),controlDir=path.join(root,'control')
+ await mkdir(workspace);await mkdir(controlDir)
+ const abort=new AbortController(),directory=path.join(controlDir,'host-executor')
+ const launch=async()=>{
+  const child=spawn(process.execPath,['-e','process.exit(0)'],{stdio:['pipe','pipe','pipe']})
+  await new Promise(resolve=>child.once('close',resolve))
+  return {child,cleanup:async()=>{},stdout:''}
+ }
+ const server=serveHostExecutor({cli:'grok',agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal,launch,async()=>[])
+ t.after(async()=>{abort.abort();await server;await rm(root,{recursive:true,force:true})})
+ for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+ await ownerRun(controlDir,'r_fast_native')
+ await writeFile(path.join(directory,'r_fast_native.request.json'),JSON.stringify({texts:['fast'],options:{cli:'grok'}}))
+ let events=''
+ for(let n=0;n<300;n++){try{events=await readFile(path.join(directory,'r_fast_native.events'),'utf8');if(events.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
+ assert.match(events,/"stream":"exit","code":0/)
+})
+
 test('retiring native generation preserves its run while the replacement claims new work once',async t=>{
  const root=await mkdtemp(path.join(tmpdir(),'ez-host-generation-'))
  const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),toolsHome=path.join(root,'tools')

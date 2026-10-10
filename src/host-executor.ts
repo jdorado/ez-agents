@@ -269,7 +269,11 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 job=await launch(request.texts,options)
               }
               active.set(base,job.child)
-              await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid,started:job.child.pid ? await processStart(job.child.pid) : undefined,hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}),{mode:0o600})
+              // Observe completion before process metadata I/O: a fast CLI may
+              // already have exited when launch returns, or while that I/O waits.
+              const closed=job.child.exitCode!==null||job.child.signalCode!==null
+                ? Promise.resolve(job.child.exitCode??1)
+                : new Promise<number>(resolve=>job!.child.once('close',code=>resolve(code??1)))
               if(signal.aborted)terminateJob(job.child)
               // Scheduled Claude streams every event; forward only the startup summary.
               const startup = observeClaude ? startupObserver() : undefined
@@ -280,8 +284,9 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 if (startup.summary() !== summary) { summary = startup.summary(); emit({stream:'stdout',text:summary+'\n'}) }
               })
               job.child.stderr?.on('data',chunk=>emit({stream:'stderr',text:chunk.toString()}))
+              await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid,started:job.child.pid ? await processStart(job.child.pid) : undefined,hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}),{mode:0o600})
               cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{}); const now=new Date();void utimes(base+'.events',now,now).catch(()=>{})},250)
-              const code=await new Promise<number>(resolve=>job!.child.once('close',code=>resolve(code??1)))
+              const code=await closed
               if (cancellation) clearInterval(cancellation)
               await job.cleanup()
               job = undefined
