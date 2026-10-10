@@ -103,7 +103,8 @@ test('isolated broker authenticates an owned run, pins plugin revision, and writ
     assert.deepEqual(JSON.parse(listed.stdout), { sample: 'sample' });
     const detailed = await request(f.socket, { version: 1, id: randomUUID(), operation: 'manager', runId: f.runId, args: ['tools', 'list', '--details'] });
     assert.equal(detailed.ok, true);
-    assert.deepEqual(JSON.parse(detailed.stdout).sample.commands, ['ez sample --help']);
+    assert.deepEqual(JSON.parse(detailed.stdout).sample.aliases, ['sample']);
+    assert.equal(JSON.parse(detailed.stdout).sample.example, 'ez sample --help');
     assert.deepEqual(JSON.parse(detailed.stdout).sample.skillReads, [['ez', 'tools', 'skill', 'sample', 'SKILL.md']]);
     const skill = await request(f.socket, { version: 1, id: randomUUID(), operation: 'manager', runId: f.runId, args: ['tools', 'skill', 'sample', 'SKILL.md'] });
     assert.equal(skill.code, 0);

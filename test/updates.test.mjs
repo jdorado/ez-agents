@@ -12,6 +12,7 @@ import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStal
 import { perform, environment, packageManager, backupStateDirectory, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
+import { TOOLS_LINE } from '../src/tools-line.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
 import { providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade, withUpgrade } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
@@ -314,15 +315,17 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  const status=await command(f.home,['status']);assert(!JSON.stringify(status).includes('private-test-token'));assert(!('rollback'in status.jobs[0]));
  assert.equal((await fs.stat(path.join(jobPath(f.home,job.id),'job.json'))).mode&0o777,0o600);
 });
-test('main activation and rollback bind guidance from the selected package root',async t=>{
- const success=await fixture(t);await bindUpdates(success.home,path.join(success.config.deploymentDir,'host-executor.json'),success.old);
- assert.equal(await fs.readFile(path.join(success.agent.workspace,'AGENTS.md'),'utf8'),'old guidance\n');
- assert.equal((await perform(success.home,await queued(success),runtime(success))).status,'completed');
- assert.equal(await fs.readFile(path.join(success.agent.workspace,'AGENTS.md'),'utf8'),'candidate guidance\n');
-
- const failed=await fixture(t);await bindUpdates(failed.home,path.join(failed.config.deploymentDir,'host-executor.json'),failed.old);
- assert.equal((await perform(failed.home,await queued(failed),runtime(failed,{fail:(_command,args)=>args.includes('up')}))).status,'rolled-back');
- assert.equal(await fs.readFile(path.join(failed.agent.workspace,'AGENTS.md'),'utf8'),'old guidance\n');
+test('main activation and rollback retire the tools footer and never write guidance',async t=>{
+ const footer='Owner mandate\n\n<!-- ez tools: begin -->\nUse `ez`.\n<!-- ez tools: end -->\n';
+ for(const outcome of ['completed','rolled-back']) {
+  const f=await fixture(t),instructions=path.join(f.agent.workspace,'AGENTS.md');await fs.writeFile(instructions,footer);
+  await bindUpdates(f.home,path.join(f.config.deploymentDir,'host-executor.json'),f.old);
+  const retired=await fs.readFile(instructions,'utf8');
+  assert.equal(retired,'Owner mandate\n\n'+TOOLS_LINE+'\n');
+  const options=outcome==='rolled-back'?{fail:(_command,args)=>args.includes('up')}:undefined;
+  assert.equal((await perform(f.home,await queued(f),runtime(f,options))).status,outcome);
+  assert.equal(await fs.readFile(instructions,'utf8'),retired);
+ }
 });
 test('latest overrides stale deployment pins and changing latest changes image bindings',async t=>{
  const tags=[],hashes=[];
@@ -477,7 +480,7 @@ test('bound dispatch follows active package root and retains private scope',asyn
  const bound=await bindUpdates(f.home,path.join(f.config.deploymentDir,'host-executor.json'));
  assert.match(bound.policy,/beta-channel/);
  assert.equal(await fs.readFile(path.join(f.agent.workspace,'TOOLS.md'),'utf8'),prior);
- assert.match(await fs.readFile(path.join(f.agent.workspace,'AGENTS.md'),'utf8'),/tools list --details/);
+ await assert.rejects(fs.access(path.join(f.agent.workspace,'AGENTS.md')),{code:'ENOENT'}); // binding never seeds guidance
  const config=await read(path.join(f.home,'config.json'));config.packageRoot=f.source;await atomic(path.join(f.home,'config.json'),config);
  // A native launcher from the real package looks up its entry point in the active root.
  await fs.writeFile(path.join(f.source,'bin/ezenciel-agents.mjs'),'#!/usr/bin/env node\nconsole.log(process.env.EZ_DEPLOYMENT_DIR+"|"+process.env.EZ_CONTROL_DIR)',{mode:0o755});

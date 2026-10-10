@@ -7,6 +7,7 @@ import {execFile,spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {promisify} from 'node:util';
 import {snapshot,init as initManager,validate,compose,locked,bindToolDiscovery,prepareCommand} from '../src/plugins/manager.mjs';
+import {TOOLS_LINE} from '../src/tools-line.mjs';
 import { ControlStore, ownerId, ownerEpoch } from '../src/control-state.js';
 import { ApplicationBindings } from '../src/application-channel.js';
 import { RunStore } from '../src/runs.js';
@@ -93,56 +94,43 @@ test('catalog paths resolve relative to the catalog and pin each new agent indep
  assert.notEqual(first.sample.revision,next.catalog.sample.revision);
  assert.deepEqual(JSON.parse((await f.call('plugins','available')).stdout),first);
 });
-test('native discovery binding preserves notes and adds bounded nonblocking routing guidance',async t=>{
- const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),notes=path.join(f.workspace,'TOOLS.md');
- await fs.writeFile(instructions,'Owner mandate\n');
+test('init never writes native instructions; the retired footer becomes the static tools line once',async t=>{
+ const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),override=path.join(f.workspace,'AGENTS.override.md');
  await init(f.home,f.workspace);
- await assert.rejects(fs.access(notes),{code:'ENOENT'});
- const first=await fs.readFile(instructions,'utf8');assert(first.startsWith('Owner mandate\n'));assert(first.includes(f.home+'/bin/ez'));
- assert.match(first,/tools list --details/);assert.match(first,/`--help`/);assert.match(first,/during a foreground owner turn, prefer `ezenciel-agents-schedule create --now \.\.\.`/);assert.match(first,/A `\[schedule \.\.\.\]` turn executes its assigned work directly and must not schedule it again/);assert.doesNotMatch(first,/ezenciel-agents-message|KISS/);
- const managed=first.slice(first.indexOf('<!-- ez tools: begin -->'),first.indexOf('<!-- ez tools: end -->')+'<!-- ez tools: end -->'.length);
- assert.ok(Buffer.byteLength(managed)<=600);
- await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(instructions,'utf8'),first);
- await fs.writeFile(notes,'Legacy policy');
- await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(notes,'utf8'),'Legacy policy');
- await fs.writeFile(path.join(f.workspace,'AGENTS.override.md'),'Override mandate');
- await bindToolDiscovery(f.home,f.workspace);assert.match(await fs.readFile(path.join(f.workspace,'AGENTS.override.md'),'utf8'),/Override mandate/);
+ await assert.rejects(fs.access(instructions),{code:'ENOENT'});
+ const footer='<!-- ez tools: begin -->\nUse `/x/bin/ez`.\n<!-- ez tools: end -->';
+ await fs.writeFile(instructions,`Owner mandate\n\n${footer}\n\nOwner tail\n`);await fs.writeFile(override,`Override mandate\n${footer}\n`);
+ await bindToolDiscovery(f.home,f.workspace);
+ const retired=await fs.readFile(instructions,'utf8');
+ assert.equal(retired,`Owner mandate\n\n${TOOLS_LINE}\n\nOwner tail\n`);
+ assert.equal(await fs.readFile(override,'utf8'),`Override mandate\n${TOOLS_LINE}\n`);
+ await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(instructions,'utf8'),retired); // once: idempotent
+ await fs.writeFile(instructions,`${TOOLS_LINE}\n${footer}\n`);await bindToolDiscovery(f.home,f.workspace);
+ assert.equal(await fs.readFile(instructions,'utf8'),`${TOOLS_LINE}\n\n`); // never duplicates the line
  await fs.writeFile(instructions,'<!-- ez tools: begin -->broken');
  await assert.rejects(bindToolDiscovery(f.home,f.workspace),/Malformed/);
  assert.equal(await fs.readFile(instructions,'utf8'),'<!-- ez tools: begin -->broken');
+ const notes=path.join(f.workspace,'TOOLS.md');await fs.writeFile(notes,footer);
  await fs.rm(instructions);await fs.symlink(notes,instructions);
  await assert.rejects(bindToolDiscovery(f.home,f.workspace),/regular file/);
- assert.equal(await fs.readFile(notes,'utf8'),'Legacy policy');
+ assert.equal(await fs.readFile(notes,'utf8'),footer);
 });
-test('isolated discovery uses the relay-bound ez client without exposing toolsHome',async t=>{
- const f=await fixture(t);await fs.mkdir(f.home);const workspace=await fs.realpath(f.workspace),controlDir=await fs.realpath(f.control),toolsHome=await fs.realpath(f.home),host={cli:'codex',isolation:'isolated',agents:[{name:'sample',workspace,controlDir,binDir:path.join(f.root,'bin'),toolsHome}]};
- await fs.mkdir(path.join(f.root,'bin'));await fs.writeFile(f.hostConfig,JSON.stringify(host));
- await init(f.home,f.workspace,undefined,f.hostConfig);
- const instructions=await fs.readFile(path.join(f.workspace,'AGENTS.md'),'utf8');assert.match(instructions,/Use `ez`/);assert.match(instructions,/`tools list --details`/);assert.doesNotMatch(instructions,new RegExp(f.home.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
-});
-test('discovery rejects an over-budget launcher before rewriting instructions',async t=>{
- const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),longHome=path.join(f.root,'h'.repeat(200),'n'.repeat(200));
- await fs.mkdir(longHome,{recursive:true});await fs.writeFile(instructions,'Owner mandate\n');
- await assert.rejects(bindToolDiscovery(longHome,f.workspace),/600-byte core budget/);
- assert.equal(await fs.readFile(instructions,'utf8'),'Owner mandate\n');
-});
-test('standalone init rejects over-budget guidance before creating activation state',async t=>{
- const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),longHome=path.join(f.root,'i'.repeat(200),'j'.repeat(200)),catalog=path.join(f.root,'empty-catalog.json');
- await fs.writeFile(catalog,'{}');await fs.writeFile(instructions,'Owner mandate\n');
- await assert.rejects(initManager(longHome,f.workspace,catalog,undefined,true),/600-byte core budget/);
- assert.deepEqual(await fs.readdir(longHome),[]);
- assert.equal(await fs.readFile(instructions,'utf8'),'Owner mandate\n');
+test('manifest example is one line starting with a declared command',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);
+ assert.doesNotThrow(()=>validate({...f.manifest,example:'sample search "q" --limit 3'},f.deployment,p.files));
+ for(const example of ['other --help','sample\nsecond','x'.repeat(161),3]) assert.throws(()=>validate({...f.manifest,example},f.deployment,p.files),/Manifest example/);
 });
 test('installed snippets follow install, upgrade and uninstall without files or Docker reads',async t=>{
  const f=await fixture(t);await init(f.home,f.workspace);
  const details=async()=>JSON.parse((await f.call('tools','list','--details')).stdout);
  assert.deepEqual(await details(),{});
  for(const description of ['Synthetic capability','Updated capability']) {
-  await fs.writeFile(path.join(f.source,'ez-plugin.json'),JSON.stringify({...f.manifest,description}));
+  const example=description==='Updated capability'?'sample run --json':undefined;
+  await fs.writeFile(path.join(f.source,'ez-plugin.json'),JSON.stringify({...f.manifest,description,example}));
   const p=await snapshot(f.source);
   await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
   const before=await fs.readFile(f.log,'utf8'),index=await details();
-  assert.equal(index.sample.description,description);assert.deepEqual(index.sample.commands,['ez sample --help']);
+  assert.deepEqual(index.sample.aliases,['sample']);assert.equal(index.sample.purpose,description);assert.equal(index.sample.example,`ez ${example??'sample --help'}`);
   assert.equal(await fs.readFile(index.sample.skills[0],'utf8'),'Synthetic');
   assert.deepEqual(index.sample.skillReads,[['ez','tools','skill','sample','SKILL.md']]);
   assert.deepEqual(JSON.parse((await f.call('tools','skill','sample','SKILL.md')).stdout),{plugin:'sample',revision:p.revision,path:'SKILL.md',content:'Synthetic'});
@@ -542,9 +530,7 @@ test('standalone CLI has discoverable setup, independent guidance and status wit
  const help=JSON.parse((await exec(process.execPath,[bin,'--help'])).stdout);
  assert.match(help.usage,/--standalone/);
  await exec(process.execPath,[bin,'init','--standalone','--home',f.home,'--workspace',f.workspace],{env:f.env});
- const notes=await fs.readFile(path.join(f.workspace,'AGENTS.md'),'utf8');
- assert.match(notes,/tools list --details/);
- assert.doesNotMatch(notes,/Finish the main Telegram|ezenciel-agents-message/);
+ await assert.rejects(fs.access(path.join(f.workspace,'AGENTS.md')),{code:'ENOENT'}); // instructions stay owner-written
  const launcher=path.join(f.home,'bin','ez');
  const status=JSON.parse((await exec(launcher,['status'],{cwd:f.root,env:f.env})).stdout);
  assert.equal(status.main,null);assert.deepEqual(status.plugins,[]);

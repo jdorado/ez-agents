@@ -39,6 +39,8 @@ export type RunRecord = {
   // Ordered task setups tried for this occurrence; the last one is active.
   attempts?: SetupAttempt[]
   replyOnly?: boolean
+  // Silent end-of-conversation turn in a replaced chat session (session-close.ts).
+  sessionClose?: true
   exitCode?: number | null
   failureReason?: string
   failure?: FailureEvidence
@@ -207,6 +209,7 @@ export class RunStore {
     application?: ApplicationOrigin
     delivery?: { bindingId: string; scope: string }
     script?: ScriptRunRef
+    sessionClose?: true
   }, exclusiveSchedule = false): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     if (input.id) {
@@ -239,6 +242,7 @@ export class RunStore {
       delivery: input.delivery,
       scheduled: input.scheduled,
       ...(input.script ? { script: input.script } : {}),
+      ...(input.sessionClose ? { sessionClose: true as const } : {}),
       status: 'queued',
       createdAt: new Date().toISOString(),
     }

@@ -27,8 +27,7 @@ node /absolute/ezenciel_agents/bin/ezenciel-agents-tools.mjs init \
 Without `--catalog`, init loads an empty packaged catalog. Keep it empty for
 initial main onboarding; no sibling repository, broker or provider account is
 needed. Finish owner pairing and verify an actual Telegram agent reply first.
-Init creates a private registry and `tools/bin/ez`, adds a
-managed AGENTS.md registry locator, and binds the matching host executor to that bin
+Init creates a private registry and `tools/bin/ez` and binds the matching host executor to that bin
 folder. Native binaries are linked through; the package's own `bin/ez` is replaced
 by that bound launcher, while an unrelated existing `ez` collision fails.
 Both host-bound and isolated `ez --help` list installed native scheduling and delivery helpers
@@ -414,10 +413,12 @@ QMD runtimes or edit installed Compose/package files to bypass missing support.
 
 ## Generated capability discovery
 
-`ez tools list --details` generates a compact index directly from installed
-`ez-plugin.json` manifests: each plugin supplies its `description`, command aliases
-and `skills`. Descriptions are limited to 200 characters in this view; full
-instructions stay in the skill. Installation, replacement and removal are reflected
+`ez tools list --details` generates a self-sufficient index directly from
+installed `ez-plugin.json` manifests. Per plugin it prints `aliases`, a one-line
+`purpose` (the manifest `description`, at most 200 characters), absolute `skills`
+paths and one `example` call. The optional manifest `example` is one line of at
+most 160 characters starting with a declared command alias; without it the
+example is `ez <first alias> --help`. Full instructions stay in the skill. Installation, replacement and removal are reflected
 on the next read, without hooks, LLM calls or a cached inventory file.
 
 The additive `skillReads` field supplies literal argument arrays for
@@ -426,8 +427,8 @@ installed plugin revision, declared path and skill content. Use it in isolated
 agents, where host package paths are private. It reads only the installed
 manifest's skills; arbitrary files, symlinks and files over 64 KiB are rejected.
 
-`ez tools list` retains its alias mapping for existing clients. Native AGENTS.md
-contains only the agent-bound discovery shortcut. New workspaces do not seed
+`ez tools list` retains its alias mapping for existing clients. The workspace
+seed writes one static line pointing here; nothing else is written. New workspaces do not seed
 TOOLS.md, SOUL.md, USER.md, or an `inbox/`/`work/` layout; upgrades preserve
 legacy notes without rewriting them. Keep owner/account policies in agent
 instructions or linked policy files, separate from plugin metadata.

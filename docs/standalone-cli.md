@@ -22,14 +22,14 @@ node /absolute/package/bin/ezenciel-agents-tools.mjs init --standalone \
 /absolute/private/company-tools/bin/ez plugins list
 ```
 
-Init starts nothing, uses an empty catalog by default, preserves existing
-workspace notes and adds a managed registry locator to AGENTS.md. A registry
+Init starts nothing, uses an empty catalog by default and never writes
+workspace instructions. A registry
 cannot be replaced by rerunning init. Keep the package at its original path:
 the launcher imports it. Status reports `main: null` without a relay binding;
 automated software upgrades currently require a relay deployment.
 
-Use `ez tools list --details` for generated installed-plugin descriptions, help shortcuts and absolute skill paths. Read only the relevant skill.
-Add that instruction to its existing project instructions without replacing them.
+Use `ez tools list --details` for each installed plugin's aliases, purpose, skill paths and one example call. Read only the relevant skill.
+Add "Tools: run `ez tools list --details`; each plugin's `--help` gives usage." to the project's existing instructions, with `ez` resolving to the returned launcher.
 Use the absolute launcher, or prepend its bin directory to that session's PATH.
 Never overwrite another global `ez`; it may belong to a different installation.
 A standalone company registry remains explicit even when invoked from a different

@@ -255,19 +255,15 @@ handbook from workspace `AGENTS.md` (and existing `AGENTS.override.md`).
 Personal text outside that block is preserved byte-for-byte. Do not reinsert
 coding, KISS, contribution or repair loops into operating minds.
 
-The package-owned guidance is the managed `<!-- ez tools -->` block: the bound
-`ez` launcher, `ez --help`, `ez tools list --details`, and one routing hint for
-foreground owner turns to prefer `ezenciel-agents-schedule create --now` when work
-can continue independently without blocking interaction. The hint tells scheduled
-turns to execute their assigned work directly instead of rescheduling themselves.
-Inventory and full scheduler usage are generated on read. Plugin registry init and update binding refresh that block.
-Malformed markers and symlinks fail visibly rather than overwriting personal work.
-Upgrade and rollback render the block through the exact package root being activated,
-so an already-running package cannot leave stale guidance behind.
+Ez writes no managed guidance after the initial workspace seed. Update binding
+(init with a host config, `enable-updates`, upgrade and rollback) replaces a former
+`<!-- ez tools -->` footer once with the seeded static line
+"Tools: run `ez tools list --details`; each plugin's `--help` gives usage." and
+otherwise leaves `AGENTS.md` untouched. Malformed markers and symlinks fail visibly
+rather than overwriting personal work. Inventory and usage are generated on read.
 
-Codex, Grok and OpenCode discover workspace instructions natively. Claude
-receives the native `--append-system-prompt-file` binding to `AGENTS.md`, alongside
-its own normal instructions. Fresh and resumed owner input is literal; ez does
+Codex, Grok, OpenCode and Claude Code discover workspace `AGENTS.md` natively
+(Claude Code loads it when the workspace has no `CLAUDE.md`). Fresh and resumed owner input is literal; ez does
 not surround it with policies, tool recipes, repair instructions or history.
 The native engine owns instruction loading and its context/token overhead.
 Already running sessions retain their current context until native reload.
