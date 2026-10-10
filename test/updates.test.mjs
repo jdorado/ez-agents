@@ -573,10 +573,10 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';await atomic(path.join(jobPath(f.home,job.id),'job.json'),interrupted);
  await atomic(path.join(f.home,'registry.lock'),{pid:second.p.pid});
  const closed2=new Promise(r=>second.p.once('close',r));second.p.kill('SIGKILL');await closed2;
- const third=start();t.after(()=>third.p.kill('SIGTERM'));
+ const third=start(),closed3=new Promise(r=>third.p.once('close',r));t.after(()=>third.p.kill('SIGTERM'));
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));return j.status==='rolled-back';});
  assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
- const closed3=new Promise(r=>third.p.once('close',r));third.p.kill('SIGTERM');assert.equal(await closed3,0,third.output());
+ third.p.kill('SIGTERM');assert.equal(await closed3,0,third.output());
 });
 
 test('queued upgrades keep admission open while busy and release a raced or aborted pause',async t=>{
