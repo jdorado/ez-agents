@@ -56,6 +56,9 @@ test('a graceful relay stop hands running host work to the next relay, which rec
     await rename(join(host, id + '.request.json'), join(host, id + '.running.json'))
     await appendFile(join(host, id + '.events'), JSON.stringify({ stream: 'stdout', text: 'working\n' }) + '\n')
   }
+  const delivered=await first.enqueueMessage(scheduled.id,'Delivered before replacement')
+  await first.claimOutbox(delivered.id)
+  await first.markOutboxSent(delivered.id,[17])
   await before.stop()
   assert.equal((await stat(join(dir, 'run-handoff.json'))).mode & 0o777, 0o600)
   const handoff = JSON.parse(await readFile(join(dir, 'run-handoff.json'), 'utf8'))
@@ -72,6 +75,7 @@ test('a graceful relay stop hands running host work to the next relay, which rec
     await after.adoptHandoff()
     await assert.rejects(readFile(join(dir, 'run-handoff.json')), { code: 'ENOENT' })
     assert.deepEqual((await runs.list()).map(run => run.status), ['running', 'running'])
+    assert.deepEqual(await runs.waitForDelivery(delivered.id,100),await first.waitForDelivery(delivered.id,100))
     // The new ledger accepts the run's result delivery and holds its recurring schedule.
     assert.ok(await runs.enqueueMessage(scheduled.id, 'Result after replacement'))
     await scheduler.tick(owner, runs, due + 60_000); await after.drainSources()

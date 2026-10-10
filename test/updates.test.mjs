@@ -760,3 +760,29 @@ test('changed single-file broker binding retains full native drain and broker re
  assert.equal((await perform(f.home,job,{...r,refreshPluginBroker:true})).status,'completed');
  assert.equal(r.calls.filter(call=>call.includes('--force-recreate')).length,1);
 });
+
+test('handoff-compatible core upgrade builds with native work active and retires only at activation',async t=>{
+ const f=await fixture(t),job=await queued(f),r=runtime(f)
+ await fs.mkdir(path.join(f.agent.controlDir,'host-executor'),{recursive:true})
+ const claim=path.join(f.agent.controlDir,'host-executor','r_native.running.json')
+ await fs.writeFile(claim,'active native occurrence')
+ r.preserveRuns=true;r.retireHost=async()=>{assert.equal((await read(path.join(f.agent.controlDir,'upgrade-pause.json'))).id,job.id);r.calls.push(['retireHost'])}
+ const execute=r.execute
+ r.execute=async(command,args,options)=>{
+  if(args.includes('build')){await fs.access(claim);await assert.rejects(fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')),{code:'ENOENT'});await assert.rejects(fs.access(path.join(f.home,'registry.lock')),{code:'ENOENT'})}
+  return execute(command,args,options)
+ }
+ assert.equal((await withUpgrade(f.agent.controlDir,job,new AbortController().signal,()=>perform(f.home,job,r),{preserveRuns:true,isIdle:async()=>false})).status,'completed')
+ assert.equal(r.calls.filter(c=>c[0]==='retireHost').length,1)
+ assert.ok(!r.calls.some(c=>c[0]==='stopHost'))
+ assert.equal(await fs.readFile(claim,'utf8'),'active native occurrence')
+ await assert.rejects(fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')),{code:'ENOENT'})
+})
+
+test('failed handoff-compatible activation retires the candidate and rolls back without stopping native runs',async t=>{
+ const f=await fixture(t),job=await queued(f),r=runtime(f,{fail:(_command,args)=>args.includes('up')})
+ r.preserveRuns=true;r.retireHost=async()=>r.calls.push(['retireHost'])
+ assert.equal((await perform(f.home,job,r)).status,'rolled-back')
+ assert.equal(r.calls.filter(c=>c[0]==='retireHost').length,2)
+ assert.ok(!r.calls.some(c=>c[0]==='stopHost'))
+})

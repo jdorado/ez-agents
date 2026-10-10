@@ -294,7 +294,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     assert.equal(await workspaceLease(agents[0].toolsHome),undefined)
     await ownerRun(agents[0].controlDir,'tg_43')
     await writeFile(path.join(directory,'tg_43.request.json'),JSON.stringify({texts:['Hold chat'],options:{cli:'grok'}}))
-    for(let n=0;n<100;n++){try{await readFile(path.join(directory,'tg_43.process.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+    for(let n=0;n<100;n++){try{if(JSON.parse(await readFile(path.join(directory,'tg_43.process.json'),'utf8')).pid)break}catch{await new Promise(r=>setTimeout(r,20))}}
     await readFile(path.join(directory,'tg_43.running.json'))
     assert.doesNotMatch(await readFile(path.join(directory,'r_hold.events'),'utf8'),/"stream":"exit"/)
     await readFile(path.join(directory,'r_hold.running.json'))
@@ -567,4 +567,46 @@ test('host transport runs a registered script from the run record and refuses ch
     if(oldToken===undefined)delete process.env.TELEGRAM_BOT_TOKEN;else process.env.TELEGRAM_BOT_TOKEN=oldToken
     await rm(root,{recursive:true,force:true})
   }
+})
+
+test('retiring native generation preserves its run while the replacement claims new work once',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'ez-host-generation-'))
+ const workspace=path.join(root,'mind'),controlDir=path.join(root,'control'),toolsHome=path.join(root,'tools')
+ await mkdir(workspace);await mkdir(toolsHome);await mkdir(controlDir)
+ await writeFile(path.join(toolsHome,'config.json'),JSON.stringify({schemaVersion:1,workspace:await realpath(workspace)}))
+ const agent={name:'qa',workspace,controlDir,toolsHome,binDir:root},installation={cli:'grok',agents:[agent]}
+ const stopA=new AbortController(),stopB=new AbortController(),retireA=new AbortController()
+ const children=new Map<string,ReturnType<typeof spawn>>(),launched:string[]=[]
+ const launch=async(_texts:string[],options:any)=>{
+  launched.push(options.runId)
+  const child=spawn(process.execPath,['-e',"process.stdin.resume();process.stdin.once('data',()=>process.exit(0));"],{stdio:['pipe','pipe','pipe']})
+  children.set(options.runId,child)
+  return {child,cleanup:async()=>{},stdout:''}
+ }
+ let a:Promise<void>|undefined,b:Promise<void>|undefined
+ t.after(async()=>{stopA.abort();stopB.abort();for(const child of children.values())child.stdin?.end('done');await Promise.all([a,b]);await rm(root,{recursive:true,force:true})})
+ const directory=path.join(controlDir,'host-executor')
+ const wait=async(check:()=>Promise<boolean>)=>{for(let n=0;n<300;n++){if(await check())return;await new Promise(r=>setTimeout(r,20))}assert.fail('generation did not reach expected state')}
+ const exists=(file:string)=>readFile(file).then(()=>true,()=>false)
+ a=serveHostExecutor(installation,stopA.signal,launch,async()=>[],retireA.signal)
+ await wait(()=>exists(path.join(directory,'heartbeat.json')))
+ await ownerRun(controlDir,'r_old_generation')
+ await writeFile(path.join(directory,'r_old_generation.request.json'),JSON.stringify({texts:['old'],options:{cli:'grok'}}))
+ await wait(async()=>children.has('r_old_generation'))
+ retireA.abort()
+ await wait(async()=>!await exists(path.join(directory,'worker.lock')))
+ assert.equal(children.get('r_old_generation')!.exitCode,null)
+ b=serveHostExecutor(installation,stopB.signal,launch,async()=>[])
+ await wait(()=>exists(path.join(directory,'worker.lock')))
+ await ownerRun(controlDir,'r_new_generation')
+ await writeFile(path.join(directory,'r_new_generation.request.json'),JSON.stringify({texts:['new'],options:{cli:'grok'}}))
+ await wait(async()=>children.has('r_new_generation'))
+ assert.deepEqual(launched,['r_old_generation','r_new_generation'])
+ children.get('r_old_generation')!.stdin!.end('done')
+ await a
+ assert.ok(await exists(path.join(directory,'worker.lock')),'retiring host must not delete replacement lock')
+ assert.match(await readFile(path.join(directory,'r_old_generation.events'),'utf8'),/"stream":"exit","code":0/)
+ children.get('r_new_generation')!.stdin!.end('done')
+ await wait(async()=>(await readFile(path.join(directory,'r_new_generation.events'),'utf8')).includes('"stream":"exit"'))
+ assert.match(await readFile(path.join(directory,'r_new_generation.events'),'utf8'),/"stream":"exit","code":0/)
 })

@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { atomic, locked } from '../plugins/manager.mjs';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
 import { state, read, jobs, jobPath, check, prepare, submit, missing, cleanupStaleBackups } from './control.mjs';
-import { perform, environment, brokerNeedsRefresh } from './runtime.mjs';
+import { perform, environment, brokerNeedsRefresh, execute, relayArgs } from './runtime.mjs';
 
 const reservedProviderKeys=new Set(['HOME','LANG','LC_ALL','LOGNAME','PATH','SHELL','TERM','TMPDIR','USER','CODEX_HOME','NODE_OPTIONS']);
 const providerEnvironmentKey=value=>{
@@ -54,7 +54,7 @@ export async function withIdleUpgrade(control,job,signal,apply,{isIdle=idle,wait
 }
 // Plugin replacement drains command leases at activation, not native turns.
 export async function withUpgrade(control,job,signal,apply,options) {
-  if(job.target==='main'||options?.requiresIdle)return withIdleUpgrade(control,job,signal,apply,options);
+  if((job.target==='main'&&!options?.preserveRuns)||options?.requiresIdle)return withIdleUpgrade(control,job,signal,apply,options);
   if(!signal.aborted)return apply();
 }
 export async function queueAutomatic(home,available) {
@@ -84,19 +84,84 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   if(prior&&(!Number.isSafeInteger(prior.pid)||prior.pid<1))throw Error('Corrupt supervisor lock');
   if(prior){try{process.kill(prior.pid,0);throw Error('Supervisor already running');}catch(e){if(e.code!=='ESRCH')throw e;}await fs.rm(lock);}
   await fs.writeFile(lock,JSON.stringify({pid:process.pid}),{flag:'wx',mode:0o600});
-  let child;
+  let child,container;
+  let retirements=[];
+  let reloadPending=false;
+  const generations=new Map();
+  const removeContainer=async id=>{
+    const generation=generations.get(id);
+    if(generation){await execute('docker',['compose','--project-name',generation.project,'--file',generation.file,'down']);await fs.rm(generation.file,{force:true});await fs.rm(generation.configFile,{force:true});generations.delete(id);}
+    else await execute('docker',['rm',id]);
+  };
   const stopHost=async()=>{
+    if(container){await execute('docker',['stop','--time','10',container]);await removeContainer(container);container=undefined;}
     if(!child)return;const running=child;child=undefined;
     if(running.exitCode!==null)return;
     const closed=new Promise(resolve=>running.once('close',resolve));running.kill('SIGTERM');
     const timer=setTimeout(()=>running.kill('SIGKILL'),10000);await closed;clearTimeout(timer);
   };
   const startHost=async root=>{
-    if(host.isolation==='isolated')return
+    if(host.isolation==='isolated') {
+      const pkg=await read(path.join(root,'package.json'));
+      if(pkg.ezRelease?.containerExecutor!==1)return;
+      const lock=path.join(agent.controlDir,'host-executor/worker.lock');
+      const prior=await read(lock).catch(missing);
+      if(prior?.containerId){
+        if(!/^[a-f0-9]{12,64}$/.test(prior.containerId))throw Error('Invalid previous isolated worker identity');
+        const running=await execute('docker',['inspect','--format','{{.State.Running}}',prior.containerId],{stdoutOnly:true}).catch(()=>null);
+        if(running?.trim()==='true')throw Error('Previous isolated worker is still running');
+        // Only the supervisor can prove a foreign container stopped.
+        if(JSON.stringify(await read(lock))!==JSON.stringify(prior))throw Error('Worker lock changed during recovery');
+        await fs.rm(lock);
+      }
+      const config=(await state(home)).config;
+      const deployment=JSON.parse(await execute('docker',[...relayArgs(config),'config','--format','json'],{stdoutOnly:true}));
+      const relay=deployment.services.relay;
+      if(!relay?.image||!Array.isArray(relay.volumes))throw Error('Invalid isolated relay binding');
+      const generation=path.basename(root).replace(/[^a-zA-Z0-9_.-]/g,'-')+'-'+Date.now();
+      const project='ez-executor-'+generation.toLowerCase();
+      const file=path.join(directory,project+'.json');
+      const configFile=path.join(directory,project+'-binding.json');
+      await atomic(configFile,{...host,agents:host.agents.map(a=>({...a,binDir:'/app/bin'}))});
+      const worker={image:relay.image,init:true,restart:'no',user:`${relay.environment.EZ_RUNTIME_UID||1000}:${relay.environment.EZ_RUNTIME_GID||1000}`,
+        cap_drop:['ALL'],security_opt:['no-new-privileges:true'],entrypoint:['node','--import','/app/node_modules/tsx/dist/loader.mjs','/app/src/host-executor.ts','/run/executor.json'],
+        environment:{...relay.environment,EZ_CONTAINER_EXECUTOR:'1',EZ_EXECUTOR_TRANSPORT:'local'},
+        volumes:[...relay.volumes,{type:'bind',source:configFile,target:'/run/executor.json',read_only:true}],tmpfs:['/tmp']};
+      await atomic(file,{services:{executor:worker}});
+      await execute('docker',['compose','--project-name',project,'--file',file,'up','-d','--no-build','executor']);
+      container=(await execute('docker',['compose','--project-name',project,'--file',file,'ps','-q','executor'],{stdoutOnly:true})).trim();
+      if(!/^[a-f0-9]{12,64}$/.test(container))throw Error('Missing isolated executor');
+      generations.set(container,{project,file,configFile});
+      for(let n=0;n<300;n++){
+        const running=await execute('docker',['inspect','--format','{{.State.Running}}',container],{stdoutOnly:true});
+        if(running.trim()!=='true')throw Error('Isolated executor exited during startup');
+        const heartbeat=await read(path.join(agent.controlDir,'host-executor/heartbeat.json')).catch(missing);
+        if(heartbeat?.containerExecutor===true&&container.startsWith(heartbeat.containerId||'missing')&&Date.now()-heartbeat.at<1000)return;
+        await sleep(100);
+      }
+      throw Error('Isolated executor heartbeat timeout');
+    }
     child=spawn(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'src/host-executor.ts'),path.join(deployment,'host-executor.json')],
-      {env:{...environment(),...providerEnvironment(host),EZ_HOST_SUPERVISOR_PID:String(process.pid)},stdio:['ignore','inherit','inherit']});
+      {detached:true,env:{...environment(),...providerEnvironment(host),EZ_HOST_SUPERVISOR_PID:String(process.pid)},stdio:['ignore','inherit','inherit']});
     let error;child.once('error',e=>{error=e;});
     await waitForHostHeartbeat(agent.controlDir,child,()=>error);
+  };
+  const retireHost=async()=>{
+    if(container){await execute('docker',['kill','--signal','SIGUSR2',container]);retirements.push({container});container=undefined;}
+    if(child){const running=child;child=undefined;if(running.exitCode===null){running.kill('SIGUSR2');retirements.push({child:running});}}
+    // A retiring generation releases its single claim lock before replacement.
+    for(let n=0;n<300;n++){
+      if(!await fs.stat(path.join(agent.controlDir,'host-executor/worker.lock')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e;}))return;
+      await sleep(100);
+    }
+    throw Error('Native executor retirement timeout');
+  };
+  const preserveRuns=async job=>{
+    if(job.target!=='main')return false;
+    const old=await read(path.join((await state(home)).config.packageRoot,'package.json'));
+    const candidate=await read(path.join(jobPath(home,job.id),'package/package.json'));
+    return old.ezRelease?.runHandoff===1&&candidate.ezRelease?.runHandoff===1&&
+      (host.isolation!=='isolated'||(old.ezRelease?.containerExecutor===1&&candidate.ezRelease?.containerExecutor===1));
   };
   const pause=path.join(agent.controlDir,'upgrade-pause.json');
   const refreshRequirement=async job=>{
@@ -124,31 +189,38 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       const refreshPluginBroker=await refreshRequirement(interrupted);
       const result=refreshPluginBroker===null?undefined:interrupted.target==='main'
         ? await (async()=>{await atomic(pause,{id:interrupted.id});try{return await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));}finally{await fs.rm(pause,{force:true});}})()
-        : await withUpgrade(agent.controlDir,interrupted,signal,()=>perform(home,interrupted,{stopHost,startHost,signal,refreshPluginBroker}),{requiresIdle:refreshPluginBroker});
-      if(result?.status==='completed'&&interrupted.target==='main')return;
+        : await withUpgrade(agent.controlDir,interrupted,signal,()=>perform(home,interrupted,{stopHost,startHost,retireHost,signal,refreshPluginBroker}),{requiresIdle:refreshPluginBroker});
+      if(['completed','rolled-back'].includes(result?.status)&&interrupted.target==='main')reloadPending=true;
     }
     const isolated=host.isolation==='isolated'
-    if(!isolated && !child)await startHost((await state(home)).config.packageRoot);
+    if(!child && !container)await startHost((await state(home)).config.packageRoot);
     let nextCheck=0;
     while(!signal.aborted) {
       if(!isolated && child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
-      const pending=(await jobs(home)).find(j=>j.status==='queued');
+      if(container&&(await execute('docker',['inspect','--format','{{.State.Running}}',container],{stdoutOnly:true})).trim()!=='true')throw Error('Isolated executor exited; supervisor service should restart');
+      if(reloadPending&&await idle(agent.controlDir))return;
+      // Reap retired containers only after their worker exits.
+      for(const item of retirements.filter(r=>r.container)){
+        if((await execute('docker',['inspect','--format','{{.State.Running}}',item.container],{stdoutOnly:true})).trim()==='false'){await removeContainer(item.container);retirements=retirements.filter(r=>r!==item);}
+      }
+      const pending=!reloadPending&&(await jobs(home)).find(j=>j.status==='queued');
       if(pending) {
         const refreshPluginBroker=await refreshRequirement(pending);
         if(refreshPluginBroker===null)continue;
+        const preserve=await preserveRuns(pending);
         const apply=async()=>{
           try {
-            const activate=async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));return perform(home,latest,{stopHost,startHost,signal,refreshPluginBroker});};
-            return pending.target==='main'?await locked(home,activate,{drainInvocations:true,signal}):await activate();
+            const activate=async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));return perform(home,latest,{stopHost,startHost,retireHost,signal,refreshPluginBroker,preserveRuns:preserve});};
+            return pending.target==='main'&&!preserve?await locked(home,activate,{drainInvocations:true,signal}):await activate();
           } catch(error) {
             // A pre-switch rejection is terminal. Applying jobs keep their journal for recovery.
             const latest=await read(path.join(jobPath(home,pending.id),'job.json'));
             if(latest.status==='queued'){latest.status='failed';latest.error=error.message;await atomic(path.join(jobPath(home,pending.id),'job.json'),latest);}else throw error;
           }
         };
-        const result=await withUpgrade(agent.controlDir,pending,signal,apply,{requiresIdle:refreshPluginBroker});
-        if(result?.status==='completed') {
-          if(pending.target==='main')return;
+        const result=await withUpgrade(agent.controlDir,pending,signal,apply,{requiresIdle:refreshPluginBroker,preserveRuns:preserve});
+        if(['completed','rolled-back'].includes(result?.status)) {
+          if(pending.target==='main')reloadPending=true;
           nextCheck=0;
         }
       }
@@ -166,7 +238,8 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       await sleep(500);
     }
   }finally {
-    clearInterval(beat);await stopHost();await fs.rm(lock,{force:true});
+    clearInterval(beat);await stopHost();
+    for(const item of retirements){if(item.container){await execute('docker',['stop','--time','10',item.container]);await removeContainer(item.container);}else if(item.child.exitCode===null)item.child.kill('SIGTERM');}await fs.rm(lock,{force:true});
     if(!(await jobs(home)).some(j=>j.status==='applying'))await fs.rm(pause,{force:true});
   }
 }

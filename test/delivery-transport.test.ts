@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, unlink } from 'node:fs/promises'
+import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
@@ -69,4 +69,24 @@ test('a response timeout is not replayed over the loopback endpoint', async t =>
   assert.ok(server.endpoint)
   await assert.rejects(callDeliverySocket(deliverySocketPath(dir), { op: 'enqueue' }, 200), /Delivery relay unavailable/)
   assert.equal(calls, 1)
+})
+
+
+test('a swap connection failure waits for the relay but an accepted timeout is never retried',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-delivery-swap-'))
+ t.after(()=>rm(dir,{recursive:true,force:true}))
+ await writeFile(join(dir,'upgrade-pause.json'),'{}')
+ const waiting=callDeliverySocket(deliverySocketPath(dir),{op:'enqueue'},1000)
+ await new Promise(r=>setTimeout(r,300))
+ let accepted=0
+ const server=await serveDeliverySocket(dir,async()=>({accepted:++accepted}))
+ t.after(()=>server.stop())
+ assert.deepEqual(await waiting,{accepted:1})
+ assert.equal(accepted,1)
+ await server.stop()
+ let attempted=0
+ const hanging=await serveDeliverySocket(dir,async()=>{attempted++;await new Promise(r=>setTimeout(r,200));return {accepted:true}})
+ t.after(()=>hanging.stop())
+ await assert.rejects(callDeliverySocket(deliverySocketPath(dir),{op:'enqueue'},40),/unavailable/)
+ assert.equal(attempted,1)
 })

@@ -176,9 +176,9 @@ export const serveDeliverySocket = async (
     socketPath,
     endpoint,
     stop: async () => {
-      await new Promise<void>((resolve) => server.close(() => resolve()))
+      await Promise.all([new Promise<void>((resolve) => server.close(() => resolve())),
+        ...(tcpServer ? [new Promise<void>((resolve) => tcpServer!.close(() => resolve()))] : [])])
       await rm(socketPath, { force: true }).catch(() => {})
-      if (tcpServer) await new Promise<void>((resolve) => tcpServer.close(() => resolve()))
       if (tcpEndpoint) await rm(path.join(controlDir, endpointFile), { force: true }).catch(() => {})
     },
   }

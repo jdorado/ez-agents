@@ -340,22 +340,32 @@ export const executorInvocation = (command: string, args: string[]) => {
     : { command, args }
 }
 
+// The isolated worker uses the same file transport as the host worker, but
+// stays in its own container. A published worker binding must never fall back
+// to local execution when its heartbeat expires.
+export const usesFileTransport = async (controlDir: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> => {
+  if (env.EZ_CONTAINER_EXECUTOR === '1') return false
+  if (env.EZ_EXECUTOR_TRANSPORT === 'host') return true
+  try { return JSON.parse(await readFile(path.join(controlDir,'host-executor/heartbeat.json'),'utf8')).containerExecutor === true }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; return false }
+}
+
 export const startExecutorJob = async (
   texts: string[],
   options: ExecutorOptions,
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
-  if (options.script && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startScriptJob(options as ExecutorOptions & { script: ScriptLaunch })
+  const host = await usesFileTransport(options.controlDir)
+  if (options.script && !host) return startScriptJob(options as ExecutorOptions & { script: ScriptLaunch })
   options = executionDefaults(executorKey(options.cli), options)
   // Named credential homes are owner-provisioned; fail closed before any launch state.
   if (options.authProfile !== undefined) await provisionedHome(options.controlDir, executorKey(options.cli), options.authProfile)
   // Routing is caller-owned: a restricted task run goes to the task runner
   // unless the host transport must ship it across the boundary first.
-  if (options.taskRun && process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return startTaskExecutor(options)
+  if (options.taskRun && !host) return startTaskExecutor(options)
   if (options.nativeSession && !/^[a-zA-Z0-9_-]+$/.test(options.runId)) throw new Error('Invalid native task run ID')
   if (options.codexSandbox !== undefined && (options.codexSandbox !== 'external' || process.env.EZ_EXECUTOR_TRANSPORT !== 'local' || options.taskRun || executorKey(options.cli) !== 'codex')) throw new Error('External Codex sandbox requires an owner-authorized native local run')
   const outputDirectory = await mkdtemp(path.join(tmpdir(), 'ezenciel-agents-'))
   const key = executorKey(options.cli)
-  const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   const gui = !host && key === 'codex-gui'
   const nativeSession = !host && key === 'codex' && options.nativeSession === true
   // Literal input plus the caller-provided trigger line. No coaching,
