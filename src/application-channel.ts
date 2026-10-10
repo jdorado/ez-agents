@@ -239,9 +239,7 @@ export class ApplicationChannel {
       const model = catalogSelection(value, await controls.catalog())
       preset = await controls.saveSelection(model,value.effort as string|undefined,guard)
     }
-    const previous = await control.applicationSession(hashedScope)
-    const next = await control.changeApplicationSession(hashedScope,guard,preset)
-    if (previous && next.sessionId !== previous.sessionId) await this.options.closeSession?.(previous)
+    await control.changeApplicationSession(hashedScope,guard,preset)
     return this.scopeControls(bindingId,scope)
   }
   async submit(bindingId: string, input: unknown): Promise<RunRecord> {

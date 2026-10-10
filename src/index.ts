@@ -85,8 +85,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // A busy relay starts it after the active run, ahead of newer chat input.
   const closeSession = async (session: SessionState | null): Promise<void> => {
     if (config.channelBackendUrl) return
-    const run = await queueSessionClose(runs, (await control.status()).owner, session)
-    if (run) void startJob(run).catch((error) => console.error('Conversation close failed to start', safeError(error)))
+    // The replacement is already saved; a failed close must not fail that reply.
+    try {
+      const run = await queueSessionClose(runs, (await control.status()).owner, session)
+      if (run) void startJob(run).catch((error) => console.error('Conversation close failed to start', safeError(error)))
+    } catch (error) { console.error('Conversation close failed to queue', safeError(error)) }
   }
 
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
