@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +11,7 @@ import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
 import { serveTestLedger } from './helpers/ledger.js'
 import { Scheduler } from '../src/scheduler.js'
+import { Scripts } from '../src/scripts.js'
 import { callDeliverySocket, socketPathFor } from '../src/delivery-socket.js'
 const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
 test('public scheduler CLI saves literal text, reads back, edits, pauses, and rejects external or finished callers',async t=>{
@@ -64,6 +65,28 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
  assert.equal(held.nextEligibleAt,null);assert.deepEqual(held.interruptedRunIds,[interrupted.id])
  await runs.patch(run.id,{status:'completed'})
  await assert.rejects(exec(process.execPath,[bin,'list'],{env}),/owner-authorized/)
+})
+
+test('edit keeps a paused agent or script schedule paused and an enabled one enabled',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-schedule-edit-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
+ const control=new ControlStore(dir,1000),workspace=join(dir,'workspace')
+ await control.requestPairing(101,101);await control.approveOwner(101)
+ await mkdir(workspace);await writeFile(join(workspace,'guard.mjs'),'')
+ await new Scripts(dir).save({id:'guard',owner:(await control.status()).owner!,workspace,entry:'guard.mjs',interpreter:'node',args:[],timeoutSeconds:60},true)
+ const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:''}
+ const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
+ const tasks={agent:(text:string)=>['--model','gpt-6-astra','--text',text],script:(name:string)=>['--script','guard','--name',name]}
+ for(const [id,task] of Object.entries(tasks)){
+  await cli('create',id,...task('Original'),'--every-seconds','3600')
+  await cli('pause',id)
+  // Changing only the instructions, even with --now, must not resume or dispatch it.
+  const paused=await cli('edit',id,...task('Changed'),'--now')
+  assert.equal(paused.enabled,false);assert.equal(paused.nextEligibleAt,null)
+  assert.equal((await cli('show',id)).enabled,false)
+  await cli('resume',id)
+  assert.equal((await cli('edit',id,...task('Again'),'--every-seconds','3600')).enabled,true)
+ }
 })
 
 test('executor PATH exposes the extensionless scheduler command',async()=>{

@@ -83,7 +83,8 @@ The run records each attempt, setup, failure category and any reported reset tim
 Trigger runs an existing task once with its saved instructions, AI and delivery binding in a fresh session. Reuse the request key after an uncertain result; the regular schedule is unchanged.
 Creates a scheduled task. Instructions are text, never shell commands.
 Use --now to run once. Run completion is not delivery proof.
-Edit replaces the full schedule. Pause/remove affect future work; cancel stops a particular run.
+Edit replaces the full schedule but keeps its paused/enabled state; only pause/resume toggle it.
+Pause/remove affect future work; cancel stops a particular run.
 Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/weekday OR semantics.`);return}
   const config=loadControlConfig(), control=new ControlStore(config.controlDir,config.pairingTtlMs)
   const owner=(await control.status()).owner
@@ -195,13 +196,15 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       v.cron ? {cron:v.cron,timezone:v.timezone!,start,until:v.until} : {everySeconds:Number(v['every-seconds']),start,until:v.until}
     if(v['clear-preflight'] && v['preflight-file']) throw Error('Choose one preflight operation')
     const previousSchedule = action === 'edit' ? await scheduler.get(id!) : undefined
+    // Edit keeps the paused/enabled state; only pause/resume toggle it.
+    const enabled = previousSchedule?.enabled ?? true
     const preflight = v['clear-preflight'] ? undefined : v['preflight-file'] ? JSON.parse(await readFile(v['preflight-file'],'utf8')) : previousSchedule?.preflight
     const origin = caller?.application ?? caller?.delivery
     const delivery = previousSchedule ? previousSchedule.delivery : (origin ? {bindingId:origin.bindingId,scope:origin.scope} : undefined)
     if (!delivery && !owner.telegramChatId) throw new Error('Create the schedule from an authenticated channel turn to bind its reply destination')
     if (v.script) {
       result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || v.script,preflight,
-        originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:'',when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
+        originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:'',when:v.when as 'unreviewed-failures' | undefined,trigger,enabled,owner,
         script:{id:v.script,args:v.arg ?? []}},action==='create'))
       console.log(JSON.stringify(result,null,2));return
     }
@@ -216,7 +219,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       if (setup.authProfile !== undefined) await provisionedHome(config.controlDir, setup.cli, setup.authProfile)
     result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
       preflight,
-      originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
+      originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled,owner,
       execution:{sessionId:previous?.sessionId || randomUUID(),preset,...(fallbacks ? {fallbacks} : {})}},action==='create'))
   }else{
     if(!id)throw new Error('ID required')
