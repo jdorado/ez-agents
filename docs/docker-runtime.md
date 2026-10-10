@@ -151,8 +151,7 @@ record, or an adoption failure) is recorded failed and interrupted, which holds
 its schedule until an explicit edit; the host is asked to cancel it. A request
 the host had not claimed before the relay stopped is failed by the host without
 starting. Records older than 24 hours are ignored, and the file is removed on
-every start. Queued runs and deliveries are still dropped, and messages a run
-sends while no relay is up fail and need a retry.
+every start. Queued runs are still dropped. Accepted deliveries are drained before listener shutdown completes; settled receipts for handed-off runs move with the handoff. A connection failure during a declared upgrade swap waits for the relay; an accepted timeout is never retried.
 A `409 Conflict` still requires the operator to stop the competing poller; it
 remains unhealthy after the startup grace. Pending and uncertain deliveries keep
 their existing receipt semantics; executor stdout is not replayed as a reply.
@@ -392,3 +391,14 @@ The isolated executor image includes Node, jq and Python 3 (`python` and
 remain behind installed plugins. Registered command admission waits up to five
 seconds for the short registry lock; lifecycle changes still fail closed, and
 no caller removes an existing lock. Serialize calls when a plugin requires it.
+
+## Isolated executor generations
+
+A handoff-capable supervisor runs the existing native file transport in a separate
+unprivileged per-agent container. It derives workspace/control mounts and the image
+from the owning relay deployment, adds only a read-only executor binding, and gives
+the worker no relay secrets, provider secret environment or Docker socket. Native
+credential homes stay in the existing control volume. Only the active generation
+claims work; retired generations keep cancellation and per-run liveness until
+their last process exits. The supervisor removes their temporary Compose resources.
+The first upgrade from an embedded isolated executor drains before this migration.

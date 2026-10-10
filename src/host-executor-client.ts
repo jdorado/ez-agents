@@ -50,7 +50,10 @@ try {
     // Drain completion first. A brief missing file at the shared-filesystem
     // boundary must not cancel a healthy job or hide its terminal result.
     try {
-      const heartbeat = JSON.parse(await readFile(path.join(directory,'heartbeat.json'),'utf8'))
+      const claimed = await stat(base+'.running.json').then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error})
+      const heartbeat = claimed
+        ? {at:(await stat(base+'.events')).mtimeMs}
+        : JSON.parse(await readFile(path.join(directory,'heartbeat.json'),'utf8'))
       if (!Number.isFinite(heartbeat.at)) throw new Error('Invalid host CLI heartbeat')
       lastHeartbeat = heartbeat.at
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }

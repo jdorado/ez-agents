@@ -27,7 +27,7 @@ import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch, type SessionState } from './control-state.js'
 import { ApprovalStore } from './approval.js'
-import { CliUnavailableError, startExecutorJob, attachHostJob, terminateJob, opencodeDataHome, claudeConfigHome } from './executor.js'
+import { CliUnavailableError, startExecutorJob, attachHostJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
 import { attemptFailure, continuationLine, nextSetup, quotaScope, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, saveRunHandoff, takeRunHandoff, type RunRecord } from './runs.js'
@@ -96,7 +96,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let activeBackend = false
   const ownerStopped = new WeakSet<ChildProcess>()
   // Host-transport executors outlive this relay; a graceful stop hands them off.
-  const hostTransport = process.env.EZ_EXECUTOR_TRANSPORT === 'host' && !config.channelBackendUrl
+  const hostTransport = async () => !config.channelBackendUrl && await usesFileTransport(config.controlDir)
   const childRuns = new WeakMap<ChildProcess, string>()
   const handedOff = new WeakSet<ChildProcess>()
   let activeChild: ChildProcess | null = null
@@ -668,8 +668,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   }
 
   let outboxWork: Promise<void> | undefined
-  const drainOutbox = (onlyRunId?: string): Promise<void> => {
-    if (shuttingDown) return outboxWork ?? Promise.resolve()
+  const drainOutbox = (onlyRunId?: string, stopping = false): Promise<void> => {
+    if (shuttingDown && !stopping) return outboxWork ?? Promise.resolve()
     return outboxWork ?? (outboxWork = (async () => {
       for (const item of await runs.pendingOutbox()) {
         if (onlyRunId && item.runId !== onlyRunId) continue
@@ -773,6 +773,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // children, host executor, CLIs) enqueue and query the memory ledger
   // through the shared handler in delivery-socket.ts. The pump below stays
   // the single delivery executor; the socket only admits work into it.
+  let drainingHandoff=false
   let deliveryServer: { socketPath: string; stop: () => Promise<void> } | null = null
   const handleDeliveryOp = createLedgerHandler(config.controlDir, {
     wake: () => { void drainOutbox() },
@@ -1288,7 +1289,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // unknown outcome is recorded interrupted, which holds its schedule.
   const adoptHandoff = async (): Promise<void> => {
     const handed = await takeRunHandoff(config.controlDir)
-    if (!hostTransport) { if (handed.length) console.error('Ignoring run handoff without host transport', handed.length); return }
+    if (!await hostTransport()) { if (handed.length) console.error('Ignoring run handoff without host transport', handed.length); return }
     // Admit every record before the first attach, so no trigger races a hold.
     const admitted = (await Promise.all(handed.map(run => runs.adopt(run).catch(() => null)))).filter((run): run is RunRecord => run !== null)
     for (const run of admitted) await withStartLock(async () => {
@@ -1353,21 +1354,25 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     shuttingDown = true
     runtimeStarted = false
     pollingAbort.abort()
+    let handedRecords:RunRecord[]=[]
     // Hand off running host work before any wait can outlast the stop grace
     // period. The lock lets an in-flight launch register; later ones see shutdown.
-    if (hostTransport) await withStartLock(async () => {
+    if (await hostTransport()) await withStartLock(async () => {
       const handoff = new Map<ChildProcess, RunRecord>()
       for (const child of [...(activeChild ? [activeChild] : []), ...background.values()]) {
         const run = childRuns.has(child) ? await runs.get(childRuns.get(child)!) : null
         if (run?.status === 'running' && !ownerStopped.has(child) && child.exitCode === null && child.signalCode === null) handoff.set(child, run)
       }
       if (!handoff.size) return
-      try { await saveRunHandoff(config.controlDir, [...handoff.values()]) }
+      try { handedRecords=[...handoff.values()];await saveRunHandoff(config.controlDir, handedRecords) }
       catch (error) { console.error('Run handoff failed; stopping host work', safeError(error)); return }
       // SIGKILL leaves no cancel marker, so the host keeps each executor running.
       for (const child of handoff.keys()) { handedOff.add(child); child.kill('SIGKILL') }
     })
-    await deliveryServer?.stop().catch(() => {})
+    drainingHandoff=handedRecords.length>0
+    if(deliveryServer)await deliveryServer.stop()
+    else if(drainingHandoff){await outboxWork?.catch(() => {});await drainOutbox(undefined,true)}
+    if(handedRecords.length)await saveRunHandoff(config.controlDir,handedRecords)
     deliveryServer = null
     await applicationChannel.stop()
     wakePollRetry?.()
@@ -1402,6 +1407,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         throw new Error(`Another relay owns ${config.controlDir}; stop it before starting a second one`)
       const deliveryTcpPort = Number(process.env.EZ_DELIVERY_TCP_PORT ?? '')
       deliveryServer = await serveDeliverySocket(config.controlDir, handleDeliveryOp, {
+        beforeClose:async()=>{if(drainingHandoff){await outboxWork?.catch(()=>{});await drainOutbox(undefined,true)}},
         ...(Number.isSafeInteger(deliveryTcpPort) && deliveryTcpPort >= 1024 && deliveryTcpPort <= 65535 ? { tcpPort: deliveryTcpPort } : {}),
       })
       // Reconcile, then adopt handed-off runs, before any intake can launch work.

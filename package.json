@@ -112,7 +112,9 @@
     "protocol": 1,
     "kind": "main",
     "stateSchema": 1,
-    "mainProtocol": 1
+    "mainProtocol": 1,
+    "runHandoff": 1,
+    "containerExecutor": 1
   },
   "exports": {
     "./application-client": "./src/application-client.mjs",

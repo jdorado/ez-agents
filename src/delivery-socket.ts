@@ -83,7 +83,7 @@ export const authorizeRun = async (controlDir: string, runId: string): Promise<R
 const encode = (value: unknown): string => `${JSON.stringify(value)}\n`
 
 export type DeliveryEndpoint = { host: '127.0.0.1'; port: number; token: string }
-export type DeliveryServeOptions = { tcpPort?: number }
+export type DeliveryServeOptions = { tcpPort?: number; beforeClose?: () => Promise<void> }
 const endpointFile = 'delivery-endpoint.json'
 const tokensMatch = (candidate: unknown, token: string): boolean =>
   typeof candidate === 'string' && candidate.length === token.length && timingSafeEqual(Buffer.from(candidate), Buffer.from(token))
@@ -94,6 +94,8 @@ export const serveDeliverySocket = async (
   options: DeliveryServeOptions = {},
 ): Promise<{ socketPath: string; endpoint: DeliveryEndpoint | null; stop: () => Promise<void> }> => {
   const socketPath = deliverySocketPath(controlDir)
+  let closing=false
+  const admissions=new Set<Promise<void>>()
   await rm(socketPath, { force: true }).catch(() => {})
   const attach = (socket: Socket, token: string | null): void => {
     let buffer = ''
@@ -105,7 +107,8 @@ export const serveDeliverySocket = async (
         const line = buffer.slice(0, newline)
         buffer = buffer.slice(newline + 1)
         if (!line.trim()) continue
-        void (async () => {
+        let admission=false
+        const work=(async () => {
           let id: unknown = null
           try {
             const envelope = JSON.parse(line) as { id?: unknown; token?: unknown; op?: unknown; payload?: unknown }
@@ -116,12 +119,19 @@ export const serveDeliverySocket = async (
             // re-verifies owner authority server-side.
             if (token !== null && !tokensMatch(envelope.token, token)) { socket.destroy(); return }
             const { token: _token, ...request } = envelope
+            if(request.op==='enqueue'){
+              if(closing)throw Error('Delivery relay is shutting down; message was not accepted')
+              admission=true
+            }
             const result = await handle(request as DeliverySocketOp)
             socket.write(encode({ id, ok: true, result: result ?? null }))
           } catch (error) {
             socket.write(encode({ id, ok: false, error: error instanceof Error ? error.message : String(error ?? 'Unknown error') }))
           }
         })()
+        // Only finite admission handlers are a drain barrier; a receipt wait
+        // completes after the relay's delivery pump flushes the accepted items.
+        if(admission){admissions.add(work);void work.finally(()=>admissions.delete(work))}
       }
     })
   }
@@ -176,9 +186,13 @@ export const serveDeliverySocket = async (
     socketPath,
     endpoint,
     stop: async () => {
-      await new Promise<void>((resolve) => server.close(() => resolve()))
+      closing=true
+      const closed=Promise.all([new Promise<void>((resolve) => server.close(() => resolve())),
+        ...(tcpServer ? [new Promise<void>((resolve) => tcpServer!.close(() => resolve()))] : [])])
+      await Promise.all(admissions)
+      await options.beforeClose?.()
+      await closed
       await rm(socketPath, { force: true }).catch(() => {})
-      if (tcpServer) await new Promise<void>((resolve) => tcpServer.close(() => resolve()))
       if (tcpEndpoint) await rm(path.join(controlDir, endpointFile), { force: true }).catch(() => {})
     },
   }

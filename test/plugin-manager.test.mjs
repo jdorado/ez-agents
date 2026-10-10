@@ -283,7 +283,7 @@ test('a lease from another PID namespace is live while its call container runs, 
  // Isolated broker lease: its pid means nothing in this namespace (EPERM/ESRCH or an unrelated process).
  await fs.writeFile(lease,JSON.stringify({pid:1,container:'broker-call',pidNamespace:'pid:[4026531999]'}),{mode:0o600});
  const path0=process.env.PATH;process.env.PATH=f.fake+path.delimiter+path0;t.after(()=>{process.env.PATH=path0;});
- const docker=state=>fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){${state}}\n`,{mode:0o700});
+ const docker=async state=>{const file=path.join(f.fake,'docker');await fs.writeFile(file+'.next',`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){${state}}\n`,{mode:0o700});await fs.rename(file+'.next',file);};
  await docker(`console.log('true')`);
  await assert.rejects(locked(f.home,async()=>{}),/commands are active/); // never misreported as stale
  let activated=false;const drain=locked(f.home,async()=>{activated=true;},{drainInvocations:true});

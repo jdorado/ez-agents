@@ -33,8 +33,8 @@ export function execute(command,args,options={}) {
 export async function textAtomic(file,text) {
   const tmp=file+'.update.tmp';await fs.writeFile(tmp,text,{mode:0o600});await fs.rename(tmp,file);
 }
-export async function backupStateDirectory(source,destination) {
-  await fs.cp(source,destination,{recursive:true,filter:async entry=>!(await fs.lstat(entry)).isSocket()});
+export async function backupStateDirectory(source,destination,omit=[]) {
+  await fs.cp(source,destination,{recursive:true,filter:async entry=>!omit.includes(path.relative(source,entry).split(path.sep)[0])&&!(await fs.lstat(entry)).isSocket()});
 }
 export const pluginArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
 export async function packageManager(root,run=execute) {
@@ -159,7 +159,7 @@ export async function perform(home,job,hooks) {
   const root=path.join(dir,'runtime');await fs.rm(root,{recursive:true,force:true});await extract(archive,root);
   const next=await eligibility(home,job.target,root,job.automatic);
   if(next.old.root!==job.previousRoot||next.old.pkg.version!==job.previousVersion)throw Error('Stale upgrade job');
-  job.status='applying';job.root=root;job.startedAt=new Date().toISOString();await save();
+  job.status='applying';job.preserveRuns=hooks.preserveRuns===true;job.root=root;job.startedAt=new Date().toISOString();await save();
   const complete=async()=>{
     job.status='completed';job.endedAt=new Date().toISOString();await save();
     try { job.cleanup=await cleanupStaleBackups(home);await save(); }
@@ -199,10 +199,16 @@ export async function perform(home,job,hooks) {
       const oldImage=(await run('docker',['inspect','--format','{{.Image}}',cid])).trim();
       if(!/^sha256:[a-f0-9]{64}$/.test(oldImage))throw Error('Cannot pin rollback image');
       job.rollback={env:envValue(oldEnv,'EZ_RELAY_IMAGE',oldImage),packageRoot:config.packageRoot};await save();
-      await run('docker',[...relayArgs(config),'stop','relay']);await hooks.stopHost();
+      const activate=async()=>{
+        const current=await eligibility(home,job.target,root,job.automatic);
+        if(current.old.root!==job.previousRoot||current.old.pkg.version!==job.previousVersion)throw Error('Stale upgrade job');
+        const pause=path.join(agent.controlDir,'upgrade-pause.json');
+        if(hooks.preserveRuns)await atomic(pause,{id:job.id});
+        try {
+      await run('docker',[...relayArgs(config),'stop','relay']);await (hooks.preserveRuns ? hooks.retireHost() : hooks.stopHost());
       const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
       await backupStateDirectory(config.workspace,path.join(backup,'workspace'));
-      await backupStateDirectory(agent.controlDir,path.join(backup,'control'));
+      await backupStateDirectory(agent.controlDir,path.join(backup,'control'),hooks.preserveRuns ? ['host-executor'] : []);
       for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
       let env=oldEnv.split(job.previousRoot+path.sep).join(root+path.sep);env=envValue(env,'EZ_RELAY_IMAGE',image);
       await textAtomic(envFile,env);
@@ -213,6 +219,9 @@ export async function perform(home,job,hooks) {
         const brokerImage=(await run('docker',['image','inspect','--format','{{.Id}}',image],{stdoutOnly:true})).trim();
         job.brokerReadiness=await refreshBroker(config,run,brokerImage);
       }
+        }finally{if(hooks.preserveRuns)await fs.rm(pause,{force:true});}
+      };
+      if(hooks.preserveRuns)await locked(home,activate,{drainInvocations:true,signal:hooks.signal});else await activate();
     } else {
       const old=next.old.record;
       const secrets=await read(path.join(home,'packages',job.target,'secrets.json')).catch(e=>{if(e.code==='ENOENT')return {};throw e;});
@@ -266,7 +275,7 @@ export async function recover(home,job,hooks) {
           return /^sha256:[a-f0-9]{64}$/.test(pinned||'')&&current.Image===pinned&&current.State?.Running===true&&current.State?.Health?.Status==='healthy';
         })().catch(()=>false);
         if(!retained)await run('docker',[...relayArgs(config),'stop','relay']);
-        await hooks.stopHost();
+        await (hooks.preserveRuns ? hooks.retireHost() : hooks.stopHost());
         await textAtomic(path.join(config.deploymentDir,'docker.env'),job.rollback.env);
         await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),job.rollback.packageRoot);
         await hooks.startHost(job.rollback.packageRoot);
