@@ -2,7 +2,7 @@ import { executionDefaults } from './model-policy.js'
 import { presetLabel, type AiPreset } from './ai.js'
 import { AUTH_PROFILE_CLIS } from './auth-profile.js'
 import type { Owner } from './control-state.js'
-import type { Schedule, ActiveSchedule } from './scheduler.js'
+import type { Schedule, ScheduledTaskView } from './scheduler.js'
 
 const ownsSchedule = (owner: Owner, schedule: Schedule) =>
   schedule.owner.telegramUserId === owner.telegramUserId &&
@@ -24,7 +24,7 @@ const setupLabel = (preset: AiPreset) => {
 }
 
 // Script schedules have no AI preset; show what core actually invokes.
-const engineLabel = (schedule: ActiveSchedule) => schedule.script
+const engineLabel = (schedule: ScheduledTaskView) => schedule.script
   ? `Script · ${schedule.script.id} · ${schedule.scriptRevision ? `rev ${schedule.scriptRevision.slice(0, 8)}` : 'not registered'}`
   : [schedule.execution!.preset, ...schedule.execution!.fallbacks ?? []].map(setupLabel).join(' → ')
 
@@ -67,28 +67,30 @@ const preview = (schedule: Schedule) => {
   return chars.length > 140 ? chars.slice(0,139).join('')+'…' : sentence
 }
 
-const currentState = (schedule: ActiveSchedule) =>
-  schedule.runState === 'running' ? '▶ Running' : schedule.runState === 'queued' ? '◌ Queued' : '● Active'
+const currentState = (schedule: ScheduledTaskView) =>
+  [schedule.runState === 'running' ? '▶ Running' : schedule.runState === 'queued' ? '◌ Queued' : undefined,
+    !schedule.enabled ? '⏸ Paused' : undefined].filter(Boolean).join(' · ') || '● Active'
 
-const lastRun = (schedule: ActiveSchedule) => {
+const lastRun = (schedule: ScheduledTaskView) => {
   if (!schedule.lastRun) return '— Not run yet'
   const status = schedule.lastRun.status === 'completed' ? '✓ Completed' : schedule.lastRun.status === 'failed' ? '✕ Failed' : '⊘ Cancelled'
   return `${status} · ${time(schedule.lastRun.at)}${schedule.lastRun.currentRevision ? '' : ' · previous version'}`
 }
 
-export const ownedScheduledTasks = (schedules: ActiveSchedule[], owner: Owner) =>
+export const ownedScheduledTasks = (schedules: ScheduledTaskView[], owner: Owner) =>
   schedules.filter((schedule) => ownsSchedule(owner, schedule))
     .sort((a, b) => a.name.localeCompare(b.name))
 
-export const scheduledTasksText = (schedules: ActiveSchedule[], owner: Owner) => {
+export const scheduledTasksText = (schedules: ScheduledTaskView[], owner: Owner) => {
   const owned = ownedScheduledTasks(schedules, owner)
-  if (!owned.length) return '📅 Scheduled tasks\n\nNo active scheduled tasks.'
-  return [`📅 Scheduled tasks · ${owned.length} active`, 'Next/last times UTC. Use /tasks 1 for task details.', ...owned.map((schedule, index) =>
+  if (!owned.length) return '📅 Scheduled tasks\n\nNo scheduled tasks.'
+  const paused = owned.filter(schedule => !schedule.enabled).length
+  return [`📅 Scheduled tasks · ${owned.length - paused} active · ${paused} paused`, 'Next/last times UTC. Use /tasks 1 for task details.', ...owned.map((schedule, index) =>
     `${index + 1} · ${schedule.name}\n  ${currentState(schedule)}\n  Schedule · ${frequency(schedule)}\n  Next · ${schedule.nextAt === null ? '—' : time(schedule.nextAt)}\n  Last · ${lastRun(schedule)}\n  Execution · ${engineLabel(schedule)}\n  ${preview(schedule)}`
   )].join('\n\n')
 }
 
-export const scheduledTaskDetailText = (schedule: ActiveSchedule, number: number, total?: number) => {
+export const scheduledTaskDetailText = (schedule: ScheduledTaskView, number: number, total?: number) => {
   const instructions = schedule.script ? preview(schedule) : schedule.text.trim()
   const capped = instructions.length > 2000 ? instructions.slice(0, 2000) + '… (truncated; full text lives in the workspace)' : instructions
   return [

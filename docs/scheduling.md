@@ -338,9 +338,11 @@ messages, read private sessions, trigger work or certify owning results.
 
 The prompt controls diagnosis, authorized recovery and quiet notification behavior. Inspect prior effects and receipts before retrying anything. A failed review run itself remains visible as a new failure for the next occurrence.
 
-The Telegram Scheduled tasks menu lists enabled schedules that still have a pending
-occurrence or a queued/running occurrence. Finished one-time tasks, paused
-schedules and revisions stopped for review are hidden. Each entry shows the
+The Telegram Scheduled tasks menu lists paused schedules alongside enabled schedules
+that still have a pending occurrence or a queued/running occurrence. Paused tasks
+are labeled Paused and have no next run; an existing queued/running occurrence
+keeps its execution state visible. Finished enabled one-time tasks and enabled
+revisions stopped for review are hidden. Each entry shows the
 frequency with the cron timezone, the saved primary and fallback setups in order
 (CLI, login profile, model and effort), next occurrence in UTC (or queued/running state),
 and the first sentence of its saved invocation
