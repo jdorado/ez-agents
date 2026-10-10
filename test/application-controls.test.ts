@@ -53,7 +53,8 @@ test('private scope reset and model controls preserve running sessions and share
     {cli:'codex',model:'fixture-model',name:'Fixture',efforts:['low','high']},
     {cli:'opencode',model:'fixture-other',name:'Other',efforts:[]},
   ],root,join(root,'native-home'),async()=>true)
-  const channel = new ApplicationChannel({controlDir:root,initial:menu.initial,aiControls:menu,wake:()=>{},cancel:async()=>{}})
+  const closed:string[] = []
+  const channel = new ApplicationChannel({controlDir:root,initial:menu.initial,aiControls:menu,wake:()=>{},cancel:async()=>{},closeSession:async session=>{if(session)closed.push(session.sessionId)}})
   t.after(async()=>{await channel.stop();await rm(root,{recursive:true,force:true})})
   const token = randomBytes(32).toString('base64url')
   const binding = (await channel.bindings.register('private',token,owner))!
@@ -77,6 +78,7 @@ test('private scope reset and model controls preserve running sessions and share
   assert.equal((await call({action:'new',expectedSession:before.activeSessionId})).status,200)
   const next = await channel.scopeControls(binding.bindingId,'exercise')
   assert.notEqual(next.activeSessionId,before.activeSessionId)
+  assert.deepEqual(closed,[]) // a private scope runs under its binding, so no owner-authority close turn
   assert.equal(next.ai.selectedId,menu.initial.id)
   assert.equal((await call({action:'new',expectedSession:before.activeSessionId})).status,400)
   assert.equal((await control.executionSession(run.execution!)).nativeSessionId,'native-private')
@@ -89,6 +91,7 @@ test('private scope reset and model controls preserve running sessions and share
   assert.deepEqual((await control.status()).ai!.presets,presets)
   assert.equal((await call({action:'model',expectedSession:next.activeSessionId,cli:'codex',model:'fixture-model',effort:'high'})).status,200)
   const updated = await channel.submit(binding.bindingId,{requestId:'updated-model',scope:'exercise',text:'same engine'})
+  assert.deepEqual(closed,[])
   assert.equal(updated.execution!.sessionId,next.activeSessionId)
   assert.equal(updated.execution!.preset.effort,'high')
   assert.deepEqual((await new RunStore(root).get(after.id))!.execution,after.execution)

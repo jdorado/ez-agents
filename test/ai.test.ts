@@ -106,13 +106,17 @@ test('OpenCode keeps same-provider models together and separates providers encod
     const other = { ...first, id: 'other', name: 'Other', model: 'openrouter/other' }
     const choice = await store.captureChoice(first)
     await store.saveNativeSession(choice.sessionId, 'ses_original')
-    const menu = createAiMenu(store, 'opencode', async () => [first, second, other].map(p => ({ ...p, efforts: [] })), dir, undefined, async () => true)
+    const closed: string[] = []
+    const menu = createAiMenu(store, 'opencode', async () => [first, second, other].map(p => ({ ...p, efforts: [] })), dir, undefined, async () => true,
+      undefined, async (session) => { if (session) closed.push(session.sessionId) })
     await store.savePreset(second)
     assert.equal((await menu.select(second, choice.sessionId)).fresh, false)
+    assert.deepEqual(closed, [])
     assert.equal((await store.captureChoice(first)).sessionId, choice.sessionId)
     await store.savePreset(other)
     assert.equal(await store.selectPreset(other.id, choice.sessionId), false)
     assert.equal((await menu.select(other, choice.sessionId)).fresh, true)
+    assert.deepEqual(closed, [choice.sessionId]) // switching provider closes the old conversation once
     const next = await store.captureChoice(first)
     assert.notEqual(next.sessionId, choice.sessionId)
     assert.equal((await store.executionSession(next)).nativeSessionId, undefined)

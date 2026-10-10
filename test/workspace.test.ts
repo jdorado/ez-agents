@@ -6,6 +6,7 @@ import test from 'node:test'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { initializeWorkspace } from '../src/workspace.js'
+import { TOOLS_LINE } from '../src/tools-line.mjs'
 
 test('packaged launcher help and invalid arguments never start the relay', () => {
   const bin = fileURLToPath(new URL('../bin/ezenciel-agents.mjs', import.meta.url))
@@ -42,6 +43,11 @@ test('fresh mind is private; repeat initialization preserves customization and o
     await writeFile(purpose, 'Research partner\n')
     assert.deepEqual(await initializeWorkspace(workspace, purpose), ['AGENTS.md'])
     assert.equal((await stat(path.join(workspace, 'AGENTS.md'))).mode & 0o777, 0o600)
+    const seed = await readFile(path.join(workspace, 'AGENTS.md'), 'utf8')
+    assert.match(seed, /^## Purpose\n\nResearch partner\n\n## Memory\n/)
+    assert.match(seed, /`memory\/MEMORY\.md`/)
+    assert.ok(seed.endsWith(`\n${TOOLS_LINE}\n`))
+    assert.doesNotMatch(seed, /ez tools: begin/)
     assert.ok(!(await readdir(workspace)).includes('SOUL.md'))
     assert.ok(!(await readdir(workspace)).includes('USER.md'))
     assert.ok(!(await readdir(workspace)).includes('MEMORY.md'))

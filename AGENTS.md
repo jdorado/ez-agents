@@ -16,11 +16,13 @@ through one generic transport, with separate agent workspaces and sessions.
 
 ## Operating-agent instructions
 
-Do not inject a coding handbook into production agent minds. The package-owned
-workspace locator is the managed `<!-- ez tools -->` block: the bound `ez`
-launcher, `ez --help`, and `ez tools list --details`. Inventory is generated on
-read; do not hardcode command recipes. Purpose lives in that agent's own
-`AGENTS.md`. Coding defaults for this repository stay in this file and
+Do not inject a coding handbook into production agent minds. The only
+package-written `AGENTS.md` text is the initial workspace seed: purpose, a short
+engine-neutral `memory/` note and one static line pointing at
+`ez tools list --details`. After seeding the agent owns `AGENTS.md`; inventory is
+generated on read, so do not hardcode command recipes. The one transport-level
+lifecycle prompt is the silent conversation-close turn (`src/session-close.ts`),
+which runs only for owner conversations. Coding defaults for this repository stay in this file and
 CONTRIBUTING.md.
 
 ## Installing this package

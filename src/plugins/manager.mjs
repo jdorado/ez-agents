@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
+import { TOOLS_LINE } from '../tools-line.mjs';
 import { readFileSync, realpathSync } from 'node:fs';
 
 const reserved = new Set(['status','updates','plugins','tools','message','owner','approval','react','setup','help','version']);
@@ -41,34 +42,23 @@ export async function stewardOwned(file) {
   const parent = await fs.stat(path.dirname(file));
   await fs.chown(file, parent.uid, parent.gid);
 }
-// Native instructions keep only the registry locator and one crucial routing
-// hint. Inventory and full scheduler usage are generated on read.
-export async function toolDiscoveryBlock(home,hostConfig) {
-  home=await fs.realpath(home);
-  let launcher=path.join(home,'bin','ez');
-  const config=hostConfig?{hostConfig}:await json(path.join(home,'config.json')).catch(error=>{if(error.code==='ENOENT')return undefined;throw error;});
-  if(config?.hostConfig) {
-    const host=await json(config.hostConfig);
-    if(host.isolation==='isolated') launcher='ez';
-  }
+// Retire the former `ez tools` footer once: replace the marked block with
+// TOOLS_LINE and leave every other byte untouched. The name is kept because
+// upgraders released before this change call it on the target package;
+// remove it when no installed core predates the change.
+export async function bindToolDiscovery(_home,workspace) {
+  workspace=await fs.realpath(workspace);
   const start='<!-- ez tools: begin -->',end='<!-- ez tools: end -->';
-  const block=start+'\nUse `'+launcher+'`; run it with `--help` or `tools list --details` to discover installed capabilities, and read the matching skill when needed.\nKeep the channel responsive: during a foreground owner turn, prefer `ezenciel-agents-schedule create --now ...` when work can continue independently. A `[schedule ...]` turn executes its assigned work directly and must not schedule it again.\n'+end;
-  if(Buffer.byteLength(block)>600)throw Error('Tool discovery guidance exceeds the 600-byte core budget');
-  return {block,start,end};
-}
-export async function bindToolDiscovery(home,workspace) {
-  home=await fs.realpath(home);workspace=await fs.realpath(workspace);
-  const {block,start,end}=await toolDiscoveryBlock(home);
   for(const name of ['AGENTS.md','AGENTS.override.md']) {
     const file=path.join(workspace,name);
     const stat=await fs.lstat(file).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
-    if(!stat && name!=='AGENTS.md')continue;
-    if(stat && !stat.isFile())throw Error('Tool instructions must be a regular file');
-    const prior=stat?await fs.readFile(file,'utf8'):'';
+    if(!stat)continue;
+    if(!stat.isFile())throw Error('Tool instructions must be a regular file');
+    const prior=await fs.readFile(file,'utf8');
     const from=prior.indexOf(start),to=prior.indexOf(end);
-    if((from<0)!==(to<0)||(from>=0&&(to<from||prior.indexOf(start,from+start.length)>=0||prior.indexOf(end,to+end.length)>=0)))throw Error('Malformed tool discovery block');
-    const next=from<0?prior+'\n'+block+'\n':prior.slice(0,from)+block+prior.slice(to+end.length);
-    if(next===prior)continue;
+    if(from<0&&to<0)continue;
+    if((from<0)!==(to<0)||to<from||prior.indexOf(start,from+start.length)>=0||prior.indexOf(end,to+end.length)>=0)throw Error('Malformed tool discovery block');
+    const next=prior.slice(0,from)+(prior.includes(TOOLS_LINE)?'':TOOLS_LINE)+prior.slice(to+end.length);
     const tmp=file+'.'+randomUUID()+'.tmp';
     try {await fs.writeFile(tmp,next,{mode:0o600,flag:'wx'});await fs.rename(tmp,file);}finally{await fs.rm(tmp,{force:true});}
   }
@@ -150,9 +140,11 @@ export async function snapshot(source) {
   return {source,files,manifest,deployment,sharedRevisions,revision:`sha256:${digest.digest('hex')}`};
 }
 export function validate(m,d,files) {
-  keys(m,['schemaVersion','id','version','description','commands','skills']);
+  keys(m,['schemaVersion','id','version','description','commands','skills','example']);
   if(m.schemaVersion!==1 || (typeof m.version!=='string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(m.version))) throw Error('Unsupported manifest version');
   id(m.id); strings(m.skills);
+  // One representative call shown by `tools list --details`; usage stays in --help/skill.
+  if(m.example!==undefined && (typeof m.example!=='string' || m.example.length>160 || /[\0-\x1f\x7f]/.test(m.example) || !Object.hasOwn(m.commands||{},m.example.split(' ')[0]))) throw Error('Manifest example must be one line of at most 160 characters starting with a declared command');
   keys(d,['schemaVersion','services','commands','exports',...(d.schemaVersion>=2?['secrets']:[]),...(d.schemaVersion===3?['sharedServices']:[])]);
   if(![1,2,3].includes(d.schemaVersion) || !d.services || !d.commands) throw Error('Unsupported deployment descriptor');
   for(const [name,s] of Object.entries(d.services)) {
@@ -532,7 +524,6 @@ export async function init(home,workspace,catalogFile,hostConfig,standalone=fals
   if(standalone && hostConfig) throw Error('Standalone setup cannot bind a relay host config');
   if(typeof home!=='string'||typeof workspace!=='string'||!path.isAbsolute(home)||!path.isAbsolute(workspace)||/[\r\n\0$:,]/.test(home+workspace)) throw Error('Explicit absolute home/workspace required');
   workspace=await fs.realpath(workspace);await privateDir(home);home=await fs.realpath(home);if(hostConfig)hostConfig=await fs.realpath(hostConfig);
-  await toolDiscoveryBlock(home,hostConfig);
   if(await fs.lstat(path.join(home,'registry.json')).catch(()=>null)) throw Error('Registry already exists; refusing replacement');
   catalogFile=path.resolve(catalogFile||fileURLToPath(new URL('../../default-plugins.json',import.meta.url)));
   const sources=await json(catalogFile);
@@ -565,7 +556,6 @@ export async function init(home,workspace,catalogFile,hostConfig,standalone=fals
       agent.binDir=bin;agent.toolsHome=home;await atomic(hostConfig,host);
     }
   });
-  await bindToolDiscovery(home,workspace);
   if(hostConfig && path.basename(hostConfig)==='host-executor.json') await (await import('../updates/binding.mjs')).bindUpdates(home,hostConfig);
   return {ok:true,launcher:path.join(home,'bin','ez'),workspace};
 }
@@ -653,12 +643,17 @@ export async function main(args) {
       return emit({plugin:name,revision:record.revision,path:skill,content:await fs.readFile(file,'utf8')});
     }
     if(action==='list') {
-      if(group==='tools' && args.length===1 && args[0]==='--details')return emit(Object.fromEntries(Object.entries(r.plugins).map(([name,p])=>[name,{
-        description:typeof p.manifest.description==='string'?p.manifest.description.replace(/\s+/g,' ').trim().slice(0,200):'',
-        commands:Object.keys(p.manifest.commands).map(alias=>`ez ${alias} --help`),
-        skills:p.manifest.skills.map(skill=>path.join(p.source,skill)),
-        skillReads:p.manifest.skills.map(skill=>['ez','tools','skill',name,skill]),
-      }])));
+      // Self-sufficient index: aliases, purpose, skill and one call per plugin.
+      if(group==='tools' && args.length===1 && args[0]==='--details')return emit(Object.fromEntries(Object.entries(r.plugins).map(([name,p])=>{
+        const aliases=Object.keys(p.manifest.commands);
+        return [name,{
+          aliases,
+          purpose:typeof p.manifest.description==='string'?p.manifest.description.replace(/\s+/g,' ').trim().slice(0,200):'',
+          skills:p.manifest.skills.map(skill=>path.join(p.source,skill)),
+          skillReads:p.manifest.skills.map(skill=>['ez','tools','skill',name,skill]),
+          example:`ez ${p.manifest.example ?? `${aliases[0]} --help`}`,
+        }];
+      })));
       if(args.length)throw Error('Use tools list [--details] or plugins list');
       return emit(group==='tools'?r.commands:r.plugins);
     }

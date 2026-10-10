@@ -17,6 +17,8 @@ import { atomicTaskFile, Tasks } from '../src/tasks.js'
 import { EventSources } from '../src/event-sources.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { packageVersion } from '../src/version.js'
+import { SESSION_CLOSE_PROMPT } from '../src/session-close.js'
+import type { ExecutorOptions } from '../src/executor.js'
 import type { Config } from '../src/config.js'
 
 const message = (id: number, text = 'hello'): Update => ({
@@ -32,6 +34,7 @@ const message = (id: number, text = 'hello'): Update => ({
 const fixture = async (overrides: Partial<Config> = {}) => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-intake-relay-'))
   const launched: string[][] = []
+  const launchOptions: ExecutorOptions[] = []
   const replies: string[] = []
   const members = new Map<number, string>()
   const keyboards: { text: string; callback_data: string }[][][] = []
@@ -47,8 +50,9 @@ const fixture = async (overrides: Partial<Config> = {}) => {
     ...overrides,
   }
   const make = () => {
-    const relay = createRelay(config, async (texts) => {
+    const relay = createRelay(config, async (texts, options) => {
       launched.push(texts)
+      launchOptions.push(options)
       const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 50)'])
       children.push(child)
       await once(child, 'spawn')
@@ -79,6 +83,7 @@ const fixture = async (overrides: Partial<Config> = {}) => {
   return {
     dir,
     launched,
+    launchOptions,
     replies,
     members,
     keyboards,
@@ -333,6 +338,35 @@ test('new conversation leaves already accepted messages pinned to the old conver
     assert.equal((await runs.get('tg_1'))!.execution!.sessionId, first)
     await f.relay.drainInbox(true)
     assert.notEqual((await runs.get('tg_3'))!.execution!.sessionId, first)
+  } finally { await f.close() }
+})
+
+test('new conversation gives the started one a single silent close turn in its own native session', async () => {
+  const f = await fixture()
+  try {
+    const runs = new RunStore(f.dir), store = new ControlStore(f.dir, 1000)
+    const settled = async () => {
+      for (let i = 0; i < 200 && (await runs.list()).some((r) => ['queued', 'running'].includes(r.status)); i++)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    await f.relay.bot.handleUpdate(message(1, '/new'))
+    assert.equal(f.launched.length, 0) // an unstarted conversation has nothing to keep
+    await f.relay.bot.handleUpdate(message(2, 'My sister is called Ana'))
+    await f.relay.drainInbox(true)
+    await settled()
+    const first = (await store.getActiveSession())!
+    assert.equal(first.hasStarted, true)
+    await f.relay.bot.handleUpdate(message(3, '/new'))
+    await settled()
+    assert.deepEqual(f.launched.at(-1), [SESSION_CLOSE_PROMPT])
+    const close = (await runs.list()).find((r) => r.sessionClose)!
+    assert.equal(close.execution!.sessionId, first.sessionId)
+    assert.equal(close.chatId, undefined); assert.equal(close.messageId, undefined)
+    const options = f.launchOptions.at(-1)!
+    assert.equal(options.isResume, true)
+    assert.equal(options.promptSuffix, '') // no reply mechanism: nothing is delivered
+    assert.notEqual((await store.getActiveSession())!.sessionId, first.sessionId)
+    assert.equal((await runs.list()).filter((r) => r.sessionClose).length, 1)
   } finally { await f.close() }
 })
 
