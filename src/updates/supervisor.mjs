@@ -139,7 +139,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
         const apply=async()=>{
           try {
             const activate=async()=>{const latest=await read(path.join(jobPath(home,pending.id),'job.json'));return perform(home,latest,{stopHost,startHost,signal,refreshPluginBroker});};
-            return pending.target==='main'?await locked(home,activate):await activate();
+            return pending.target==='main'?await locked(home,activate,{drainInvocations:true,signal}):await activate();
           } catch(error) {
             // A pre-switch rejection is terminal. Applying jobs keep their journal for recovery.
             const latest=await read(path.join(jobPath(home,pending.id),'job.json'));

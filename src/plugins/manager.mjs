@@ -8,7 +8,7 @@ import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
 import { TOOLS_LINE } from '../tools-line.mjs';
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync, readlinkSync, realpathSync } from 'node:fs';
 
 const reserved = new Set(['status','updates','plugins','tools','message','owner','approval','react','setup','help','version']);
 const id = value => { if(typeof value !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(value)) throw Error('Invalid identifier'); return value; };
@@ -64,6 +64,9 @@ export async function bindToolDiscovery(_home,workspace) {
   }
 }
 const invocationDirectory = home => path.join(home,'command-invocations');
+// A lease pid is only meaningful inside the PID namespace that wrote it. The
+// isolated broker writes leases from its container, which the host cannot probe.
+const pidNamespace=(()=>{try{return readlinkSync('/proc/self/ns/pid');}catch{return undefined;}})();
 async function activeInvocations(home) {
   const directory=invocationDirectory(home),files=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
   for(const file of files) {
@@ -71,8 +74,11 @@ async function activeInvocations(home) {
     const lease=await json(path.join(directory,file)).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
     if(!lease)continue;
     if(!Number.isSafeInteger(lease.pid)||lease.pid<1||typeof lease.container!=='string'||!lease.container)throw Error('Invalid command invocation lease; inspect before recovery');
-    try {process.kill(lease.pid,0);return true;} catch(error) {if(error.code!=='ESRCH'&&error.code!=='EPERM')throw error;}
-    const state=await run(['container','inspect',lease.container],{capture:true});
+    const foreign=typeof lease.pidNamespace==='string'&&lease.pidNamespace!==pidNamespace;
+    if(!foreign) {try {process.kill(lease.pid,0);return true;} catch(error) {if(error.code!=='ESRCH'&&error.code!=='EPERM')throw error;}}
+    const state=await run(['container','inspect','--format','{{.State.Running}}',lease.container],{capture:true});
+    // Foreign leases: the call container's own state is the only liveness signal.
+    if(state.code===0&&foreign&&state.stdout.trim()==='true')return true;
     if(state.code===0)throw Error(`Stale command invocation lease; inspect container ${lease.container} before recovery`);
     if(!/No such (?:object|container)/i.test(state.stderr+state.stdout))throw Error('Unable to verify a stale command invocation lease; inspect Docker before recovery');
     await fs.rm(path.join(directory,file));
@@ -81,7 +87,7 @@ async function activeInvocations(home) {
 }
 async function invocationLease(home,container) {
   const directory=invocationDirectory(home);await privateDir(directory);
-  const file=path.join(directory,randomUUID()+'.json');await fs.writeFile(file,JSON.stringify({pid:process.pid,container}),{mode:0o600,flag:'wx'});
+  const file=path.join(directory,randomUUID()+'.json');await fs.writeFile(file,JSON.stringify({pid:process.pid,container,...(pidNamespace?{pidNamespace}:{})}),{mode:0o600,flag:'wx'});
   await stewardOwned(file);
   return async()=>{await fs.rm(file,{force:true});};
 }
