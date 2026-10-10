@@ -193,6 +193,16 @@ export async function perform(home,job,hooks) {
       });
       const image=`ez-upgrade-${digest(JSON.stringify([job.sha256,buildArgs])).slice(0,24)}`;
       await run('docker',['build','--target','runtime',...buildArgs,'-t',image,root]);
+      const backup=path.join(dir,'backup');
+      const backupState=async()=>{
+        await fs.mkdir(backup,{mode:0o700});
+        await backupStateDirectory(config.workspace,path.join(backup,'workspace'));
+        await backupStateDirectory(agent.controlDir,path.join(backup,'control'),hooks.preserveRuns ? ['host-executor'] : []);
+        for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
+      };
+      // Native client state can be many gigabytes. This advisory copy never
+      // rewinds live state, so compatible generations keep serving throughout it.
+      if(hooks.preserveRuns)await backupState();
       const envFile=path.join(config.deploymentDir,'docker.env'),oldEnv=await fs.readFile(envFile,'utf8');
       const cid=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
       if(!cid||/\s/.test(cid))throw Error('Expected one running relay');
@@ -206,10 +216,7 @@ export async function perform(home,job,hooks) {
         if(hooks.preserveRuns)await atomic(pause,{id:job.id});
         try {
       await run('docker',[...relayArgs(config),'stop','relay']);await (hooks.preserveRuns ? hooks.retireHost() : hooks.stopHost());
-      const backup=path.join(dir,'backup');await fs.mkdir(backup,{mode:0o700});
-      await backupStateDirectory(config.workspace,path.join(backup,'workspace'));
-      await backupStateDirectory(agent.controlDir,path.join(backup,'control'),hooks.preserveRuns ? ['host-executor'] : []);
-      for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
+      if(!hooks.preserveRuns)await backupState();
       let env=oldEnv.split(job.previousRoot+path.sep).join(root+path.sep);env=envValue(env,'EZ_RELAY_IMAGE',image);
       await textAtomic(envFile,env);
       await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),root);

@@ -770,6 +770,12 @@ test('handoff-compatible core upgrade builds with native work active and retires
  const execute=r.execute
  r.execute=async(command,args,options)=>{
   if(args.includes('build')){await fs.access(claim);await assert.rejects(fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')),{code:'ENOENT'});await assert.rejects(fs.access(path.join(f.home,'registry.lock')),{code:'ENOENT'})}
+  if(args.includes('stop')){
+   const backup=path.join(jobPath(f.home,job.id),'backup');
+   assert.equal(await fs.readFile(path.join(backup,'workspace','TOOLS.md'),'utf8'),'My notes\n','state backup finishes before relay shutdown');
+   await fs.access(path.join(backup,'control'));
+   await assert.rejects(fs.access(path.join(backup,'control','host-executor')),{code:'ENOENT'});
+  }
   return execute(command,args,options)
  }
  assert.equal((await withUpgrade(f.agent.controlDir,job,new AbortController().signal,()=>perform(f.home,job,r),{preserveRuns:true,isIdle:async()=>false})).status,'completed')
