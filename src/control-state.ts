@@ -763,10 +763,16 @@ export class ControlStore {
       await requireControlGuard(state, guard)
       if (!state.ai) throw new Error('AI settings not initialized')
       // Auto-detected client defaults come and go with installed clients; only
-      // owner-saved choices count toward the cap.
-      if (state.ai.presets.filter((p) => !p.id.startsWith('detected_')).length >= 12 && !state.ai.presets.some((p) => p.id === preset.id))
-        throw new Error('Keep it small: at most 12 saved AIs.')
-      state.ai.presets = [...state.ai.presets.filter((p) => p.id !== preset.id), persistedPreset(preset)]
+      // owner-saved choices count toward the cap. Conversations keep their own
+      // preset copy, so at the cap the oldest unreferenced choice makes room.
+      const ai = state.ai
+      const saved = ai.presets.filter((p) => !p.id.startsWith('detected_'))
+      if (saved.length >= 12 && !ai.presets.some((p) => p.id === preset.id)) {
+        const kept = new Set([ai.selectedId, ai.defaultId, ...(ai.recentIds ?? [])])
+        const oldest = saved.find((p) => !kept.has(p.id))!
+        ai.presets = ai.presets.filter((p) => p.id !== oldest.id)
+      }
+      ai.presets = [...ai.presets.filter((p) => p.id !== preset.id), persistedPreset(preset)]
       await this.writeState(state)
     })
   }
