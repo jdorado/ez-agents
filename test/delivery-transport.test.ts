@@ -64,11 +64,30 @@ test('a response timeout is not replayed over the loopback endpoint', async t =>
   const dir = await mkdtemp(join(tmpdir(), 'ez-delivery-timeout-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   let calls = 0
-  const server = await serveDeliverySocket(dir, async () => { calls++; return new Promise(() => {}) }, { tcpPort: 0 })
+  const server = await serveDeliverySocket(dir, async () => { calls++; await new Promise(resolve=>setTimeout(resolve,300)); return {accepted:true} }, { tcpPort: 0 })
   t.after(() => server.stop())
   assert.ok(server.endpoint)
   await assert.rejects(callDeliverySocket(deliverySocketPath(dir), { op: 'enqueue' }, 200), /Delivery relay unavailable/)
   assert.equal(calls, 1)
+})
+
+test('shutdown waits for an admitted enqueue before the final delivery drain',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-delivery-admission-'))
+ t.after(()=>rm(dir,{recursive:true,force:true}))
+ let release!:()=>void,entered!:()=>void,accepted=0,drained=0
+ const gate=new Promise<void>(resolve=>{release=resolve}),admitted=new Promise<void>(resolve=>{entered=resolve})
+ const server=await serveDeliverySocket(dir,async()=>{entered();await gate;accepted++;return {accepted:true}},{beforeClose:async()=>{drained=accepted}})
+ const request=callDeliverySocket(deliverySocketPath(dir),{op:'enqueue'})
+ await admitted
+ let stopped=false
+ const stop=server.stop().then(()=>{stopped=true})
+ await new Promise(resolve=>setTimeout(resolve,50))
+ assert.equal(stopped,false)
+ assert.equal(drained,0)
+ release()
+ assert.deepEqual(await request,{accepted:true})
+ await stop
+ assert.equal(drained,1)
 })
 
 

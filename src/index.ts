@@ -773,6 +773,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // children, host executor, CLIs) enqueue and query the memory ledger
   // through the shared handler in delivery-socket.ts. The pump below stays
   // the single delivery executor; the socket only admits work into it.
+  let drainingHandoff=false
   let deliveryServer: { socketPath: string; stop: () => Promise<void> } | null = null
   const handleDeliveryOp = createLedgerHandler(config.controlDir, {
     wake: () => { void drainOutbox() },
@@ -1368,11 +1369,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // SIGKILL leaves no cancel marker, so the host keeps each executor running.
       for (const child of handoff.keys()) { handedOff.add(child); child.kill('SIGKILL') }
     })
-    const deliveryStopped=deliveryServer?.stop().catch(() => {})
-    await outboxWork?.catch(() => {})
-    await drainOutbox(undefined,true)
+    drainingHandoff=handedRecords.length>0
+    if(deliveryServer)await deliveryServer.stop()
+    else if(drainingHandoff){await outboxWork?.catch(() => {});await drainOutbox(undefined,true)}
     if(handedRecords.length)await saveRunHandoff(config.controlDir,handedRecords)
-    await deliveryStopped
     deliveryServer = null
     await applicationChannel.stop()
     wakePollRetry?.()
@@ -1407,6 +1407,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         throw new Error(`Another relay owns ${config.controlDir}; stop it before starting a second one`)
       const deliveryTcpPort = Number(process.env.EZ_DELIVERY_TCP_PORT ?? '')
       deliveryServer = await serveDeliverySocket(config.controlDir, handleDeliveryOp, {
+        beforeClose:async()=>{if(drainingHandoff){await outboxWork?.catch(()=>{});await drainOutbox(undefined,true)}},
         ...(Number.isSafeInteger(deliveryTcpPort) && deliveryTcpPort >= 1024 && deliveryTcpPort <= 65535 ? { tcpPort: deliveryTcpPort } : {}),
       })
       // Reconcile, then adopt handed-off runs, before any intake can launch work.

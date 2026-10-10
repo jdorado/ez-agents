@@ -126,8 +126,11 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       const worker={image:relay.image,init:true,restart:'no',user:`${relay.environment.EZ_RUNTIME_UID||1000}:${relay.environment.EZ_RUNTIME_GID||1000}`,
         cap_drop:['ALL'],security_opt:['no-new-privileges:true'],entrypoint:['node','--import','/app/node_modules/tsx/dist/loader.mjs','/app/src/host-executor.ts','/run/executor.json'],
         environment:{...relay.environment,EZ_CONTAINER_EXECUTOR:'1',EZ_EXECUTOR_TRANSPORT:'local'},
-        volumes:[...relay.volumes,{type:'bind',source:configFile,target:'/run/executor.json',read_only:true}],tmpfs:['/tmp']};
-      await atomic(file,{services:{executor:worker}});
+        volumes:[...relay.volumes,{type:'bind',source:configFile,target:'/run/executor.json',read_only:true}],tmpfs:['/tmp'],
+        ...Object.fromEntries(['networks','network_mode','extra_hosts','dns','dns_search'].filter(key=>relay[key]!==undefined).map(key=>[key,relay[key]]))};
+      if(worker.networks&&!Array.isArray(worker.networks))worker.networks=Object.fromEntries(Object.keys(worker.networks).map(name=>[name,{}]));
+      const networks=worker.networks?Object.fromEntries(Object.entries(deployment.networks||{}).map(([name,binding])=>[name,{name:binding.name,external:true}])):undefined;
+      await atomic(file,{services:{executor:worker},...(networks?{networks}:{})});
       await execute('docker',['compose','--project-name',project,'--file',file,'up','-d','--no-build','executor']);
       container=(await execute('docker',['compose','--project-name',project,'--file',file,'ps','-q','executor'],{stdoutOnly:true})).trim();
       if(!/^[a-f0-9]{12,64}$/.test(container))throw Error('Missing isolated executor');
@@ -161,7 +164,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     const old=await read(path.join((await state(home)).config.packageRoot,'package.json'));
     const candidate=await read(path.join(jobPath(home,job.id),'package/package.json'));
     return old.ezRelease?.runHandoff===1&&candidate.ezRelease?.runHandoff===1&&
-      (host.isolation!=='isolated'||(old.ezRelease?.containerExecutor===1&&candidate.ezRelease?.containerExecutor===1));
+      (host.isolation!=='isolated'||(container&&old.ezRelease?.containerExecutor===1&&candidate.ezRelease?.containerExecutor===1));
   };
   const pause=path.join(agent.controlDir,'upgrade-pause.json');
   const refreshRequirement=async job=>{
@@ -184,19 +187,32 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     if(owner&&prior&&owner.pid===prior.pid)await fs.rm(registryLock);
     // Wait for an orphaned transport's parent-watch to terminate it first.
     await sleep(1200);
+    const workerOwner=await read(path.join(agent.controlDir,'host-executor/worker.lock')).catch(missing);
+    if(host.isolation==='isolated'&&workerOwner?.containerId){
+      if(!/^[a-f0-9]{12,64}$/.test(workerOwner.containerId))throw Error('Invalid isolated worker identity');
+      if((await execute('docker',['inspect','--format','{{.State.Running}}',workerOwner.containerId],{stdoutOnly:true}).catch(()=>''))?.trim()==='true')container=workerOwner.containerId;
+    }
     const interrupted=(await jobs(home)).find(j=>j.status==='applying');
     if(interrupted){
       const refreshPluginBroker=await refreshRequirement(interrupted);
       const result=refreshPluginBroker===null?undefined:interrupted.target==='main'
-        ? await (async()=>{await atomic(pause,{id:interrupted.id});try{return await locked(home,()=>perform(home,interrupted,{stopHost,startHost}));}finally{await fs.rm(pause,{force:true});}})()
+        ? await (async()=>{await atomic(pause,{id:interrupted.id});try{return await locked(home,()=>perform(home,interrupted,{stopHost,startHost,retireHost,preserveRuns:interrupted.preserveRuns===true}));}finally{await fs.rm(pause,{force:true});}})()
         : await withUpgrade(agent.controlDir,interrupted,signal,()=>perform(home,interrupted,{stopHost,startHost,retireHost,signal,refreshPluginBroker}),{requiresIdle:refreshPluginBroker});
       if(['completed','rolled-back'].includes(result?.status)&&interrupted.target==='main')reloadPending=true;
     }
     const isolated=host.isolation==='isolated'
-    if(!child && !container)await startHost((await state(home)).config.packageRoot);
+    if(!isolated&&!child)await startHost((await state(home)).config.packageRoot);
+    const initializeIsolated=async()=>{
+      if(!isolated||container)return;
+      const root=(await state(home)).config.packageRoot;
+      if((await read(path.join(root,'package.json'))).ezRelease?.containerExecutor!==1)return;
+      await withIdleUpgrade(agent.controlDir,{id:'executor-migration'},signal,()=>startHost(root));
+    };
+    await initializeIsolated();
     let nextCheck=0;
     while(!signal.aborted) {
       if(!isolated && child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
+      await initializeIsolated();
       if(container&&(await execute('docker',['inspect','--format','{{.State.Running}}',container],{stdoutOnly:true})).trim()!=='true')throw Error('Isolated executor exited; supervisor service should restart');
       if(reloadPending&&await idle(agent.controlDir))return;
       // Reap retired containers only after their worker exits.
