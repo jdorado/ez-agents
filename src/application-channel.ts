@@ -2,7 +2,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, open, unlink, stat, chown } from 'node:fs/promises'
 import { join } from 'node:path'
-import { ControlStore, sessionTitle, telegramOwner, type ControlGuard, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
+import { ControlStore, sessionTitle, telegramOwner, type ControlGuard, type Owner, type SessionState, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
 import { ownsRun } from './identity.js'
 import { applicationId, validApplicationOrigin } from './application-origin.js'
@@ -97,6 +97,8 @@ export class ApplicationChannel {
   constructor(private options: {
     controlDir: string; workspace?: string; isolation?: string; initial: AiPreset
     wake: () => void
+    // Queues the replaced conversation's silent close turn (session-close.ts).
+    closeSession?: (session: SessionState | null) => Promise<void>
     cancel: (id: string) => Promise<void>
     speech?: (text: string, language: 'en' | 'es') => Promise<{ buffer: Buffer; mimeType: string }>
     createTelegramPairing?: (bindingId: string, owner: Owner) => Promise<{ connected: true } | { connected: false; url: string; expiresAt: string }>
@@ -168,7 +170,11 @@ export class ApplicationChannel {
       const live = (await this.bindings.list()).find(item=>item.bindingId===bindingId)
       if (!live?.shareTelegram || !sameOwner(owner, live.owner)) throw new Error('Application authority revoked')
     }}
-    if (value.action === 'new') await control.resetSession(expected, guard)
+    if (value.action === 'new') {
+      const previous = await control.getActiveSession()
+      await control.resetSession(expected, guard)
+      await this.options.closeSession?.(previous)
+    }
     if (value.action === 'switch') {
       if (typeof value.sessionId !== 'string') throw new Error('Invalid application conversation')
       // switchSession enforces the same visibility/engine restrictions as /chats.

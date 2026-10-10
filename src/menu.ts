@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { InlineKeyboard, type Context } from 'grammy'
-import { ControlStore, type ControlGuard } from './control-state.js'
+import { ControlStore, type ControlGuard, type SessionState } from './control-state.js'
 import { chatPreset, installed, persistedPreset, presetLabel, presetProvider, readModels, sameChoice, sameEngine, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 import { claudeConfigHome } from './executor.js'
@@ -31,7 +31,7 @@ const matchesModel = (preset: AiPreset, model: ModelChoice) =>
 // Short-lived opaque button IDs: no model names or executable arguments from callbacks.
 // These are operational settings, not a second conversational/agent loop.
 export const createAiMenu = (control: ControlStore, cli: string, catalog = readModels, workspace = process.cwd(), codexHome?: string,
-  isInstalled = installed, opencodeDataHome?: string) => {
+  isInstalled = installed, opencodeDataHome?: string, closeSession?: (session: SessionState | null) => Promise<void>) => {
   const initial = chatPreset(cli)
   const host = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
   if (host) catalog = async () => JSON.parse(await readFile(path.join(process.env.EZ_CONTROL_DIR!, 'host-executor/models.json'),'utf8'))
@@ -68,6 +68,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const current = state.presets.find((p) => p.id === state.selectedId)!
     const fresh = !sameEngine(current, preset) || presetProvider(current) !== presetProvider(preset) || Boolean(session && !session.cli)
     if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Refresh available AIs before trying again.')
+    if (fresh) await closeSession?.(session)
     return { preset, fresh }
   }
   const choose = async (ctx: Context, preset: AiPreset) => {

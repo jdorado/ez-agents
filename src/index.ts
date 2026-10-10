@@ -25,7 +25,7 @@ import { isOwner, ownsRun } from './identity.js'
 import type { Update } from 'grammy/types'
 import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
-import { ControlStore, telegramOwner, ownerId, ownerEpoch } from './control-state.js'
+import { ControlStore, telegramOwner, ownerId, ownerEpoch, type SessionState } from './control-state.js'
 import { ApprovalStore } from './approval.js'
 import { CliUnavailableError, startExecutorJob, attachHostJob, terminateJob, opencodeDataHome, claudeConfigHome } from './executor.js'
 import { attemptFailure, continuationLine, nextSetup, quotaScope, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
@@ -38,6 +38,7 @@ import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
 import { createConversationMenu } from './conversation-menu.js'
+import { queueSessionClose } from './session-close.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
 import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset, type AiPreset } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
@@ -77,9 +78,19 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const codexHome = join(config.controlDir, 'cli', 'codex')
   const conversationMenu = createConversationMenu(control)
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome,
-    undefined, opencodeDataHome(config.controlDir))
+    undefined, opencodeDataHome(config.controlDir), (session) => closeSession(session))
   const durableWorkerChoice = () => control.captureChoice(aiMenu.initial)
   const binDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin')
+  // Queue the replaced chat session's silent close turn (session-close.ts).
+  // A busy relay starts it after the active run, ahead of newer chat input.
+  const closeSession = async (session: SessionState | null): Promise<void> => {
+    if (config.channelBackendUrl) return
+    // The replacement is already saved; a failed close must not fail that reply.
+    try {
+      const run = await queueSessionClose(runs, (await control.status()).owner, session)
+      if (run) void startJob(run).catch((error) => console.error('Conversation close failed to start', safeError(error)))
+    } catch (error) { console.error('Conversation close failed to queue', safeError(error)) }
+  }
 
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
   let activeBackend = false
@@ -118,6 +129,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       format: 'wav',
     }) : undefined,
     wake: () => { void drainSources().catch(error => console.error('Application queue unavailable', safeError(error))) },
+    closeSession: (session) => closeSession(session),
     createTelegramPairing: async (bindingId, owner) => {
       const username = bot?.botInfo?.username
       if (!username || !/^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(username))
@@ -182,7 +194,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // stat uses the effective UID; access uses the relay's isolated real UID.
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
-      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled && !run.external) return
+      if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled && !run.external && !run.sessionClose) return
       if (!run.scheduled && await runs.running(false)) return
       const owner = (await control.status()).owner
       if (!owner || !ownsRun(owner, run)) {
@@ -1037,7 +1049,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
     if (text === '/new') {
       await control.aiState(aiMenu.initial)
+      const previous = await control.getActiveSession()
       const next = await control.resetSession()
+      await closeSession(previous)
       await ctx.reply(
         `🔄 Started fresh conversation session (<code>${next.sessionId.slice(0, 8)}</code>). Agent files and memory preserved.`,
         { parse_mode: 'HTML' },
@@ -1225,7 +1239,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         await ctx.reply(id ? `Incoming batch ${id} queued for retry.` : 'No failed incoming batch to retry.')
       } else if (action === 'new') {
         await control.aiState(aiMenu.initial)
+        const previous = await control.getActiveSession()
         const next = await control.resetSession()
+        await closeSession(previous)
         await ctx.answerCallbackQuery({ text: 'New session started' })
         await ctx.reply(
           `🔄 Started fresh conversation session (<code>${next.sessionId.slice(0, 8)}</code>).`,

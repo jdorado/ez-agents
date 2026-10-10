@@ -57,14 +57,14 @@ At minimum, provide:
   machine-readable commands, stable exit codes, and readback for writes.
 
 The manager snapshots the package according to `package.json.files` plus the
-required manifests and Docker inputs. `ez tools list --details` includes
+required manifests and Docker inputs. `ez tools list --details` prints aliases, purpose, skill paths, one example call
+(the optional manifest `example`, else `<alias> --help`) and
 `skillReads`: literal command argument arrays for reading each installed skill.
 Use `ez tools skill <plugin> <declared-path>` to return its text and pinned
 revision. The isolated executor cannot open private host package paths directly;
 the authorized broker reads only manifest-declared regular skill files, without
 copying them into the agent workspace. Skill reads reject symlinks and files over
-64 KiB. The existing generic discovery footer remains accurate; no plugin-specific
-usage snippet or per-turn instruction is needed for this read contract.
+64 KiB. No AGENTS.md text or per-turn instruction is needed for this read contract.
 
 Keep one canonical checkout; do not keep
 permanent packaged copies or a second registry. See the full
