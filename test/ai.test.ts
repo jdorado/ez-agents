@@ -631,7 +631,7 @@ test('private channel model choices do not consume owner preset slots', async ()
     assert.equal(readback.preset?.model, model.model)
     assert.equal(readback.preset?.effort, 'low')
     assert.deepEqual((await store.status()).ai, before)
-    await assert.rejects(menu.saveSelection(model, 'max'), /at most 12/)
+    assert.equal((await menu.saveSelection(model, 'max')).effort, 'max')
     await assert.rejects(store.changeApplicationSession(scope, {...guard, expectedSession:null}, preset), /Conversation changed/)
     assert.deepEqual((await store.applicationSession(scope))?.preset, readback.preset)
   } finally { await rm(dir, {recursive:true, force:true}) }
@@ -648,7 +648,29 @@ test('detected presets do not count against the saved AI cap', async () => {
     assert.equal((await store.status()).ai!.presets.length, 13)
     const next = {id:'one-more', name:'One more', cli:'claude', model:'sonnet', effort:'medium'}
     await store.savePreset(next)
-    await assert.rejects(store.savePreset({...next, id:'too-many', name:'Too many'}), /at most 12/)
+    await store.savePreset({...next, id:'one-past-cap', name:'One past cap'})
+    const ids = (await store.status()).ai!.presets.map(p => p.id)
+    assert.equal(ids.filter(id => !id.startsWith('detected_')).length, 12)
+    assert.ok(!ids.includes('saved-1') && ids.includes('one-past-cap') && ids.includes(initial.id))
+  } finally { await rm(dir, {recursive:true, force:true}) }
+})
+
+test('a new model choice at the saved AI cap replaces the oldest unused choice', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-cap-select-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    const initial = initialPreset('claude')
+    await store.captureChoice(initial)
+    for (let n = 1; n < 12; n++) await store.savePreset({...initial, id:`saved-${n}`, name:`Saved ${n}`, model:'opus', effort:n % 2 ? 'high' : 'xhigh'})
+    await store.selectPreset('saved-1', (await store.getActiveSession())?.sessionId ?? null)
+    const model = {cli:'claude', model:'sonnet', name:'sonnet', efforts:['low', 'high']}
+    const menu = createAiMenu(store, 'claude', async () => [model], dir, undefined, async () => true)
+    const preset = await menu.saveSelection(model, 'high')
+    await menu.select(preset, (await store.getActiveSession())?.sessionId ?? null)
+    const ai = (await store.status()).ai!
+    assert.equal(ai.presets.find(p => p.id === ai.selectedId)?.model, 'sonnet')
+    assert.equal(ai.presets.length, 12)
+    assert.ok(ai.presets.some(p => p.id === 'saved-1') && !ai.presets.some(p => p.id === 'saved-2'))
   } finally { await rm(dir, {recursive:true, force:true}) }
 })
 
