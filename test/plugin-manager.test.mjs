@@ -288,6 +288,24 @@ test('an unreadable invocation lease pid falls through to container verification
   await assert.rejects(locked(f.home,async()=>{}),/Stale command invocation lease/);
  } finally {process.kill=kill0;process.env.PATH=path0;}
 });
+test('a lease from another PID namespace is live while its call container runs, then drains',async t=>{
+ const f=await fixture(t);
+ const directory=path.join(f.home,'command-invocations');await fs.mkdir(directory,{recursive:true});
+ const lease=path.join(directory,'00000000-0000-4000-8000-000000000001.json');
+ // Isolated broker lease: its pid means nothing in this namespace (EPERM/ESRCH or an unrelated process).
+ await fs.writeFile(lease,JSON.stringify({pid:1,container:'broker-call',pidNamespace:'pid:[4026531999]'}),{mode:0o600});
+ const path0=process.env.PATH;process.env.PATH=f.fake+path.delimiter+path0;t.after(()=>{process.env.PATH=path0;});
+ const docker=state=>fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){${state}}\n`,{mode:0o700});
+ await docker(`console.log('true')`);
+ await assert.rejects(locked(f.home,async()=>{}),/commands are active/); // never misreported as stale
+ let activated=false;const drain=locked(f.home,async()=>{activated=true;},{drainInvocations:true});
+ await new Promise(resolve=>setTimeout(resolve,100));assert.equal(activated,false);
+ await docker(`console.error('Error: No such object: broker-call');process.exit(1)`);
+ await drain;assert.equal(activated,true);await assert.rejects(fs.access(lease),{code:'ENOENT'});
+ await fs.writeFile(lease,JSON.stringify({pid:1,container:'broker-call',pidNamespace:'pid:[4026531999]'}),{mode:0o600});
+ await docker(`console.log('false')`);
+ await assert.rejects(locked(f.home,async()=>{}),/Stale command invocation lease/); // stopped but not removed: inspect first
+});
 test('changed source, symlinks, reserved aliases, arbitrary Docker fields rejected',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
  await fs.writeFile(path.join(f.source,'client.mjs'),'changed');await assert.rejects(f.call('plugins','install','sample','--source',f.source,'--revision',p.revision));

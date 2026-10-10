@@ -314,6 +314,12 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  const status=await command(f.home,['status']);assert(!JSON.stringify(status).includes('private-test-token'));assert(!('rollback'in status.jobs[0]));
  assert.equal((await fs.stat(path.join(jobPath(f.home,job.id),'job.json'))).mode&0o777,0o600);
 });
+test('apply queues while a plugin call holds its lease; activation drains it first',async t=>{
+ const f=await fixture(t),directory=path.join(f.home,'command-invocations');await fs.mkdir(directory,{recursive:true});
+ await fs.writeFile(path.join(directory,'00000000-0000-4000-8000-000000000002.json'),JSON.stringify({pid:process.pid,container:'live-call'}),{mode:0o600});
+ assert.equal((await queued(f)).status,'queued');
+ await fs.rm(path.join(directory,'00000000-0000-4000-8000-000000000002.json'));
+});
 test('main activation and rollback bind guidance from the selected package root',async t=>{
  const success=await fixture(t);await bindUpdates(success.home,path.join(success.config.deploymentDir,'host-executor.json'),success.old);
  assert.equal(await fs.readFile(path.join(success.agent.workspace,'AGENTS.md'),'utf8'),'old guidance\n');

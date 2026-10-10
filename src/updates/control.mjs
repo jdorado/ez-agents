@@ -191,7 +191,8 @@ export async function submit(home,id,automatic) {
     if(next.old.root!==job.previousRoot||next.old.pkg.version!==job.previousVersion)throw Error('Installation changed since preparation');
     if(digest(await fs.readFile(path.join(dir,'candidate.tgz')))!==job.sha256)throw Error('Candidate changed');
     job.status='queued';job.automatic=automatic;await atomic(path.join(dir,'job.json'),job);return job;
-  });
+  // Queueing writes only the job; activation drains plugin calls before switching.
+  },{allowInvocations:true,waitMs:5000});
 }
 export async function retryRecovery(home,id) {
   const {directory}=await state(home),dir=jobPath(home,id);
@@ -201,7 +202,7 @@ export async function retryRecovery(home,id) {
     if((await jobs(home)).some(j=>['queued','applying'].includes(j.status)))throw Error('An upgrade is already pending');
     await requireSupervisor(directory);
     job.status='queued';job.recoveryRequested=true;await atomic(path.join(dir,'job.json'),job);return {id,status:job.status,recoveryRequested:true};
-  });
+  },{allowInvocations:true,waitMs:5000});
 }
 export async function command(home,args) {
   const [action,...rest]=args;
