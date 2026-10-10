@@ -18,6 +18,11 @@ The main target and installed plugins version independently.
 
 Handoff-compatible core upgrades build while native work continues and pause admission only for activation. The current native executor retires from claiming new work; the replacement claims new requests while the retiring generation finishes its existing runs. The relay adopts those runs without replay, preserving their schedule holds, cancellation and settled delivery receipts. The supervisor reloads only after native work is idle, so OS service process-group cleanup cannot kill a retiring generation. Plugin upgrades build while native work continues. Activation closes the existing registry admission lock, drains in-flight plugin command leases, and replaces the plugin under that lock. New native plugin calls wait for admission; an outdated revision fails before provider execution and must be rediscovered. No admitted provider operation is replayed. The shared broker and native sessions remain running. Older runtimes without the handoff contract retain the full native-work drain. Isolated agents migrate once while idle to a separate, unprivileged executor container using the same file transport; later relay/runtime upgrades preserve that executor generation. No native CLI or provider credentials move to the host. A plugin update also retains that drain if an operator replaced the broker’s single-file host binding (for example to approve new network pins), because that case still requires broker recreation.
 
+Compatible main upgrades also finish their advisory workspace/native-client
+backup before closing admission or stopping the relay. Large native histories do
+not extend the swap's delivery outage. These live-state copies are best effort;
+rollback restores code and configuration, never the backup over active state.
+
 The owner chooses the saved update policy. The host supervisor owns
 interruption-safe replacement. There is one host service per agent, not a second
 agent or an additional updater daemon. Its replaceable child runs the normal CLI
