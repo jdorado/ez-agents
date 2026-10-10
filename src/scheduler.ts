@@ -29,7 +29,7 @@ export type ScheduledRunSummary = {
   at: string
   currentRevision: boolean
 }
-export type ActiveSchedule = Schedule & { nextAt: number | null; runState?: 'queued' | 'running'; lastRun?: ScheduledRunSummary; scriptRevision?: string }
+export type ScheduledTaskView = Schedule & { nextAt: number | null; runState?: 'queued' | 'running'; lastRun?: ScheduledRunSummary; scriptRevision?: string }
 export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string; originRunId?: string }
 export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
   const s = v as ScheduledOrigin
@@ -102,10 +102,9 @@ export class Scheduler {
       return nextOccurrence(s.trigger,-1)
     }
   }
-  async listActiveReadOnly(runs: RunRecord[]): Promise<ActiveSchedule[]> {
-    const active: ActiveSchedule[] = []
+  async listTasksReadOnly(runs: RunRecord[]): Promise<ScheduledTaskView[]> {
+    const active: ScheduledTaskView[] = []
     for (const s of await this.listReadOnly()) {
-      if (!s.enabled) continue
       const current = runs.filter(r => r.scheduled?.id === s.id && r.scheduled.revision === s.revision && ownsRun(s.owner,r))
       const history = runs.filter(r => r.scheduled?.id === s.id && r.scheduled.pairedAt === s.owner.pairedAt && ownsRun(s.owner,r))
         .filter((r): r is RunRecord & { status: ScheduledRunSummary['status'] } =>
@@ -113,11 +112,11 @@ export class Scheduler {
         .sort((a,b) => (b.endedAt ?? b.startedAt ?? b.createdAt).localeCompare(a.endedAt ?? a.startedAt ?? a.createdAt))
       const last = history[0]
       const runState = current.some(r => r.status === 'running') ? 'running' : current.some(r => r.status === 'queued') ? 'queued' : undefined
-      if (!runState && current.some(r => holdsSchedule(s,r))) continue
+      if (s.enabled && !runState && current.some(r => holdsSchedule(s,r))) continue
       try {
-        const nextAt = await this.pendingOccurrence(s)
+        const nextAt = s.enabled ? await this.pendingOccurrence(s) : null
         const scriptRevision = s.script ? await new Scripts(this.controlDir).get(s.script.id).then(r => r.revision, () => undefined) : undefined
-        if (runState || nextAt !== null) active.push({...s,nextAt,runState,...(scriptRevision ? {scriptRevision} : {}),...(last ? {
+        if (!s.enabled || runState || nextAt !== null) active.push({...s,nextAt,runState,...(scriptRevision ? {scriptRevision} : {}),...(last ? {
           lastRun: {status:last.status,at:last.endedAt ?? last.startedAt ?? last.createdAt,currentRevision:last.scheduled!.revision===s.revision},
         } : {})})
       }
