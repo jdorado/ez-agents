@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.50
 
 - Share memory across engines through the workspace. New workspaces seed a short `## Memory` note (durable facts in `memory/`, one per file, indexed in `memory/MEMORY.md`); every engine loads `AGENTS.md`, so Codex and Claude read the same files. When a chat conversation is replaced (`/new`, the New button, web app new, or an AI/provider switch), its engine gets one silent turn in that native session to save durable facts; nothing is delivered and the engine decides what to write.
 - Drop the managed `<!-- ez tools -->` AGENTS.md footer. The install seed writes one static line ("Tools: run `ez tools list --details`; each plugin's `--help` gives usage."); update binding replaces an existing footer with that line once and otherwise never writes instructions. `ez tools list --details` now prints per plugin `aliases`, `purpose`, `skills`, `skillReads` and one `example` call (optional manifest `example`, else `<alias> --help`).
@@ -9,6 +9,11 @@
 - Continue a scheduled occurrence on its next saved login when Claude stops at a usage/session limit after work began. The next setup starts a fresh native session with the saved prompt plus one factual line naming the run, stopped setup, its native session and reset time. Only a typed quota rejection the run ended on continues; work after a limit, access denial, other failures, cancellation and unknown outcomes still stop without replay. Attempts record `quota-after-work-began` and each Ez-assigned session ID.
 - Stop isolated plugin calls hanging silently before reaching the broker when the caller leaves a socket stdin open (native engine shells, async Node spawns). Pipes and files are still read to EOF; a socket that sends nothing for one second is treated as no input. Remove a uniquely named call container whenever Compose exits non-zero, so a call that stops between create and start no longer strands it in `Created`.
 - Advance scheduled work to its next saved login after a typed authentication rejection before work. Recognize Claude API-error metadata without marking analysis started; account/organization denials, hooks, model/tool work and uncertain outcomes still stop fallback. Preserve the saved chain for the next occurrence.
+- Let scheduled fallback setups name an owner-provisioned native login profile per setup, with no fixed list length. A quota rejection skips later setups on the same login profile while other accounts stay eligible; model/tool/hook work, access denial, cancellation and uncertain failures still stop the chain.
+- Show each scheduled task's frequency and full primary → fallback path (CLI, login profile, provider, model, effort) in Telegram `/tasks` and `/tasks N`.
+- Report the exact AI selection error (missing client models, missing model, unsupported effort) instead of a generic invalid selection, without changing the saved choice.
+
+Beta limits: live fresh-host/reboot acceptance, two-real-account channel switching and real exhausted-account/provider rejection remain pending. The conversation close turn is engine-decided and runs only for owner conversations; existing workspaces do not receive the `## Memory` seed note automatically. Plugin manifests may declare `example`; a plugin that does requires core 0.1.0-beta.50 or newer, and older cores skip that plugin update until they upgrade. Publication does not establish an installed-agent upgrade or authorize provider/domain writes.
 
 ## 0.1.0-beta.49
 
