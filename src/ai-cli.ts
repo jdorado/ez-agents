@@ -16,7 +16,7 @@ if(values.help){
 if (!process.env.EZ_CONTROL_DIR) throw new Error('Use this agent’s bound control directory')
 const controlDir=process.env.EZ_CONTROL_DIR
 const authProfile=values['auth-profile']
-const catalog=():Promise<ModelChoice[]>=>resolveIsolation(process.env)==='host-capable'
+const catalog=():Promise<ModelChoice[]>=>(process.env.EZ_AI_CATALOG==='host'||(process.env.EZ_AI_CATALOG===undefined&&resolveIsolation(process.env)==='host-capable'))
   ? readFile(join(controlDir,'host-executor','models.json'),'utf8').then(text=>JSON.parse(text))
   : readModels(undefined,undefined,join(controlDir,'cli','codex'),undefined,undefined,undefined,controlDir)
 if(positionals[0]==='list')console.log(JSON.stringify(await catalog()))

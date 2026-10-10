@@ -6,6 +6,7 @@ import path from 'node:path'
 import {spawnSync} from 'node:child_process'
 import {fileURLToPath} from 'node:url'
 import {ControlStore} from '../src/control-state.js'
+import {executorJobEnv} from '../src/executor.js'
 import {initialPreset} from '../src/ai.js'
 
 test('explicit CLI/model selection preserves installation default and rejects unavailable choices',async()=>{
@@ -50,13 +51,15 @@ test('an agent can select a declared provider and model without putting the key 
   await writeFile(path.join(binDir,'codex'),'#!/bin/sh\nexit 0\n',{mode:0o700})
   await writeFile(path.join(controlDir,'host-executor','models.json'),JSON.stringify([{cli:'codex',provider:'openrouter',model:'google/gemini-3.8-flash',name:'Gemini',efforts:[]}]))
   const store=new ControlStore(controlDir,900000);await store.aiState(initialPreset('codex'))
-  const env={...process.env,HOME:root,PATH:binDir+path.delimiter+process.env.PATH,EZ_CONTROL_DIR:controlDir,EZ_EXECUTOR_TRANSPORT:'host',OPENROUTER_API_KEY:'must-not-persist'}
+  const env=executorJobEnv({runId:'fixture',controlDir,binDir,catalogTransport:'host'},{...process.env,HOME:root,PATH:binDir+path.delimiter+process.env.PATH,OPENROUTER_API_KEY:'must-not-persist'})
   const bin=fileURLToPath(new URL('../bin/ezenciel-agents-ai.mjs',import.meta.url))
   const result=spawnSync(process.execPath,[bin,'select','--cli','codex','--provider','openrouter','--model','google/gemini-3.8-flash'],{env,encoding:'utf8'})
   assert.equal(result.status,0,result.stderr)
   const state=await store.status(),selected=state.ai?.presets.find(p=>p.id===state.ai?.selectedId)
   assert.equal(selected?.provider,'openrouter');assert.equal(selected?.model,'google/gemini-3.8-flash')
   assert.equal(JSON.stringify(state).includes('must-not-persist'),false)
+  assert.equal(env.EZ_EXECUTOR_TRANSPORT,undefined)
+  assert.equal(env.EZ_ISOLATION,undefined)
  }finally{await rm(root,{recursive:true,force:true})}
 })
 
