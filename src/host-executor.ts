@@ -230,7 +230,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               // Script occurrences come from the authorized run record, never the request.
               if (run?.script) {
                 if (!run.scheduled) throw new Error('Script runs require a scheduled occurrence')
-                const options:ExecutorOptions={catalogTransport:'host',workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),
+                const options:ExecutorOptions={catalogTransport:containerId?'local':'host',workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),
                   runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                   script:{...run.script,scheduleId:run.scheduled.id,scheduleRevision:run.scheduled.revision,dueAt:run.scheduled.dueAt}}
                 job=await launch(request.texts,options)
@@ -262,7 +262,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 // transient native-client probe failure must not reject a model
                 // that the host just advertised to the relay and application.
                 if (cli !== installation.cli || opts.authProfile !== undefined) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,authProfile:opts.authProfile,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
-                const options:ExecutorOptions={catalogTransport:'host',workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
+                const options:ExecutorOptions={catalogTransport:containerId?'local':'host',workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                   runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                   sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,authProfile:opts.authProfile,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
                   promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled)}
