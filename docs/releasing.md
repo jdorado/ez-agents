@@ -22,6 +22,7 @@ separate release bot is not required.
    audit advances. Baseline CI does not validate a newly published native version.
    Managed installs and upgrades keep their existing native version selection.
    Main relay: `EZ_RELAY_IMAGE=ez-release-runtime node docker/smoke.mjs`.
+   Isolated executor: `EZ_RELAY_IMAGE=ez-release-runtime node docker/isolated-executor-smoke.mjs`.
    The WhatsApp Compose overlay has no separate relay image; verify its
    provider integration with the synthetic plugin smoke in `docs/plugins.md`.
 4. Create an artifact with `npm pack --ignore-scripts`. Inspect its file list,

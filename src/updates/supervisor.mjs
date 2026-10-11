@@ -30,9 +30,9 @@ export async function waitForHostHeartbeat(controlDir,child,failure,{attempts=30
   }
   throw Error('Host transport heartbeat timeout');
 }
-export async function idle(control) {
+export async function idle(control,{pendingRequests=true}={}) {
   const host=await fs.readdir(path.join(control,'host-executor')).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
-  if(host.some(f=>f.endsWith('.running.json')||f.endsWith('.request.json')))return false;
+  if(host.some(f=>f.endsWith('.running.json')||(pendingRequests&&f.endsWith('.request.json'))))return false;
   // Run records live in relay memory: the live socket status is the only
   // cross-process view of active work. A down relay cannot own a run.
   const status=await callDeliverySocket(path.join(control,'delivery.sock'),{op:'status'},2000).catch(()=>null);
@@ -73,6 +73,26 @@ export async function queueAutomatic(home,available) {
   }
   return null;
 }
+// Docker archive copy keeps the binding private and readonly without changing
+// host ownership, which may differ from the unprivileged container identity.
+export function executorBindingArchive(binding,gid) {
+  if(!Number.isSafeInteger(gid)||gid<0||gid>0o7777777)throw Error('Invalid executor group');
+  const data=Buffer.from(JSON.stringify(binding)),header=Buffer.alloc(512);
+  const oct=(offset,width,value)=>header.write(value.toString(8).padStart(width-1,'0')+'\0',offset);
+  header.write('executor.json');oct(100,8,0o440);oct(108,8,0);oct(116,8,gid);
+  oct(124,12,data.length);oct(136,12,0);header.fill(32,148,156);
+  header.write('0',156);header.write('ustar\0',257);header.write('00',263);
+  header.write(header.reduce((sum,byte)=>sum+byte,0).toString(8).padStart(6,'0')+'\0 ',148);
+  return Buffer.concat([header,data,Buffer.alloc((512-data.length%512)%512+1024)]);
+}
+export function executorVolumes(deployment,worker) {
+  const names=[...new Set(worker.volumes.filter(m=>m.type==='volume').map(m=>m.source))];
+  return Object.fromEntries(names.map(name=>{
+    const actual=deployment.volumes?.[name]?.name;
+    if(typeof actual!=='string'||!actual)throw Error('Missing executor volume binding');
+    return [name,{name:actual,external:true}];
+  }));
+}
 export async function supervise(deployment,signal,{discover=check}={}) {
   const host=await read(path.join(deployment,'host-executor.json'));
   if(host.agents.length!==1||!host.agents[0].toolsHome)throw Error('Initialize a single deployment plugin registry before starting the supervisor');
@@ -90,7 +110,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   const generations=new Map();
   const removeContainer=async id=>{
     const generation=generations.get(id);
-    if(generation){await execute('docker',['compose','--project-name',generation.project,'--file',generation.file,'down']);await fs.rm(generation.file,{force:true});await fs.rm(generation.configFile,{force:true});generations.delete(id);}
+    if(generation){await execute('docker',['compose','--project-name',generation.project,'--file',generation.file,'down']);await fs.rm(generation.file,{force:true});generations.delete(id);}
     else await execute('docker',['rm',id]);
   };
   const stopHost=async()=>{
@@ -121,20 +141,28 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       const generation=path.basename(root).replace(/[^a-zA-Z0-9_.-]/g,'-')+'-'+Date.now();
       const project='ez-executor-'+generation.toLowerCase();
       const file=path.join(directory,project+'.json');
-      const configFile=path.join(directory,project+'-binding.json');
-      await atomic(configFile,{...host,agents:host.agents.map(a=>({...a,binDir:'/app/bin'}))});
+      const binding={...host,agents:host.agents.map(a=>({...a,binDir:'/app/bin'}))};
       const worker={image:relay.image,init:true,restart:'no',user:`${relay.environment.EZ_RUNTIME_UID||1000}:${relay.environment.EZ_RUNTIME_GID||1000}`,
         cap_drop:['ALL'],security_opt:['no-new-privileges:true'],entrypoint:['node','--import','/app/node_modules/tsx/dist/loader.mjs','/app/src/host-executor.ts','/run/executor.json'],
         environment:{...relay.environment,EZ_CONTAINER_EXECUTOR:'1',EZ_EXECUTOR_TRANSPORT:'local'},
-        volumes:[...relay.volumes,{type:'bind',source:configFile,target:'/run/executor.json',read_only:true}],tmpfs:['/tmp'],
+        volumes:relay.volumes,tmpfs:['/tmp'],
         ...Object.fromEntries(['networks','network_mode','extra_hosts','dns','dns_search'].filter(key=>relay[key]!==undefined).map(key=>[key,relay[key]]))};
       if(worker.networks&&!Array.isArray(worker.networks))worker.networks=Object.fromEntries(Object.keys(worker.networks).map(name=>[name,{}]));
       const networks=worker.networks?Object.fromEntries(Object.entries(deployment.networks||{}).map(([name,binding])=>[name,{name:binding.name,external:true}])):undefined;
-      await atomic(file,{services:{executor:worker},...(networks?{networks}:{})});
-      await execute('docker',['compose','--project-name',project,'--file',file,'up','-d','--no-build','executor']);
-      container=(await execute('docker',['compose','--project-name',project,'--file',file,'ps','-q','executor'],{stdoutOnly:true})).trim();
-      if(!/^[a-f0-9]{12,64}$/.test(container))throw Error('Missing isolated executor');
-      generations.set(container,{project,file,configFile});
+      const volumes=executorVolumes(deployment,worker);
+      const archive=executorBindingArchive(binding,Number(worker.user.split(':')[1]));
+      await atomic(file,{services:{executor:worker},...(networks?{networks}:{}),...(Object.keys(volumes).length?{volumes}:{})});
+      try {
+        await execute('docker',['compose','--project-name',project,'--file',file,'create','--no-build','executor']);
+        container=(await execute('docker',['compose','--project-name',project,'--file',file,'ps','-aq','executor'],{stdoutOnly:true})).trim();
+        if(!/^[a-f0-9]{12,64}$/.test(container))throw Error('Missing isolated executor');
+      } catch(error) {
+        await execute('docker',['compose','--project-name',project,'--file',file,'down']);
+        await fs.rm(file,{force:true});container=undefined;throw error;
+      }
+      generations.set(container,{project,file});
+      await execute('docker',['cp','-',`${container}:/run`],{input:archive});
+      await execute('docker',['start',container]);
       for(let n=0;n<300;n++){
         const running=await execute('docker',['inspect','--format','{{.State.Running}}',container],{stdoutOnly:true});
         if(running.trim()!=='true')throw Error('Isolated executor exited during startup');
@@ -206,7 +234,9 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       if(!isolated||container)return;
       const root=(await state(home)).config.packageRoot;
       if((await read(path.join(root,'package.json'))).ezRelease?.containerExecutor!==1)return;
-      await withIdleUpgrade(agent.controlDir,{id:'executor-migration'},signal,()=>startHost(root));
+      // Queued requests need this worker to drain. Existing native runs still
+      // block migration; the worker lock continues to enforce single ownership.
+      await withIdleUpgrade(agent.controlDir,{id:'executor-migration'},signal,()=>startHost(root),{isIdle:()=>idle(agent.controlDir,{pendingRequests:false})});
     };
     await initializeIsolated();
     let nextCheck=0;
