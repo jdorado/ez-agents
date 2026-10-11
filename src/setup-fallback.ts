@@ -1,4 +1,4 @@
-import { presetLabel, presetProvider, type AiPreset, type ExecutionChoice } from './ai.js'
+import { presetLabel, presetProvider, sameChoice, type AiPreset, type ExecutionChoice } from './ai.js'
 
 // Ordered task setups for one scheduled occurrence. Core advances only on typed
 // evidence: a missing CLI or a provider rejection before any model output or
@@ -37,7 +37,25 @@ export const continuationLine = (runId: string, attempts: SetupAttempt[]): strin
   return limited.length ? `[run ${runId} continues: ${limited.map(a => `${presetLabel(a.preset)} began work in native session ${a.sessionId} and stopped at its usage limit${a.resetAt ? ` (resets ${a.resetAt})` : ''}`).join('; ')}. That work may be partly applied.]` : undefined
 }
 
-export const setupCandidates = (execution: ExecutionChoice): AiPreset[] => [execution.preset, ...(execution.fallbacks ?? [])]
+export type SetupHealth = Record<string, { lastSuccessAt?: string; resetAt?: string }>
+export const validSetupHealth = (value: unknown): value is SetupHealth => Boolean(value && typeof value === 'object' && !Array.isArray(value) &&
+  Object.entries(value).every(([scope, health]) => /^[a-z][a-zA-Z0-9@_./:-]{0,199}$/.test(scope) && health && typeof health === 'object' && !Array.isArray(health) &&
+    Object.entries(health).every(([key, at]) => ['lastSuccessAt', 'resetAt'].includes(key) && typeof at === 'string' &&
+      Number.isFinite(Date.parse(at)) && new Date(at).toISOString() === at)))
+
+// Rotate only the primary's contiguous same-model/effort login choices. Other
+// explicitly saved engines/models keep their fallback priority.
+export const setupCandidates = (execution: ExecutionChoice, health: SetupHealth = {}, now = Date.now()): AiPreset[] => {
+  const saved = [execution.preset, ...(execution.fallbacks ?? [])], primary = saved[0]
+  const end = saved.findIndex(p => p.cli !== primary.cli || p.provider !== primary.provider || p.model !== primary.model || p.effort !== primary.effort)
+  const group = saved.slice(0, end < 0 ? saved.length : end)
+  let best = 0, latest = -Infinity
+  for (let i = 0; i < group.length; i++) {
+    const state = health[quotaScope(group[i])], at = Date.parse(state?.lastSuccessAt ?? '')
+    if (!(Date.parse(state?.resetAt ?? '') > now) && at > latest) { best = i; latest = at }
+  }
+  return [...group.slice(best), ...group.slice(0, best), ...saved.slice(group.length)]
+}
 
 // The owner provisions native profiles for separate provider accounts. Models
 // in one login share its quota scope; another named login may be tried once.
@@ -53,15 +71,18 @@ export const quotaScope = (preset: AiPreset): string => {
 
 // The next untried setup, skipping a login that already rejected authentication
 // or reached its quota in this occurrence. Each candidate is tried at most once.
-export const nextSetup = (candidates: AiPreset[], attempts: SetupAttempt[]): { skipped: SetupAttempt[]; preset?: AiPreset } => {
+export const nextSetup = (candidates: AiPreset[], attempts: SetupAttempt[], health: SetupHealth = {}, now = Date.now()): { skipped: SetupAttempt[]; preset?: AiPreset } => {
   const exhausted = new Map(attempts.filter(a => ['quota', 'quota-after-work-began', 'login-unavailable'].includes(a.category!))
     .map(a => [a.quotaScope, a.category === 'login-unavailable' ? 'same-login-scope' as const : 'same-quota-scope' as const]))
   const skipped: SetupAttempt[] = []
-  for (const preset of candidates.slice(attempts.length)) {
+  for (const preset of candidates) {
+    if (attempts.some(attempt => sameChoice(attempt.preset, preset))) continue
     const scope = quotaScope(preset)
-    if (!exhausted.has(scope)) return { skipped, preset }
-    const at = new Date().toISOString()
-    skipped.push({ preset, quotaScope: scope, outcome: 'skipped', category: exhausted.get(scope), startedAt: at, endedAt: at })
+    const resetAt = health[scope]?.resetAt
+    const category = exhausted.get(scope) ?? (Date.parse(resetAt ?? '') > now ? 'same-quota-scope' : undefined)
+    if (!category) return { skipped, preset }
+    const at = new Date(now).toISOString()
+    skipped.push({ preset, quotaScope: scope, outcome: 'skipped', category, ...(resetAt ? { resetAt } : {}), startedAt: at, endedAt: at })
   }
   return { skipped }
 }

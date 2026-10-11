@@ -10,7 +10,7 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore, activeSetup } from '../src/runs.js'
 import { Scheduler } from '../src/scheduler.js'
 import { CliUnavailableError, EXECUTOR_REGISTRY, type ExecutorOptions } from '../src/executor.js'
-import { attemptFailure, codexRejection, nextSetup, quotaScope, startupObserver, startupLine } from '../src/setup-fallback.js'
+import { attemptFailure, codexRejection, nextSetup, quotaScope, setupCandidates, startupObserver, startupLine } from '../src/setup-fallback.js'
 import type { AiPreset } from '../src/ai.js'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let i=0;i<250;i++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Timed out')}
@@ -93,6 +93,21 @@ test('a quota rejection skips models in the same login scope; named accounts hav
   assert.deepEqual(nextSetup([claudeA,claudeB,codexA],[{...first,category:'quota-after-work-began'}]).skipped.map(s=>s.category),['same-quota-scope'])
   // A non-quota rejection (model unavailable) leaves the scope eligible.
   assert.equal(nextSetup([claudeA,claudeB],[{...first,category:'provider-rejected'}]).preset,claudeB)
+})
+
+test('same-settings login choices rotate from the last success, preserving explicit model fallback priority',()=>{
+  const a={...claudeA,effort:'xhigh'},b={...a,id:'b',authProfile:'claude2'},c={...a,id:'c',authProfile:'claude3'}
+  const execution={sessionId:'00000000-0000-4000-8000-000000000000',preset:a,fallbacks:[b,c,codexA]}
+  const health={'claude@claude2':{lastSuccessAt:'2026-01-01T00:00:00.000Z'}}
+  assert.deepEqual(setupCandidates(execution,health).map(p=>p.id),['b','c','claude-a','codex-a'])
+  assert.deepEqual(setupCandidates({...execution,fallbacks:[codexA,b]},health).map(p=>p.id),['claude-a','codex-a','b'])
+  const now=Date.parse('2026-01-01T01:00:00.000Z'), resetAt='2026-01-01T02:00:00.000Z'
+  const cooling={claude:{resetAt},'claude@claude2':{...health['claude@claude2'],resetAt}}
+  const next=nextSetup([a,b,c],[],cooling,now)
+  assert.equal(next.preset,c)
+  assert.deepEqual(next.skipped.map(s=>[s.quotaScope,s.category,s.resetAt]),[['claude','same-quota-scope',resetAt],['claude@claude2','same-quota-scope',resetAt]])
+  assert.equal(nextSetup([a,b,c],[],cooling,Date.parse(resetAt)).preset,a,'the native reset expires the cooldown')
+  assert.equal(nextSetup([b,c,a],[{preset:b,quotaScope:'claude@claude2',outcome:'failed',category:'quota'}]).preset,c,'rotation never retries an attempted login')
 })
 
 type Script={lines?:unknown[];code?:number;unavailable?:boolean;hold?:boolean}
@@ -206,6 +221,29 @@ test('four Claude accounts advance in order on quota rejection before work',asyn
     assert.ok(f.launches.every(l=>l.runId===run.id))
     assert.deepEqual(run.attempts!.map(a=>[a.quotaScope,a.outcome]),[
       ['claude','failed'],['claude@claude2','failed'],['claude@claude3','failed'],['claude@claude4','completed']])
+  }finally{await f.close()}
+})
+
+test('later tasks reuse the last working login and retain quota resets in owner control state',async()=>{
+  const primary={...claudeA,effort:'xhigh'},profiles=['claude2','claude3'].map((authProfile,i)=>({...primary,id:`fallback-${i}`,authProfile}))
+  const resetAt=new Date(Date.now()+3600_000).toISOString(),limit={type:'ez.startup',workBegan:false,rejection:{category:'quota',resetAt}}
+  const f=await fixture('sticky-login',[{lines:[limit],code:1},{lines:[work],code:0},{lines:[limit],code:1},{lines:[work],code:0},{lines:[work],code:0}],profiles,primary)
+  try{
+    await f.done()
+    const control=new ControlStore(f.dir,1000),owner=(await control.status()).owner!
+    assert.equal((await control.scheduledSetupHealth(owner)).claude.resetAt,resetAt)
+    for(const id of ['second','third']){
+      const saved=await f.scheduler.save({id,name:id,text:'Another saved task',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,fallbacks:profiles},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
+      const run=await f.scheduler.trigger(id,saved.revision,id,owner,f.runs)
+      await f.relay.drainSources()
+      await until(async()=>(await f.runs.get(run.id))?.status==='completed')
+    }
+    assert.deepEqual(f.launches.map(l=>l.authProfile),[undefined,'claude2','claude2','claude3','claude3'])
+    assert.ok(f.launches.every(l=>l.model==='opus'&&l.effort==='xhigh'))
+    const persisted=await new ControlStore(f.dir,1000).scheduledSetupHealth(owner)
+    assert.equal(persisted.claude.resetAt,resetAt)
+    assert.equal(persisted['claude@claude2'].resetAt,resetAt)
+    assert.ok(persisted['claude@claude3'].lastSuccessAt)
   }finally{await f.close()}
 })
 

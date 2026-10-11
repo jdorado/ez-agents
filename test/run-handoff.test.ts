@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { appendFile, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { join } from 'node:path'
 import type { Update } from 'grammy/types'
 import { createRelay } from '../src/index.js'
@@ -133,4 +135,56 @@ test('adoption fails closed for unknown, invalid, stale or corrupt handoff recor
     await assert.rejects(readFile(join(dir, 'run-handoff.json')), { code: 'ENOENT' })
     assert.equal(await runs.get('r_schedule_local'), null)
   } finally { await local.stop() }
+})
+
+test('an adopted scheduled run continues a terminal quota limit on its next saved login', async t => {
+  const { root, dir, next, host, files, owner } = await fixture(t)
+  const scheduler = new Scheduler(dir), first = new RunStore(dir)
+  const primary = { ...initialPreset('claude'), model: 'opus', effort: 'xhigh' }
+  const profiles = ['claude2', 'claude3'].map((authProfile, i) => ({ ...primary, id: `fallback-${i + 1}`, authProfile }))
+  const saved = await scheduler.save({ id: 'quota', name: 'Quota', text: 'Saved work', owner, enabled: true,
+    trigger: { at: '2027-01-01T00:00:00Z' }, execution: { sessionId: '00000000-0000-4000-8000-000000000000', preset: primary, fallbacks: profiles } }, true)
+  const run = await scheduler.trigger(saved.id, saved.revision, 'adopt-quota', owner, first)
+  const before = createRelay(config(dir, root))
+  t.after(() => before.stop())
+  before.bot.api.config.use(async () => ({ ok: true, result: { message_id: 42 } }) as never)
+  for (const profile of profiles) await mkdir(join(dir, 'cli', 'profiles', profile.authProfile, 'claude'), { recursive: true })
+  const event = (text: unknown) => JSON.stringify({ stream: 'stdout', text: JSON.stringify(text) + '\n' }) + '\n'
+  await before.drainSources()
+  await until(async () => (await files()).includes(run.id + '.request.json'))
+  await rename(join(host, run.id + '.request.json'), join(host, run.id + '.running.json'))
+  await appendFile(join(host, run.id + '.events'), event({ type: 'assistant', error: 'rate_limit' }) + JSON.stringify({ stream: 'exit', code: 1 }) + '\n')
+  await rm(join(host, run.id + '.running.json'))
+  await until(async () => (await first.get(run.id))?.attempts?.length === 2 && (await files()).includes(run.id + '.request.json'))
+  await rename(join(host, run.id + '.request.json'), join(host, run.id + '.running.json'))
+  await appendFile(join(host, run.id + '.events'), event({ type: 'assistant', message: { content: [{ type: 'tool_use' }] } }))
+  const partialSession = (await first.get(run.id))!.attempts![1].sessionId!
+  await before.stop()
+
+  const launches: { authProfile?: string; model?: string; effort?: string; runId: string; sessionId?: string; texts: string[] }[] = []
+  const after = createRelay(config(next, root), async (texts, options) => {
+    launches.push({ authProfile: options.authProfile, model: options.model, effort: options.effort, runId: options.runId, sessionId: options.sessionId, texts })
+    const child = spawn(process.execPath, ['-e', 'process.stdout.write(JSON.stringify({type:"ez.startup",workBegan:true})+String.fromCharCode(10));setTimeout(()=>process.exit(0),20)'])
+    await once(child, 'spawn')
+    return { child, cleanup: async () => {}, stdout: '' }
+  }), runs = new RunStore(next)
+  after.bot.api.config.use(async () => ({ ok: true, result: { message_id: 42 } }) as never)
+  try {
+    await after.adoptHandoff()
+    assert.equal(launches.length, 0, 'adoption only attaches to the existing native session')
+    await appendFile(join(host, run.id + '.events'), event({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 2114380800 } }) +
+      event({ type: 'assistant', error: 'rate_limit' }) + JSON.stringify({ stream: 'exit', code: 1 }) + '\n')
+    await rm(join(host, run.id + '.running.json'))
+    await until(async () => ['completed', 'failed'].includes((await runs.get(run.id))!.status))
+    const ended = (await runs.get(run.id))!
+    assert.equal(ended.status, 'completed')
+    assert.deepEqual(ended.attempts!.map(a => [a.quotaScope, a.outcome, a.category]), [
+      ['claude', 'failed', 'quota'], ['claude@claude2', 'failed', 'quota-after-work-began'], ['claude@claude3', 'completed', undefined],
+    ])
+    assert.equal(launches.length, 1)
+    assert.deepEqual([launches[0].authProfile, launches[0].model, launches[0].effort, launches[0].runId], ['claude3', 'opus', 'xhigh', run.id])
+    assert.notEqual(launches[0].sessionId, partialSession)
+    assert.match(launches[0].texts.at(-1)!, new RegExp(`began work in native session ${partialSession}.*That work may be partly applied`))
+    assert.equal((await runs.list()).length, 1)
+  } finally { await after.stop() }
 })
