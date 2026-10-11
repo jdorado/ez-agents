@@ -111,7 +111,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     nextSendAt = Date.now() + 1000
   }
   let startLock: Promise<void> = Promise.resolve()
-  const withStartLock = (work: () => Promise<void>): Promise<void> => {
+  const withStartLock = <T>(work: () => Promise<T>): Promise<T> => {
     const next = startLock.then(work, work)
     startLock = next.then(
       () => undefined,
@@ -800,7 +800,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   // the single delivery executor; the socket only admits work into it.
   let drainingHandoff=false
   let deliveryServer: { socketPath: string; stop: () => Promise<void> } | null = null
-  const handleDeliveryOp = createLedgerHandler(config.controlDir, {
+  const ledgerHandler = createLedgerHandler(config.controlDir, {
     wake: () => { void drainOutbox() },
     status: () => ({
       polling: Boolean(bot?.isRunning()),
@@ -809,6 +809,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       version: packageVersion,
     }),
   })
+  // Read idle status only after admissions already inside startJob finish.
+  // The updater closes admission before asking for this barrier.
+  const handleDeliveryOp: typeof ledgerHandler = op => op.op === 'status'
+    ? withStartLock(() => ledgerHandler(op))
+    : ledgerHandler(op)
 
   const checkOwner = async (ctx: Context): Promise<boolean> => {
     if (!ctx.from || ctx.from.is_bot || ctx.message?.sender_chat) return false

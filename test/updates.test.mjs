@@ -531,6 +531,8 @@ test('missing or broken managers fail with repair guidance before installing or 
 
 for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider} drains work, replaces host PID and recovers after restart`,async t=>{
  const f=await fixture(t),fake=path.join(f.root,'fake');await fs.mkdir(fake);
+ const server=createServer(socket=>socket.on('data',chunk=>{const req=JSON.parse(chunk.toString());socket.end(JSON.stringify({id:req.id,ok:true,result:{running:0}})+'\n');}));
+ await new Promise(resolve=>server.listen(path.join(f.agent.controlDir,'delivery.sock'),resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
  // A process may die after creating a job directory but before atomically
  // committing its receipt. That directory must not block transport startup.
  await fs.mkdir(path.join(f.home,'updates','d18e847a-bb59-49c6-96f3-27fdc43ca44f'));
@@ -543,9 +545,9 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  }
  // Package archives never contain node_modules; the fake pnpm below provisions the fixture loader.
  await fs.rm(path.join(f.source,'node_modules'),{recursive:true});
- const log=path.join(f.root,'commands.jsonl');
+ const log=path.join(f.root,'commands.jsonl'),held=path.join(f.agent.controlDir,'host-executor/held.request.json'),retiring=path.join(f.agent.controlDir,'host-executor/retiring.running.json');
  await fs.writeFile(path.join(fake,provider),`#!${process.execPath}\nif(${JSON.stringify(provider)}==='corepack'&&process.argv[2]!=='pnpm@10.30.3')throw Error('Unpinned manager');if(process.argv.includes('view')){console.log(JSON.stringify('0.160.0'));process.exit(0)}if(process.argv.includes('--version')){console.log('10.30.3');process.exit(0)}const fs=require('fs');fs.mkdirSync('node_modules/tsx/dist',{recursive:true});fs.writeFileSync('node_modules/tsx/dist/loader.mjs','');`,{mode:0o755});
- await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nconst fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a.includes('config'))console.log(JSON.stringify({services:{relay:{build:{args:{}}}}}));if(a.includes('ps'))console.log('cid');if(a[0]==='inspect')console.log('sha256:'+'a'.repeat(64));`,{mode:0o755});
+ await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}\nconst fs=require('fs');const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');if(a.includes('config'))console.log(JSON.stringify({services:{relay:{build:{args:{}}}}}));if(a.includes('ps'))console.log('cid');if(a[0]==='inspect')console.log('sha256:'+'a'.repeat(64));if(a.includes('up')&&!fs.existsSync(${JSON.stringify(held)})){fs.writeFileSync(${JSON.stringify(held)},'queued request');fs.writeFileSync(${JSON.stringify(retiring)},'active retired generation');}`,{mode:0o755});
  const wrapper=path.join(f.root,'supervisor.mjs'),module=new URL('../src/updates/supervisor.mjs',import.meta.url).href;
  await fs.writeFile(wrapper,`import {supervise} from ${JSON.stringify(module)};const a=new AbortController();process.on('SIGTERM',()=>a.abort());await supervise(${JSON.stringify(f.config.deploymentDir)},a.signal,{discover:async()=>{${provider==='pnpm' ? "throw Error('Synthetic discovery failure')" : 'return []'}}});`);
  const start=()=>{const p=spawn(process.execPath,[wrapper],{env:{...process.env,PATH:fake},stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);return {p,output:()=>output};};
@@ -562,21 +564,38 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  await assert.rejects(fs.readFile(path.join(f.agent.controlDir,'upgrade-pause.json')),e=>e.code==='ENOENT');
  await fs.rm(running);
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));if(j.status==='failed'||j.status==='rolled-back')throw Error(JSON.stringify(j)+first.output());return j.status==='completed';});
- const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);assert.equal(await firstClosed,0,first.output());
+ const newBeat=await heartbeat();assert.notEqual(newBeat.pid,oldBeat.pid);
+ await wait(async()=>await fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')).then(()=>true,()=>false));
+ assert.equal(first.p.exitCode,null,'active retiring work must finish before service reload');
+ assert.equal(await fs.readFile(retiring,'utf8'),'active retired generation');
+ assert.equal(await fs.readFile(held,'utf8'),'queued request');
+ await fs.rm(retiring);
+ assert.equal(await firstClosed,0,first.output());
+ assert.equal((await read(path.join(f.agent.controlDir,'upgrade-pause.json'))).id,job.id,'admission stays closed across supervisor exit');
  if(provider==='pnpm'){assert.match(first.output(),/Update discovery failed; host remains running/);assert.doesNotMatch(first.output(),/Synthetic discovery failure/);}
  // Adversarial: a completed update must not publish an agent wakeup notice.
  await assert.rejects(fs.readFile(path.join(f.agent.controlDir,'update-attention.json')),error=>error.code==='ENOENT');
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).packageManager.command,provider);
+ // Failed successor startup must not reopen admission or consume pending work.
+ const activeHost=path.join(active,'src/host-executor.ts');await fs.writeFile(activeHost,"throw Error('Synthetic worker startup failure')");
+ const broken=start(),brokenClosed=new Promise(resolve=>broken.p.once('close',resolve));t.after(()=>broken.p.kill('SIGTERM'));
+ assert.equal(await brokenClosed,1,broken.output());
+ assert.equal((await read(path.join(f.agent.controlDir,'upgrade-pause.json'))).id,job.id);
+ assert.equal(await fs.readFile(held,'utf8'),'queued request');
+ await fs.writeFile(activeHost,hostCode);
  const second=start();t.after(()=>second.p.kill('SIGTERM'));
  await wait(async()=>{const h=await heartbeat();return h?.pid!==newBeat.pid&&h?.at>newBeat.at;});
+ await wait(async()=>await fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')).then(()=>false,()=>true));
+ assert.equal(await fs.readFile(held,'utf8'),'queued request','successor resumes without removing queued requests');
  const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';await atomic(path.join(jobPath(f.home,job.id),'job.json'),interrupted);
  await atomic(path.join(f.home,'registry.lock'),{pid:second.p.pid});
  const closed2=new Promise(r=>second.p.once('close',r));second.p.kill('SIGKILL');await closed2;
  const third=start(),closed3=new Promise(r=>third.p.once('close',r));t.after(()=>third.p.kill('SIGTERM'));
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));return j.status==='rolled-back';});
  assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
- // A rolled-back main update reloads automatically once native work is idle.
+ // The exact post-rollback regression: an unclaimed request cannot starve reload.
+ assert.equal(await fs.readFile(held,'utf8'),'queued request');
  await wait(()=>third.p.exitCode!==null||third.p.signalCode!==null);
  assert.equal(await closed3,0,third.output());
 });
@@ -801,12 +820,14 @@ test('missing executor startup ignores queued requests but never live native wor
  const dir=path.join(root,'host-executor');await fs.mkdir(dir);
  await fs.writeFile(path.join(dir,'queued.request.json'),'{}');
  assert.equal(await idle(root),false);assert.equal(await idle(root,{pendingRequests:false}),true);
+ assert.equal(await idle(root,{pendingRequests:false,relayRequired:true}),false,'reload requires the live admission barrier');
  await fs.writeFile(path.join(dir,'live.running.json'),'{}');assert.equal(await idle(root,{pendingRequests:false}),false);
  assert.equal(await fs.readFile(path.join(dir,'queued.request.json'),'utf8'),'{}');
  await fs.rm(path.join(dir,'live.running.json'));
  const server=createServer(socket=>socket.on('data',chunk=>{const req=JSON.parse(chunk.toString());socket.end(JSON.stringify({id:req.id,ok:true,result:{running:1}})+'\n');}));
  await new Promise(resolve=>server.listen(path.join(root,'delivery.sock'),resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
  assert.equal(await idle(root,{pendingRequests:false}),false);
+ assert.equal(await idle(root,{pendingRequests:false,relayRequired:true}),false);
 });
 test('executor preserves exact named volume identities and rejects missing declarations',()=>{
  const worker={volumes:[{type:'volume',source:'registered-whatsapp-ipc'},{type:'bind',source:'/private/workspace'}]};

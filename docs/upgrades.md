@@ -16,7 +16,7 @@ automatic channel for core and plugins without a saved policy. Existing explicit
 stable or manual policies are preserved. The owner may select either per target.
 The main target and installed plugins version independently.
 
-Handoff-compatible core upgrades build while native work continues and pause admission only for activation. The current native executor retires from claiming new work; the replacement claims new requests while the retiring generation finishes its existing runs. The relay adopts those runs without replay, preserving their schedule holds, cancellation and settled delivery receipts. The supervisor reloads only after native work is idle, so OS service process-group cleanup cannot kill a retiring generation. Plugin upgrades build while native work continues. Activation closes the existing registry admission lock, drains in-flight plugin command leases, and replaces the plugin under that lock. New native plugin calls wait for admission; an outdated revision fails before provider execution and must be rediscovered. No admitted provider operation is replayed. The shared broker and native sessions remain running. Older runtimes without the handoff contract retain the full native-work drain. Isolated agents migrate once after live native work finishes to a separate, unprivileged executor container. Pending requests remain queued for that executor; its private binding is copied into the container as root-owned, group-readable and not writable by the configured runtime user. Existing named volumes are attached as external volumes. It uses the same file transport; later relay/runtime upgrades preserve that executor generation. No native CLI or provider credentials move to the host. A plugin update also retains that drain if an operator replaced the broker’s single-file host binding (for example to approve new network pins), because that case still requires broker recreation.
+Handoff-compatible core upgrades build while native work continues; activation and the later supervisor reload hold new turn admission. The current native executor retires from claiming new work; the replacement claims new requests while the retiring generation finishes its existing runs. The relay adopts those runs without replay, preserving their schedule holds, cancellation and settled delivery receipts. After completion or rollback, the supervisor holds new turn admission until existing native work finishes and its successor worker is ready. Queued requests remain in the running relay and file transport; they do not block this supervisor reload. OS service process-group cleanup therefore cannot kill a retiring generation or be starved by newly admitted work. Plugin upgrades build while native work continues. Activation closes the existing registry admission lock, drains in-flight plugin command leases, and replaces the plugin under that lock. New native plugin calls wait for admission; an outdated revision fails before provider execution and must be rediscovered. No admitted provider operation is replayed. The shared broker and native sessions remain running. Older runtimes without the handoff contract retain the full native-work drain. Isolated agents migrate once after live native work finishes to a separate, unprivileged executor container. Pending requests remain queued for that executor; its private binding is copied into the container as root-owned, group-readable and not writable by the configured runtime user. Existing named volumes are attached as external volumes. It uses the same file transport; later relay/runtime upgrades preserve that executor generation. No native CLI or provider credentials move to the host. A plugin update also retains that drain if an operator replaced the broker’s single-file host binding (for example to approve new network pins), because that case still requires broker recreation.
 
 Compatible main upgrades also finish their advisory workspace/native-client
 backup before closing admission or stopping the relay. Large native histories do
@@ -63,10 +63,15 @@ restart and verify. Do not recreate the agent or its registry. Subsequent
 compatible upgrades are agent-owned. Noncanonical/multi-agent host configuration
 files require migration to one canonical deployment per service first.
 
-## Recovering an isolated-executor startup defect
+## Recovering an isolated-executor or supervisor admission defect
 
-If an older supervisor cannot start its isolated executor, queued requests can
-prevent that same supervisor from installing its correction. Use an exact,
+The post-update reload requires a live relay status response taken after
+in-progress admissions finish. An unavailable or timed-out response keeps
+admission closed and leaves active executors running.
+
+If an older supervisor cannot start its isolated executor, or its post-update
+reload admits new work indefinitely, it can prevent its own correction from
+being installed. Use an exact,
 reviewed newer package's `src/updates/supervisor.mjs DEPLOYMENT_DIRECTORY` as the
 existing OS service's temporary entry point. First verify that no native run is
 active. Keep the same service user, environment, registry, deployment and queued
