@@ -576,7 +576,9 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  const third=start(),closed3=new Promise(r=>third.p.once('close',r));t.after(()=>third.p.kill('SIGTERM'));
  await wait(async()=>{const j=await read(path.join(jobPath(f.home,job.id),'job.json'));return j.status==='rolled-back';});
  assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
- third.p.kill('SIGTERM');assert.equal(await closed3,0,third.output());
+ // A rolled-back main update reloads automatically once native work is idle.
+ await wait(()=>third.p.exitCode!==null||third.p.signalCode!==null);
+ assert.equal(await closed3,0,third.output());
 });
 
 test('queued upgrades keep admission open while busy and release a raced or aborted pause',async t=>{
