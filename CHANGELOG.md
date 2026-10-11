@@ -4,6 +4,7 @@
 
 - Keep native runs alive during handoff-compatible core upgrades. The retiring executor finishes existing work while its replacement accepts new requests; the relay adopts runs without replay and preserves schedule holds, cancellation and settled delivery receipts. Isolated agents migrate once while idle to a separate, unprivileged executor container; later compatible upgrades preserve its running generation. Older runtimes without the handoff contract retain the full native-work drain.
 - Prepare compatible-upgrade workspace and native-client backups before pausing admission or stopping the relay, so large histories do not extend the swap outage. Rollback restores code and configuration without rewinding active native state.
+- Make stop requests reach handed-off native work even while its observer is starting. A failed cancellation write leaves the observer active and reports the failed stop request.
 - Show paused schedules in `/tasks` and task details with a paused label and no next run. Editing a paused schedule keeps it paused.
 - Replace the oldest unused saved AI choice when the saved-choice limit is reached, preserving the selected, default and recently used choices.
 - Use the isolated native client's own catalog for AI selection, so available models such as Sonnet appear without relying on a host catalog.

@@ -893,6 +893,18 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         : []),
     ].join('\n')
   }
+  const stopActiveWork = async (): Promise<boolean> => {
+    const children: [string | undefined, ChildProcess][] = [...background]
+    if (activeChild) children.unshift([undefined, activeChild])
+    let requested = true
+    for (const [id, child] of children) {
+      if (!await terminateJob(child)) { requested = false; continue }
+      ownerStopped.add(child)
+      if (id) await scheduler.cancel(id)
+    }
+    return requested
+  }
+
   const cancelPending = async () => {
     let count = 0
     await withStartLock(async () => {
@@ -1031,16 +1043,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if (text === '/stop') {
       const running = await runs.running(false)
       if ((running && running.pid) || background.size) {
-        try {
-          if (activeChild) { ownerStopped.add(activeChild); terminateJob(activeChild) }
-          for (const [id,child] of background) { await scheduler.cancel(id); ownerStopped.add(child); terminateJob(child) }
-        } catch {}
-        if (activeTypingTimer) {
+        let requested = false
+        try { requested = await stopActiveWork() } catch {}
+        if (requested && activeTypingTimer) {
           clearInterval(activeTypingTimer)
           activeTypingTimer = null
         }
         await ctx.reply(
-          '🛑 Stop requested for active work. Queued work remains and will run next. /cancel clears it.',
+          requested ? '🛑 Stop requested for active work. Queued work remains and will run next. /cancel clears it.'
+            : 'A stop request failed; some work remains active.',
         )
       } else {
         await ctx.reply('No active run in progress.')
@@ -1263,11 +1274,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       } else if (action === 'stop') {
         const running = await runs.running(false)
         if ((running && running.pid) || background.size) {
-          if (activeChild) { ownerStopped.add(activeChild); terminateJob(activeChild) }
-          for (const [id,child] of background) { await scheduler.cancel(id); ownerStopped.add(child); terminateJob(child) }
-          await ctx.answerCallbackQuery({ text: 'Run stopped' })
+          let requested = false
+          try { requested = await stopActiveWork() } catch {}
+          await ctx.answerCallbackQuery({ text: requested ? 'Stop requested' : 'Stop request failed' })
           await ctx.reply(
-            '🛑 Stop requested for active work. Queued work remains and will run next. /cancel clears it.',
+            requested ? '🛑 Stop requested for active work. Queued work remains and will run next. /cancel clears it.'
+              : 'A stop request failed; some work remains active.',
           )
         } else {
           await ctx.answerCallbackQuery({ text: 'No run active' })

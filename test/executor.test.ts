@@ -2,11 +2,11 @@ import { ownerRun } from './helpers/owner-run.js'
 import { RunStore } from '../src/runs.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile, rename, stat } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, attachHostJob, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
@@ -139,13 +139,41 @@ test('host transport does not throw when selecting the desktop adapter', async (
       workspace: root, controlDir, binDir: path.join(root, 'bin'), cli: 'codex-gui', runId: 'r_hostgui', timeoutMs: 1500,
     })
     assert.ok(job.child.pid)
-    terminateJob(job.child)
-    await new Promise((resolve) => job.child.once('close', resolve))
+    const closed = new Promise((resolve) => job.child.once('close', resolve))
+    await terminateJob(job.child)
+    await closed
+    assert.equal(await readFile(path.join(controlDir,'host-executor/r_hostgui.cancel'),'utf8'),'')
     await job.cleanup()
   } finally {
     if (prior === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT
     else process.env.EZ_EXECUTOR_TRANSPORT = prior
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('host cancellation persists before a stalled observer receives a signal', {skip:process.platform==='win32'}, async () => {
+  const root=await mkdtemp(path.join(tmpdir(),'ez-cancel-observer-'))
+  const directory=path.join(root,'host-executor'),id='r_stalled'
+  await mkdir(directory)
+  await assert.rejects(attachHostJob(root,'../escape'),/Invalid host executor run ID/)
+  await writeFile(path.join(directory,id+'.running.json'),'{}')
+  const child=await attachHostJob(root,id)
+  const closed=new Promise(resolve=>child.once('close',resolve))
+  child.kill('SIGSTOP')
+  try {
+    await rename(directory,directory+'.saved')
+    await writeFile(directory,'Blocked transport directory')
+    assert.equal(await terminateJob(child),false)
+    assert.equal(child.exitCode,null)
+    assert.equal(child.signalCode,null)
+    await assert.rejects(readFile(path.join(directory+'.saved',id+'.cancel')),{code:'ENOENT'})
+    await rm(directory);await rename(directory+'.saved',directory)
+    assert.equal(await terminateJob(child),true)
+    assert.equal(await readFile(path.join(directory,id+'.cancel'),'utf8'),'')
+    assert.equal((await stat(path.join(directory,id+'.cancel'))).mode&0o777,0o600)
+  } finally {
+    child.kill('SIGCONT');child.kill('SIGKILL')
+    await closed;await rm(root,{recursive:true,force:true})
   }
 })
 
