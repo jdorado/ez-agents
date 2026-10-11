@@ -1,7 +1,8 @@
 import { executionDefaults } from './model-policy.js'
 import { startTaskExecutor } from './task-executor.js'
 import { deliverySocketPath } from './delivery-socket.js'
-import { mkdtemp, rm, writeFile, mkdir, symlink, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, mkdir, symlink, readFile, rename } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { accessSync, openSync, closeSync, constants as fsConstants } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import path from 'node:path'
@@ -13,6 +14,13 @@ import { DESKTOP_UNAVAILABLE } from './desktop-bridge.js'
 import { macosWorkspaceProfile, workspaceSiblingDenies } from './workspace-confine.js'
 import { Scripts, type ScriptRunRef } from './scripts.js'
 import { claudeAuthEnvironment, cliHome, provisionedHome } from './auth-profile.js'
+import { isHostRunId } from './host-executor-protocol.js'
+
+const hostCancelFiles = new WeakMap<ChildProcess, string>()
+const hostCancelFile = (controlDir: string, runId: string): string => {
+  if (!isHostRunId(runId)) throw new Error('Invalid host executor run ID')
+  return path.join(controlDir, 'host-executor', runId + '.cancel')
+}
 
 export type ExecutorOptions = {
   repairEnabled?: boolean
@@ -357,6 +365,7 @@ export const startExecutorJob = async (
   options: ExecutorOptions,
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
   const host = await usesFileTransport(options.controlDir)
+  const cancelFile = host ? hostCancelFile(options.controlDir, options.runId) : undefined
   if (options.script && !host) return startScriptJob(options as ExecutorOptions & { script: ScriptLaunch })
   options = executionDefaults(executorKey(options.cli), options)
   // Named credential homes are owner-provisioned; fail closed before any launch state.
@@ -470,6 +479,7 @@ export const startExecutorJob = async (
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   })
+  if (cancelFile) hostCancelFiles.set(child, cancelFile)
   await new Promise<void>((resolve, reject) => {
     child.once('spawn', resolve)
     child.once('error', reject)
@@ -514,9 +524,11 @@ export const startGrokJob = startExecutorJob
 
 // Watch a host-transport run a previous relay submitted; it is never resubmitted.
 export const attachHostJob = async (controlDir: string, runId: string): Promise<ChildProcess> => {
+  const cancelFile = hostCancelFile(controlDir, runId)
   const invocation = executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
     fileURLToPath(new URL('./host-executor-client.ts', import.meta.url)), controlDir, runId, '--attach'])
   const child = spawn(invocation.command, invocation.args, { env: executorEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
+  hostCancelFiles.set(child, cancelFile)
   await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
   return child
 }
@@ -564,11 +576,27 @@ export const nativeSessionId = (cli: string, line: string): string | undefined =
   } catch {}
 }
 
-const terminating = new WeakSet<ChildProcess>()
-export const terminateJob = (child: ChildProcess, inspect = processSnapshot): void => {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null || terminating.has(child)) return
-  terminating.add(child)
-  void (async () => {
+const terminating = new WeakMap<ChildProcess, Promise<boolean>>()
+export const terminateJob = (child: ChildProcess, inspect = processSnapshot): Promise<boolean> => {
+  const pending = terminating.get(child)
+  if (pending) return pending
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true)
+  const work = (async () => {
+    const cancelFile = hostCancelFiles.get(child)
+    if (cancelFile) {
+      // The observer may still be loading, or unable to handle a signal. Commit
+      // the native worker's stop request before terminating that observer.
+      const temporary = cancelFile + '.' + process.pid + '.' + randomUUID() + '.tmp'
+      try {
+        await mkdir(path.dirname(cancelFile), { recursive: true, mode: 0o700 })
+        await writeFile(temporary, '', { mode: 0o600, flag: 'wx' })
+        await rename(temporary, cancelFile)
+      } catch (error) {
+        await rm(temporary, { force: true }).catch(() => {})
+        console.error('Cannot request host executor cancellation; observer remains active', error)
+        return false
+      }
+    }
     const targets = new Set([child.pid!])
     // Native tool terminals can start separate process groups. Capture ancestry
     // before stopping the CLI, while those children still have their parent.
@@ -596,5 +624,9 @@ export const terminateJob = (child: ChildProcess, inspect = processSnapshot): vo
       void processSnapshot().then(current => signal(matchingProcessIds(identities, current), 'SIGKILL'))
         .catch(error => console.error('Cannot inspect executor descendants for escalation', error))
     }, 3000)
+    return true
   })()
+  terminating.set(child, work)
+  void work.then(stopped => { if (!stopped) terminating.delete(child) })
+  return work
 }

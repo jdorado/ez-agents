@@ -8,7 +8,7 @@ import { serveHostExecutor, refreshAgentCatalog } from '../src/host-executor.js'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { isHostRunId } from '../src/host-executor-protocol.js'
-import { EXECUTOR_REGISTRY } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, attachHostJob, terminateJob } from '../src/executor.js'
 import { RunStore } from '../src/runs.js'
 import { packageVersion } from '../src/version.js'
 import { executionDefaults } from '../src/model-policy.js'
@@ -298,7 +298,13 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     await readFile(path.join(directory,'tg_43.running.json'))
     assert.doesNotMatch(await readFile(path.join(directory,'r_hold.events'),'utf8'),/"stream":"exit"/)
     await readFile(path.join(directory,'r_hold.running.json'))
-    await writeFile(path.join(directory,'r_hold.cancel'),'')
+    // An observer that cannot handle signals must still stop the native run.
+    const observer=await attachHostJob(agents[0].controlDir,'r_hold')
+    const observerClosed=new Promise(resolve=>observer.once('close',resolve))
+    observer.stdout?.resume();observer.stderr?.resume()
+    observer.kill('SIGSTOP')
+    try { assert.equal(await terminateJob(observer),true) }
+    finally { observer.kill('SIGCONT');observer.kill('SIGKILL');await observerClosed }
     let heldOutput=''
     for(let n=0;n<200;n++){heldOutput=await readFile(path.join(directory,'r_hold.events'),'utf8');if(heldOutput.includes('"stream":"exit"'))break;await new Promise(r=>setTimeout(r,20))}
     assert.match(heldOutput, /"stream":"exit","code":1/)
