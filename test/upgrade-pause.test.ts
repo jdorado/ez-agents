@@ -137,5 +137,5 @@ test('Linux relay real/effective UID regression (Docker test target)', {
     '--test', fileURLToPath(import.meta.url),
   ], { encoding: 'utf8', timeout: 15000, env })
   assert.equal(result.status, 0, result.stdout + result.stderr)
-  assert.match(result.stdout, /ok 1 - private control directory/)
+  assert.match(result.stdout, /ok \d+ - private control directory/)
 })
