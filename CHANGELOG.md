@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.0-beta.51
+
+- Keep native runs alive during handoff-compatible core upgrades. The retiring executor finishes existing work while its replacement accepts new requests; the relay adopts runs without replay and preserves schedule holds, cancellation and settled delivery receipts. Isolated agents migrate once while idle to a separate, unprivileged executor container; later compatible upgrades preserve its running generation. Older runtimes without the handoff contract retain the full native-work drain.
+- Prepare compatible-upgrade workspace and native-client backups before pausing admission or stopping the relay, so large histories do not extend the swap outage. Rollback restores code and configuration without rewinding active native state.
+- Show paused schedules in `/tasks` and task details with a paused label and no next run. Editing a paused schedule keeps it paused.
+- Replace the oldest unused saved AI choice when the saved-choice limit is reached, preserving choices used by conversations, defaults or schedules.
+- Use the isolated native client's own catalog for AI selection, so available models such as Sonnet appear without relying on a host catalog.
+
+Beta limits: live fresh-host/reboot acceptance and live compatible upgrades during active native work on the VM and Mac remain pending. Synthetic container lifecycle checks and an idle EzStocks OVH private-candidate upgrade passed; these do not establish live active-run or provider acceptance. Publication does not establish an installed-agent upgrade or authorize provider/domain writes.
+
 ## 0.1.0-beta.50
 
 - Share memory across engines through the workspace. New workspaces seed a short `## Memory` note (durable facts in `memory/`, one per file, indexed in `memory/MEMORY.md`); every engine loads `AGENTS.md`, so Codex and Claude read the same files. When a chat conversation is replaced (`/new`, the New button, web app new, or an AI/provider switch), its engine gets one silent turn in that native session to save durable facts; nothing is delivered and the engine decides what to write.
