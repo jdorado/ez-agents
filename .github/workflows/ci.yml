@@ -60,3 +60,4 @@ jobs:
           docker build --target runtime --build-arg CODEX_CLI_VERSION=0.160.1 -t ezenciel-agents:local "$release_dir/package"
       - run: node docker/smoke.mjs
       - run: node docker/status-smoke.mjs
+      - run: node docker/isolated-executor-smoke.mjs

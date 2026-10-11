@@ -19,13 +19,14 @@ export function execute(command,args,options={}) {
   return new Promise((resolve,reject)=>{
     const invocation=process.env.EZ_DOCKER_COMPOSE==='standalone'&&command==='docker'&&args[0]==='compose'
       ? {command:'docker-compose',args:args.slice(1)} : {command,args};
-    const child=spawn(invocation.command,invocation.args,{cwd:options.cwd,env:environment(),stdio:['ignore','pipe','pipe']});let output='',stdout='';
+    const child=spawn(invocation.command,invocation.args,{cwd:options.cwd,env:environment(),stdio:[options.input===undefined?'ignore':'pipe','pipe','pipe']});let output='',stdout='';
     const timer=setTimeout(()=>child.kill('SIGKILL'),options.timeout||600000);
     const file=options.outputFile?createWriteStream(options.outputFile,{flags:'wx',mode:0o600}):null;
     const written=file?new Promise((resolve,reject)=>{file.once('finish',resolve);file.once('error',reject);}):Promise.resolve();
     if(file)child.stdout.pipe(file);else child.stdout.on('data',b=>{output=(output+b).slice(-16000);if(options.stdoutOnly)stdout=(stdout+b).slice(-16000);});
     child.stderr.on('data',b=>{output=(output+b).slice(-16000);});
     void written.catch(()=>child.kill('SIGKILL'));
+    if(options.input!==undefined){child.stdin.on('error',error=>{child.kill('SIGKILL');reject(error);});child.stdin.end(options.input);}
     child.once('error',error=>{clearTimeout(timer);reject(error);});
     child.once('close',async code=>{clearTimeout(timer);try{await written;if(code!==0)throw Error(`${invocation.command} failed (${code}): ${output}`);resolve(options.stdoutOnly?stdout:output);}catch(error){reject(error);}});
   });

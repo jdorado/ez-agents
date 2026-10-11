@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.52
+
+- Restore isolated executor startup with existing named volumes and a private, root-owned read-only container binding. Host file ownership and permissions remain unchanged.
+- Start a missing isolated executor when native requests are queued, while retaining the live-run drain and single-worker ownership checks.
+
+
 ## 0.1.0-beta.51
 
 - Keep native runs alive during handoff-compatible core upgrades. The retiring executor finishes existing work while its replacement accepts new requests; the relay adopts runs without replay and preserves schedule holds, cancellation and settled delivery receipts. Isolated agents migrate once while idle to a separate, unprivileged executor container; later compatible upgrades preserve its running generation. Older runtimes without the handoff contract retain the full native-work drain.

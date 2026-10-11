@@ -14,7 +14,7 @@ import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manage
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { TOOLS_LINE } from '../src/tools-line.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
-import { providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade, withUpgrade } from '../src/updates/supervisor.mjs';
+import { idle, executorBindingArchive, executorVolumes, providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade, withUpgrade } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
 
 test('structured runtime output excludes warnings but failures retain diagnostics',async()=>{
@@ -794,3 +794,30 @@ test('failed handoff-compatible activation retires the candidate and rolls back 
  assert.equal(r.calls.filter(c=>c[0]==='retireHost').length,2)
  assert.ok(!r.calls.some(c=>c[0]==='stopHost'))
 })
+
+
+test('missing executor startup ignores queued requests but never live native work',async t=>{
+ const root=await fs.mkdtemp(path.join(tmpdir(),'ez-executor-admission-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const dir=path.join(root,'host-executor');await fs.mkdir(dir);
+ await fs.writeFile(path.join(dir,'queued.request.json'),'{}');
+ assert.equal(await idle(root),false);assert.equal(await idle(root,{pendingRequests:false}),true);
+ await fs.writeFile(path.join(dir,'live.running.json'),'{}');assert.equal(await idle(root,{pendingRequests:false}),false);
+ assert.equal(await fs.readFile(path.join(dir,'queued.request.json'),'utf8'),'{}');
+ await fs.rm(path.join(dir,'live.running.json'));
+ const server=createServer(socket=>socket.on('data',chunk=>{const req=JSON.parse(chunk.toString());socket.end(JSON.stringify({id:req.id,ok:true,result:{running:1}})+'\n');}));
+ await new Promise(resolve=>server.listen(path.join(root,'delivery.sock'),resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+ assert.equal(await idle(root,{pendingRequests:false}),false);
+});
+test('executor preserves exact named volume identities and rejects missing declarations',()=>{
+ const worker={volumes:[{type:'volume',source:'registered-whatsapp-ipc'},{type:'bind',source:'/private/workspace'}]};
+ assert.deepEqual(executorVolumes({volumes:{'registered-whatsapp-ipc':{name:'existing-private-ipc'}}},worker),{'registered-whatsapp-ipc':{name:'existing-private-ipc',external:true}});
+ assert.throws(()=>executorVolumes({},worker),/Missing executor volume/);
+});
+test('executor archive extracts its exact private binding without host ownership changes',async t=>{
+ const root=await fs.mkdtemp(path.join(tmpdir(),'ez-executor-binding-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const binding={agents:[{workspace:'/private/work',binDir:'/app/bin'}]},file=path.join(root,'binding.tar');
+ await fs.writeFile(file,executorBindingArchive(binding,1000),{mode:0o600});
+ await exec('tar',['-xf',file,'-C',root]);
+ const extracted=path.join(root,'executor.json');assert.deepEqual(await read(extracted),binding);assert.equal((await fs.stat(extracted)).mode&0o777,0o440);
+ for(const invalid of [-1,NaN,1.5,'1000',0o10000000])assert.throws(()=>executorBindingArchive(binding,invalid),/Invalid executor group/);
+});
