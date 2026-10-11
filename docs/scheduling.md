@@ -106,6 +106,19 @@ session with the saved prompt plus one factual line naming the run, the stopped
 setup, its native session and reset time, and that its work may be partly applied.
 The agent reconciles from its own records; core replays nothing else.
 
+These same completion and fallback rules apply after a graceful relay upgrade
+adopts a running native session. Adoption attaches to that session; only an
+eligible terminal failure starts the next saved setup.
+
+For consecutive primary choices that differ only by native login profile, later
+scheduled runs start with the last successfully completed login and rotate through
+the remaining saved logins if it becomes unavailable. The existing owner control
+state retains that preference and typed quota reset times across relay restarts.
+Other tasks with saved fallbacks for those logins skip an exhausted scope until its reset;
+no cooldown is invented when the provider supplies none. A concurrent older run's
+success does not erase a future reset. Saved models, effort, heterogeneous fallback
+priority and chat selection are preserved; no unconfigured login is added.
+
 A login or quota rejection skips the remaining setups in the same scope: the native
 client and login profile (`claude`, `codex` including desktop and custom Codex
 providers), `grok`, or the upstream provider for OpenCode/Pi models. A named

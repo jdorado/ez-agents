@@ -10,7 +10,7 @@ import { desktopCodexPath } from './desktop-bridge.js'
 import { AUTH_PROFILE_CLIS, claudeAuthEnvironment, cliHome, isAuthProfile, listAuthProfiles } from './auth-profile.js'
 
 export type AiPreset = { id: string; name: string; cli: string; provider?: string; authProfile?: string; model?: string; effort?: string }
-// Optional ordered fallbacks are tried only for a scheduled occurrence that never started work.
+// Scheduled fallback setups retain the native rejection/partial-work boundaries.
 export type ExecutionChoice = { sessionId: string; preset: AiPreset; fallbacks?: AiPreset[] }
 export type ModelChoice = { cli: string; provider?: string; authProfile?: string; model?: string; name: string; efforts: string[] }
 type Engine = { cli?: string; authProfile?: string }

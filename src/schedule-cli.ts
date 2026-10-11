@@ -72,7 +72,9 @@ Failures default to unreviewed owner runs. Review records a diagnosis; it never 
 A conditional review schedule consumes no model run when there are no unreviewed failures.
 New tasks capture the selected engine settings; edit preserves existing settings unless overridden.
 Every task requires a concrete saved model. Supply --model if the selected settings have none; existing tasks never fall back to chat or client defaults.
-Fallbacks run in the saved order only when the previous setup's CLI is unavailable or its provider
+Tasks reuse the last successful login among the leading saved setups with the same engine, provider,
+model and effort, and skip logins until any reported quota reset. Other setup priority stays as saved.
+Fallbacks continue only when the previous setup's CLI is unavailable or its provider
 rejected the turn before any work began, including an unavailable login. A Claude usage limit the run ended on
 after work began continues on the next setup in a fresh session, told the stopped session and that its work may be
 partly applied. Account/organization access denial, unknown errors, cancellation and other failures after work

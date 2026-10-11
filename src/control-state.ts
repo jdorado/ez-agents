@@ -4,6 +4,7 @@ import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isPreset, persistedPreset, presetProvider, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
 import { isAuthProfile } from './auth-profile.js'
+import { quotaScope, validSetupHealth, type SetupAttempt, type SetupHealth } from './setup-fallback.js'
 
 export type Owner = {
   id?: string
@@ -78,6 +79,7 @@ type ControlState = {
   activeSession?: SessionState | null
   ai?: { presets: AiPreset[]; defaultId: string; selectedId: string; recentIds?: string[] }
   sessions?: SessionState[]
+  setupHealth?: SetupHealth
 }
 
 type Clock = () => number
@@ -139,6 +141,7 @@ const isState = (value: unknown): value is ControlState => {
     Array.isArray(candidate.pending) &&
     candidate.pending.every(pairing) &&
     (candidate.owner === null || validOwner(candidate.owner)) &&
+    (candidate.setupHealth === undefined || validSetupHealth(candidate.setupHealth)) &&
     (candidate.ai === undefined || (Array.isArray(candidate.ai.presets) &&
       candidate.ai.presets.every(isPreset) &&
       candidate.ai.presets.some((p) => p.id === candidate.ai!.defaultId) &&
@@ -438,6 +441,7 @@ export class ControlStore {
       state.activeSession = null
       state.ai = undefined
       state.sessions = undefined
+      state.setupHealth = undefined
       await this.writeState(state)
       return hadOwner
     })
@@ -447,6 +451,39 @@ export class ControlStore {
     return this.withLock(async () => {
       const state = await this.readState()
       return state.activeSession ?? null
+    })
+  }
+
+  async scheduledSetupHealth(owner: Owner): Promise<SetupHealth> {
+    return this.withLock(async () => {
+      const state = await this.readState()
+      if (!sameOwner(owner, state.owner)) throw new Error('Scheduled setup authority revoked')
+      return structuredClone(state.setupHealth ?? {})
+    })
+  }
+
+  // Native account outcomes belong to existing owner control state. They do not
+  // change chat defaults or task definitions, and no cooldown is invented.
+  async recordSetupOutcome(owner: Owner, attempt: SetupAttempt): Promise<void> {
+    if (attempt.outcome !== 'completed' && !['quota', 'quota-after-work-began', 'login-unavailable'].includes(attempt.category ?? '')) return
+    if (!isPreset(attempt.preset)) throw new Error('Invalid scheduled setup')
+    await this.withLock(async () => {
+      const state = await this.readState()
+      if (!sameOwner(owner, state.owner)) throw new Error('Scheduled setup authority revoked')
+      state.setupHealth ??= {}
+      const scope = quotaScope(attempt.preset), health = state.setupHealth[scope] ??= {}, now = this.clock()
+      if (attempt.outcome === 'completed') {
+        health.lastSuccessAt = new Date(now).toISOString()
+        // An older concurrent run's success cannot erase a future quota reset.
+        if (!(Date.parse(health.resetAt ?? '') > now)) delete health.resetAt
+      } else {
+        delete health.lastSuccessAt
+        if (attempt.category !== 'login-unavailable' && attempt.resetAt && Number.isFinite(Date.parse(attempt.resetAt)) &&
+            Date.parse(attempt.resetAt) > Math.max(now, Date.parse(health.resetAt ?? '') || 0))
+          health.resetAt = new Date(attempt.resetAt).toISOString()
+      }
+      if (!Object.keys(health).length) delete state.setupHealth[scope]
+      await this.writeState(state)
     })
   }
 

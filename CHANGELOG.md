@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Preserve scheduled fallback handling when a compatible relay upgrade adopts a running native session, including continuation after a terminal usage limit without replaying its work.
+- Reuse the last successful same-model native login across scheduled tasks and relay restarts; rotate through configured logins and skip known exhausted scopes until their provider reset.
+
 ## 0.1.0-beta.52
 
 - Restore isolated executor startup with existing named volumes and a private, root-owned read-only container binding. Host file ownership and permissions remain unchanged.

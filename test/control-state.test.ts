@@ -135,3 +135,26 @@ test('steady-state owner checks and session pins write nothing to control/', asy
   assert.equal(after.mtimeMs, before.mtimeMs)
   assert.equal(after.size, before.size)
 }))
+
+test('scheduled login health is atomic, owner-bound and retained without changing AI selection',async()=>fixture(async(store,advance,directory)=>{
+  const {initialPreset}=await import('../src/ai.js')
+  await store.requestPairing(101,101);const owner=await store.approveOwner(101)
+  await store.aiState(initialPreset('claude'))
+  const before=(await store.status()).ai,preset={...initialPreset('claude'),model:'opus',authProfile:'claude2'}
+  await store.recordSetupOutcome(owner,{preset,quotaScope:'forged',outcome:'completed'})
+  const resetAt='2026-01-01T01:00:00.000Z'
+  await store.recordSetupOutcome(owner,{preset,quotaScope:'forged',outcome:'failed',category:'quota-after-work-began',resetAt})
+  advance(1000)
+  await store.recordSetupOutcome(owner,{preset,quotaScope:'forged',outcome:'completed'})
+  let health=await store.scheduledSetupHealth(owner)
+  assert.equal(health['claude@claude2'].resetAt,resetAt,'a concurrent older success cannot clear a future reset')
+  assert.equal(health.forged,undefined,'scope is derived from the saved native setup')
+  assert.deepEqual((await store.status()).ai,before)
+  assert.deepEqual(await new ControlStore(directory,60_000).scheduledSetupHealth(owner),health)
+  advance(3600_000)
+  await store.recordSetupOutcome(owner,{preset,quotaScope:'claude@claude2',outcome:'completed'})
+  health=await store.scheduledSetupHealth(owner);assert.equal(health['claude@claude2'].resetAt,undefined)
+  await store.revokeOwner()
+  await assert.rejects(store.recordSetupOutcome(owner,{preset,quotaScope:'claude@claude2',outcome:'completed'}),/revoked/)
+  assert.equal((await store.status()).setupHealth,undefined)
+}))
