@@ -65,6 +65,10 @@ files require migration to one canonical deployment per service first.
 
 ## Recovering an isolated-executor or supervisor admission defect
 
+The post-update reload requires a live relay status response taken after
+in-progress admissions finish. An unavailable or timed-out response keeps
+admission closed and leaves active executors running.
+
 If an older supervisor cannot start its isolated executor, or its post-update
 reload admits new work indefinitely, it can prevent its own correction from
 being installed. Use an exact,

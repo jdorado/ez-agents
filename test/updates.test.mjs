@@ -531,6 +531,8 @@ test('missing or broken managers fail with repair guidance before installing or 
 
 for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider} drains work, replaces host PID and recovers after restart`,async t=>{
  const f=await fixture(t),fake=path.join(f.root,'fake');await fs.mkdir(fake);
+ const server=createServer(socket=>socket.on('data',chunk=>{const req=JSON.parse(chunk.toString());socket.end(JSON.stringify({id:req.id,ok:true,result:{running:0}})+'\n');}));
+ await new Promise(resolve=>server.listen(path.join(f.agent.controlDir,'delivery.sock'),resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
  // A process may die after creating a job directory but before atomically
  // committing its receipt. That directory must not block transport startup.
  await fs.mkdir(path.join(f.home,'updates','d18e847a-bb59-49c6-96f3-27fdc43ca44f'));
@@ -818,12 +820,14 @@ test('missing executor startup ignores queued requests but never live native wor
  const dir=path.join(root,'host-executor');await fs.mkdir(dir);
  await fs.writeFile(path.join(dir,'queued.request.json'),'{}');
  assert.equal(await idle(root),false);assert.equal(await idle(root,{pendingRequests:false}),true);
+ assert.equal(await idle(root,{pendingRequests:false,relayRequired:true}),false,'reload requires the live admission barrier');
  await fs.writeFile(path.join(dir,'live.running.json'),'{}');assert.equal(await idle(root,{pendingRequests:false}),false);
  assert.equal(await fs.readFile(path.join(dir,'queued.request.json'),'utf8'),'{}');
  await fs.rm(path.join(dir,'live.running.json'));
  const server=createServer(socket=>socket.on('data',chunk=>{const req=JSON.parse(chunk.toString());socket.end(JSON.stringify({id:req.id,ok:true,result:{running:1}})+'\n');}));
  await new Promise(resolve=>server.listen(path.join(root,'delivery.sock'),resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
  assert.equal(await idle(root,{pendingRequests:false}),false);
+ assert.equal(await idle(root,{pendingRequests:false,relayRequired:true}),false);
 });
 test('executor preserves exact named volume identities and rejects missing declarations',()=>{
  const worker={volumes:[{type:'volume',source:'registered-whatsapp-ipc'},{type:'bind',source:'/private/workspace'}]};

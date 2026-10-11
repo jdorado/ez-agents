@@ -30,13 +30,14 @@ export async function waitForHostHeartbeat(controlDir,child,failure,{attempts=30
   }
   throw Error('Host transport heartbeat timeout');
 }
-export async function idle(control,{pendingRequests=true}={}) {
+export async function idle(control,{pendingRequests=true,relayRequired=false}={}) {
   const host=await fs.readdir(path.join(control,'host-executor')).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
   if(host.some(f=>f.endsWith('.running.json')||(pendingRequests&&f.endsWith('.request.json'))))return false;
   // Run records live in relay memory: the live socket status is the only
-  // cross-process view of active work. A down relay cannot own a run.
+  // cross-process view of active work. Reload additionally requires its
+  // admission barrier; an unavailable response cannot prove a safe shutdown.
   const status=await callDeliverySocket(path.join(control,'delivery.sock'),{op:'status'},2000).catch(()=>null);
-  return !status||status.running===0;
+  return status ? status.running===0 : !relayRequired;
 }
 // Pause admission only after work is idle, and release it if a turn raced the
 // check. A queued upgrade must never hold the owner's chat behind a long turn.
@@ -254,7 +255,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
         // Hold new turns while existing generations finish. Queued requests
         // cannot block a restart that leaves the relay and its ledger running.
         await atomic(pause,{id:reloadPending.id});
-        if(await idle(agent.controlDir,{pendingRequests:false})){reloadReady=true;return;}
+        if(await idle(agent.controlDir,{pendingRequests:false,relayRequired:true})){reloadReady=true;return;}
       }
       // Reap retired containers only after their worker exits.
       for(const item of retirements.filter(r=>r.container)){
