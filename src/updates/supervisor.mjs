@@ -106,7 +106,9 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   await fs.writeFile(lock,JSON.stringify({pid:process.pid}),{flag:'wx',mode:0o600});
   let child,container;
   let retirements=[];
-  let reloadPending=false;
+  let reloadPending;
+  let reloadReady=false;
+  let admissionReady=false;
   const generations=new Map();
   const removeContainer=async id=>{
     const generation=generations.get(id);
@@ -195,6 +197,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       (host.isolation!=='isolated'||(container&&old.ezRelease?.containerExecutor===1&&candidate.ezRelease?.containerExecutor===1));
   };
   const pause=path.join(agent.controlDir,'upgrade-pause.json');
+  const inheritedPause=await read(pause).catch(missing);
   const refreshRequirement=async job=>{
     if(job.target==='main')return false;
     try {return await brokerNeedsRefresh((await state(home)).config);}
@@ -226,7 +229,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       const result=refreshPluginBroker===null?undefined:interrupted.target==='main'
         ? await (async()=>{await atomic(pause,{id:interrupted.id});try{return await locked(home,()=>perform(home,interrupted,{stopHost,startHost,retireHost,preserveRuns:interrupted.preserveRuns===true}));}finally{await fs.rm(pause,{force:true});}})()
         : await withUpgrade(agent.controlDir,interrupted,signal,()=>perform(home,interrupted,{stopHost,startHost,retireHost,signal,refreshPluginBroker}),{requiresIdle:refreshPluginBroker});
-      if(['completed','rolled-back'].includes(result?.status)&&interrupted.target==='main')reloadPending=true;
+      if(['completed','rolled-back'].includes(result?.status)&&interrupted.target==='main')reloadPending=interrupted;
     }
     const isolated=host.isolation==='isolated'
     if(!isolated&&!child)await startHost((await state(home)).config.packageRoot);
@@ -244,7 +247,15 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       if(!isolated && child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
       await initializeIsolated();
       if(container&&(await execute('docker',['inspect','--format','{{.State.Running}}',container],{stdoutOnly:true})).trim()!=='true')throw Error('Isolated executor exited; supervisor service should restart');
-      if(reloadPending&&await idle(agent.controlDir))return;
+      // Reopen only after the successor worker is ready. The relay and its
+      // unclaimed requests remain running throughout this supervisor restart.
+      if(!admissionReady&&!reloadPending&&(!isolated||container)){await fs.rm(pause,{force:true});admissionReady=true;}
+      if(reloadPending) {
+        // Hold new turns while existing generations finish. Queued requests
+        // cannot block a restart that leaves the relay and its ledger running.
+        await atomic(pause,{id:reloadPending.id});
+        if(await idle(agent.controlDir,{pendingRequests:false})){reloadReady=true;return;}
+      }
       // Reap retired containers only after their worker exits.
       for(const item of retirements.filter(r=>r.container)){
         if((await execute('docker',['inspect','--format','{{.State.Running}}',item.container],{stdoutOnly:true})).trim()==='false'){await removeContainer(item.container);retirements=retirements.filter(r=>r!==item);}
@@ -266,7 +277,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
         };
         const result=await withUpgrade(agent.controlDir,pending,signal,apply,{requiresIdle:refreshPluginBroker,preserveRuns:preserve});
         if(['completed','rolled-back'].includes(result?.status)) {
-          if(pending.target==='main')reloadPending=true;
+          if(pending.target==='main')reloadPending=pending;
           nextCheck=0;
         }
       }
@@ -286,7 +297,10 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   }finally {
     clearInterval(beat);await stopHost();
     for(const item of retirements){if(item.container){await execute('docker',['stop','--time','10',item.container]);await removeContainer(item.container);}else if(item.child.exitCode===null)item.child.kill('SIGTERM');}await fs.rm(lock,{force:true});
-    if(!(await jobs(home)).some(j=>j.status==='applying'))await fs.rm(pause,{force:true});
+    if(!reloadReady) {
+      if(!admissionReady&&inheritedPause)await atomic(pause,inheritedPause);
+      else if(!(await jobs(home)).some(j=>j.status==='applying'))await fs.rm(pause,{force:true});
+    }
   }
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {

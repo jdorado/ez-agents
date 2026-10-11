@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Hold new native turn admission while a completed or rolled-back core update drains for supervisor reload. Retain queued requests and reopen only after the replacement worker is ready.
+
 - Preserve scheduled fallback handling when a compatible relay upgrade adopts a running native session, including continuation after a terminal usage limit without replaying its work.
 - Reuse the last successful same-model native login across scheduled tasks and relay restarts; rotate through configured logins and skip known exhausted scopes until their provider reset.
 
