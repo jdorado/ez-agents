@@ -388,7 +388,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               promptSuffix: runPromptSuffix(started),
               taskRun: Boolean(run.taskId),
               nativeSession: Boolean(run.scheduled),
-              onSession: run.external || run.taskId ? undefined : async (id) => { await runs.patch(run.id,{nativeSessionId:id}); if (!run.scheduled) await control.saveNativeSession(session.sessionId,id) },
+              onSession: run.external || run.taskId ? undefined : async (id) => {
+                if (ordered) attempts = attempts.map(a => a.sessionId === sessionId ? { ...a, sessionId: id } : a)
+                await runs.patch(run.id, { nativeSessionId: id, ...(ordered ? { attempts } : {}) })
+                if (!run.scheduled) await control.saveNativeSession(session.sessionId, id)
+              },
             }), preset }
           } catch (error) {
             if (ordered && !(error instanceof CliUnavailableError)) {
@@ -846,8 +850,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   })
   // Read idle status only after admissions already inside startJob finish.
   // The updater closes admission before asking for this barrier.
-  const handleDeliveryOp: typeof ledgerHandler = op => op.op === 'status'
-    ? withStartLock(() => ledgerHandler(op))
+  const handleDeliveryOp: typeof ledgerHandler = op => ['status', 'retryScheduleQuota'].includes(op.op)
+    ? withStartLock(() => ledgerHandler(op)).then(result => {
+      if (op.op === 'retryScheduleQuota') void drainSources().catch(console.error)
+      return result
+    })
     : ledgerHandler(op)
 
   const checkOwner = async (ctx: Context): Promise<boolean> => {

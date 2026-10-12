@@ -110,7 +110,7 @@ test('same-settings login choices rotate from the last success, preserving expli
   assert.equal(nextSetup([b,c,a],[{preset:b,quotaScope:'claude@claude2',outcome:'failed',category:'quota'}]).preset,c,'rotation never retries an attempted login')
 })
 
-type Script={lines?:unknown[];code?:number;unavailable?:boolean;hold?:boolean}
+type Script={lines?:unknown[];code?:number;unavailable?:boolean;hold?:boolean;session?:string}
 const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA)=>{
   const dir=await mkdtemp(join(tmpdir(),`ez-fallback-${name}-`)),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
   const launches:ExecutorOptions[]=[],prompts:string[][]=[],admitted:(AiPreset|undefined)[]=[],sent:string[]=[]
@@ -118,6 +118,7 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
     const script=scripts[launches.length] ?? {code:0}
     launches.push(options);prompts.push(texts);admitted.push(activeSetup((await runs.get(options.runId))!))
     if(script.unavailable)throw new CliUnavailableError(`Native CLI ${options.cli} is not executable on the host PATH`)
+    if (script.session) await options.onSession?.(script.session)
     const out=(script.lines ?? []).map(l=>typeof l==='string'?l:JSON.stringify(l)).join('\n')
     const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(out ? out+'\n' : '')});setTimeout(()=>process.exit(${script.code ?? 0}),${script.hold ? 60000 : 10})`],{detached:process.platform!=='win32'})
     await once(child,'spawn');return {child,cleanup:async()=>{},stdout:''}
@@ -557,4 +558,49 @@ test('installed schedule retry command revives only a typed prior quota failure,
     assert.equal(run.attempts!.length,2)
     assert.equal((await f.runs.list()).filter(r=>r.scheduled?.id==='daily').length,1)
   } finally { await ledger?.stop();await f.close() }
+})
+
+
+test('Codex quota continuation retains the actual stopped native thread, not the assigned transport ID',async()=>{
+  const native='019a0000-0000-7000-8000-000000000001'
+  const f=await fixture('native-reference',[{session:native,lines:[startupLine({workBegan:true,rejection:{category:'quota'}})],code:1},{session:'019a0000-0000-7000-8000-000000000002',lines:[startupLine({workBegan:true})]}],[],codexA)
+  try {
+    await until(async()=>Boolean((await f.runs.get(f.run.id))?.quotaWait))
+    assert.notEqual(f.launches[0].sessionId,native)
+    assert.equal((await f.runs.get(f.run.id))!.attempts![0].sessionId,native)
+    await f.scheduler.retryQuota(f.owner,f.runs,f.run.id);await f.relay.drainSources()
+    const ended=await f.done()
+    assert.equal(ended.attempts![0].sessionId,native)
+    assert.ok(f.prompts[1].some(line=>line.includes(native) && line.includes('partly applied')))
+    assert.ok(!f.prompts[1].some(line=>line.includes(f.launches[0].sessionId!)))
+  } finally { await f.close() }
+})
+
+test('socket quota retry shares the admission lock with timed scheduler starts',async t=>{
+  const f=await fixture('retry-start-race',[{lines:[quota],code:1},{hold:true}],[])
+  const {callDeliverySocket,socketPathFor,deliverySocketAlive}=await import('../src/delivery-socket.js')
+  let running:Promise<void>|undefined
+  let release!:()=>void,entered!:()=>void
+  const blocked=new Promise<void>(resolve=>{release=resolve}),atClear=new Promise<void>(resolve=>{entered=resolve})
+  const clear=ControlStore.prototype.clearQuotaWait
+  try {
+    await until(async()=>Boolean((await f.runs.get(f.run.id))?.quotaWait))
+    f.relay.bot.botInfo={id:9,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as typeof f.relay.bot.botInfo
+    t.mock.method(f.relay.bot,'start',async()=>{})
+    running=f.relay.start()
+    await until(async()=>deliverySocketAlive(socketPathFor(f.dir)))
+    t.mock.method(ControlStore.prototype,'clearQuotaWait',async function(this:ControlStore,owner:Parameters<typeof clear>[0],scopes:string[]) {
+      await clear.call(this,owner,scopes)
+      entered();await blocked
+    })
+    const retry=callDeliverySocket(socketPathFor(f.dir),{op:'retryScheduleQuota',payload:{runId:f.run.id}})
+    await atClear
+    const dispatch=f.relay.drainSources()
+    await new Promise(resolve=>setTimeout(resolve,30))
+    assert.equal(f.launches.length,1,'the timed start waits while retry changes admission')
+    release();await retry;await dispatch
+    assert.equal(f.launches.length,2)
+    assert.equal((await f.runs.get(f.run.id))!.status,'running')
+    await f.relay.drainSources();assert.equal(f.launches.length,2,'no duplicate native child')
+  } finally { release();await f.close();await running }
 })
