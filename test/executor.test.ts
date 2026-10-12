@@ -349,12 +349,8 @@ test('adapters do not append instruction files or impose a workflow turn budget'
 })
 
 test('Codex external isolation changes only explicit sandbox argv and never enters child environment', () => {
-  const args = EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',codexSandbox:'external',sessionId:'native-id',isResume:true,
-    controlDir:'/agent/control',toolsHome:'/agent/tools',sharedWorkspace:'/shared',additionalWorkspaces:['/extra']},'', 'hello')
-  assert.ok(args.includes('--dangerously-bypass-approvals-and-sandbox'))
-  assert.ok(!args.includes('--sandbox'))
-  assert.ok(!args.includes('--add-dir'))
-  assert.ok(!args.includes('sandbox_workspace_write.network_access=true'))
+  const args = EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',codexSandbox:'external',sessionId:'native-id',isResume:true},'', 'hello')
+  assert.equal(args[args.indexOf('--sandbox')+1], 'danger-full-access')
   assert.ok(args.includes('native-id'))
   assert.equal(executorEnvironment({EZ_CODEX_SANDBOX:'external'}).EZ_CODEX_SANDBOX, undefined)
 })
@@ -390,7 +386,7 @@ test('external local owner chat preserves literal input and admission rejects fo
     assert.equal(code,0)
     const observed=JSON.parse(await readFile(path.join(root,'observed.json'),'utf8'))
     assert.equal(observed.text,'  literal /goal request\n')
-    assert.ok(observed.args.includes('--dangerously-bypass-approvals-and-sandbox'))
+    assert.equal(observed.args[observed.args.indexOf('--sandbox')+1],'danger-full-access')
     assert.equal(observed.secret,undefined)
     const runs=new RunStore(root)
     await runs.create({id:'r_foreign',chatId:999,telegramUserId:999,texts:['no']})

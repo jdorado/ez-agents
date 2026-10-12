@@ -285,10 +285,10 @@ This prevents automatic context sharing, not adversarial access by the host user
 On macOS host jobs, Seatbelt also denies sibling directories of the bound
 workspace (a tenant farm), while allowing explicitly shared and additional
 workspace grants and leaving `$HOME` readable for the host CLI.
-External isolation uses Codex's `--dangerously-bypass-approvals-and-sandbox`
-flag and omits writable-directory sandbox flags, so Codex does not apply a
-nested sandbox. The existing container mounts or outer Seatbelt grants still
-define the filesystem boundary. Other runs retain `workspace-write`.
+Codex then uses `danger-full-access` so it does not apply a nested Seatbelt.
+The isolated executor derives the Codex sandbox setting from its trusted
+deployment environment, never from an incoming job. Host workers and restricted
+tasks retain their existing native sandbox.
 
 ## Claude Code auth
 

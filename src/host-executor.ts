@@ -265,6 +265,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 const options:ExecutorOptions={catalogTransport:containerId?'local':'host',workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                   runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                   sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,authProfile:opts.authProfile,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
+                  codexSandbox:containerId && installation.isolation==='isolated' && cli==='codex' && !run?.taskId && process.env.EZ_CODEX_SANDBOX==='external' ? 'external' : undefined,
                   promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled)}
                 job=await launch(request.texts,options)
               }
