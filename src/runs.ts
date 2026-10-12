@@ -10,7 +10,7 @@ import { validScheduledOrigin, type ScheduledOrigin } from './scheduler.js'
 import type { IncomingItem } from './inbox.js'
 import { assertId } from './identity.js'
 import { isExecutionChoice, type AiPreset, type ExecutionChoice } from './ai.js'
-import type { SetupAttempt } from './setup-fallback.js'
+import type { SetupAttempt, QuotaWait } from './setup-fallback.js'
 import type { ScriptRunRef } from './scripts.js'
 import {authorizeDeliveryContext,currentDeliveryOwner,type DeliveryContext} from './delivery-context.mjs'
 
@@ -38,6 +38,9 @@ export type RunRecord = {
   execution?: ExecutionChoice
   // Ordered task setups tried for this occurrence; the last one is active.
   attempts?: SetupAttempt[]
+  // Queued quota wait, also retained while its availability probe starts.
+  quotaWait?: QuotaWait
+  attemptRound?: number
   replyOnly?: boolean
   // Silent end-of-conversation turn in a replaced chat session (session-close.ts).
   sessionClose?: true
@@ -273,7 +276,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut' | 'attempts'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut' | 'attempts' | 'quotaWait' | 'attemptRound'>>,
   ): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     const run = store.get(id)

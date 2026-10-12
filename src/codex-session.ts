@@ -33,6 +33,7 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
   const settled=(goal:any)=>{
     if(goal)hadGoal=true
     if(activeTurn || goal?.status==='active')return
+    if(goal?.status==='usageLimited')emit(startupLine({workBegan,rejection:{category:'quota',...(resetAt?{resetAt}:{})}}))
     if(goal && goal.status!=='complete'){console.error(`Native goal stopped: ${goal.status}`);finish(1);return}
     if(!goal && hadGoal){fail(new Error('Native goal disappeared without verified completion'));return}
     if(!sawTurn)return
@@ -73,7 +74,8 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
       if(message.params.turn.status!=='completed'){
         if(message.params.turn.status==='interrupted')finish(130)
         else {
-          const category=workBegan ? undefined : codexRejection(message.params.turn.error?.codexErrorInfo)
+          const rejected=codexRejection(message.params.turn.error?.codexErrorInfo)
+          const category=!workBegan || rejected==='quota' ? rejected : undefined
           if(category)emit(startupLine({workBegan,rejection:{category,...(category==='quota' && resetAt ? {resetAt} : {})}}))
           fail(new Error(redactFailure(typeof message.params.turn.error?.message==='string'
           ? message.params.turn.error.message : 'Native turn failed without error details')))
@@ -88,6 +90,8 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
   try{
     await request('initialize',{clientInfo:{name:'ezenciel-agents',version:'1'},capabilities:{experimentalApi:true}})
     send({method:'initialized',params:{}})
+    // Read native quota metadata even when a rejected turn emits no update.
+    await request('account/rateLimits/read',{}).then(limits=>{resetAt=codexResetAt(limits.rateLimits)}).catch(()=>{})
     const result=await request('thread/start',{
       cwd:options.workspace,approvalPolicy:'never',sandbox:options.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write',model:options.model,
       config:{project_root_markers:['AGENTS.md','.git'],'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[]),...(options.sharedWorkspace?[options.sharedWorkspace]:[]),...(options.additionalWorkspaces ?? [])],

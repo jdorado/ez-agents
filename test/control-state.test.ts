@@ -158,3 +158,42 @@ test('scheduled login health is atomic, owner-bound and retained without changin
   await assert.rejects(store.recordSetupOutcome(owner,{preset,quotaScope:'claude@claude2',outcome:'completed'}),/revoked/)
   assert.equal((await store.status()).setupHealth,undefined)
 }))
+
+
+test('unknown quota resets back off per login and explicit retry clears the owner cooldown', async t => {
+  const dir=await mkdtemp(path.join(tmpdir(),'ez-quota-backoff-'))
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  let now=Date.now()
+  const store=new ControlStore(dir,1000,()=>now)
+  await store.requestPairing(101,101);await store.approveOwner(101)
+  const owner=(await store.status()).owner!
+  const preset={id:'c',name:'Claude',cli:'claude',model:'opus'}
+  for (const minutes of [5,15,30,60,60]) {
+    await store.recordSetupOutcome(owner,{preset,quotaScope:'claude',outcome:'failed',category:'quota'})
+    const health=(await store.scheduledSetupHealth(owner)).claude
+    assert.equal(Date.parse(health.retryAt!)-now,minutes*60000)
+    await store.recordSetupOutcome(owner,{preset,quotaScope:'claude',outcome:'failed',category:'quota'})
+    assert.equal((await store.scheduledSetupHealth(owner)).claude.retryAt,health.retryAt,'concurrent failures share the same check')
+    now=Date.parse(health.retryAt!)+1
+  }
+  await assert.rejects(store.clearQuotaWait({...owner,generation:'00000000-0000-4000-8000-000000000000'},['claude']),/revoked/)
+  await store.clearQuotaWait(owner,['claude'])
+  assert.equal((await store.scheduledSetupHealth(owner)).claude.retryAt,undefined)
+})
+
+
+test('a reset elapsed during shutdown gets one prompt probe, then stale reset reports back off', async () => fixture(async (store,advance) => {
+  await store.requestPairing(101,101);await store.approveOwner(101)
+  const owner=(await store.status()).owner!,preset={id:'c',name:'Codex',cli:'codex',model:'gpt-6-sol'}
+  const now=Date.parse('2026-01-01T00:00:00.000Z'),resetAt=new Date(now-1000).toISOString()
+  const attempt={preset,quotaScope:'codex',outcome:'failed' as const,category:'quota' as const,resetAt}
+  await store.recordSetupOutcome(owner,attempt)
+  let health=(await store.scheduledSetupHealth(owner)).codex
+  assert.equal(Date.parse(health.retryAt!)-now,1000)
+  assert.equal(health.quotaFailures,0)
+  advance(1000)
+  await store.recordSetupOutcome(owner,attempt)
+  health=(await store.scheduledSetupHealth(owner)).codex
+  assert.equal(Date.parse(health.retryAt!)-now-1000,5*60000)
+  assert.equal(health.quotaFailures,1)
+}))

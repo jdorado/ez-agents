@@ -4,12 +4,13 @@ import { needsFailureReview } from './failure.js'
 import { mkdir, readFile, readdir, writeFile, rename, link, rm } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
-import { type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
+import { ControlStore, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
 import { validApplicationOrigin } from './application-origin.js'
 import { ApplicationBindings } from './application-channel.js'
 import { assertId, ownsRun } from './identity.js'
 import { type AiPreset, type ExecutionChoice, isExecutionChoice, persistedPreset } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
+import { quotaCategory, quotaScope } from './setup-fallback.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { Scripts, assertScriptArgs, assertScriptId, type ScriptRunRef } from './scripts.js'
 
@@ -196,6 +197,32 @@ export class Scheduler {
         (!!s.delivery || ((s.owner.telegramLinkedAt ?? s.owner.pairedAt) === (owner.telegramLinkedAt ?? owner.pairedAt) && s.owner.telegramChatId === owner.telegramChatId))
     } catch { return false }
   }
+  // Explicit retry changes quota admission only; it never repeats another failure.
+  async retryQuota(owner: Owner, runs: RunStore, runId?: string): Promise<{ runIds: string[]; scopes: string[] }> {
+    const all = await runs.list()
+    const requested = runId ? [await runs.get(runId)] : all.filter(r => r.status === 'queued' && r.quotaWait && ownsRun(owner, r))
+    const ready: RunRecord[] = []
+    for (const run of requested) {
+      const quotaFailure = run?.status === 'failed' && run.failureReason === 'setups-unavailable' &&
+        Boolean(run.attempts?.length) && run.attempts!.every(a => quotaCategory(a.category))
+      const eligible = run && ownsRun(owner, run) && run.scheduled && !run.script && !run.interrupted &&
+        ((run.status === 'queued' && run.quotaWait) || quotaFailure) &&
+        await this.current(run, owner) && (await this.get(run.scheduled.id)).enabled && !await this.cancelled(run.id) &&
+        !all.some(other => other.id !== run.id && other.scheduled?.id === run.scheduled!.id && ['queued', 'running'].includes(other.status))
+      if (!eligible) {
+        if (runId) throw new Error('Run is not a current, uncancelled quota-blocked occurrence; inspect it before retrying')
+        continue
+      }
+      if (run.delivery) await new ApplicationBindings(this.controlDir).authorize(run)
+      ready.push(run)
+    }
+    const scopes = [...new Set(ready.flatMap(r => [r.execution!.preset, ...r.execution!.fallbacks ?? []].map(quotaScope)))]
+    await new ControlStore(this.controlDir, 1000).clearQuotaWait(owner, scopes)
+    for (const run of ready) await runs.patch(run.id, { status: 'queued', quotaWait: {}, pid: undefined, endedAt: undefined,
+      exitCode: undefined, failure: undefined, failureReason: undefined, failureReview: undefined })
+    return { runIds: ready.map(r => r.id), scopes }
+  }
+
   async cancel(runId: string, run?: RunRecord | null) {
     assertId(runId); await this.ensure()
     const record = run ?? await new RunStore(this.controlDir).get(runId)

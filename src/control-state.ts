@@ -4,7 +4,7 @@ import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isPreset, persistedPreset, presetProvider, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
 import { isAuthProfile } from './auth-profile.js'
-import { quotaScope, validSetupHealth, type SetupAttempt, type SetupHealth } from './setup-fallback.js'
+import { quotaScope, quotaBlockedUntil, quotaCategory, validSetupHealth, type SetupAttempt, type SetupHealth } from './setup-fallback.js'
 
 export type Owner = {
   id?: string
@@ -463,9 +463,9 @@ export class ControlStore {
   }
 
   // Native account outcomes belong to existing owner control state. They do not
-  // change chat defaults or task definitions, and no cooldown is invented.
+  // change chat defaults or task definitions. Unknown resets use bounded checks.
   async recordSetupOutcome(owner: Owner, attempt: SetupAttempt): Promise<void> {
-    if (attempt.outcome !== 'completed' && !['quota', 'quota-after-work-began', 'login-unavailable'].includes(attempt.category ?? '')) return
+    if (attempt.outcome !== 'completed' && !(quotaCategory(attempt.category) || attempt.category === 'login-unavailable')) return
     if (!isPreset(attempt.preset)) throw new Error('Invalid scheduled setup')
     await this.withLock(async () => {
       const state = await this.readState()
@@ -475,14 +475,38 @@ export class ControlStore {
       if (attempt.outcome === 'completed') {
         health.lastSuccessAt = new Date(now).toISOString()
         // An older concurrent run's success cannot erase a future quota reset.
-        if (!(Date.parse(health.resetAt ?? '') > now)) delete health.resetAt
+        if (!(quotaBlockedUntil(health) > now)) {
+          delete health.resetAt; delete health.retryAt; delete health.quotaFailures
+        }
       } else {
         delete health.lastSuccessAt
-        if (attempt.category !== 'login-unavailable' && attempt.resetAt && Number.isFinite(Date.parse(attempt.resetAt)) &&
-            Date.parse(attempt.resetAt) > Math.max(now, Date.parse(health.resetAt ?? '') || 0))
-          health.resetAt = new Date(attempt.resetAt).toISOString()
+        if (attempt.category !== 'login-unavailable') {
+          if (attempt.category?.startsWith('credits-required')) health.manualRetry = true
+          else if (Date.parse(attempt.resetAt ?? '') > now) {
+            if (Date.parse(attempt.resetAt!) > (Date.parse(health.resetAt ?? '') || 0)) health.resetAt = new Date(attempt.resetAt!).toISOString()
+          } else if (!(quotaBlockedUntil(health) > now)) {
+            // A reset may pass during shutdown: probe once promptly, then back off.
+            // Concurrent rejections share one check rather than accelerating it.
+            const elapsedReset = Number.isFinite(Date.parse(attempt.resetAt ?? '')) && health.quotaFailures === undefined
+            health.quotaFailures = elapsedReset ? 0 : Math.min(4, (health.quotaFailures ?? 0) + 1)
+            const delay = elapsedReset ? 1000 : [5, 15, 30, 60][health.quotaFailures - 1] * 60_000
+            health.retryAt = new Date(now + delay).toISOString()
+          }
+        }
       }
       if (!Object.keys(health).length) delete state.setupHealth[scope]
+      await this.writeState(state)
+    })
+  }
+
+  async clearQuotaWait(owner: Owner, scopes: string[]): Promise<void> {
+    await this.withLock(async () => {
+      const state = await this.readState()
+      if (!sameOwner(owner, state.owner)) throw new Error('Scheduled setup authority revoked')
+      for (const scope of scopes) {
+        const health = state.setupHealth?.[scope]
+        if (health) { delete health.resetAt; delete health.retryAt; delete health.quotaFailures; delete health.manualRetry }
+      }
       await this.writeState(state)
     })
   }

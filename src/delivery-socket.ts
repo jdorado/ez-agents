@@ -35,6 +35,7 @@ export type DeliverySocketOp =
   | { op: 'status' }
   | { op: 'schedulePreflight'; payload?: Record<string, unknown> }
   | { op: 'triggerSchedule'; payload: { scheduleId: string; revision: string; key: string; callerRunId?: string } }
+  | { op: 'retryScheduleQuota'; payload: { runId?: string; callerRunId?: string } }
   | { op: 'enqueue'; payload: Record<string, unknown> }
   | { op: 'wait'; payload: { id: string; timeoutMs?: number } }
   | { op: 'get'; payload: { runId: string } }
@@ -257,6 +258,19 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         hooks.wake()
         return run
       }
+      case 'retryScheduleQuota': {
+        const { runId, callerRunId } = op.payload ?? {}
+        if (runId !== undefined && !nonEmptyString(runId)) throw new Error('Run ID is invalid')
+        if (callerRunId !== undefined) {
+          const caller = await requireOwnerExecution(controlDir, callerRunId)
+          if (caller.replyOnly || caller.script) throw new Error('Quota retry requires an active owner-authorized run')
+        }
+        const owner = await readOnlyOwner(controlDir)
+        if (!owner) throw new Error('Pair an owner before retrying')
+        const result = await new Scheduler(controlDir).retryQuota(owner, runs, runId)
+        hooks.wake()
+        return result
+      }
       case 'enqueue': {
         const envelope = (op.payload ?? {}) as Record<string, unknown>
         if (envelope.kind === 'owner') {
@@ -335,7 +349,7 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         if (typeof payload.runId !== 'string' || !payload.runId) throw new Error('Run ID is required')
         if (!payload.change || typeof payload.change !== 'object') throw new Error('Patch change is required')
         // Setup attempts select what the host admits; only the relay records them.
-        if ('attempts' in payload.change) throw new Error('Setup attempts are relay-owned')
+        if (['attempts', 'attemptRound', 'quotaWait'].some(key => key in (payload.change as Record<string, unknown>))) throw new Error('Setup attempts and quota admission are relay-owned')
         return runs.patch(payload.runId, payload.change as never)
       }
       case 'taskApplication': {

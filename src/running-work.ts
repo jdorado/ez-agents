@@ -46,6 +46,7 @@ export function projectRunningWork(records: RunRecord[], outbox: StoredOutboxIte
     const latest = events[0]
     return {
       id: run.id, status: run.status,
+      ...(run.status === 'queued' && run.quotaWait ? { quotaWait: { retryAt: timestamp(run.quotaWait.retryAt) } } : {}),
       kind: run.script ? 'scheduled-script' : run.scheduled ? 'scheduled-agent' : run.sessionClose ? 'session-close' : run.application || run.telegramApplication ? 'application-foreground' : 'foreground',
       schedule: run.scheduled ? { id: run.scheduled.id, revision: run.scheduled.revision,
         name: schedule ? label(schedule.name) : null, dueAt: timestamp(run.scheduled.dueAt) } : null,
@@ -106,6 +107,7 @@ export function formatRunningWork(view: RunningWorkView): string {
   for (const run of view.runs) {
     lines.push('', `${run.id}  ${run.status}  ${run.kind}`)
     if (run.schedule) lines.push(`  Schedule: ${run.schedule.name ?? '(name unavailable)'} (${run.schedule.id}, revision ${run.schedule.revision}); due ${run.schedule.dueAt ?? 'unknown'}`)
+    if (run.quotaWait) lines.push(`  Waiting for quota: ${run.quotaWait.retryAt ? `next check ${run.quotaWait.retryAt}` : 'awaiting availability or manual retry'}; /retry_quota ${run.id}`)
     if (run.script) lines.push(`  Script: ${run.script.id}; engine/model: not applicable`)
     else lines.push(`  Engine/model: ${run.execution?.cli ?? 'unknown'} / ${run.execution?.model ?? 'unknown'}${run.execution?.effort ? `; effort ${run.execution.effort}` : ''}${run.execution ? ` (${run.execution.source}${run.execution.attemptOutcome ? `: ${run.execution.attemptOutcome}` : ''})` : ''}`)
     lines.push(`  Started: ${run.startedAt ?? (run.status === 'queued' ? 'not started' : 'unknown')}; elapsed: ${run.status === 'queued' ? 'not applicable' : duration(run.elapsedSeconds)}${run.status === 'queued' ? `; queued for ${duration(run.queuedSeconds)}` : ''}`)

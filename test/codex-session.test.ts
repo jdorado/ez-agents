@@ -16,7 +16,7 @@ const start=id=>event('turn/started',{turn:{id,status:'inProgress'}});
 const end=id=>event('turn/completed',{turn:{id,status:'completed'}});
 let reads=0;
 rl.on('line',line=>{const q=JSON.parse(line);if(!q.id)return;
-if(q.method==='initialize')return send({id:q.id,result:{}});
+if(q.method==='initialize' || q.method==='account/rateLimits/read')return send({id:q.id,result:{}});
 if(q.method==='thread/start')return send({id:q.id,result:{thread:{id:'native-test'}}});
 if(q.method==='thread/goal/set')return send({id:q.id,error:{message:'Transport must not create goals'}});
 if(q.method==='turn/start'){

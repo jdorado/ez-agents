@@ -133,9 +133,9 @@ native-session `codexErrorInfo` and Claude `stream-json` error fields (scheduled
 Claude runs use `--output-format stream-json`; the host forwards only a compact
 startup summary). Other engines advance only when their CLI is unavailable.
 
-The one failure after work began that continues is a Claude usage limit the run
-ended on (for example "You've hit your session limit"): a typed quota rejection
-with no model, tool or hook activity after it. A native session cannot be resumed
+After work begins, only a typed Codex or Claude usage limit, or a Claude
+credits-required rejection, permits continuation. The run must have ended on
+that rejection, with no subsequent model, tool or hook activity. A native session cannot be resumed
 under another login's configuration home, so the next eligible setup starts a fresh
 session with the saved prompt plus one factual line naming the run, the stopped
 setup, its native session and reset time, and that its work may be partly applied.
@@ -150,7 +150,7 @@ scheduled runs start with the last successfully completed login and rotate throu
 the remaining saved logins if it becomes unavailable. The existing owner control
 state retains that preference and typed quota reset times across relay restarts.
 Other tasks with saved fallbacks for those logins skip an exhausted scope until its reset;
-no cooldown is invented when the provider supplies none. A concurrent older run's
+unknown reset times use progressively spaced checks (5, 15, 30, then 60 minutes). A concurrent older run's
 success does not erase a future reset. Saved models, effort, heterogeneous fallback
 priority and chat selection are preserved; no unconfigured login is added.
 
@@ -161,17 +161,47 @@ profile selects a separate owner-provisioned account and is eligible for its own
 attempt; changing only the model in the same profile does not reset its scope.
 Do not provision aliases of the same account to obtain more allowance. Ez does
 not infer account independence from credentials or promise that a shared
-organization's allowance is separate. Each setup runs at most once per occurrence.
+organization's allowance is separate. Each setup runs at most once per availability check; quota waits retain the earlier attempts.
 
 Every attempt keeps the same run ID, occurrence, schedule revision, workspace,
-delivery binding and scheduled concurrency slot, in a fresh native session.
+delivery binding, in a fresh native session. Quota waits release the scheduled concurrency slot.
 `run RUN_ID` shows `attempts`: each setup, quota scope, outcome, failure category
 (`cli-unavailable`, `login-unavailable`, `quota`, `provider-rejected`, `access-denied`,
-`quota-after-work-began`, `after-work-began`, `uncertain`, or `same-login-scope`/`same-quota-scope`
-for a skipped setup), exit code, reported reset time and the session ID Ez assigned. If every setup is unavailable the run fails with
-reason `setups-unavailable`, a summary of each setup, and an owner notice on
-Telegram-bound tasks. Core never purchases credits, enables overage or consumes
-reset credits; the next regular occurrence runs normally.
+`quota-after-work-began`, `credits-required`, `credits-required-after-work-began`, `after-work-began`, `uncertain`, or `same-login-scope`/`same-quota-scope`
+for a skipped setup), exit code, reported reset time and the session ID Ez assigned.
+
+When all saved logins are quota-blocked, the same occurrence stays `queued` with
+`quotaWait`. A known reset schedules its next availability check. If it passed during native
+shutdown, one prompt probe precedes ordinary backoff. Unknown resets
+back off per login to an hourly maximum. A credits-required rejection waits for
+explicit retry. Other unavailable setups still fail with `setups-unavailable`.
+Waiting consumes no native process or scheduled execution slot. The scheduler
+keeps one pending occurrence per task, so repeated ticks do not accumulate copies.
+Waiting occurrences share one probe per login until native work is accepted.
+`/status` and the queued/running-work view show waiting and the next check.
+
+After adding credits or manually resetting a provider limit, use either:
+
+```sh
+ezenciel-agents-schedule retry           # wake current queued quota waits
+ezenciel-agents-schedule retry RUN_ID    # retry this waiting or prior quota-failed occurrence
+```
+
+Telegram: `/retry_quota` or `/retry_quota RUN_ID` (`/retry-quota` also works).
+The command works without an inference turn. It clears the cooldowns for the
+occurrence's saved login scopes and requests a new availability check. It never
+adds a login, changes the model or buys credits. A specific prior run is eligible
+only when its failure was entirely quota-related, its schedule is current and
+enabled, and no other occurrence of that task is queued or running. Cancelled,
+interrupted, edited, foreign-owner and other failed runs cannot be retried this way.
+`/retry` continues to handle failed incoming messages.
+
+Prior attempts and stopped native-session references remain in the same run.
+After partial work, the engine receives the existing factual continuation line
+and reconciles effects from its own records. Core reconstructs no history.
+Cooldowns persist in owner control state; waiting run records follow the existing
+relay-memory retention contract and do not survive a restart. Core never purchases
+credits, enables overage or consumes reset credits.
 
 ## Registered script schedules
 
