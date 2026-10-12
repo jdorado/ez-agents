@@ -333,4 +333,7 @@ The core `ezenciel-agents-schedule` CLI accepts instruction text for one-off dat
 intervals and timezone-aware cron schedules. `create --now` delegates a task to a
 separate CLI session queued with owner turns in the bound workspace. Long work has
 no production wall-clock timeout; goals and subagents remain native executor
-features. See [scheduling, recovery and QA](docs/scheduling.md).
+features. Use `ezenciel-agents-schedule running` for a read-only view of queued
+and running foreground/scheduled work, or add `--json` for an agent-readable
+snapshot. Native child status and tool activity are unavailable; old or missing
+telemetry does not imply idle or complete. See [scheduling, recovery and QA](docs/scheduling.md).
