@@ -171,7 +171,8 @@ delivery binding, in a fresh native session. Quota waits release the scheduled c
 for a skipped setup), exit code, reported reset time and the session ID Ez assigned.
 
 When all saved logins are quota-blocked, the same occurrence stays `queued` with
-`quotaWait`. A known reset schedules its next availability check; unknown resets
+`quotaWait`. A known reset schedules its next availability check. If it passed during native
+shutdown, one prompt probe precedes ordinary backoff. Unknown resets
 back off per login to an hourly maximum. A credits-required rejection waits for
 explicit retry. Other unavailable setups still fail with `setups-unavailable`.
 Waiting consumes no native process or scheduled execution slot. The scheduler

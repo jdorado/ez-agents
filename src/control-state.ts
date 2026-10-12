@@ -484,12 +484,13 @@ export class ControlStore {
           if (attempt.category?.startsWith('credits-required')) health.manualRetry = true
           else if (Date.parse(attempt.resetAt ?? '') > now) {
             if (Date.parse(attempt.resetAt!) > (Date.parse(health.resetAt ?? '') || 0)) health.resetAt = new Date(attempt.resetAt!).toISOString()
-          } else {
-            // Concurrent rejections share one check, rather than accelerating backoff.
-            if (!(quotaBlockedUntil(health) > now)) {
-              health.quotaFailures = Math.min(4, (health.quotaFailures ?? 0) + 1)
-              health.retryAt = new Date(now + [5, 15, 30, 60][health.quotaFailures - 1] * 60_000).toISOString()
-            }
+          } else if (!(quotaBlockedUntil(health) > now)) {
+            // A reset may pass during shutdown: probe once promptly, then back off.
+            // Concurrent rejections share one check rather than accelerating it.
+            const elapsedReset = Number.isFinite(Date.parse(attempt.resetAt ?? '')) && health.quotaFailures === undefined
+            health.quotaFailures = elapsedReset ? 0 : Math.min(4, (health.quotaFailures ?? 0) + 1)
+            const delay = elapsedReset ? 1000 : [5, 15, 30, 60][health.quotaFailures - 1] * 60_000
+            health.retryAt = new Date(now + delay).toISOString()
           }
         }
       }

@@ -52,7 +52,7 @@ export const quotaCategory = (category?: string): boolean =>
   ['quota', 'quota-after-work-began', 'credits-required', 'credits-required-after-work-began', 'same-quota-scope'].includes(category ?? '')
 export const validSetupHealth = (value: unknown): value is SetupHealth => Boolean(value && typeof value === 'object' && !Array.isArray(value) &&
   Object.entries(value).every(([scope, health]) => /^[a-z][a-zA-Z0-9@_./:-]{0,199}$/.test(scope) && health && typeof health === 'object' && !Array.isArray(health) &&
-    Object.entries(health).every(([key, at]) => key === 'quotaFailures' ? Number.isInteger(at) && Number(at) >= 1 && Number(at) <= 4 :
+    Object.entries(health).every(([key, at]) => key === 'quotaFailures' ? Number.isInteger(at) && Number(at) >= 0 && Number(at) <= 4 :
       key === 'manualRetry' ? at === true : ['lastSuccessAt', 'resetAt', 'retryAt'].includes(key) && typeof at === 'string' &&
       Number.isFinite(Date.parse(at)) && new Date(at).toISOString() === at)))
 

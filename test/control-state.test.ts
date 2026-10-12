@@ -180,3 +180,20 @@ test('unknown quota resets back off per login and explicit retry clears the owne
   await store.clearQuotaWait(owner,['claude'])
   assert.equal((await store.scheduledSetupHealth(owner)).claude.retryAt,undefined)
 })
+
+
+test('a reset elapsed during shutdown gets one prompt probe, then stale reset reports back off', async () => fixture(async (store,advance) => {
+  await store.requestPairing(101,101);await store.approveOwner(101)
+  const owner=(await store.status()).owner!,preset={id:'c',name:'Codex',cli:'codex',model:'gpt-6-sol'}
+  const now=Date.parse('2026-01-01T00:00:00.000Z'),resetAt=new Date(now-1000).toISOString()
+  const attempt={preset,quotaScope:'codex',outcome:'failed' as const,category:'quota' as const,resetAt}
+  await store.recordSetupOutcome(owner,attempt)
+  let health=(await store.scheduledSetupHealth(owner)).codex
+  assert.equal(Date.parse(health.retryAt!)-now,1000)
+  assert.equal(health.quotaFailures,0)
+  advance(1000)
+  await store.recordSetupOutcome(owner,attempt)
+  health=(await store.scheduledSetupHealth(owner)).codex
+  assert.equal(Date.parse(health.retryAt!)-now-1000,5*60000)
+  assert.equal(health.quotaFailures,1)
+}))
