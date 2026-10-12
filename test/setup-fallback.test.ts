@@ -125,10 +125,10 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
   relay.bot.api.config.use(async(_prev,method,payload)=>{if(method==='sendMessage')sent.push((payload as {text:string}).text);return {ok:true,result:{message_id:42}} as never})
   await control.requestPairing(101,101);await control.approveOwner(101)
   const owner=(await control.status()).owner!
-  const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,fallbacks},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
+  const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,...(fallbacks.length ? {fallbacks} : {})},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
   const run=await scheduler.trigger(saved.id,saved.revision,'fallback-'+name,owner,runs)
   await relay.drainSources()
-  return {dir,runs,scheduler,relay,run,launches,prompts,admitted,sent,done:async()=>{await until(async()=>['completed','failed','cancelled'].includes((await runs.get(run.id))!.status));return (await runs.get(run.id))!},
+  return {dir,owner,runs,scheduler,relay,run,launches,prompts,admitted,sent,done:async()=>{await until(async()=>['completed','failed','cancelled'].includes((await runs.get(run.id))!.status));return (await runs.get(run.id))!},
     close:async()=>{await relay.stop();await rm(dir,{recursive:true,force:true})}}
 }
 const quota={type:'assistant',error:'rate_limit'},work={type:'assistant',message:{content:[{type:'text',text:'working'}]}}
@@ -289,13 +289,19 @@ test('a usage limit after work began continues the same run on the next login, t
   }
 })
 
-test('a run that reaches the limit on every login fails with each setup recorded',async()=>{
-  const f=await fixture('limit-everywhere',[{lines:[work,limitEvent,limitMessage],code:1},{lines:[limitEvent,limitMessage],code:1}],[{...claudeA,authProfile:'claude2'}])
+test('a run that reaches the limit on every login waits and manually continues the same occurrence',async()=>{
+  const f=await fixture('limit-everywhere',[{lines:[work,limitEvent,limitMessage],code:0},{lines:[limitEvent,limitMessage],code:1}],[{...claudeA,authProfile:'claude2'}])
   try{
-    const run=await f.done()
-    assert.equal(run.status,'failed');assert.equal(run.failureReason,'setups-unavailable');assert.equal(f.launches.length,2)
+    await until(async()=>Boolean((await f.runs.get(f.run.id))?.quotaWait))
+    const run=(await f.runs.get(f.run.id))!
+    assert.equal(run.status,'queued');assert.equal(run.failure,undefined);assert.equal(f.launches.length,2)
     assert.deepEqual(run.attempts!.map(a=>[a.quotaScope,a.category]),[['claude','quota-after-work-began'],['claude@claude2','quota']])
-    assert.match(run.failure!.error,/quota-after-work-began, resets 2026-10-09T18:10:00\.000Z.*quota, resets/)
+    await f.relay.drainSources();assert.equal(f.launches.length,2)
+    await f.scheduler.retryQuota(f.owner,f.runs,run.id)
+    await f.relay.drainSources()
+    assert.equal((await f.done()).status,'completed')
+    assert.equal(f.launches[2].runId,run.id)
+    assert.ok(f.prompts[2].some(p=>p.includes(f.launches[0].sessionId!) && p.includes('partly applied')))
   }finally{await f.close()}
 })
 
@@ -338,6 +344,7 @@ test('schedules reject duplicate or invalid setups and the socket cannot rewrite
     try{
       const run=await new RunStore(dir).create({chatId:101,telegramUserId:101,texts:['x'],execution:execution([claudeB])})
       await assert.rejects(callDeliverySocket(socketPathFor(dir),{op:'patch',payload:{runId:run.id,change:{attempts:forged}}}),/relay-owned/)
+      for (const key of ['quotaWait','attemptRound']) await assert.rejects(callDeliverySocket(socketPathFor(dir),{op:'patch',payload:{runId:run.id,change:{[key]:{}}}}),/relay-owned/)
     }finally{await ledger.stop()}
   }finally{await rm(dir,{recursive:true,force:true})}
 })
@@ -395,7 +402,7 @@ test('Codex native session reports typed pre-work rejection and work start',asyn
     const program=`const rl=require('readline').createInterface({input:process.stdin});const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
 const event=(method,params)=>send({method,params:{threadId:'th',...params}});
 rl.on('line',line=>{const q=JSON.parse(line);if(!q.id)return;
-if(q.method==='initialize')return send({id:q.id,result:{}});
+if(q.method==='initialize' || q.method==='account/rateLimits/read')return send({id:q.id,result:{}});
 if(q.method==='thread/start')return send({id:q.id,result:{thread:{id:'th'}}});
 if(q.method==='turn/start'){send({id:q.id,result:{turn:{id:'one'}}});event('turn/started',{turn:{id:'one'}});
  event('item/started',{item:{type:'userMessage'}});${worked ? "event('item/started',{item:{type:'agentMessage'}});" : ''}
@@ -405,7 +412,7 @@ if(q.method==='turn/start'){send({id:q.id,result:{turn:{id:'one'}}});event('turn
     const code=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',model:'gpt-6-sol',prompt:'work'},{launch:()=>spawn(process.execPath,['-e',program],{stdio:['pipe','pipe','pipe'],detached:process.platform!=='win32'}),emit:line=>output.push(line)})
     assert.equal(code,1)
     const o=startupObserver();o.write(output.join('\n')+'\n')
-    assert.deepEqual(o.result(),worked ? {workBegan:true,rejection:undefined} : {workBegan:false,rejection:{category:'quota',resetAt:'2026-10-08T12:00:00.000Z'}})
+    assert.deepEqual(o.result(),{workBegan:worked,rejection:{category:'quota',resetAt:'2026-10-08T12:00:00.000Z'}})
   }
 })
 
@@ -458,4 +465,96 @@ test('schedule CLI saves arbitrary profile/model/effort combinations and validat
     ['cli=unknown,model=fixture',/Unsupported executor/],
   ] as const)await assert.rejects(exec(process.execPath,[...base,spec],{env}),error)
   await assert.rejects(exec(process.execPath,[...base,'cli=claude,model=opus,auth-profile=claude2','--fallback','cli=claude,model=opus,auth-profile=claude2'],{env}),/distinct/)
+})
+
+
+test('a single saved Codex setup waits for its reported reset and completes without duplicating the occurrence',async()=>{
+  const resetAt=new Date(Date.now()+900).toISOString()
+  const f=await fixture('timed-wake',[{lines:[startupLine({workBegan:false,rejection:{category:'quota',resetAt}})],code:1},{lines:[startupLine({workBegan:true})],code:0}],[],codexA)
+  try {
+    await until(async()=>Boolean((await f.runs.get(f.run.id))?.quotaWait))
+    assert.equal((await f.runs.get(f.run.id))!.quotaWait!.retryAt,resetAt)
+    await f.relay.drainSources();assert.equal(f.launches.length,1)
+    await new Promise(resolve=>setTimeout(resolve,Math.max(0,Date.parse(resetAt)-Date.now()+10)))
+    await f.relay.drainSources()
+    assert.equal((await f.done()).status,'completed')
+    assert.equal(f.launches.length,2)
+    assert.equal((await f.runs.list()).filter(r=>r.scheduled?.id==='daily').length,1)
+    assert.equal((await f.runs.get(f.run.id))!.attempts!.length,2)
+  } finally { await f.close() }
+})
+
+test('credits-required waits for explicit retry; the owner Telegram command wakes it without inference',async()=>{
+  const event={type:'rate_limit_event',rate_limit_info:{status:'rejected',errorCode:'credits_required'}}
+  assert.equal(observe(event,quota).rejection!.category,'credits-required')
+  const f=await fixture('credits',[{lines:[event,quota],code:1},{lines:[work],code:0}],[])
+  try {
+    await until(async()=>Boolean((await f.runs.get(f.run.id))?.quotaWait))
+    assert.deepEqual((await f.runs.get(f.run.id))!.quotaWait,{})
+    assert.equal((await new ControlStore(f.dir,1000).scheduledSetupHealth(f.owner)).claude.manualRetry,true)
+    await f.relay.drainSources();assert.equal(f.launches.length,1)
+    f.relay.bot.botInfo={id:9,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as typeof f.relay.bot.botInfo
+    await f.relay.bot.handleUpdate({update_id:700,message:{message_id:700,date:0,text:'/retry_quota',from:{id:101,is_bot:false,first_name:'Owner'},chat:{id:101,type:'private',first_name:'Owner'}}})
+    await f.relay.drainSources()
+    assert.equal((await f.done()).status,'completed')
+    assert.ok(f.sent.some(text=>text.includes('Quota retry queued')))
+  } finally { await f.close() }
+})
+
+test('waiting tasks share one login probe and leave the execution slot available',async()=>{
+  const f=await fixture('shared-probe',[{lines:[quota],code:1},{hold:true}],[])
+  try {
+    await until(async()=>Boolean((await f.runs.get(f.run.id))?.quotaWait))
+    const first=await f.scheduler.get('daily')
+    const second=await f.scheduler.save({...first,id:'second'})
+    const run=await f.scheduler.trigger(second.id,second.revision,'second',f.owner,f.runs)
+    await f.relay.drainSources()
+    assert.equal((await f.runs.get(run.id))!.status,'queued')
+    assert.equal(f.launches.length,1)
+    await f.scheduler.retryQuota(f.owner,f.runs)
+    await f.relay.drainSources()
+    assert.equal(f.launches.length,2,'one probe for both queued tasks')
+    assert.equal((await f.runs.get(run.id))!.status,'queued')
+    const third=await f.scheduler.save({...first,id:'third',execution:{...first.execution!,preset:codexA}})
+    await f.scheduler.trigger(third.id,third.revision,'third',f.owner,f.runs)
+    await f.relay.drainSources()
+    assert.equal(f.launches.length,3,'another login can use the released slot')
+  } finally { await f.close() }
+})
+
+test('manual quota retry rejects cancelled, edited, foreign and non-quota runs',async()=>{
+  const f=await fixture('retry-authority',[{lines:[quota],code:1}],[])
+  try {
+    await until(async()=>Boolean((await f.runs.get(f.run.id))?.quotaWait))
+    await assert.rejects(f.scheduler.retryQuota({...f.owner,generation:'00000000-0000-4000-8000-000000000000'},f.runs,f.run.id),/not a current/)
+    await f.runs.patch(f.run.id,{status:'failed',quotaWait:undefined,failureReason:'executor-exit'})
+    await assert.rejects(f.scheduler.retryQuota(f.owner,f.runs,f.run.id),/not a current/)
+    await f.runs.patch(f.run.id,{status:'queued',quotaWait:{}})
+    await f.scheduler.cancel(f.run.id)
+    await assert.rejects(f.scheduler.retryQuota(f.owner,f.runs,f.run.id),/not a current/)
+    const saved=await f.scheduler.get('daily')
+    await f.scheduler.save({...saved,text:'Edited work'})
+    await assert.rejects(f.scheduler.retryQuota(f.owner,f.runs,f.run.id),/not a current/)
+    assert.ok((await new ControlStore(f.dir,1000).scheduledSetupHealth(f.owner)).claude.retryAt)
+  } finally { await f.close() }
+})
+
+
+test('installed schedule retry command revives only a typed prior quota failure, retaining run identity',async()=>{
+  const f=await fixture('cli-retry',[{lines:[quota],code:1},{lines:[work],code:0}],[])
+  const {serveTestLedger}=await import('./helpers/ledger.js')
+  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),{fileURLToPath}=await import('node:url')
+  const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
+  let ledger:Awaited<ReturnType<typeof serveTestLedger>>|undefined
+  try {
+    await until(async()=>Boolean((await f.runs.get(f.run.id))?.quotaWait))
+    await f.runs.patch(f.run.id,{status:'failed',quotaWait:undefined,failureReason:'setups-unavailable',endedAt:new Date().toISOString()})
+    ledger=await serveTestLedger(f.dir)
+    const result=JSON.parse((await exec(process.execPath,[bin,'retry',f.run.id],{env:{...process.env,EZ_CONTROL_DIR:f.dir,EZ_RUN_ID:''}})).stdout)
+    assert.deepEqual(result.runIds,[f.run.id]);assert.deepEqual(result.scopes,['claude'])
+    await f.relay.drainSources()
+    const run=await f.done();assert.equal(run.status,'completed');assert.equal(run.failure,undefined)
+    assert.equal(run.attempts!.length,2)
+    assert.equal((await f.runs.list()).filter(r=>r.scheduled?.id==='daily').length,1)
+  } finally { await ledger?.stop();await f.close() }
 })

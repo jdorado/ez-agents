@@ -45,6 +45,7 @@ async function main() {
   }})
   if(v.help){console.log(`ezenciel-agents-schedule list | runs | show ID | pause ID | resume ID | remove ID | cancel RUN_ID
   running [--json]   Read queued/running foreground and scheduled work in this relay
+  retry [RUN_ID] — retry quota-blocked work after resetting a limit or adding credits
   failures [--all] [--limit N] | run RUN_ID | context
   evidence [RUN_ID] [--offset N --limit N --expected SNAPSHOT_SHA256]
   trigger SCHEDULE_ID --key REQUEST_KEY
@@ -191,6 +192,10 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     }
   }else if(action==='list')result=await Promise.all((await scheduler.list()).filter(owned).map(show))
   else if(action==='runs')result=(await runs.list()).filter(r=>r.scheduled && r.scheduled.pairedAt===owner.pairedAt && ownsRun(owner,r))
+  else if(action==='retry'){
+    if(Object.keys(v).length || scriptId)throw new Error('Retry takes only an optional quota-blocked run ID')
+    result=await callDeliverySocket(socketPath,{op:'retryScheduleQuota',payload:{...(id ? {runId:id} : {}),...(caller ? {callerRunId:caller.id} : {})}})
+  }
   else if(action==='trigger'){
     if(!id || !v.key)throw new Error('Trigger requires SCHEDULE_ID and --key REQUEST_KEY')
     if(Object.keys(v).some(key=>key!=='key'))throw new Error('Trigger uses saved task settings; overrides are not allowed')

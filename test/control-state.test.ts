@@ -158,3 +158,25 @@ test('scheduled login health is atomic, owner-bound and retained without changin
   await assert.rejects(store.recordSetupOutcome(owner,{preset,quotaScope:'claude@claude2',outcome:'completed'}),/revoked/)
   assert.equal((await store.status()).setupHealth,undefined)
 }))
+
+
+test('unknown quota resets back off per login and explicit retry clears the owner cooldown', async t => {
+  const dir=await mkdtemp(path.join(tmpdir(),'ez-quota-backoff-'))
+  t.after(()=>rm(dir,{recursive:true,force:true}))
+  let now=Date.now()
+  const store=new ControlStore(dir,1000,()=>now)
+  await store.requestPairing(101,101);await store.approveOwner(101)
+  const owner=(await store.status()).owner!
+  const preset={id:'c',name:'Claude',cli:'claude',model:'opus'}
+  for (const minutes of [5,15,30,60,60]) {
+    await store.recordSetupOutcome(owner,{preset,quotaScope:'claude',outcome:'failed',category:'quota'})
+    const health=(await store.scheduledSetupHealth(owner)).claude
+    assert.equal(Date.parse(health.retryAt!)-now,minutes*60000)
+    await store.recordSetupOutcome(owner,{preset,quotaScope:'claude',outcome:'failed',category:'quota'})
+    assert.equal((await store.scheduledSetupHealth(owner)).claude.retryAt,health.retryAt,'concurrent failures share the same check')
+    now=Date.parse(health.retryAt!)+1
+  }
+  await assert.rejects(store.clearQuotaWait({...owner,generation:'00000000-0000-4000-8000-000000000000'},['claude']),/revoked/)
+  await store.clearQuotaWait(owner,['claude'])
+  assert.equal((await store.scheduledSetupHealth(owner)).claude.retryAt,undefined)
+})

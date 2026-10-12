@@ -28,7 +28,7 @@ import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch, type Owner, type SessionState } from './control-state.js'
 import { ApprovalStore } from './approval.js'
 import { CliUnavailableError, startExecutorJob, attachHostJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
-import { attemptFailure, continuationLine, nextSetup, quotaScope, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
+import { attemptFailure, continuationLine, nextSetup, quotaScope, quotaWait, quotaCategory, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, activeSetup, saveRunHandoff, takeRunHandoff, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
@@ -188,6 +188,17 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const telegramSource = telegramEnabled ? new TelegramSource(config.controlDir, config.telegramBotToken.split(':')[0], sendChat,
     async(chatId,text,bytes,filename)=>[(await bot!.api.sendDocument(chatId,new InputFile(bytes,filename),{caption:text})).message_id]) : null
 
+  const setupAvailability = async (owner: Owner, runId?: string) => {
+    const health = await control.scheduledSetupHealth(owner)
+    // Only one waiting occurrence probes a login until structured work is accepted.
+    for (const active of await runs.list()) {
+      if (active.id === runId || active.status !== 'running' || !active.quotaWait) continue
+      const preset = activeSetup(active)
+      if (preset) health[quotaScope(preset)] = { ...health[quotaScope(preset)], manualRetry: true }
+    }
+    return health
+  }
+
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
       if (shuttingDown || activeBackend) return
@@ -253,6 +264,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         await releaseExternal(run)
         return
       }
+      if (run.scheduled && !run.script) {
+        const waiting = quotaWait(setupCandidates(run.execution!), await setupAvailability(owner, run.id))
+        if (waiting) { await runs.patch(run.id, { quotaWait: waiting }); return }
+      }
       await watchRun(run, texts, owner)
     })
   }
@@ -273,6 +288,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       if (run.scheduled) background.delete(run.id)
       const unavailable = error instanceof SetupsUnavailableError
+      if (unavailable && run.scheduled && run.execution) {
+        const owner = (await control.status()).owner
+        if (owner && ownsRun(owner, run) && await scheduler.current(run, owner) && !await scheduler.cancelled(run.id)) {
+          const waiting = quotaWait(setupCandidates(run.execution), await setupAvailability(owner, run.id))
+          if (waiting) {
+            await runs.patch(run.id, { status: 'queued', quotaWait: waiting, pid: undefined })
+            return
+          }
+        }
+      }
       await runs.patch(run.id, { status: 'failed', failureReason: unavailable ? 'setups-unavailable' : 'executor-start', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
       await releaseExternal(run)
       console.error('run start failed', run.id, safeError(error))
@@ -304,8 +329,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // A scheduled occurrence may name ordered fallback setups. They share this
       // run, workspace and concurrency slot; each is tried at most once.
       const candidates = run.scheduled && !script ? setupCandidates(started.execution!, await control.scheduledSetupHealth(owner)) : [selected]
-      const ordered = candidates.length > 1
-      let attempts: SetupAttempt[] = adopted ? [...run.attempts ?? []] : []
+      const ordered = Boolean(run.scheduled && !script)
+      let attempts: SetupAttempt[] = [...run.attempts ?? []]
+      // Keep audit history and partial-work facts; a wake starts a new attempt round.
+      const roundStart = adopted ? run.attemptRound ?? 0 : attempts.length
+      if (ordered && !adopted) await runs.patch(run.id, { attemptRound: roundStart })
       const settle = (change: Partial<SetupAttempt>) => {
         attempts = [...attempts.slice(0, -1), { ...attempts[attempts.length - 1], ...change, endedAt: new Date().toISOString() }]
       }
@@ -315,7 +343,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         let preset: AiPreset | undefined
         const current = !shuttingDown && !await scheduler.cancelled(run.id) ? (await control.status()).owner : undefined
         if (current && ownsRun(current, run) && await scheduler.current(run, current)) {
-          const next = nextSetup(candidates, attempts, await control.scheduledSetupHealth(current))
+          const next = nextSetup(candidates, attempts.slice(roundStart), await setupAvailability(current, run.id))
           attempts = [...attempts, ...next.skipped]
           if (!next.preset) {
             await runs.patch(run.id, { attempts })
@@ -384,7 +412,14 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         if (script) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { outputTail = (outputTail + chunk).slice(-16384) })
         // Structured startup events decide whether a failed setup may advance.
         const startup = ordered ? startupObserver() : undefined
-        if (startup) child.stdout?.setEncoding('utf8').on('data', startup.write)
+        let probing = Boolean(run.quotaWait)
+        if (startup) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => {
+          startup.write(chunk)
+          if (probing && startup.accepted()) {
+            probing = false
+            void runs.patch(run.id, { quotaWait: undefined }).catch(console.error)
+          }
+        })
         const scriptTimer = script ? setTimeout(() => { timedOut = true; terminateJob(child) }, Math.max(0,
           script.registration.timeoutSeconds * 1000 - (adopted ? Date.now() - Date.parse(started.startedAt ?? started.createdAt) : 0))) : undefined
         child.once('close', () => clearTimeout(scriptTimer))
@@ -437,7 +472,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           }
         }
         const finalize = async (code: number | null, cancelled: boolean, failed: boolean) => {
-          await runs.patch(started.id, { status: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', endedAt: new Date().toISOString(), exitCode: code,
+          await runs.patch(started.id, { status: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', quotaWait: undefined, endedAt: new Date().toISOString(), exitCode: code,
             ...(script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
             ...(failed ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(timedOut ? `Script exceeded its ${script!.registration.timeoutSeconds}s timeout and was terminated` : errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
           await releaseExternal(run)
@@ -458,7 +493,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
                 const observed = startup?.result()
                 const rejected = observed?.rejection && !observed.workBegan ? observed.rejection : undefined
                 // A rejection before work is a failure even when the CLI exits 0.
-                const failed = !cancelled && (code !== 0 || timedOut || Boolean(rejected))
+                const failed = !cancelled && (code !== 0 || timedOut || Boolean(rejected) || quotaCategory(observed?.rejection?.category))
                 if (startup) {
                   const { continues, ...failure } = failed ? attemptFailure(observed!) : { continues: false }
                   settle({ outcome: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', exitCode: code, ...failure })
@@ -845,6 +880,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     { command: 'status', description: 'Work, queue and delivery health' },
     { command: 'stop', description: 'Stop active work; keep queued messages' },
     { command: 'cancel', description: 'Cancel pending messages; keep active work' },
+    { command: 'retry_quota', description: 'Retry quota-blocked work after a reset or added credits' },
     { command: 'retry', description: 'Retry the latest failed incoming batch' },
     { command: 'new', description: 'New conversation; keep workspace files' },
   ]
@@ -912,6 +948,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       `Current: ${running ? (waitingForHost ? 'waiting for the workspace' : 'running') : 'idle'}`,
       `Scheduled limit: ${config.scheduledConcurrency ?? 6}`,
       `Background: ${scheduled ? `${scheduled} scheduled task${scheduled === 1 ? '' : 's'} running` : 'none'}`,
+      ...all.filter(r => r.status === 'queued' && r.quotaWait).map(r => `Waiting for quota: ${r.scheduled?.id ?? r.id}${r.quotaWait!.retryAt ? ` · next check ${r.quotaWait!.retryAt}` : ' · awaiting availability or /retry_quota'}`),
       `Queue: ${queued || incoming.pending ? `${queued} run${queued === 1 ? '' : 's'}; ${incoming.pending} incoming message${incoming.pending === 1 ? '' : 's'}` : 'empty'}`,
       ...(attention.length ? ['', 'Needs attention', ...attention] : []),
       '',
@@ -1052,6 +1089,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if (text === '/help') {
       await ctx.reply([...commands, ...aliases.filter((a) => !commands.some((c) => c.command === a.command))]
         .map((c) => `/${c.command} — ${c.description}`).join('\n'))
+      return
+    }
+    if (typeof text === 'string' && /^\/retry[_-]quota(?:\s|$)/.test(text)) {
+      const id = text.split(/\s+/)[1]
+      try {
+        if (text.split(/\s+/).length > 2) throw new Error('Usage: /retry_quota [RUN_ID]')
+        const result = await withStartLock(async () => scheduler.retryQuota((await control.status()).owner!, runs, id))
+        void drainSources().catch(console.error)
+        await ctx.reply(result.runIds.length ? `Quota retry queued for ${result.runIds.length} run(s).` : 'No queued quota-blocked work. Use /retry_quota RUN_ID for an earlier quota failure.')
+      } catch (error) { await ctx.reply(safeError(error)) }
       return
     }
     if (text === '/retry') {

@@ -4,9 +4,9 @@ import { presetLabel, presetProvider, sameChoice, type AiPreset, type ExecutionC
 // evidence: a missing CLI or a provider rejection before any model output or
 // tool item, or a usage limit the run ended on after work began (continued in a
 // fresh session that is told so). Anything else stops the chain.
-export type StartupCategory = 'cli-unavailable' | 'login-unavailable' | 'quota' | 'provider-rejected' | 'access-denied'
+export type StartupCategory = 'cli-unavailable' | 'login-unavailable' | 'quota' | 'credits-required' | 'provider-rejected' | 'access-denied'
 export type StartupRejection = { category: StartupCategory; resetAt?: string }
-export type AttemptCategory = StartupCategory | 'quota-after-work-began' | 'after-work-began' | 'uncertain' | 'same-quota-scope' | 'same-login-scope'
+export type AttemptCategory = StartupCategory | 'quota-after-work-began' | 'credits-required-after-work-began' | 'after-work-began' | 'uncertain' | 'same-quota-scope' | 'same-login-scope'
 export type SetupAttempt = {
   preset: AiPreset
   quotaScope: string
@@ -19,7 +19,7 @@ export type SetupAttempt = {
   endedAt?: string
 }
 
-const categories: StartupCategory[] = ['cli-unavailable', 'login-unavailable', 'quota', 'provider-rejected', 'access-denied']
+const categories: StartupCategory[] = ['cli-unavailable', 'login-unavailable', 'quota', 'credits-required', 'provider-rejected', 'access-denied']
 
 // A failed attempt's category and reset time, and whether the occurrence
 // continues on the next setup. Once work began only a quota limit the run ended
@@ -27,20 +27,33 @@ const categories: StartupCategory[] = ['cli-unavailable', 'login-unavailable', '
 export const attemptFailure = ({ workBegan, rejection }: { workBegan: boolean; rejection?: StartupRejection }): { category: AttemptCategory; resetAt?: string; continues: boolean } => {
   const resetAt = rejection?.resetAt ? { resetAt: rejection.resetAt } : {}
   if (!workBegan) return rejection ? { category: rejection.category, ...resetAt, continues: rejection.category !== 'access-denied' } : { category: 'uncertain', continues: false }
-  return rejection?.category === 'quota' ? { category: 'quota-after-work-began', ...resetAt, continues: true } : { category: 'after-work-began', continues: false }
+  return rejection && ['quota', 'credits-required'].includes(rejection.category) ? { category: rejection.category === 'quota' ? 'quota-after-work-began' : 'credits-required-after-work-began', ...resetAt, continues: true } : { category: 'after-work-began', continues: false }
 }
 
 // Transport fact for a setup that continues an occurrence after an earlier setup
 // stopped at its usage limit once work had begun. Facts only, no guidance.
 export const continuationLine = (runId: string, attempts: SetupAttempt[]): string | undefined => {
-  const limited = attempts.filter(a => a.category === 'quota-after-work-began')
+  const limited = attempts.filter(a => ['quota-after-work-began', 'credits-required-after-work-began'].includes(a.category ?? ''))
   return limited.length ? `[run ${runId} continues: ${limited.map(a => `${presetLabel(a.preset)} began work in native session ${a.sessionId} and stopped at its usage limit${a.resetAt ? ` (resets ${a.resetAt})` : ''}`).join('; ')}. That work may be partly applied.]` : undefined
 }
 
-export type SetupHealth = Record<string, { lastSuccessAt?: string; resetAt?: string }>
+export type SetupHealth = Record<string, { lastSuccessAt?: string; resetAt?: string; retryAt?: string; quotaFailures?: number; manualRetry?: true }>
+export type QuotaWait = { retryAt?: string }
+export const quotaBlockedUntil = (health: SetupHealth[string] = {}): number => health.manualRetry ? Infinity :
+  Math.max(Date.parse(health.resetAt ?? '') || 0, Date.parse(health.retryAt ?? '') || 0)
+// Any available saved login may run; otherwise wait for the earliest one.
+export const quotaWait = (candidates: AiPreset[], health: SetupHealth, now = Date.now()): QuotaWait | undefined => {
+  const times = candidates.map(p => quotaBlockedUntil(health[quotaScope(p)]))
+  if (!times.length || times.some(at => at <= now)) return undefined
+  const next = Math.min(...times)
+  return Number.isFinite(next) ? { retryAt: new Date(next).toISOString() } : {}
+}
+export const quotaCategory = (category?: string): boolean =>
+  ['quota', 'quota-after-work-began', 'credits-required', 'credits-required-after-work-began', 'same-quota-scope'].includes(category ?? '')
 export const validSetupHealth = (value: unknown): value is SetupHealth => Boolean(value && typeof value === 'object' && !Array.isArray(value) &&
   Object.entries(value).every(([scope, health]) => /^[a-z][a-zA-Z0-9@_./:-]{0,199}$/.test(scope) && health && typeof health === 'object' && !Array.isArray(health) &&
-    Object.entries(health).every(([key, at]) => ['lastSuccessAt', 'resetAt'].includes(key) && typeof at === 'string' &&
+    Object.entries(health).every(([key, at]) => key === 'quotaFailures' ? Number.isInteger(at) && Number(at) >= 1 && Number(at) <= 4 :
+      key === 'manualRetry' ? at === true : ['lastSuccessAt', 'resetAt', 'retryAt'].includes(key) && typeof at === 'string' &&
       Number.isFinite(Date.parse(at)) && new Date(at).toISOString() === at)))
 
 // Rotate only the primary's contiguous same-model/effort login choices. Other
@@ -52,7 +65,7 @@ export const setupCandidates = (execution: ExecutionChoice, health: SetupHealth 
   let best = 0, latest = -Infinity
   for (let i = 0; i < group.length; i++) {
     const state = health[quotaScope(group[i])], at = Date.parse(state?.lastSuccessAt ?? '')
-    if (!(Date.parse(state?.resetAt ?? '') > now) && at > latest) { best = i; latest = at }
+    if (!(quotaBlockedUntil(state) > now) && at > latest) { best = i; latest = at }
   }
   return [...group.slice(best), ...group.slice(0, best), ...saved.slice(group.length)]
 }
@@ -72,14 +85,14 @@ export const quotaScope = (preset: AiPreset): string => {
 // The next untried setup, skipping a login that already rejected authentication
 // or reached its quota in this occurrence. Each candidate is tried at most once.
 export const nextSetup = (candidates: AiPreset[], attempts: SetupAttempt[], health: SetupHealth = {}, now = Date.now()): { skipped: SetupAttempt[]; preset?: AiPreset } => {
-  const exhausted = new Map(attempts.filter(a => ['quota', 'quota-after-work-began', 'login-unavailable'].includes(a.category!))
+  const exhausted = new Map(attempts.filter(a => quotaCategory(a.category) || a.category === 'login-unavailable')
     .map(a => [a.quotaScope, a.category === 'login-unavailable' ? 'same-login-scope' as const : 'same-quota-scope' as const]))
   const skipped: SetupAttempt[] = []
   for (const preset of candidates) {
     if (attempts.some(attempt => sameChoice(attempt.preset, preset))) continue
     const scope = quotaScope(preset)
     const resetAt = health[scope]?.resetAt
-    const category = exhausted.get(scope) ?? (Date.parse(resetAt ?? '') > now ? 'same-quota-scope' : undefined)
+    const category = exhausted.get(scope) ?? (quotaBlockedUntil(health[scope]) > now ? 'same-quota-scope' : undefined)
     if (!category) return { skipped, preset }
     const at = new Date(now).toISOString()
     skipped.push({ preset, quotaScope: scope, outcome: 'skipped', category, ...(resetAt ? { resetAt } : {}), startedAt: at, endedAt: at })
@@ -96,7 +109,7 @@ const epochSeconds = (value: unknown): string | undefined =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? new Date(value * 1000).toISOString() : undefined
 
 const claudeErrors: Record<string, StartupCategory> = {
-  rate_limit: 'quota', billing_error: 'quota',
+  rate_limit: 'quota', billing_error: 'credits-required',
   authentication_failed: 'login-unavailable', oauth_org_not_allowed: 'access-denied', account_on_hold: 'access-denied',
   verification_required: 'access-denied', cloud_credential_error: 'access-denied',
   overloaded: 'provider-rejected', server_error: 'provider-rejected', model_not_found: 'provider-rejected', invalid_request: 'provider-rejected',
@@ -154,7 +167,7 @@ export const startupObserver = () => {
         (event?.type === 'system' && event.subtype === 'init')) return
     if (event?.type === 'rate_limit_event') {
       const info = event.rate_limit_info
-      if (info?.status === 'rejected') reject({ category: 'quota', ...(epochSeconds(info.resetsAt) ? { resetAt: epochSeconds(info.resetsAt) } : {}) })
+      if (info?.status === 'rejected') reject({ category: info.errorCode === 'credits_required' ? 'credits-required' : 'quota', ...(epochSeconds(info.resetsAt) ? { resetAt: epochSeconds(info.resetsAt) } : {}) })
       return
     }
     // Native API retry/error metadata is not model output. Do not inspect error
@@ -164,7 +177,7 @@ export const startupObserver = () => {
       if (category) { reject({ category }); return }
     }
     const category = event?.type === 'assistant' && typeof event.error === 'string' ? claudeErrors[event.error] : undefined
-    if (category) reject({ category, ...(category === 'quota' && rejection?.resetAt ? { resetAt: rejection.resetAt } : {}) })
+    if (category) reject({ category: category === 'quota' && rejection?.category === 'credits-required' ? 'credits-required' : category, ...(category === 'quota' && rejection?.resetAt ? { resetAt: rejection.resetAt } : {}) })
     else work()
   }
   return {
@@ -175,6 +188,7 @@ export const startupObserver = () => {
       for (const text of lines) line(text)
     },
     result: () => { line(buffer); buffer = ''; return { workBegan, rejection } },
+    accepted: () => workBegan && !rejection,
     summary: () => startupLine({ workBegan, rejection }),
   }
 }
