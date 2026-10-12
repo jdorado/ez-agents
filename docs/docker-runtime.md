@@ -286,6 +286,9 @@ On macOS host jobs, Seatbelt also denies sibling directories of the bound
 workspace (a tenant farm), while allowing explicitly shared and additional
 workspace grants and leaving `$HOME` readable for the host CLI.
 Codex then uses `danger-full-access` so it does not apply a nested Seatbelt.
+The isolated executor derives the Codex sandbox setting from its trusted
+deployment environment, never from an incoming job. Host workers and restricted
+tasks retain their existing native sandbox.
 
 ## Claude Code auth
 

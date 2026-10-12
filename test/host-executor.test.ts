@@ -49,6 +49,47 @@ test('isolated installations cannot start host transport', async () => {
   abort.abort()
 })
 
+test('isolated Codex execution uses the bound sandbox setting, never a job override', async () => {
+  const previous = { container:process.env.EZ_CONTAINER_EXECUTOR, hostname:process.env.HOSTNAME, sandbox:process.env.EZ_CODEX_SANDBOX }
+  try {
+    for (const [isolation, container, sandbox, cli, expected] of [
+      ['isolated','1','external','codex','external'],
+      ['isolated','1','','codex',undefined],
+      ['host-capable','','external','codex',undefined],
+      ['isolated','1','external','grok',undefined],
+    ] as const) {
+      process.env.EZ_CONTAINER_EXECUTOR=container;process.env.HOSTNAME='fixture-container';process.env.EZ_CODEX_SANDBOX=sandbox
+      const root=await mkdtemp(path.join(tmpdir(),'ez-bound-sandbox-')),workspace=path.join(root,'mind'),controlDir=path.join(root,'control')
+      const directory=path.join(controlDir,'host-executor'),abort=new AbortController()
+      let server:Promise<void>|undefined,captured:Parameters<typeof EXECUTOR_REGISTRY.codex.buildArgs>[0]|undefined
+      try {
+        await mkdir(workspace);await mkdir(directory,{recursive:true});await ownerRun(controlDir,'tg_42')
+        server=serveHostExecutor({cli,isolation,agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal,async(_texts,options)=>{
+          captured=options
+          const child=spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),20)'],{stdio:['pipe','pipe','pipe']})
+          return {child,cleanup:async()=>{},stdout:''}
+        },async()=>[])
+        for(let n=0;n<300;n++){try{await readFile(path.join(directory,'heartbeat.json'));break}catch{await new Promise(r=>setTimeout(r,20))}}
+        await readFile(path.join(directory,'heartbeat.json'))
+        await writeFile(path.join(directory,'tg_42.request.json'),JSON.stringify({texts:['test'],options:{cli,codexSandbox:'external'}}))
+        let events=''
+        for(let n=0;n<300;n++){try{events=await readFile(path.join(directory,'tg_42.events'),'utf8');if(events.includes('"stream":"exit"'))break}catch{}await new Promise(r=>setTimeout(r,20))}
+        assert.match(events,/"stream":"exit","code":0/)
+        assert.ok(captured)
+        assert.equal(captured.codexSandbox,expected,`${isolation}/${cli}/${sandbox || 'unset'}`)
+        if(cli==='codex'){
+          const args=EXECUTOR_REGISTRY.codex.buildArgs(captured,'','test')
+          assert.equal(args[args.indexOf('--sandbox')+1],expected ? 'danger-full-access' : 'workspace-write')
+        }
+      } finally {abort.abort();await server;await rm(root,{recursive:true,force:true})}
+    }
+  } finally {
+    for(const [key,value] of [['EZ_CONTAINER_EXECUTOR',previous.container],['HOSTNAME',previous.hostname],['EZ_CODEX_SANDBOX',previous.sandbox]]){
+      if(value===undefined)delete process.env[key!];else process.env[key!]=value
+    }
+  }
+})
+
 test('host bindings reject invalid opencode provider scopes before touching state', async () => {
   const abort=new AbortController()
   for (const opencodeProviders of [['BAD NAME'], [], ['ok', 'ok'], new Array(17).fill('ok')]) {
