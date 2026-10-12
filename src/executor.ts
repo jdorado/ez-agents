@@ -448,6 +448,9 @@ export const startExecutorJob = async (
     // token (`claude setup-token`) never refreshes, so one file can be copied
     // to every agent without them invalidating each other's OAuth session.
     Object.assign(environment, await claudeAuthEnvironment(home, options.authProfile))
+    // Print mode otherwise kills unfinished background work after 10 idle minutes.
+    // Keep native background work alive until completion or cancellation.
+    environment.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = '0'
   }
   if (!host && !gui && key === 'opencode') {
     // Point OpenCode at the agent-bound data home (cli/opencode/auth.json)
