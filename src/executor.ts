@@ -142,7 +142,10 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
     name: 'codex', command: 'codex', description: 'Codex CLI',
     buildArgs: (opts, _file, prompt) => {
       if (opts.codexSandbox !== undefined && opts.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
-      const args = ['exec', '--skip-git-repo-check', '--json', '--sandbox', opts.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write', '--disable', 'memories', '--enable', 'skip_host_skill_discovery', '-c', 'approval_policy="never"']
+      const external = opts.codexSandbox === 'external'
+      const args = ['exec', '--skip-git-repo-check', '--json',
+        ...(external ? ['--dangerously-bypass-approvals-and-sandbox'] : ['--sandbox', 'workspace-write', '-c', 'approval_policy="never"']),
+        '--disable', 'memories', '--enable', 'skip_host_skill_discovery']
       if (opts.codexProvider) {
         const provider = validateCodexProvider(opts.codexProvider)
         args.push(
@@ -155,10 +158,14 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
         if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid Codex compaction token limit')
         args.push('-c', `model_auto_compact_token_limit=${limit}`)
       }
-      if (opts.controlDir) args.push('--add-dir', opts.controlDir)
-      if (opts.sharedWorkspace) args.push('--add-dir', opts.sharedWorkspace)
-      for (const workspace of opts.additionalWorkspaces ?? []) args.push('--add-dir', workspace)
-      if (opts.toolsHome) args.push('--add-dir', opts.toolsHome, '-c', 'sandbox_workspace_write.network_access=true')
+      // The outer container/Seatbelt owns these grants. Writable-directory
+      // sandbox flags belong only to runs whose sandbox Codex manages.
+      if (!external) {
+        if (opts.controlDir) args.push('--add-dir', opts.controlDir)
+        if (opts.sharedWorkspace) args.push('--add-dir', opts.sharedWorkspace)
+        for (const workspace of opts.additionalWorkspaces ?? []) args.push('--add-dir', workspace)
+        if (opts.toolsHome) args.push('--add-dir', opts.toolsHome, '-c', 'sandbox_workspace_write.network_access=true')
+      }
       if (opts.model) args.push('--model', opts.model)
       if (opts.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(opts.effort)}`)
       if (opts.isResume && opts.sessionId) args.push('resume', opts.sessionId)
