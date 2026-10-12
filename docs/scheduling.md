@@ -13,6 +13,8 @@ ezenciel-agents-schedule create --name Research --now \
   --text '/goal Complete the authorized research objective. Save evidence, verify the outcome, and send the owner the result.'
 ezenciel-agents-schedule list
 ezenciel-agents-schedule runs
+ezenciel-agents-schedule running
+ezenciel-agents-schedule running --json
 ezenciel-agents-schedule trigger SCHEDULE_ID --key owner-smoke-20261003
 ezenciel-agents-schedule pause SCHEDULE_ID
 ezenciel-agents-schedule resume SCHEDULE_ID
@@ -27,6 +29,39 @@ An edit keeps a future pending occurrence when its trigger is unchanged;
 otherwise the edited rule begins at its next future occurrence. Editing does
 not replay missed work from an old start date. Use `--now` to request a new
 one-time run explicitly. `show` reports the pending occurrence used by dispatch.
+
+`running` gives one read-only view of **queued and running current-owner
+foreground turns (Telegram/application) and scheduled runs** in the bound relay.
+It shows run IDs,
+schedule names/IDs/revisions, the saved or latest attempted engine/model, start and
+elapsed times, and the last recorded relay activity. `--json` returns the same
+sanitized metadata with `schemaVersion`, `observedAt`, `counts`, `coverage` and
+`runs`, suitable for asking the agent to summarize what is running. Other commands
+keep their existing JSON output. The relay must be reachable; an unavailable
+relay is an error, never an empty/idle result.
+
+Activity means a recorded queue/start, setup attempt or delivery enqueue time;
+it does not measure native tool progress. An old observation does not change a
+run's recorded status. Missing start/model/activity metadata stays unknown, and
+finished runs are omitted. Schedule names are available only when the saved
+definition still matches that run's revision. For ordered fallbacks, the latest
+non-skipped attempt is shown with its recorded outcome. Script runs have no
+engine/model.
+
+`origin` and `scheduledChildren` link scheduled work to its recorded originating
+request. An origin may already be finished; its status is unknown when its record
+is outside retained owner coverage. These links are request provenance, not a
+native subagent tree. Native child status and native tool activity are unavailable
+on the current adapters, including Codex, Codex desktop, Claude, Grok, OpenCode
+and Pi. Native sessions, provider quotas and process lists are not queried.
+Prompts, message text, script arguments and raw engine output are not exported.
+
+This view covers one relay's retained memory. Ordinary restarts drop the ledger;
+gracefully adopted host runs are the existing exception. Standalone manual
+CLI/desktop sessions, other installations and restricted external/isolated tasks
+are outside this view. Application request context is omitted. Future schedule
+occurrences that have not been queued remain in `list`/`show`.
+
 Intervals use `--every-seconds` (minimum 60), optional `--start`, and optional
 `--until`. Cron also supports start/end bounds. All absolute timestamps require
 an explicit offset. `--now` starts on the next relay tick, not synchronously.

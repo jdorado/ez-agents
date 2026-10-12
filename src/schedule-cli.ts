@@ -16,6 +16,7 @@ import { executorEnvironment } from './executor.js'
 import { provisionedHome } from './auth-profile.js'
 import { ownsRun } from './identity.js'
 import { type Trigger } from './schedule-time.js'
+import { formatRunningWork, type RunningWorkView } from './running-work.js'
 
 // Each fallback selects its own native engine, credential home and model.
 const fallbackSetup = (spec: string, index: number): AiPreset => {
@@ -38,11 +39,12 @@ async function main() {
   const { values:v, positionals:[action='list',id,scriptId] } = parseArgs({allowPositionals:true,options:{
     script:{type:'string'}, arg:{type:'string',multiple:true}, file:{type:'string'}, interpreter:{type:'string'}, 'timeout-seconds':{type:'string'},
     cli:{type:'string'}, 'auth-profile':{type:'string'}, model:{type:'string'}, effort:{type:'string'}, fallback:{type:'string',multiple:true}, 'clear-fallbacks':{type:'boolean'},
-    all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
+    json:{type:'boolean'}, all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
     'preflight-file':{type:'string'},'clear-preflight':{type:'boolean'},name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
     cron:{type:'string'}, timezone:{type:'string'}, 'every-seconds':{type:'string'}, start:{type:'string'}, until:{type:'string'}, help:{type:'boolean'},
   }})
   if(v.help){console.log(`ezenciel-agents-schedule list | runs | show ID | pause ID | resume ID | remove ID | cancel RUN_ID
+  running [--json]   Read queued/running foreground and scheduled work in this relay
   failures [--all] [--limit N] | run RUN_ID | context
   evidence [RUN_ID] [--offset N --limit N --expected SNAPSHOT_SHA256]
   trigger SCHEDULE_ID --key REQUEST_KEY
@@ -64,6 +66,10 @@ Script runs receive EZ_RUN_ID, EZ_SCHEDULE_ID, EZ_SCHEDULE_REVISION, EZ_DUE_AT, 
 EZ_SCRIPT_SHA256 plus the normal executor allowlist. Stdout/stderr are bounded diagnostics in run, never owner messages.
 Script runs have a timeout (default ${DEFAULT_SCRIPT_TIMEOUT_SECONDS}s) and are never retried automatically.
 Context reads the current run only.
+Running is read-only and defaults to readable output; --json exports sanitized metadata.
+It includes current-owner foreground turns (Telegram/application) and schedules, with recorded setup, times and schedule-origin links.
+Activity covers relay lifecycle, setup attempts and delivery enqueue times; native tools and child status are unavailable.
+Missing or old observations never mean idle or complete. Standalone CLI/desktop and external/isolated work are outside this view.
 Evidence exports sanitized current-owner Telegram operational metadata only.
 Follow nextOffset with --expected; a changed snapshot requires restarting.
 Relay retention is incomplete. Content hashes identify submitted text, not recipient content.
@@ -88,10 +94,16 @@ Use --now to run once. Run completion is not delivery proof.
 Edit replaces the full schedule but keeps its paused/enabled state; only pause/resume toggle it.
 Pause/remove affect future work; cancel stops a particular run.
 Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/weekday OR semantics.`);return}
-  const config=loadControlConfig(), control=new ControlStore(config.controlDir,config.pairingTtlMs)
+  const config=loadControlConfig()
+  const socketPath=socketPathFor(config.controlDir)
+  if(action==='running'){
+    if(id || scriptId || Object.keys(v).some(key=>key!=='json'))throw new Error('Running accepts only --json')
+    const result=await callDeliverySocket(socketPath,{op:'runningWork',payload:{callerRunId:process.env.EZ_RUN_ID || undefined}}) as RunningWorkView
+    console.log(v.json ? JSON.stringify(result,null,2) : formatRunningWork(result));return
+  }
+  const control=new ControlStore(config.controlDir,config.pairingTtlMs)
   const owner=(await control.status()).owner
   if(!owner)throw new Error('Pair an owner before scheduling')
-  const socketPath=socketPathFor(config.controlDir)
   // Run records live in the relay memory ledger, reached through the delivery
   // socket. Schedule files stay on disk, so list/show/create/edit/pause/
   // resume/remove keep working with the relay stopped; run-inspecting actions
