@@ -128,7 +128,7 @@ export const readAntigravityModels = async (run?: (args: string[]) => Promise<st
   })
   try {
     const rows = (await exec(['models'])).split(/\r?\n/).flatMap(line => {
-      const match = line.match(/^\s*([a-z0-9][a-z0-9_./:-]*)[ \t]{2,}([^\r\n]+)$/)
+      const match = line.match(/^\s*([a-z0-9][a-z0-9_./:-]*)(?:\t+| {2,})([^\r\n]+)$/)
       return match && safe(match[1]) ? [{ cli: 'agy', model: match[1], name: match[2].trim().slice(0, 80), efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }] : []
     })
     return rows.filter((row, index) => rows.findIndex(other => other.model === row.model) === index)

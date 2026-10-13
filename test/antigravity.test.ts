@@ -50,6 +50,25 @@ test('native Antigravity catalog admits only its advertised models and retains c
  assert.deepEqual(await readAntigravityModels(async()=>{throw new Error('unauthenticated')}),[])
 })
 
+test('Antigravity discovery accepts the actual native single-tab model table', async () => {
+ const nativeOutput = [
+  'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+  'gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)',
+  'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)',
+  'claude-opus-5-5-low\tClaude Opus 5.5 (Low)',
+  'claude-opus-5-5-medium\tClaude Opus 5.5 (Medium)',
+  'claude-opus-5-5-high\tClaude Opus 5.5 (High)',
+  'claude-sonnet-5-5-low\tClaude Sonnet 5.5 (Low)',
+  'claude-sonnet-5-5-medium\tClaude Sonnet 5.5 (Medium)',
+  'claude-sonnet-5-5-high\tClaude Sonnet 5.5 (High)',
+  'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
+ ].join('\n')
+ const rows=await readAntigravityModels(async()=>nativeOutput)
+ assert.equal(rows.length,10)
+ assert.deepEqual(rows.map(row=>[row.model,row.name]),nativeOutput.split('\n').map(line=>line.split('\t')))
+ assert.deepEqual(await readAntigravityModels(async()=>'warning single-space diagnostic\n'),[])
+})
+
 test('interleaved application scopes capture and resume their own Antigravity subprocesses; cancellation and secrets remain isolated', async t => {
  const root=await mkdtemp(path.join(tmpdir(),'ez-agy-'))
  const bin=path.join(root,'bin'),workspace=path.join(root,'mind'),controlDir=path.join(root,'control')
