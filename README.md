@@ -69,7 +69,7 @@ use the [native application channel](docs/application-channel.md).
 | Part | What it contributes |
 |---|---|
 | **Workspace** | Markdown instructions, domain knowledge and working files that persist across conversations and changes of AI. |
-| **Native engine** | Inference, native sessions, context management and tool execution. See [AI selection](docs/architecture/ai-selection.md). |
+| **Native engine** | Inference, native sessions, context management and tool execution. See [AI selection](docs/architecture/ai-selection.md) and [Antigravity host setup](docs/antigravity.md). |
 | **Authority** | A verified owner and explicit limits on delegated work. Receiving a message or installing a tool does not grant permission to act. |
 | **Plugins** | Documented CLI commands and agent instructions for application capabilities. Commands enforce authentication, authorization, validation and canonical persistence directly or through authoritative application services. |
 | **Ez transport and runtime** | Channel delivery, scheduling and standard runtime controls around the native engine. |

@@ -27,6 +27,7 @@ test('discovery projects configured choices only; no credentials or guessed wrap
       { cli: 'codex', model: 'fixture-codex', effort: 'low' },
       { cli: 'claude', model: 'fixture-claude', effort: 'medium' },
       { cli: 'opencode', model: 'fixture/provider', effort: undefined },
+      { cli: 'agy', model: undefined, effort: undefined },
       { cli: 'codex-gui', model: undefined, effort: undefined },
     ])
     assert.ok(!JSON.stringify(choices).includes('fixture-secret'))

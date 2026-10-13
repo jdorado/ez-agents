@@ -170,6 +170,26 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       return args
     },
   },
+  agy: {
+    name: 'agy', command: 'agy', description: 'Google Antigravity CLI (1.3.4+)',
+    buildArgs: (opts) => {
+      // One literal stdin turn; the native CLI owns the conversation and waits
+      // for completion after EOF. Never resume the shared latest conversation.
+      const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--print-timeout', '0']
+      if (opts.isResume) {
+        if (!opts.sessionId || !/^[a-zA-Z0-9_-]{1,160}$/.test(opts.sessionId)) throw new Error('Antigravity resume requires a native conversation ID')
+        args.push('--conversation', opts.sessionId)
+      }
+      for (const directory of [opts.controlDir, opts.toolsHome, opts.sharedWorkspace, ...(opts.additionalWorkspaces ?? [])])
+        if (directory) args.push('--add-dir', directory)
+      if (opts.model) args.push('--model', opts.model)
+      if (opts.effort) {
+        if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(opts.effort)) throw new Error('Invalid Antigravity reasoning effort')
+        args.push('--effort', opts.effort)
+      }
+      return args
+    },
+  },
   claude: {
     name: 'claude',
     command: 'claude',
@@ -263,6 +283,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
 }
 
 export const EXECUTOR_ALIASES: Record<string, string> = {
+  antigravity: 'agy',
   'claude-code': 'claude',
   oc: 'opencode',
 }
@@ -498,12 +519,13 @@ export const startExecutorJob = async (
     ? JSON.stringify({texts,options:{...options,onSession:undefined,codexSandbox:undefined}})
     : nativeSession ? JSON.stringify({...launchOptions,onSession:undefined,prompt:promptText})
     : gui ? JSON.stringify({prompt:promptText,options:{...options,onSession:undefined}})
+    : key === 'agy' ? JSON.stringify({event:'user',message:{content:promptText}}) + '\n'
     : ['codex', 'claude'].includes(key) ? promptText : undefined)
   const timeout = options.timeoutMs > 0 ? setTimeout(() => terminateJob(child), options.timeoutMs) : undefined
   let stdout = ''
   let stderr = ''
   let metadataWork = Promise.resolve()
-  if (child.stdout && options.onSession && ['codex', 'codex-gui', 'opencode'].includes(key)) {
+  if (child.stdout && options.onSession && ['codex', 'codex-gui', 'opencode', 'agy'].includes(key)) {
     const lines = createInterface({ input: child.stdout })
     lines.on('line', (line) => {
       const id = nativeSessionId(key, line)
@@ -578,7 +600,8 @@ export const nativeSessionId = (cli: string, line: string): string | undefined =
   try {
     const event = JSON.parse(line)
     const id = (cli === 'codex' || cli === 'codex-gui') && event.type === 'thread.started' ? event.thread_id
-      : cli === 'opencode' && ['step_start', 'step_finish', 'text', 'tool_use'].includes(event.type) ? event.sessionID : undefined
+      : cli === 'opencode' && ['step_start', 'step_finish', 'text', 'tool_use'].includes(event.type) ? event.sessionID
+      : cli === 'agy' && event.event === 'init' ? event.conversation_id : undefined
     if (typeof id === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(id)) return id
   } catch {}
 }
