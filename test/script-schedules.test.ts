@@ -104,7 +104,7 @@ test('agent registers and schedules a script natively; script runs cannot change
   await f.runs.patch(scriptRun.id, { status: 'running' })
   const asScript = { env: { ...env, EZ_RUN_ID: scriptRun.id }, cwd: f.workspace }
   for (const args of [['script', 'update', 'book-freshness'], ['script', 'register', 'other', '--file', 'scripts/guard.mjs', '--interpreter', 'node'],
-    ['edit', 'actual-book-freshness-guard', '--script', 'book-freshness', '--now'], ['pause', 'daily'], ['trigger', 'daily', '--key', 'k']])
+    ['edit', 'actual-book-freshness-guard', '--expected-revision', schedule.revision, '--script', 'book-freshness', '--now'], ['pause', 'daily'], ['trigger', 'daily', '--key', 'k']])
     await assert.rejects(exec(process.execPath, [bin, ...args], asScript), /Script runs cannot change scripts or schedules/)
   assert.equal(JSON.parse((await exec(process.execPath, [bin, 'script', 'show', 'book-freshness'], asScript)).stdout).id, 'book-freshness')
   // A relative --file resolves from the caller's directory, stored relative to the workspace.
@@ -123,9 +123,9 @@ test('script CLI creates, preserves and explicitly clears preflight gates', asyn
  const options=['--script','guard','--at','2027-09-09T09:00:00+04:00']
  const created=await cli('create','gated',...options,'--preflight-file',file)
  assert.deepEqual(created.preflight,preflight)
- const edited=await cli('edit','gated',...options,'--name','Renamed')
+ const edited=await cli('edit','gated','--expected-revision',created.revision,...options,'--name','Renamed')
  assert.deepEqual(edited.preflight,preflight)
- const cleared=await cli('edit','gated',...options,'--clear-preflight')
+ const cleared=await cli('edit','gated','--expected-revision',edited.revision,...options,'--clear-preflight')
  assert.equal(cleared.preflight,undefined)
 })
 

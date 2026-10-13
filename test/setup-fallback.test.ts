@@ -110,7 +110,7 @@ test('same-settings login choices rotate from the last success, preserving expli
   assert.equal(nextSetup([b,c,a],[{preset:b,quotaScope:'claude@claude2',outcome:'failed',category:'quota'}]).preset,c,'rotation never retries an attempted login')
 })
 
-type Script={lines?:unknown[];code?:number;unavailable?:boolean;hold?:boolean;session?:string}
+type Script={lines?:unknown[];code?:number;unavailable?:boolean;hold?:boolean;session?:string;stage?:string}
 const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA)=>{
   const dir=await mkdtemp(join(tmpdir(),`ez-fallback-${name}-`)),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
   const launches:ExecutorOptions[]=[],prompts:string[][]=[],admitted:(AiPreset|undefined)[]=[],sent:string[]=[]
@@ -118,6 +118,7 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
     const script=scripts[launches.length] ?? {code:0}
     launches.push(options);prompts.push(texts);admitted.push(activeSetup((await runs.get(options.runId))!))
     if(script.unavailable)throw new CliUnavailableError(`Native CLI ${options.cli} is not executable on the host PATH`)
+    if(script.stage){const s=await scheduler.get('daily');await scheduler.edit({...s,text:script.stage},s.revision,()=>runs.list(),true)}
     if (script.session) await options.onSession?.(script.session)
     const out=(script.lines ?? []).map(l=>typeof l==='string'?l:JSON.stringify(l)).join('\n')
     const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(out ? out+'\n' : '')});setTimeout(()=>process.exit(${script.code ?? 0}),${script.hold ? 60000 : 10})`],{detached:process.platform!=='win32'})
@@ -318,6 +319,18 @@ test('cancellation stops the chain',async()=>{
   }finally{await f.close()}
 })
 
+test('a staged edit lets the running occurrence continue to its saved fallback on captured settings',async()=>{
+  const f=await fixture('staged',[{stage:'Edited work',lines:[quota],code:1},{lines:[startupLine({workBegan:true})],code:0}])
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'completed')
+    assert.deepEqual(run.attempts!.map(a=>[a.preset.id,a.outcome]),[['claude-a','failed'],['claude-b','skipped'],['codex-a','completed']])
+    assert.ok(f.prompts.every(texts=>texts.includes('Saved work')),'every attempt runs the captured instructions')
+    const saved=await f.scheduler.get('daily')
+    assert.equal(saved.text,'Edited work');assert.deepEqual(saved.continuingRunIds,[f.run.id])
+  }finally{await f.close()}
+})
+
 test('when every setup is unavailable the run reports each setup clearly',async()=>{
   const f=await fixture('none',[{unavailable:true},{unavailable:true}],[codexA])
   try{
@@ -428,8 +441,9 @@ test('schedule CLI saves ordered fallbacks, preserves them on edit and clears th
   const when=['--at','2027-09-09T09:00:00+04:00','--text','Work']
   const saved=await cli('create','chain','--cli','claude','--model','opus',...when,'--fallback','cli=claude,model=sonnet,effort=medium','--fallback','cli=codex,model=gpt-6-sol')
   assert.deepEqual(saved.execution.fallbacks.map((p:AiPreset)=>[p.cli,p.model,p.effort]),[['claude','sonnet','medium'],['codex','gpt-6-sol',undefined]])
-  assert.deepEqual((await cli('edit','chain','--cli','claude','--model','opus',...when)).execution.fallbacks,saved.execution.fallbacks)
-  assert.equal((await cli('edit','chain','--cli','claude','--model','opus',...when,'--clear-fallbacks')).execution.fallbacks,undefined)
+  const kept=await cli('edit','chain','--expected-revision',saved.revision,'--cli','claude','--model','opus',...when)
+  assert.deepEqual(kept.execution.fallbacks,saved.execution.fallbacks)
+  assert.equal((await cli('edit','chain','--expected-revision',kept.revision,'--cli','claude','--model','opus',...when,'--clear-fallbacks')).execution.fallbacks,undefined)
   await assert.rejects(exec(process.execPath,[bin,'create','bad','--cli','claude','--model','opus',...when,'--fallback','cli=codex'],{env}),/cli=EXECUTOR,model=MODEL/)
   await assert.rejects(exec(process.execPath,[bin,'create','dup','--cli','claude','--model','opus',...when,'--fallback','cli=claude,model=opus'],{env}),/distinct/)
 })
@@ -455,7 +469,7 @@ test('schedule CLI saves arbitrary profile/model/effort combinations and validat
     `cli=${cli},model=${model},effort=${effort}${profile?`,auth-profile=${profile}`:''}${provider?`,provider=${provider}`:''}`])
   const saved=await cli('create','chain','--cli','claude','--model','opus','--effort','high',...when,...flags)
   assert.deepEqual(saved.execution.fallbacks.map((p:AiPreset)=>[p.cli,p.authProfile,p.provider,p.model,p.effort]),tuples)
-  assert.deepEqual((await cli('edit','chain',...when)).execution,saved.execution)
+  assert.deepEqual((await cli('edit','chain','--expected-revision',saved.revision,...when)).execution,saved.execution)
   const base=[bin,'create','bad','--cli','claude','--model','opus',...when,'--fallback']
   for(const [spec,error] of [
     ['cli=claude,model=opus,auth-profile=missing',/not provisioned/],

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile, rename, link, rm, realpath, stat, access } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile, rename, link, rm, realpath, stat, access, chown } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { randomUUID, createHash } from 'node:crypto'
 import path from 'node:path'
@@ -82,10 +82,20 @@ export const workspaceEntry = async (workspace: string, entry: string): Promise<
 
 export const fileSha256 = async (file: string) => createHash('sha256').update(await readFile(file)).digest('hex')
 
-const atomic = async (file: string, value: unknown, exclusive = false) => {
+// The relay's runtime user reads saved definitions. A root operator command
+// (for example `docker compose exec relay ...`) gives the definition directory
+// the control directory's owner and each file its directory's owner.
+export const definitionDirectory = async (controlDir: string, dir: string) => {
+  await mkdir(dir, { recursive: true, mode: 0o700 })
+  if (process.getuid?.() !== 0) return
+  const [owner, current] = await Promise.all([stat(controlDir), stat(dir)])
+  if (current.uid !== owner.uid || current.gid !== owner.gid) await chown(dir, owner.uid, owner.gid)
+}
+export const writeDefinition = async (file: string, value: unknown, exclusive = false) => {
   const tmp = `${file}.${randomUUID()}.tmp`
   try {
     await writeFile(tmp, JSON.stringify(value) + '\n', { mode: 0o600, flag: 'wx' })
+    if (process.getuid?.() === 0) { const owner = await stat(path.dirname(file)); await chown(tmp, owner.uid, owner.gid) }
     if (exclusive) await link(tmp, file)
     else await rename(tmp, file)
   } finally { await rm(tmp, { force: true }) }
@@ -93,7 +103,7 @@ const atomic = async (file: string, value: unknown, exclusive = false) => {
 
 export class Scripts {
   private dir: string
-  constructor(controlDir: string) { this.dir = path.join(controlDir, 'scripts') }
+  constructor(private controlDir: string) { this.dir = path.join(controlDir, 'scripts') }
 
   async get(id: string): Promise<ScriptRegistration> {
     const s = JSON.parse(await readFile(path.join(this.dir, assertId(assertScriptId(id)) + '.json'), 'utf8')) as ScriptRegistration
@@ -138,8 +148,8 @@ export class Scripts {
     const s: ScriptRegistration = { version: 1, id: input.id, revision: randomUUID(), owner: input.owner, entry: relative,
       interpreter: input.interpreter, args: assertScriptArgs(input.args), sha256: await fileSha256(file),
       timeoutSeconds: assertTimeout(input.timeoutSeconds), registeredAt: previous?.registeredAt ?? now, updatedAt: now }
-    await mkdir(this.dir, { recursive: true, mode: 0o700 })
-    try { await atomic(path.join(this.dir, s.id + '.json'), s, create) }
+    await definitionDirectory(this.controlDir, this.dir)
+    try { await writeDefinition(path.join(this.dir, s.id + '.json'), s, create) }
     catch (error) {
       if (create && (error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('Script is already registered; use update')
       throw error
