@@ -24,7 +24,9 @@ test('CLI projects operational proof without sessions, failure prose or delivere
   const { dir, runs } = await fixture(t)
   const secret = 'private-session-or-token'
   await runs.patch('owner_run', { nativeSessionId: secret, failureReason: secret,
-    failure: { error: secret, relayVersion: '0.1.0-beta.47' } })
+    failure: { error: secret, relayVersion: '0.1.0-beta.47' },
+    attempts:[{preset:{id:'test',name:'test',cli:'claude',model:'opus'},quotaScope:'claude',outcome:'failed',
+      nativeTerminal:{status:'failed',subtype:'error_during_execution',isError:true,stopReason:null,privateText:secret} as any}] })
   const sent = await runs.enqueueMessage('owner_run', 'private financial report')
   await runs.claimOutbox(sent.id); await runs.markOutboxSent(sent.id, [7])
   const uncertain = await runs.enqueueMessage('owner_run', 'uncertain report')
@@ -35,6 +37,7 @@ test('CLI projects operational proof without sessions, failure prose or delivere
   })
   const result = JSON.parse(stdout)
   assert.equal(result.runs.length, 1)
+  assert.deepEqual(result.runs[0].nativeTerminals,[{attempt:1,status:'failed',subtype:'error_during_execution',isError:true,stopReason:null}])
   assert.ok(!stdout.includes(secret) && !stdout.includes('private financial report') && !stdout.includes('uncertain report'))
   const receipts = result.runs[0].deliveries
   assert.equal(receipts.find((r: any) => r.id === sent.id).receiptVerified, true)
