@@ -147,6 +147,7 @@ test('host execution resolves a declared provider from the bound agent, not a la
     await mkdir(path.join(controlDir, 'cli', 'codex'), {recursive: true})
     await writeFile(path.join(fakeBin, 'codex'), '#!/bin/sh\nexit 0\n', {mode: 0o700})
     await writeFile(path.join(fakeBin, 'opencode'), '#!/bin/sh\nexit 0\n', {mode: 0o700})
+    await writeFile(path.join(fakeBin, 'agy'), '#!/bin/sh\nexit 0\n', {mode: 0o700})
     await writeFile(path.join(controlDir, 'cli', 'codex', 'models_cache.json'), JSON.stringify({models: [
       {slug: provider.models[0], visibility: 'list', display_name: 'DeepSeek V4.1 Flash', supported_reasoning_levels: [{effort: 'max'}]},
     ]}))
