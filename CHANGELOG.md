@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.1.0-beta.53
+## 0.1.0-beta.58
+
+Versions 0.1.0-beta.53 through 0.1.0-beta.57 were used only by private QA candidates; this release follows the newest installed candidate (0.1.0-beta.58.rc.1) so it can upgrade in place.
 
 - Add an owner chat/application fallback chain (`ezenciel-agents-ai fallbacks`), captured when work is queued, with the scheduled-fallback safeguards: advance only on typed unavailability, rejection before work or a usage limit, never after cancellation, access denial, revoked authority or an uncertain outcome. Same-CLI logins keep the turn's model and effort, and each login keeps its own native session per conversation.
 - Add opt-in per-attempt run telemetry (`ezenciel-agents-ai telemetry on`): reported model, deduplicated token counts, tool counts/durations and error categories with labelled coverage gaps, never prompts, tool data, credentials or costs.
@@ -13,7 +15,7 @@
 - Restore isolated Codex chat replies: the isolated executor derives the Codex sandbox setting from its trusted deployment environment, never from an incoming job.
 - Keep unfinished Claude background work alive in print mode until completion or explicit cancellation, instead of being killed after 10 idle minutes.
 
-Beta limits: live fresh-host/reboot acceptance and live installed-agent QA of the chat fallback chain, run telemetry and safe schedule edits remain pending; they are covered by synthetic relay, CLI and container tests. A Codex chat setup advances only when its CLI is unavailable, so put Codex last in a chat chain. On its first turn, a fallback login's linked session does not see the conversation's earlier native history. Callers of `ezenciel-agents-schedule edit` must now pass `--expected-revision`, and edit needs the running relay. Publication does not establish an installed-agent upgrade or authorize provider/domain writes.
+Beta limits: live fresh-host/reboot acceptance and live installed-agent QA of the chat fallback chain, run telemetry and safe schedule edits remain pending; they are covered by synthetic relay, CLI and container tests. A Codex chat setup advances only when its CLI is unavailable, so put Codex last in a chat chain. On its first turn, a fallback login's linked session does not see the conversation's earlier native history. Run telemetry and quota-waiting runs live in relay memory and reset on restart; saved-login cooldowns persist. Callers of `ezenciel-agents-schedule edit` must now pass `--expected-revision`, and edit needs the running relay. Publication does not establish an installed-agent upgrade or authorize provider/domain writes.
 
 ## 0.1.0-beta.52
 
