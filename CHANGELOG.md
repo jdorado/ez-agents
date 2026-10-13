@@ -1,14 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.58
+
+Versions 0.1.0-beta.53 through 0.1.0-beta.57 were used only by private QA candidates; this release follows the newest installed candidate (0.1.0-beta.58.rc.1) so it can upgrade in place.
 
 - Add an owner chat/application fallback chain (`ezenciel-agents-ai fallbacks`), captured when work is queued, with the scheduled-fallback safeguards: advance only on typed unavailability, rejection before work or a usage limit, never after cancellation, access denial, revoked authority or an uncertain outcome. Same-CLI logins keep the turn's model and effort, and each login keeps its own native session per conversation.
 - Add opt-in per-attempt run telemetry (`ezenciel-agents-ai telemetry on`): reported model, deduplicated token counts, tool counts/durations and error categories with labelled coverage gaps, never prompts, tool data, credentials or costs.
 - Make schedule edits safe for queued and running work. `edit` now requires `--expected-revision` and rejects a stale revision. It applies only while the task is idle, or with `--stage` saves the change for future occurrences while queued and running ones finish on their captured settings, including fallbacks and quota retries. Edits, dispatch, trigger, pause, resume and remove serialize on a per-task lock, so a due occurrence cannot land between the check and the write. Edit needs the running relay. A root invocation of the schedule CLI runs as the control directory's owner, so its definitions stay readable by the relay and it cannot follow agent-planted symlinks.
 - Hold new native turn admission while a completed or rolled-back core update drains for supervisor reload. Retain queued requests and reopen only after the replacement worker is ready.
-
 - Preserve scheduled fallback handling when a compatible relay upgrade adopts a running native session, including continuation after a terminal usage limit without replaying its work.
 - Reuse the last successful same-model native login across scheduled tasks and relay restarts; rotate through configured logins and skip known exhausted scopes until their provider reset.
+- Keep scheduled work queued when every saved CLI login reaches its usage limit, instead of failing on each tick. Known resets wake the occurrence; unknown resets back off from 5 minutes to hourly. Codex reports native rate limits, and Claude credits-required responses wait for an explicit retry. `ezenciel-agents-schedule retry [RUN_ID]` and `/retry_quota [RUN_ID]` clear the relevant cooldowns after a manual reset or added credits.
+- Add `ezenciel-agents-schedule running [--json]`, a read-only view of queued and running current-owner foreground turns and scheduled runs with their engine, timing and schedule origin. It exports no prompts, messages or native output.
+- Restore isolated Codex chat replies: the isolated executor derives the Codex sandbox setting from its trusted deployment environment, never from an incoming job.
+- Keep unfinished Claude background work alive in print mode until completion or explicit cancellation, instead of being killed after 10 idle minutes.
+
+Beta limits: live fresh-host/reboot acceptance and live installed-agent QA of the chat fallback chain, run telemetry and safe schedule edits remain pending; they are covered by synthetic relay, CLI and container tests. A Codex chat setup advances only when its CLI is unavailable, so put Codex last in a chat chain. On its first turn, a fallback login's linked session does not see the conversation's earlier native history. Run telemetry and quota-waiting runs live in relay memory and reset on restart; saved-login cooldowns persist. Callers of `ezenciel-agents-schedule edit` must now pass `--expected-revision`, and edit needs the running relay. Publication does not establish an installed-agent upgrade or authorize provider/domain writes.
 
 ## 0.1.0-beta.52
 
