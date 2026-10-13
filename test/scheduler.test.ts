@@ -290,6 +290,16 @@ test('a holder whose lock expired never releases the next holder',async t=>{
  await first();await stat(file)
  await second();await assert.rejects(stat(file),{code:'ENOENT'})
 })
+test('an occurrence of a removed task does not make its recreated task busy',async t=>{
+ const f=await fixture(t), s=await f.scheduler.save(f.input,true)
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ const [old]=await f.runs.list()
+ await f.scheduler.remove(s.id)
+ const again=await f.scheduler.save(f.input,true)
+ const edited=await f.scheduler.edit({...f.input,text:'Recreated'},again.revision,()=>f.runs.list(),true)
+ assert.equal(edited.continuingRunIds,undefined)
+ assert.equal(await f.scheduler.current(old,f.owner),false,'the removed task occurrence stays non-current')
+})
 test('continuing occurrences must be valid record identifiers',async t=>{
  const f=await fixture(t), s=await f.scheduler.save(f.input,true)
  await writeFile(join(f.dir,'schedules/test.json'),JSON.stringify({...s,continuingRunIds:['../escape']}))

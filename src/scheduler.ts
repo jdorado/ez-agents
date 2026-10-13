@@ -226,7 +226,7 @@ export class Scheduler {
       const current = await this.get(input.id)
       if (current.revision !== expectedRevision) throw new Error(`Schedule changed since revision ${expectedRevision}; read it again with show and reapply the edit`)
       if (!sameOwner(current.owner,input.owner)) throw new Error('Schedule ownership mismatch')
-      const active = (await runs()).filter(r => r.scheduled?.id === current.id && inFlight(r)).map(r => r.id)
+      const active = (await runs()).filter(r => occurrenceOf(current, r) && inFlight(r)).map(r => r.id)
       if (active.length && !stage) throw new Error(`Schedule has queued or running occurrences (${active.join(', ')}); edit again when idle, cancel them, or pass --stage to apply the edit to future occurrences only`)
       return this.save({...input,enabled:current.enabled,continuingRunIds:active.length ? active : undefined})
     })
@@ -267,20 +267,22 @@ export class Scheduler {
       if (run.delivery) await new ApplicationBindings(this.controlDir).authorize(run)
       ready.push(run)
     }
-    const scopes = [...new Set(ready.flatMap(r => [r.execution!.preset, ...r.execution!.fallbacks ?? []].map(quotaScope)))]
-    await new ControlStore(this.controlDir, 1000).clearQuotaWait(owner, scopes)
-    const retried: string[] = []
-    // An edit that replaced the occurrence's revision meanwhile wins over the requeue.
+    const retried: string[] = [], cleared = new Set<string>()
+    // An edit that replaced the occurrence's revision meanwhile wins over the requeue;
+    // only a requeued occurrence clears its setups' quota backoff.
     for (const run of ready) await this.locked(run.scheduled!.id, async () => {
       if (!await this.current(run, owner) || (await runs.list()).some(other => other.id !== run.id && other.scheduled?.id === run.scheduled!.id && inFlight(other))) {
         if (runId) throw new Error('Schedule changed or has another occurrence in flight; inspect the run before retrying')
         return
       }
+      const scopes = [run.execution!.preset, ...run.execution!.fallbacks ?? []].map(quotaScope)
+      await new ControlStore(this.controlDir, 1000).clearQuotaWait(owner, scopes)
+      for (const scope of scopes) cleared.add(scope)
       await runs.patch(run.id, { status: 'queued', quotaWait: {}, pid: undefined, endedAt: undefined,
         exitCode: undefined, failure: undefined, failureReason: undefined, failureReview: undefined })
       retried.push(run.id)
     })
-    return { runIds: retried, scopes }
+    return { runIds: retried, scopes: [...cleared] }
   }
 
   async cancel(runId: string, run?: RunRecord | null) {
