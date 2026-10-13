@@ -214,6 +214,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     await writeFile(path.join(root,'claude'),await readFile(binary),{mode:0o700})
     await writeFile(path.join(root,'codex'),await readFile(binary),{mode:0o700})
     await writeFile(path.join(root,'opencode'),'#!/bin/sh\nexit 0\n',{mode:0o700})
+    await writeFile(path.join(root,'agy'),'#!/bin/sh\nexit 0\n',{mode:0o700})
     process.env.PATH=root+path.delimiter+oldPath
     EXECUTOR_REGISTRY.grok.command=binary
     EXECUTOR_REGISTRY.grok.buildArgs=(opts,file,prompt)=>[...EXECUTOR_REGISTRY.codex.buildArgs(opts,file,prompt).slice(0,-1),prompt]
