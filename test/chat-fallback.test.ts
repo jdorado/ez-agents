@@ -202,6 +202,16 @@ test('a usage limit after work began continues on the next login, told that work
   } finally { await f.close() }
 })
 
+test('a usage limit after work began on the last setup fails the turn as started work, not a start failure', async () => {
+  const f = await fixture('last-limit', [{ lines: [work, quota], code: 1 }], { chain: [], telemetry: true })
+  try {
+    const run = await f.turn()
+    assert.equal(run.status, 'failed'); assert.equal(run.failureReason, 'executor-exit'); assert.equal(run.exitCode, 1)
+    assert.deepEqual(run.attempts!.map(a => a.category), ['quota-after-work-began'])
+    assert.doesNotMatch(f.sent.join('\n'), /could not start/)
+  } finally { await f.close() }
+})
+
 test('without a chain or telemetry, chat behavior is unchanged', async () => {
   const f = await fixture('plain', [{ lines: [quota], code: 1 }], { chain: [] })
   try {

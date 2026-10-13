@@ -365,6 +365,8 @@ work may be partly applied). Access denial, other failures after work began,
 unknown outcomes, owner stop and revoked owner or application authority end the
 turn without replay. A login cooling down after a recorded quota rejection is
 skipped while another is available; when all are, they are tried in order.
+Codex chat turns report no typed usage-limit rejection, so a Codex setup
+advances only when its CLI is unavailable; put Codex last in the chain.
 Each login keeps its own native session for the conversation, created on first
 use and resumed on later turns; a session never resumes under another login. A
 fallback login's first turn does not see the conversation's earlier native

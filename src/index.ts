@@ -356,8 +356,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       // Advance only after an eligible failure (see attemptFailure) of a current,
       // uncancelled occurrence. Setups in an exhausted scope are skipped and recorded.
-      // Chat never refuses a present owner on recorded quota health alone: when
-      // every saved login is cooling down, it tries them in order instead.
+      // Owner-present work (chat, application, event sources) never refuses on
+      // recorded quota health alone: when every saved login is cooling down, it
+      // tries them in order instead.
       let ignoreHealth = false
       const advance = async (): Promise<AiPreset | undefined> => {
         let preset: AiPreset | undefined
@@ -365,10 +366,13 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         if (current && await authorized(current)) {
           const round = attempts.slice(roundStart)
           let next = nextSetup(candidates, round, ignoreHealth ? {} : await setupAvailability(current, run.id))
-          if (!next.preset && chat && !round.length && !ignoreHealth) { ignoreHealth = true; next = nextSetup(candidates, round) }
+          if (!next.preset && !run.scheduled && !round.length && !ignoreHealth) { ignoreHealth = true; next = nextSetup(candidates, round) }
           attempts = [...attempts, ...next.skipped]
           if (!next.preset) {
             await runs.patch(run.id, { attempts })
+            // Owner-present work whose setup already began work ends as that
+            // run's failure; it did start.
+            if (!run.scheduled && round.some(a => a.category?.endsWith('after-work-began'))) return undefined
             throw new SetupsUnavailableError(unavailableSummary(attempts))
           }
           preset = next.preset
