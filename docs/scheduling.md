@@ -160,7 +160,7 @@ schedule removal, a policy or unknown error, an interrupted transport, or any
 other failure after work began. Evidence comes from structured events only: Codex
 native-session `codexErrorInfo` and Claude `stream-json` error fields (scheduled
 Claude runs use `--output-format stream-json`; the host forwards only a compact
-startup summary). Other engines advance only when their CLI is unavailable.
+startup and typed terminal-outcome summary). Other engines advance only when their CLI is unavailable.
 
 After work begins, only a typed Codex or Claude usage limit, or a Claude
 credits-required rejection, permits continuation. The run must have ended on
@@ -374,7 +374,16 @@ in-flight process or prove whether an external side effect happened.
 
 The host and relay must be online. Paused/completed schedule definitions and task
 artifacts are retained. The agent sends through the normal Telegram outbox;
-`completed` means executor exit, while provider delivery is recorded separately.
+`completed` means executor completion without a known typed native error or
+incomplete terminal result; it does not certify domain work. Claude's native
+`result` subtype, `is_error` and stop reason override exit zero when they report
+failure, truncation or an unknown completion. Each observed result is retained
+as an allowlisted `nativeTerminal` on the attempt, even with telemetry off;
+`evidence` exports these fields without native sessions or prose. Unknown codes
+are labelled `unknown`, and absent result evidence is not backfilled. The host
+and relay must both carry this contract; an older host cannot supply fields it
+discarded. Provider delivery is recorded separately. The owning agent or plugin
+owns the saved complete/incomplete domain receipt, including a no-change result.
 A timeout or ambiguous send must not cause blind replay of the whole task.
 
 ## Failure-review stop
@@ -423,7 +432,8 @@ For a shareable operational projection, use `evidence [RUN_ID] --offset 0 --limi
 This reads the live relay through its existing authenticated socket, under the
 bound operator or an active unrestricted Telegram owner run. Application/channel,
 external and isolated-task callers cannot use it. It exposes only current-owner
-Telegram foreground/scheduled runs, stable IDs, clocks/status/presets, failure
+Telegram foreground/scheduled runs, stable IDs, clocks/status/presets, typed native
+terminal outcomes by attempt, failure
 metadata without prose, and retained run-associated outbox metadata. No native
 session, prompt, reasoning, tool arguments/results, message text or channel identity
 is returned. Failure text is represented by its SHA-256, not copied or diagnosed.

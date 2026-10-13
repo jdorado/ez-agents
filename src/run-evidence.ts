@@ -3,6 +3,7 @@ import { readOnlyOwner, requireOwnerExecution } from './execution-authority.js'
 import { ownsRun, assertId } from './identity.js'
 import { RunStore, retainedOutbox, type RunRecord, type StoredOutboxItem } from './runs.js'
 import type { Owner } from './control-state.js'
+import { validNativeTerminal } from './setup-fallback.js'
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 const version = (value?: string) => value && /^[0-9A-Za-z.+-]{1,80}$/.test(value) ? value : undefined
@@ -39,6 +40,8 @@ export function projectRunEvidence(runs: RunRecord[], outbox: StoredOutboxItem[]
       failureReasonRecorded: Boolean(run.failureReason), blockReasonRecorded: Boolean(run.blockReason),
       failureReview: run.failureReview ? { failedAt: run.failureReview.failedAt, reviewedAt: run.failureReview.reviewedAt, status: run.failureReview.status } : undefined,
       nativeSessionRecorded: Boolean(run.nativeSessionId),
+      nativeTerminals: (run.attempts ?? []).flatMap((attempt, index) => attempt.nativeTerminal ?
+        [{ attempt: index + 1, ...validNativeTerminal(attempt.nativeTerminal) }] : []),
       toolDelegationMetadata: { state: 'unavailable', reason: 'The relay does not retain native tool or delegation events.' },
       deliveries: outbox.filter(item => item.runId === run.id && item.chatId === owner.telegramChatId &&
         Date.parse(item.createdAt) >= Date.parse(owner.telegramLinkedAt ?? owner.pairedAt))
