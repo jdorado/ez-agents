@@ -4,7 +4,7 @@ import { readOnlyOwner, requireOwnerExecution } from './execution-authority.js'
 import { redactFailure } from './failure.js'
 import { ownsRun } from './identity.js'
 import { activeSetup, retainedOutbox, RunStore, type RunRecord, type StoredOutboxItem } from './runs.js'
-import { Scheduler, type Schedule } from './scheduler.js'
+import { Scheduler, occurrenceOf, type Schedule } from './scheduler.js'
 
 const timestamp = (value?: string): string | null =>
   value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null
@@ -27,8 +27,7 @@ export function projectRunningWork(records: RunRecord[], outbox: StoredOutboxIte
   const runs = active.map(run => {
     const preset = activeSetup(run)
     const attempt = [...run.attempts ?? []].reverse().find(item => item.outcome !== 'skipped')
-    const schedule = schedules.find(item => item.id === run.scheduled?.id &&
-      item.revision === run.scheduled.revision && sameOwner(item.owner, owner))
+    const schedule = schedules.find(item => occurrenceOf(item, run) && sameOwner(item.owner, owner))
     const originId = run.scheduled?.originRunId
     const origin = owned.find(item => item.id === originId)
     const events = [

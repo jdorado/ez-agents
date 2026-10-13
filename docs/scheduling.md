@@ -22,13 +22,42 @@ ezenciel-agents-schedule remove SCHEDULE_ID
 ezenciel-agents-schedule cancel RUN_ID
 ```
 
-Use `--text-file` for longer instructions. `edit ID` replaces the complete schedule
-with a new revision; use the same trigger/name/text flags as `create`. It keeps
-the paused/enabled state: an edited paused task stays paused until `resume`.
+Use `--text-file` for longer instructions. `edit ID --expected-revision REVISION`
+replaces the complete schedule with a new revision; use the same trigger/name/text
+flags as `create`. `REVISION` is the `revision` printed by `show`, `list`,
+`create` or a previous `edit`. If the schedule changed since that revision, the
+edit is rejected and nothing is written: read it again and reapply the change.
+It keeps the paused/enabled state: an edited paused task stays paused until `resume`.
 An edit keeps a future pending occurrence when its trigger is unchanged;
 otherwise the edited rule begins at its next future occurrence. Editing does
 not replay missed work from an old start date. Use `--now` to request a new
 one-time run explicitly. `show` reports the pending occurrence used by dispatch.
+
+An edit never disrupts an occurrence that is already queued or running:
+
+- Without `--stage`, it applies only while the task is idle. When an occurrence
+  is queued (including a quota wait) or running, it is rejected with those run IDs
+  and nothing changes. Edit again after they finish, or `cancel RUN_ID` first.
+- With `--stage`, the new revision is saved for future occurrences. The queued or
+  running occurrences listed in `continuingRunIds` finish with the instructions,
+  engine, model, effort, fallbacks, delivery binding and revision they captured,
+  including fallback advancement and quota retries. The next occurrence of the new
+  revision waits for them, as usual for one task. A continuing occurrence that is
+  interrupted (or fails, for a `--when unreviewed-failures` schedule) holds the
+  new revision until the next explicit edit.
+
+The compare, idle check and write happen under the task's lock, which dispatch,
+`trigger`, `pause`, `resume`, `remove` and quota `retry` also take; a due occurrence therefore
+lands either before the edit (and is protected as above) or after it, on the new
+revision. Edit needs the running relay to read queued and running occurrences;
+an unavailable relay rejects the edit rather than assuming the task is idle.
+`list`, `show`, `create`, `pause`, `resume`, `remove` and script registration keep
+working with the relay stopped.
+
+Definitions are private files owned by the agent runtime user. A root invocation,
+such as `docker compose exec relay ezenciel-agents-schedule ...`, first switches to
+the user and group that own the control directory, so saved definitions stay
+readable by the relay and root never writes through paths the agent controls.
 
 `running` gives one read-only view of **queued and running current-owner
 foreground turns (Telegram/application) and scheduled runs** in the bound relay.
@@ -127,7 +156,7 @@ error, unavailable model or bad request), including a missing, expired or revoke
 login (typed authentication failure or HTTP401). Native API-error metadata does
 not count as model/tool work. It stops, without replay, on access
 denial (HTTP403, account or organization restriction), cancellation, relay shutdown,
-a schedule edit, a policy or unknown error, an interrupted transport, or any
+schedule removal, a policy or unknown error, an interrupted transport, or any
 other failure after work began. Evidence comes from structured events only: Codex
 native-session `codexErrorInfo` and Claude `stream-json` error fields (scheduled
 Claude runs use `--output-format stream-json`; the host forwards only a compact
@@ -327,8 +356,9 @@ Schedule definitions and cursors use protected atomic JSON files. A restart
 between queue creation and cursor persistence does not duplicate an occurrence.
 An overdue one-time job runs on return. Missed recurring occurrences coalesce into
 one pending run; future runs resume at the next eligible time. A paused queued
-occurrence waits for resume. Editing/removing a schedule invalidates its old
-queued occurrence; already-running work continues until explicitly cancelled.
+occurrence waits for resume. Removing a schedule invalidates its queued
+occurrence; already-running work continues until explicitly cancelled. An edit
+never invalidates queued or running work (see `edit` above).
 
 `/stop` stops all active work; `cancel RUN_ID` stops one background task. `/cancel`
 clears queued work. Pause/remove a recurring schedule to prevent future runs.

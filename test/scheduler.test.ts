@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile, readFile, stat } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, stat, readdir, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
@@ -177,4 +177,131 @@ test('missing models cannot be saved, dispatched or triggered; legacy settings r
  const [run]=await f.runs.list()
  assert.equal(run.execution?.preset.model,f.input.execution.preset.model)
  assert.equal(run.scheduled?.revision,repaired.revision)
+})
+
+// Safe updates: an edit never invalidates an occurrence that is already queued
+// or running, and definition writes serialize with dispatch on the schedule lock.
+test('edit applies only from the expected revision and keeps a concurrent pause',async t=>{
+ const f=await fixture(t), s=await f.scheduler.save(f.input,true), list=()=>f.runs.list()
+ const first=await f.scheduler.edit({...f.input,text:'First'},s.revision,list)
+ await assert.rejects(f.scheduler.edit({...f.input,text:'Stale'},s.revision,list),/changed since revision/)
+ assert.equal((await f.scheduler.get(s.id)).text,'First')
+ const racing=await Promise.allSettled(['A','B'].map(text=>f.scheduler.edit({...f.input,text},first.revision,list)))
+ const won=racing.filter(r=>r.status==='fulfilled')
+ assert.equal(won.length,1,'two edits from one revision cannot both apply')
+ assert.match(String((racing.find(r=>r.status==='rejected') as PromiseRejectedResult).reason),/changed since revision/)
+ const latest=await f.scheduler.get(s.id)
+ assert.equal(latest.revision,(won[0] as PromiseFulfilledResult<typeof latest>).value.revision)
+ // Pause keeps the revision; an edit read before it must not resume the task.
+ await f.scheduler.enable(s.id,false)
+ assert.equal((await f.scheduler.edit({...f.input,enabled:true,text:'After pause'},latest.revision,list)).enabled,false)
+ assert.deepEqual((await readdir(join(f.dir,'schedules'))).filter(name=>name.endsWith('.lock')),[])
+})
+test('edit refuses a busy task; a staged edit lets queued and running occurrences finish on captured settings',async t=>{
+ const f=await fixture(t), list=()=>f.runs.list()
+ const s=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start:new Date(f.now).toISOString()}},true)
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ const [queued]=await f.runs.list()
+ const changed={...f.input,text:'New instructions',trigger:s.trigger,execution:{...f.input.execution,preset:{...f.input.execution.preset,model:'new-model'}}}
+ await assert.rejects(f.scheduler.edit(changed,s.revision,list),new RegExp(`queued or running occurrences \\(${queued.id}\\)`))
+ assert.equal((await f.scheduler.get(s.id)).revision,s.revision)
+ assert.equal(await f.scheduler.current(queued,f.owner),true,'a refused edit leaves the queued occurrence admissible')
+ await f.runs.patch(queued.id,{status:'running'})
+ const staged=await f.scheduler.edit(changed,s.revision,list,true)
+ assert.deepEqual(staged.continuingRunIds,[queued.id])
+ // Admission and fallback advancement keep accepting the captured occurrence.
+ assert.equal(await f.scheduler.current(queued,f.owner),true)
+ const captured=(await f.runs.get(queued.id))!
+ assert.equal(captured.texts[1],'Do the work');assert.equal(captured.execution?.preset.model,'fixture-model')
+ assert.equal((await f.scheduler.listTasksReadOnly(await f.runs.list()))[0].runState,'running')
+ await f.scheduler.tick(f.owner,f.runs,f.now+600000)
+ assert.equal((await f.runs.list()).length,1,'the staged revision waits for the running occurrence')
+ await f.runs.patch(queued.id,{status:'completed'})
+ await f.scheduler.tick(f.owner,f.runs,f.now+600000)
+ const next=(await f.runs.list()).find(r=>r.id!==queued.id)!
+ assert.equal(next.scheduled?.revision,staged.revision)
+ assert.equal(next.texts[1],'New instructions');assert.equal(next.execution?.preset.model,'new-model')
+ await f.runs.patch(next.id,{status:'completed'})
+ const idle=await f.scheduler.edit({...changed,text:'Idle edit'},staged.revision,list)
+ assert.equal(idle.continuingRunIds,undefined)
+ assert.equal(await f.scheduler.current(queued,f.owner),false)
+})
+test('a dispatch never lands between an edit check and its write',async t=>{
+ const f=await fixture(t), s=await f.scheduler.save(f.input,true)
+ // The edit holds the lock while it reads the ledger: a concurrent tick skips the task.
+ const applied=await f.scheduler.edit({...f.input,text:'Edited'},s.revision,async()=>{
+  await f.scheduler.tick(f.owner,f.runs,f.now)
+  return f.runs.list()
+ })
+ assert.equal((await f.runs.list()).length,0)
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ const [run]=await f.runs.list()
+ assert.equal(run.scheduled?.revision,applied.revision);assert.equal(run.texts[1],'Edited')
+ assert.equal(await f.scheduler.current(run,f.owner),true)
+ // The dispatcher holds the lock while it queues: an edit started then sees the occurrence.
+ const g=await fixture(t), saved=await g.scheduler.save(g.input,true)
+ let editing:Promise<unknown>|undefined, staging:Promise<unknown>|undefined
+ const hooked=Object.assign(Object.create(g.runs) as RunStore,{create:async(...args:Parameters<RunStore['create']>)=>{
+  editing=g.scheduler.edit({...g.input,text:'Too late'},saved.revision,()=>g.runs.list())
+  staging=g.scheduler.edit({...g.input,text:'Staged'},saved.revision,()=>g.runs.list(),true)
+  return g.runs.create(...args)
+ }})
+ await g.scheduler.tick(g.owner,hooked,g.now)
+ const results=await Promise.allSettled([editing!,staging!])
+ const [dispatched]=await g.runs.list()
+ assert.equal(dispatched.scheduled?.revision,saved.revision)
+ assert.ok(results.some(r=>r.status==='rejected' && /queued or running|changed since revision/.test(String(r.reason))),'an unstaged edit cannot replace a busy task')
+ assert.equal(await g.scheduler.current(dispatched,g.owner),true,'the queued occurrence stays admissible')
+})
+test('concurrent dispatch, trigger and edit never leave an occurrence that admission would cancel',async t=>{
+ const f=await fixture(t), jitter=()=>new Promise(resolve=>setTimeout(resolve,Math.random()*4))
+ for(let i=0;i<30;i++){
+  const id=`race-${i}`, stage=i%2===1
+  const s=await f.scheduler.save({...f.input,id},true)
+  const [,,edited]=await Promise.allSettled([
+   jitter().then(()=>f.scheduler.tick(f.owner,f.runs,f.now)),
+   jitter().then(()=>f.scheduler.trigger(id,s.revision,`key-${i}`,f.owner,f.runs)),
+   jitter().then(()=>f.scheduler.edit({...f.input,id,text:`Edited ${i}`},s.revision,()=>f.runs.list(),stage)),
+  ])
+  const occurrences=(await f.runs.list()).filter(r=>r.scheduled?.id===id)
+  assert.ok(occurrences.length<=1,'one queued or running occurrence per task')
+  for(const run of occurrences)assert.equal(await f.scheduler.current(run,f.owner),true,`${id} ${run.scheduled?.revision} would be cancelled`)
+  if(edited.status==='rejected')assert.match(String(edited.reason),/queued or running/)
+  else if(!stage)assert.ok(occurrences.every(r=>r.scheduled?.revision===edited.value.revision))
+  for(const run of occurrences)await f.runs.patch(run.id,{status:'completed'})
+ }
+ assert.deepEqual((await readdir(join(f.dir,'schedules'))).filter(name=>name.endsWith('.lock')),[])
+})
+test('a lock left by a crashed writer expires; a live one makes dispatch wait',async t=>{
+ const f=await fixture(t), s=await f.scheduler.save(f.input,true), lock=join(f.dir,'schedules',`${s.id}.lock`)
+ await writeFile(lock,'')
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ assert.equal((await f.runs.list()).length,0)
+ const old=new Date(Date.now()-60000);await utimes(lock,old,old)
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ assert.equal((await f.runs.list()).length,1)
+ await assert.rejects(stat(lock),{code:'ENOENT'})
+})
+test('a holder whose lock expired never releases the next holder',async t=>{
+ const f=await fixture(t), lock=(f.scheduler as unknown as {lock:(id:string)=>Promise<()=>Promise<void>>}).lock.bind(f.scheduler)
+ const file=join(f.dir,'schedules/test.lock'), first=await lock('test')
+ const old=new Date(Date.now()-60000);await utimes(file,old,old)
+ const second=await lock('test')
+ await first();await stat(file)
+ await second();await assert.rejects(stat(file),{code:'ENOENT'})
+})
+test('an occurrence of a removed task does not make its recreated task busy',async t=>{
+ const f=await fixture(t), s=await f.scheduler.save(f.input,true)
+ await f.scheduler.tick(f.owner,f.runs,f.now)
+ const [old]=await f.runs.list()
+ await f.scheduler.remove(s.id)
+ const again=await f.scheduler.save(f.input,true)
+ const edited=await f.scheduler.edit({...f.input,text:'Recreated'},again.revision,()=>f.runs.list(),true)
+ assert.equal(edited.continuingRunIds,undefined)
+ assert.equal(await f.scheduler.current(old,f.owner),false,'the removed task occurrence stays non-current')
+})
+test('continuing occurrences must be valid record identifiers',async t=>{
+ const f=await fixture(t), s=await f.scheduler.save(f.input,true)
+ await writeFile(join(f.dir,'schedules/test.json'),JSON.stringify({...s,continuingRunIds:['../escape']}))
+ await assert.rejects(f.scheduler.get('test'),/Invalid schedule record/)
 })

@@ -1,6 +1,7 @@
 import { needsFailureReview, failureStamp, redactFailure } from './failure.js'
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { loadControlConfig } from './config.js'
@@ -39,6 +40,7 @@ async function main() {
   const { values:v, positionals:[action='list',id,scriptId] } = parseArgs({allowPositionals:true,options:{
     script:{type:'string'}, arg:{type:'string',multiple:true}, file:{type:'string'}, interpreter:{type:'string'}, 'timeout-seconds':{type:'string'},
     cli:{type:'string'}, 'auth-profile':{type:'string'}, model:{type:'string'}, effort:{type:'string'}, fallback:{type:'string',multiple:true}, 'clear-fallbacks':{type:'boolean'},
+    'expected-revision':{type:'string'}, stage:{type:'boolean'},
     json:{type:'boolean'}, all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
     'preflight-file':{type:'string'},'clear-preflight':{type:'boolean'},name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
     cron:{type:'string'}, timezone:{type:'string'}, 'every-seconds':{type:'string'}, start:{type:'string'}, until:{type:'string'}, help:{type:'boolean'},
@@ -50,7 +52,8 @@ async function main() {
   evidence [RUN_ID] [--offset N --limit N --expected SNAPSHOT_SHA256]
   trigger SCHEDULE_ID --key REQUEST_KEY
   review RUN_ID --failed-at ISO --status resolved|attention --diagnosis TEXT --recovery TEXT --outcome TEXT
-  create [ID] | edit ID --name NAME (--text TEXT | --text-file FILE | --script SCRIPT_ID [--arg=VALUE ...])
+  create [ID] | edit ID --expected-revision REVISION [--stage]
+    --name NAME (--text TEXT | --text-file FILE | --script SCRIPT_ID [--arg=VALUE ...])
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
     [--cli EXECUTOR] [--auth-profile NAME] [--model MODEL] [--effort <native-effort>]
     [--fallback cli=EXECUTOR,model=MODEL[,auth-profile=NAME][,effort=EFFORT][,provider=ID] ... | --clear-fallbacks]
@@ -92,10 +95,20 @@ The run records each attempt, setup, failure category and any reported reset tim
 Trigger runs an existing task once with its saved instructions, AI and delivery binding in a fresh session. Reuse the request key after an uncertain result; the regular schedule is unchanged.
 Creates a scheduled task. Instructions are text, never shell commands.
 Use --now to run once. Run completion is not delivery proof.
-Edit replaces the full schedule but keeps its paused/enabled state; only pause/resume toggle it.
+Edit replaces the full schedule from the revision you read (show prints it); a changed revision is rejected.
+It applies only while the task has no queued or running occurrence. --stage applies it to future occurrences
+and lets those occurrences finish with their captured instructions and settings. Edit needs the running relay.
+Edit keeps the paused/enabled state; only pause/resume toggle it.
 Pause/remove affect future work; cancel stops a particular run.
 Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/weekday OR semantics.`);return}
   const config=loadControlConfig()
+  // A root operator command (for example `docker compose exec relay ...`) acts as
+  // the runtime user that owns the control directory: saved definitions stay
+  // readable by the relay, and root never writes through agent-owned paths.
+  if(process.geteuid?.()===0){
+    const {uid,gid}=statSync(config.controlDir)
+    process.setgroups!([gid]);process.setgid!(gid);process.setuid!(uid)
+  }
   const socketPath=socketPathFor(config.controlDir)
   if(action==='running'){
     if(id || scriptId || Object.keys(v).some(key=>key!=='json'))throw new Error('Running accepts only --json')
@@ -106,8 +119,8 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
   const owner=(await control.status()).owner
   if(!owner)throw new Error('Pair an owner before scheduling')
   // Run records live in the relay memory ledger, reached through the delivery
-  // socket. Schedule files stay on disk, so list/show/create/edit/pause/
-  // resume/remove keep working with the relay stopped; run-inspecting actions
+  // socket. Schedule files stay on disk, so list/show/create/pause/resume/remove
+  // keep working with the relay stopped; edit and run-inspecting actions
   // (context/failures/run/review/runs/cancel) require the running relay.
   const socketUnavailable = (error: unknown): boolean =>
     error instanceof Error && /Delivery relay unavailable/.test(error.message)
@@ -204,6 +217,8 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     result=await callDeliverySocket(socketPath,{op:'triggerSchedule',payload:{scheduleId:id,revision:schedule.revision,key:v.key,...(caller ? {callerRunId:caller.id} : {})}})
   }else if(action==='create' || action==='edit'){
     if(action==='edit' && (!id || !owned(await scheduler.get(id))))throw new Error('Unknown schedule')
+    if(action==='edit' && !v['expected-revision'])throw new Error('Edit requires --expected-revision REVISION (the revision shown by show ID)')
+    if(action==='create' && (v['expected-revision'] || v.stage))throw new Error('--expected-revision and --stage apply to edit only')
     if(action==='create' && id && (await scheduler.list()).some(s=>s.id===id))throw new Error('Schedule exists; use edit')
     if([v.now,v.at,v.cron,v['every-seconds']].filter(Boolean).length!==1)throw new Error('Choose exactly one trigger')
     if([v.text,v['text-file'],v.script].filter(Boolean).length!==1)throw new Error('Choose --text, --text-file or --script')
@@ -215,16 +230,21 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       v.cron ? {cron:v.cron,timezone:v.timezone!,start,until:v.until} : {everySeconds:Number(v['every-seconds']),start,until:v.until}
     if(v['clear-preflight'] && v['preflight-file']) throw Error('Choose one preflight operation')
     const previousSchedule = action === 'edit' ? await scheduler.get(id!) : undefined
-    // Edit keeps the paused/enabled state; only pause/resume toggle it.
-    const enabled = previousSchedule?.enabled ?? true
+    // New tasks start enabled; edit compares the revision and keeps the paused/enabled state under the schedule lock.
+    const write = (input: Parameters<Scheduler['save']>[0]) => action === 'create' ? scheduler.save(input, true) :
+      // A bounded ledger read keeps the schedule lock short.
+      scheduler.edit(input, v['expected-revision']!, () => callDeliverySocket(socketPath, { op: 'list' }, 10_000).then(r => r as RunRecord[]).catch(error => {
+        if (socketUnavailable(error)) throw new Error('Relay unavailable: edit needs the running relay to confirm which occurrences are queued or running')
+        throw error
+      }), v.stage)
     const preflight = v['clear-preflight'] ? undefined : v['preflight-file'] ? JSON.parse(await readFile(v['preflight-file'],'utf8')) : previousSchedule?.preflight
     const origin = caller?.application ?? caller?.delivery
     const delivery = previousSchedule ? previousSchedule.delivery : (origin ? {bindingId:origin.bindingId,scope:origin.scope} : undefined)
     if (!delivery && !owner.telegramChatId) throw new Error('Create the schedule from an authenticated channel turn to bind its reply destination')
     if (v.script) {
-      result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || v.script,preflight,
-        originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:'',when:v.when as 'unreviewed-failures' | undefined,trigger,enabled,owner,
-        script:{id:v.script,args:v.arg ?? []}},action==='create'))
+      result=await show(await write({id:id || 's_'+randomUUID(),name:v.name || v.script,preflight,
+        originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:'',when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
+        script:{id:v.script,args:v.arg ?? []}}))
       console.log(JSON.stringify(result,null,2));return
     }
     const previous = previousSchedule?.execution
@@ -236,10 +256,10 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const fallbacks = v['clear-fallbacks'] ? undefined : v.fallback ? v.fallback.map(fallbackSetup) : previous?.fallbacks
     for (const setup of [preset, ...fallbacks ?? []])
       if (setup.authProfile !== undefined) await provisionedHome(config.controlDir, setup.cli, setup.authProfile)
-    result=await show(await scheduler.save({id:id || 's_'+randomUUID(),name:v.name || 'Task',
+    result=await show(await write({id:id || 's_'+randomUUID(),name:v.name || 'Task',
       preflight,
-      originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled,owner,
-      execution:{sessionId:previous?.sessionId || randomUUID(),preset,...(fallbacks ? {fallbacks} : {})}},action==='create'))
+      originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
+      execution:{sessionId:previous?.sessionId || randomUUID(),preset,...(fallbacks ? {fallbacks} : {})}}))
   }else{
     if(!id)throw new Error('ID required')
     if(action==='cancel'){

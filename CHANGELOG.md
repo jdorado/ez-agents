@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make schedule edits safe for queued and running work. `edit` now requires `--expected-revision` and rejects a stale revision. It applies only while the task is idle, or with `--stage` saves the change for future occurrences while queued and running ones finish on their captured settings, including fallbacks and quota retries. Edits, dispatch, trigger, pause, resume and remove serialize on a per-task lock, so a due occurrence cannot land between the check and the write. Edit needs the running relay. A root invocation of the schedule CLI runs as the control directory's owner, so its definitions stay readable by the relay and it cannot follow agent-planted symlinks.
 - Hold new native turn admission while a completed or rolled-back core update drains for supervisor reload. Retain queued requests and reopen only after the replacement worker is ready.
 
 - Preserve scheduled fallback handling when a compatible relay upgrade adopts a running native session, including continuation after a terminal usage limit without replaying its work.

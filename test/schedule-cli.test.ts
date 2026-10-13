@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chown, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -42,11 +42,12 @@ test('public scheduler CLI saves literal text, reads back, edits, pauses, and re
  await assert.rejects(exec(process.execPath,[bin,...args],{env}),/exists/)
  assert.equal(JSON.parse((await exec(process.execPath,[bin,'pause','test'],{env})).stdout).enabled,false)
  assert.equal(JSON.parse((await exec(process.execPath,[bin,'resume','test'],{env})).stdout).enabled,true)
- await exec(process.execPath,[bin,'edit','test','--model','custom-model','--effort','low','--cron','0 9 * * 2','--timezone','Asia/Dubai','--text','Tuesday'],{env})
+ const resumed=JSON.parse((await exec(process.execPath,[bin,'show','test'],{env})).stdout)
+ await exec(process.execPath,[bin,'edit','test','--expected-revision',resumed.revision,'--model','custom-model','--effort','low','--cron','0 9 * * 2','--timezone','Asia/Dubai','--text','Tuesday'],{env})
  assert.equal(JSON.parse((await exec(process.execPath,[bin,'show','test'],{env})).stdout).text,'Tuesday')
  const explicit=JSON.parse((await exec(process.execPath,[bin,'show','test'],{env})).stdout)
  assert.equal(explicit.execution.preset.model,'custom-model');assert.equal(explicit.execution.preset.effort,'low')
- await exec(process.execPath,[bin,'edit','test','--cron','0 9 * * 2','--timezone','Asia/Dubai','--text','Tuesday'],{env})
+ await exec(process.execPath,[bin,'edit','test','--expected-revision',explicit.revision,'--cron','0 9 * * 2','--timezone','Asia/Dubai','--text','Tuesday'],{env})
  assert.deepEqual(JSON.parse((await exec(process.execPath,[bin,'show','test'],{env})).stdout).execution,explicit.execution)
  const external=await runs.create({chatId:101,telegramUserId:101,texts:[],execution,external:{sourceId:'source',bindingId:'binding',eventIds:['event']}})
  await runs.patch(external.id,{status:'running'})
@@ -78,15 +79,63 @@ test('edit keeps a paused agent or script schedule paused and an enabled one ena
  const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
  const tasks={agent:(text:string)=>['--model','gpt-6-astra','--text',text],script:(name:string)=>['--script','guard','--name',name]}
  for(const [id,task] of Object.entries(tasks)){
-  await cli('create',id,...task('Original'),'--every-seconds','3600')
+  const created=await cli('create',id,...task('Original'),'--every-seconds','3600')
   await cli('pause',id)
   // Changing only the instructions, even with --now, must not resume or dispatch it.
-  const paused=await cli('edit',id,...task('Changed'),'--now')
+  const paused=await cli('edit',id,'--expected-revision',created.revision,...task('Changed'),'--now')
   assert.equal(paused.enabled,false);assert.equal(paused.nextEligibleAt,null)
   assert.equal((await cli('show',id)).enabled,false)
   await cli('resume',id)
-  assert.equal((await cli('edit',id,...task('Again'),'--every-seconds','3600')).enabled,true)
+  assert.equal((await cli('edit',id,'--expected-revision',paused.revision,...task('Again'),'--every-seconds','3600')).enabled,true)
  }
+})
+
+test('edit compares the read revision, refuses busy tasks unless staged and needs the relay',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-schedule-safe-edit-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
+ const control=new ControlStore(dir,1000),runs=new RunStore(dir)
+ await control.requestPairing(101,101);await control.approveOwner(101)
+ const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:''}
+ const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
+ const task=(text:string)=>['--model','gpt-6-astra','--every-seconds','3600','--text',text]
+ assert.match((await exec(process.execPath,[bin,'--help'])).stdout,/edit ID --expected-revision REVISION \[--stage\]/)
+ await assert.rejects(exec(process.execPath,[bin,'create','daily','--stage',...task('Original')],{env}),/apply to edit only/)
+ const created=await cli('create','daily',...task('Original'))
+ await assert.rejects(exec(process.execPath,[bin,'edit','daily',...task('Blind')],{env}),/requires --expected-revision/)
+ const edited=await cli('edit','daily','--expected-revision',created.revision,...task('Edited'))
+ await assert.rejects(exec(process.execPath,[bin,'edit','daily','--expected-revision',created.revision,...task('Stale')],{env}),/changed since revision/)
+ const queued=await runs.create({chatId:101,telegramUserId:101,texts:['[schedule]','Edited'],execution:edited.execution,
+  scheduled:{id:'daily',revision:edited.revision,dueAt:new Date().toISOString(),pairedAt:edited.owner.pairedAt}})
+ await assert.rejects(exec(process.execPath,[bin,'edit','daily','--expected-revision',edited.revision,...task('Busy')],{env}),/queued or running occurrences \(r_/)
+ assert.equal((await cli('show','daily')).revision,edited.revision)
+ const staged=await cli('edit','daily','--expected-revision',edited.revision,'--stage',...task('Staged'))
+ assert.deepEqual(staged.continuingRunIds,[queued.id]);assert.equal(staged.text,'Staged')
+ await ledger.stop()
+ await assert.rejects(exec(process.execPath,[bin,'edit','daily','--expected-revision',staged.revision,'--stage',...task('Offline')],{env}),/Relay unavailable/)
+ assert.equal((await cli('show','daily')).revision,staged.revision)
+})
+
+test('a root operator command acts as the control directory owner and cannot follow a planted symlink',{skip:process.geteuid?.()!==0},async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-schedule-root-')),target=await mkdtemp(join(tmpdir(),'ez-root-target-')),runtime=20000
+ t.after(()=>Promise.all([rm(dir,{recursive:true,force:true}),rm(target,{recursive:true,force:true})]))
+ const control=new ControlStore(dir,1000);await control.requestPairing(101,101);await control.approveOwner(101)
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
+ const workspace=join(dir,'workspace');await mkdir(workspace);await writeFile(join(workspace,'guard.mjs'),'')
+ // The runtime user owns its control directory, as the container entrypoint provisions it.
+ await chown(dir,runtime,runtime);for(const name of await readdir(dir))await chown(join(dir,name),runtime,runtime)
+ await chown(join(workspace,'guard.mjs'),runtime,runtime)
+ const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:'',EZ_AGENT_WORKSPACE:workspace}
+ const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env,cwd:workspace})).stdout)
+ const task=['--model','gpt-6-astra','--every-seconds','3600','--text','Root operator']
+ const created=await cli('create','daily',...task)
+ const edited=await cli('edit','daily','--expected-revision',created.revision,...task)
+ await cli('script','register','guard','--file','guard.mjs','--interpreter','node')
+ for(const path of ['schedules','schedules/daily.json',`schedules/daily.${edited.revision}.cursor`,'scripts/guard.json'])
+  assert.equal((await stat(join(dir,path))).uid,runtime,path)
+ // An agent can replace its own control subdirectory; root must not write through it.
+ await rm(join(dir,'schedules'),{recursive:true});await symlink(target,join(dir,'schedules'))
+ await assert.rejects(exec(process.execPath,[bin,'create','other',...task],{env}),/EACCES|permission denied/)
+ assert.deepEqual(await readdir(target),[]);assert.equal((await stat(target)).uid,0)
 })
 
 test('executor PATH exposes the extensionless scheduler command',async()=>{
