@@ -2,7 +2,10 @@
 
 `menu.ts` owns Telegram controls; `ai.ts` projects installed-client metadata.
 `ControlStore` stores saved presets, the next-conversation default and current choice.
-No provider SDK, model fallback, history migration, or second execution loop.
+No provider SDK, history migration, or second execution loop. The only model
+fallback is an owner-saved ordered chain captured with each turn and advanced by
+the relay's existing attempt loop on typed evidence
+([chat fallback chain](../docker-runtime.md#chat-fallback-chain)).
 A missing catalog entry rejects selection without changing the conversation.
 An unsupported effort reports the exact installed model's advertised levels.
 Missing selectable models do not establish that the active native session is
@@ -19,7 +22,8 @@ and native history; subsequent turns pass the new settings to the native engine.
 Changing client, provider or auth profile starts a separate native conversation.
 A conversation records its client and auth profile when created; launch rejects a
 choice for another profile, so a native session never resumes under another
-account. Provisioned profiles appear as additional catalog entries for their
+account; a fallback login uses its own linked native session for the
+conversation. Provisioned profiles appear as additional catalog entries for their
 client (see [auth profiles](../docker-runtime.md#auth-profiles)). Old bindings
 remain available so accepted work can finish and owners can reopen their chats.
 

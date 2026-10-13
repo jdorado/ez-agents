@@ -2,7 +2,7 @@ import { assertEffort } from './model-policy.js'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { isPreset, persistedPreset, presetProvider, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
+import { isPreset, persistedPreset, presetProvider, resolveFallbacks, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
 import { isAuthProfile } from './auth-profile.js'
 import { quotaScope, quotaBlockedUntil, quotaCategory, validSetupHealth, type SetupAttempt, type SetupHealth } from './setup-fallback.js'
 
@@ -56,6 +56,10 @@ type ApplicationPairingRequest = {
 
 export type PairingRequest = TelegramPairingRequest | ApplicationPairingRequest
 
+// A fallback login's own native conversation beside a conversation's engine.
+export type LinkedSession = { cli: string; authProfile?: string; sessionId: string; nativeSessionId?: string; hasStarted: boolean }
+type Engine = { cli: string; authProfile?: string }
+
 export type SessionState = {
   sessionId: string
   hasStarted: boolean
@@ -68,6 +72,8 @@ export type SessionState = {
   preset?: AiPreset
   applicationScope?: string
   telegramShared?: boolean
+  // One native session per other engine that served this conversation.
+  linked?: LinkedSession[]
 }
 
 export type ControlGuard = { owner: Owner; authorize: () => Promise<unknown>; expectedSession?: string | null; applicationScope?: string }
@@ -77,9 +83,12 @@ type ControlState = {
   owner: Owner | null
   pending: PairingRequest[]
   activeSession?: SessionState | null
-  ai?: { presets: AiPreset[]; defaultId: string; selectedId: string; recentIds?: string[] }
+  // fallbacks: the owner's ordered chat/application chain after the selected AI.
+  ai?: { presets: AiPreset[]; defaultId: string; selectedId: string; recentIds?: string[]; fallbacks?: AiPreset[] }
   sessions?: SessionState[]
   setupHealth?: SetupHealth
+  // Owner opt-in for per-attempt run telemetry; absent means off.
+  runTelemetry?: true
 }
 
 type Clock = () => number
@@ -135,7 +144,12 @@ const isState = (value: unknown): value is ControlState => {
     (s.applicationScope === undefined || /^[a-f0-9]{64}$/.test(s.applicationScope)) &&
     (s.telegramShared === undefined || typeof s.telegramShared === 'boolean') &&
     (s.authProfile === undefined || (isAuthProfile(s.authProfile) && s.cli !== undefined)) &&
-    (s.preset === undefined || (isPreset(s.preset) && sameEngine(s.preset, s)))
+    (s.preset === undefined || (isPreset(s.preset) && sameEngine(s.preset, s))) &&
+    (s.linked === undefined || (Array.isArray(s.linked) && s.linked.length <= 16 && s.linked.every((l, i) =>
+      l && typeof l.cli === 'string' && /^[a-z-]{1,20}$/.test(l.cli) && (l.authProfile === undefined || isAuthProfile(l.authProfile)) &&
+      /^[0-9a-f-]{36}$/i.test(l.sessionId) && typeof l.hasStarted === 'boolean' &&
+      (l.nativeSessionId === undefined || /^[a-zA-Z0-9_-]{1,160}$/.test(l.nativeSessionId)) &&
+      !sameEngine(l, s) && !s.linked!.slice(0, i).some(other => sameEngine(other, l)))))
   return (
     candidate.version === 1 &&
     Array.isArray(candidate.pending) &&
@@ -146,7 +160,10 @@ const isState = (value: unknown): value is ControlState => {
       candidate.ai.presets.every(isPreset) &&
       candidate.ai.presets.some((p) => p.id === candidate.ai!.defaultId) &&
       candidate.ai.presets.some((p) => p.id === candidate.ai!.selectedId) &&
-      (candidate.ai.recentIds === undefined || isRecentIds(candidate.ai.recentIds)))) &&
+      (candidate.ai.recentIds === undefined || isRecentIds(candidate.ai.recentIds)) &&
+      (candidate.ai.fallbacks === undefined || (Array.isArray(candidate.ai.fallbacks) && candidate.ai.fallbacks.length > 0 &&
+        candidate.ai.fallbacks.length <= 12 && candidate.ai.fallbacks.every(isPreset))))) &&
+    (candidate.runTelemetry === undefined || candidate.runTelemetry === true) &&
     (candidate.sessions === undefined || (Array.isArray(candidate.sessions) && candidate.sessions.every(
       session))) &&
     (candidate.activeSession == null ||
@@ -158,6 +175,15 @@ export const sessionTitle = (session: SessionState): string =>
   session.title || `Conversation ${session.sessionId.slice(0, 8)}`
 
 const engineOf = (preset: AiPreset) => ({ cli: preset.cli, ...(preset.authProfile ? { authProfile: preset.authProfile } : {}) })
+
+// Queued work captures the chain with its primary choice; later edits do not change it.
+const withChain = (choice: ExecutionChoice, chain?: AiPreset[]): ExecutionChoice => {
+  const fallbacks = resolveFallbacks(choice.preset, chain)
+  return fallbacks ? { ...choice, fallbacks } : choice
+}
+
+// Clients that report their own native session ID; others use the Ez-assigned ID.
+const reportsNativeSession = (cli?: string) => ['codex', 'codex-gui', 'opencode'].includes(cli ?? '')
 
 const rememberPreset = (state: ControlState) => {
   const preset = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
@@ -696,7 +722,7 @@ export class ControlStore {
         presetProvider(session.preset) !== presetProvider(settledPreset)) &&
       (!sameEngine(session, settledPreset) || JSON.stringify(session.preset) === JSON.stringify(settledPreset)) &&
       Boolean(session.title || session.hasStarted || !title?.trim()))
-      return { sessionId: session.sessionId, preset: settledPreset }
+      return withChain({ sessionId: session.sessionId, preset: settledPreset }, settledAi?.fallbacks)
     return this.withLock(async () => {
       const state = await this.readState()
       state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id, recentIds: [] }
@@ -718,7 +744,7 @@ export class ControlStore {
       if (!state.activeSession.title && !state.activeSession.hasStarted && title?.trim())
         state.activeSession.title = title.replace(/\s+/g, ' ').trim().slice(0, 80)
       await this.writeState(state)
-      return { sessionId: state.activeSession.sessionId, preset }
+      return withChain({ sessionId: state.activeSession.sessionId, preset }, state.ai.fallbacks)
     })
   }
 
@@ -747,14 +773,14 @@ export class ControlStore {
         if (requested) previous.preset = requested
         activate(previous)
         if (shareTelegram || requested) await this.writeState(state)
-        return { sessionId: previous.sessionId, preset: previous.preset }
+        return withChain({ sessionId: previous.sessionId, preset: previous.preset }, state.ai.fallbacks)
       }
       const preset = requested ?? state.ai.presets.find(item => item.id === state.ai!.selectedId)!
       const session: SessionState = { sessionId: crypto.randomUUID(), hasStarted: false, ...engineOf(preset), preset, applicationScope: scope }
       state.sessions.push(session)
       activate(session)
       await this.writeState(state)
-      return { sessionId: session.sessionId, preset }
+      return withChain({ sessionId: session.sessionId, preset }, state.ai.fallbacks)
     })
   }
 
@@ -812,6 +838,84 @@ export class ControlStore {
       session.nativeSessionId = nativeSessionId
       // Native session creation is durable even if the subsequent turn fails.
       session.hasStarted = true
+      await this.writeState(state)
+    })
+  }
+
+  // The native session an engine resumes for this conversation: the
+  // conversation's own for its engine, otherwise that login's linked session,
+  // created on first use. A session never resumes under another credential home.
+  async engineSession(sessionId: string, engine: Engine): Promise<{ sessionId: string; nativeSessionId?: string; hasStarted: boolean }> {
+    return this.withLock(async () => {
+      const state = await this.readState()
+      const session = this.conversation(state, sessionId)
+      if (sameEngine(session, engine)) return session
+      let linked = session.linked?.find(item => sameEngine(item, engine))
+      if (!linked) {
+        linked = { cli: engine.cli, ...(engine.authProfile ? { authProfile: engine.authProfile } : {}), sessionId: crypto.randomUUID(), hasStarted: false }
+        session.linked = [...session.linked ?? [], linked].slice(-16)
+        await this.writeState(state)
+      }
+      return linked
+    })
+  }
+
+  async saveEngineSession(sessionId: string, engine: Engine, nativeSessionId: string): Promise<void> {
+    if (!/^[a-zA-Z0-9_-]{1,160}$/.test(nativeSessionId)) throw new Error('Invalid native session ID')
+    await this.withLock(async () => {
+      const state = await this.readState()
+      const session = this.conversation(state, sessionId)
+      const target = sameEngine(session, engine) ? session : session.linked?.find(item => sameEngine(item, engine))
+      if (!target) throw new Error('Unknown conversation engine')
+      if (target.nativeSessionId && target.nativeSessionId !== nativeSessionId) throw new Error('Native session changed unexpectedly')
+      target.nativeSessionId = nativeSessionId
+      target.hasStarted = true
+      await this.writeState(state)
+    })
+  }
+
+  // After an ordered attempt: a session that began work resumes next time. A
+  // client that rejected an unstarted session may already have claimed its ID,
+  // so a client using Ez-assigned IDs gets a fresh one for its next attempt.
+  async settleEngineSession(sessionId: string, engine: Engine, started: boolean): Promise<void> {
+    await this.withLock(async () => {
+      const state = await this.readState()
+      const session = state.activeSession?.sessionId === sessionId ? state.activeSession : state.sessions?.find(s => s.sessionId === sessionId)
+      const target = !session ? undefined : sameEngine(session, engine) ? session : session.linked?.find(item => sameEngine(item, engine))
+      // Reporting clients start only through saveEngineSession.
+      if (!target || target.hasStarted || reportsNativeSession(target.cli)) return
+      if (started) target.hasStarted = true
+      else if (target === session) session.nativeSessionId = crypto.randomUUID()
+      else target.sessionId = crypto.randomUUID()
+      await this.writeState(state)
+    })
+  }
+
+  private conversation(state: ControlState, sessionId: string): SessionState {
+    const session = state.activeSession?.sessionId === sessionId ? state.activeSession : state.sessions?.find(s => s.sessionId === sessionId)
+    if (!session?.cli) throw new Error('Unknown conversation')
+    return session
+  }
+
+  // Applies to work queued afterwards; queued work keeps its captured chain.
+  async setChatFallbacks(chain: AiPreset[] | undefined): Promise<void> {
+    if (chain !== undefined && (!chain.length || chain.length > 12 || !chain.every(isPreset) ||
+      new Set(chain.map(p => p.id)).size !== chain.length)) throw new Error('Invalid fallback chain')
+    for (const preset of chain ?? []) assertEffort(preset.effort, preset.model, preset.cli)
+    await this.withLock(async () => {
+      const state = await this.readState()
+      if (!state.ai) throw new Error('AI settings not initialized')
+      if (chain) state.ai.fallbacks = chain.map(persistedPreset)
+      else delete state.ai.fallbacks
+      await this.writeState(state)
+    })
+  }
+
+  async setRunTelemetry(enabled: boolean): Promise<void> {
+    await this.withLock(async () => {
+      const state = await this.readState()
+      if (enabled) state.runTelemetry = true
+      else delete state.runTelemetry
       await this.writeState(state)
     })
   }

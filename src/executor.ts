@@ -36,6 +36,10 @@ export type ExecutorOptions = {
   // Caller-owned routing flags. The core only spawns and streams.
   taskRun?: boolean
   nativeSession?: boolean
+  // Ordered setups and telemetry read structured client events; stdout is never chat.
+  structuredOutput?: boolean
+  // Owner-enabled run telemetry; Codex native sessions forward usage summaries.
+  telemetry?: boolean
   toolsHome?: string
   sharedWorkspace?: string
   additionalWorkspaces?: string[]
@@ -131,7 +135,7 @@ export type CliAdapter = {
   command: string
   description: string
   buildArgs: (
-    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'additionalWorkspaces' | 'codexAutoCompactTokens' | 'codexSandbox' | 'codexProvider' | 'nativeSession'> & { controlDir?: string },
+    options: Pick<ExecutorOptions, 'workspace' | 'sessionId' | 'isResume' | 'model' | 'effort' | 'toolsHome' | 'sharedWorkspace' | 'additionalWorkspaces' | 'codexAutoCompactTokens' | 'codexSandbox' | 'codexProvider' | 'nativeSession' | 'structuredOutput'> & { controlDir?: string },
     promptFile: string,
     promptText: string,
   ) => string[]
@@ -178,9 +182,9 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
         args.push('--session-id', opts.sessionId)
       }
       args.push('--print', '--dangerously-skip-permissions')
-      // Scheduled runs stream structured events so core can tell a provider
-      // rejection before work from a failure after work began.
-      if (opts.nativeSession) args.push('--output-format', 'stream-json', '--verbose')
+      // Scheduled runs and ordered chat setups stream structured events so core
+      // can tell a provider rejection before work from a failure after work began.
+      if (opts.nativeSession || opts.structuredOutput) args.push('--output-format', 'stream-json', '--verbose')
       for (const directory of [opts.controlDir, opts.sharedWorkspace, ...(opts.additionalWorkspaces ?? []), opts.toolsHome])
         if (directory) args.push('--add-dir', directory)
       if (opts.model) args.push('--model', opts.model)

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { CliUnavailableError, startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
 import { activeSetup } from './runs.js'
 import { startupLine, startupObserver } from './setup-fallback.js'
+import { telemetryObserver } from './run-telemetry.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
 import { readModels, sameEngine, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
@@ -236,16 +237,22 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 job=await launch(request.texts,options)
               } else {
                 const cli = opts.cli || installation.cli
+                // Ordered runs (scheduled, captured chat chain or telemetry) record
+                // attempts; only the relay's active attempt is admitted.
+                const ordered = Boolean(run?.scheduled || run?.attempts?.length)
                 if (run?.scheduled) {
                   const setup = activeSetup(run)
                   assertScheduledModel(setup?.model)
                   if (opts.model !== setup!.model || cli !== setup!.cli) throw new Error('Scheduled run model does not match its saved task model')
-                  observeClaude = cli === 'claude'
+                } else if (ordered) {
+                  const setup = activeSetup(run!)
+                  if (!setup || opts.model !== setup.model || cli !== setup.cli || opts.effort !== setup.effort) throw new Error('Run setup does not match its captured AI selection')
                 }
+                observeClaude = ordered && cli === 'claude'
                 resolveExecutor(cli)
                 // The credential home comes from the authorized run's captured
                 // choice; a request can never move it to another account.
-                const captured = run?.scheduled ? activeSetup(run) : run?.execution?.preset
+                const captured = ordered ? activeSetup(run!) : run?.execution?.preset
                 if ((opts.authProfile !== undefined || (captured?.cli === cli && captured.authProfile !== undefined)) &&
                     !(captured && sameEngine(captured, {cli, authProfile: opts.authProfile})))
                   throw new Error('Run auth profile does not match its captured AI selection')
@@ -266,7 +273,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                   runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                   sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,authProfile:opts.authProfile,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,
                   codexSandbox:containerId && installation.isolation==='isolated' && cli==='codex' && !run?.taskId && process.env.EZ_CODEX_SANDBOX==='external' ? 'external' : undefined,
-                  promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled)}
+                  promptSuffix:runPromptSuffix(run),taskRun:Boolean(run?.taskId),nativeSession:Boolean(run?.scheduled),structuredOutput:ordered,telemetry:Boolean(run?.telemetry)}
                 job=await launch(request.texts,options)
               }
               active.set(base,job.child)
@@ -276,13 +283,16 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 ? Promise.resolve(job.child.exitCode??1)
                 : new Promise<number>(resolve=>job!.child.once('close',code=>resolve(code??1)))
               if(signal.aborted)terminateJob(job.child)
-              // Scheduled Claude streams every event; forward only the startup summary.
+              // Ordered Claude streams every event; forward only the startup and,
+              // when enabled, telemetry summaries (counts and categories only).
               const startup = observeClaude ? startupObserver() : undefined
+              const telemetry = startup && run?.telemetry ? telemetryObserver() : undefined
               let summary = ''
               job.child.stdout?.setEncoding('utf8').on('data',(chunk:string)=>{
                 if (!startup) return emit({stream:'stdout',text:chunk})
-                startup.write(chunk)
-                if (startup.summary() !== summary) { summary = startup.summary(); emit({stream:'stdout',text:summary+'\n'}) }
+                startup.write(chunk); telemetry?.write(chunk)
+                const next = [startup.summary(), ...(telemetry ? [telemetry.summary()] : [])].join('\n')
+                if (next !== summary) { summary = next; emit({stream:'stdout',text:summary+'\n'}) }
               })
               job.child.stderr?.on('data',chunk=>emit({stream:'stderr',text:chunk.toString()}))
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid,started:job.child.pid ? await processStart(job.child.pid) : undefined,hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}),{mode:0o600})

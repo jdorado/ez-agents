@@ -41,6 +41,8 @@ export type RunRecord = {
   // Queued quota wait, also retained while its availability probe starts.
   quotaWait?: QuotaWait
   attemptRound?: number
+  // Owner-enabled run telemetry, fixed when the run starts.
+  telemetry?: true
   replyOnly?: boolean
   // Silent end-of-conversation turn in a replaced chat session (session-close.ts).
   sessionClose?: true
@@ -276,7 +278,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut' | 'attempts' | 'quotaWait' | 'attemptRound'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut' | 'attempts' | 'quotaWait' | 'attemptRound' | 'telemetry'>>,
   ): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     const run = store.get(id)
