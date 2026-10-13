@@ -1,16 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile, readFile, stat, chown, readdir, utimes, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, stat, readdir, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { createRequire } from 'node:module'
-import { fileURLToPath } from 'node:url'
 import { Scheduler, scheduledRunId } from '../src/scheduler.js'
 import { RunStore } from '../src/runs.js'
-import { Scripts } from '../src/scripts.js'
 import { nextOccurrence, validateTrigger, type Trigger } from '../src/schedule-time.js'
 
 const next=(t:Trigger,after:string)=>{
@@ -186,7 +181,6 @@ test('missing models cannot be saved, dispatched or triggered; legacy settings r
 
 // Safe updates: an edit never invalidates an occurrence that is already queued
 // or running, and definition writes serialize with dispatch on the schedule lock.
-const inFlightIds=async(runs:RunStore,id:string)=>(await runs.list()).filter(r=>r.scheduled?.id===id && ['queued','running'].includes(r.status)).map(r=>r.id)
 test('edit applies only from the expected revision and keeps a concurrent pause',async t=>{
  const f=await fixture(t), s=await f.scheduler.save(f.input,true), list=()=>f.runs.list()
  const first=await f.scheduler.edit({...f.input,text:'First'},s.revision,list)
@@ -288,27 +282,16 @@ test('a lock left by a crashed writer expires; a live one makes dispatch wait',a
  assert.equal((await f.runs.list()).length,1)
  await assert.rejects(stat(lock),{code:'ENOENT'})
 })
+test('a holder whose lock expired never releases the next holder',async t=>{
+ const f=await fixture(t), lock=(f.scheduler as unknown as {lock:(id:string)=>Promise<()=>Promise<void>>}).lock.bind(f.scheduler)
+ const file=join(f.dir,'schedules/test.lock'), first=await lock('test')
+ const old=new Date(Date.now()-60000);await utimes(file,old,old)
+ const second=await lock('test')
+ await first();await stat(file)
+ await second();await assert.rejects(stat(file),{code:'ENOENT'})
+})
 test('continuing occurrences must be valid record identifiers',async t=>{
  const f=await fixture(t), s=await f.scheduler.save(f.input,true)
  await writeFile(join(f.dir,'schedules/test.json'),JSON.stringify({...s,continuingRunIds:['../escape']}))
  await assert.rejects(f.scheduler.get('test'),/Invalid schedule record/)
-})
-test('definitions written by a root operator stay readable by the runtime user',{skip:process.getuid?.()!==0},async t=>{
- const f=await fixture(t), runtime=20000
- await chown(f.dir,runtime,runtime)
- const s=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start:new Date(f.now).toISOString()}},true)
- const edited=await f.scheduler.edit({...f.input,text:'Root edit',trigger:s.trigger},s.revision,()=>f.runs.list())
- await f.scheduler.enable(s.id,false)
- const workspace=join(f.dir,'workspace');await mkdir(workspace);await writeFile(join(workspace,'guard.mjs'),'')
- await new Scripts(f.dir).save({id:'guard',owner:f.owner,workspace,entry:'guard.mjs',interpreter:'node',args:[],timeoutSeconds:60},true)
- for(const path of ['schedules','schedules/test.json',`schedules/test.${edited.revision}.cursor`,'scripts','scripts/guard.json']){
-  const saved=await stat(join(f.dir,path))
-  assert.deepEqual([saved.uid,saved.gid,saved.mode&0o777],[runtime,runtime,path.endsWith('s') ? 0o700 : 0o600],path)
- }
- // The runtime user itself reads back the saved definition and registration.
- const tsx=createRequire(import.meta.url).resolve('tsx'), src=(name:string)=>fileURLToPath(new URL(`../src/${name}`,import.meta.url))
- const script=`const {Scheduler}=await import(${JSON.stringify(src('scheduler.ts'))});const {Scripts}=await import(${JSON.stringify(src('scripts.ts'))});`+
-  `const s=await new Scheduler(${JSON.stringify(f.dir)}).get('test');const r=await new Scripts(${JSON.stringify(f.dir)}).get('guard');console.log(JSON.stringify([s.revision,s.text,s.enabled,r.id]))`
- const {stdout}=await promisify(execFile)(process.execPath,['--import',tsx,'--input-type=module','-e',script],{uid:runtime,gid:runtime})
- assert.deepEqual(JSON.parse(stdout),[edited.revision,'Root edit',false,'guard'])
 })

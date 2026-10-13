@@ -1,6 +1,7 @@
 import { needsFailureReview, failureStamp, redactFailure } from './failure.js'
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
+import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { loadControlConfig } from './config.js'
@@ -101,6 +102,13 @@ Edit keeps the paused/enabled state; only pause/resume toggle it.
 Pause/remove affect future work; cancel stops a particular run.
 Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/weekday OR semantics.`);return}
   const config=loadControlConfig()
+  // A root operator command (for example `docker compose exec relay ...`) acts as
+  // the runtime user that owns the control directory: saved definitions stay
+  // readable by the relay, and root never writes through agent-owned paths.
+  if(process.geteuid?.()===0){
+    const {uid,gid}=statSync(config.controlDir)
+    process.setgroups!([gid]);process.setgid!(gid);process.setuid!(uid)
+  }
   const socketPath=socketPathFor(config.controlDir)
   if(action==='running'){
     if(id || scriptId || Object.keys(v).some(key=>key!=='json'))throw new Error('Running accepts only --json')

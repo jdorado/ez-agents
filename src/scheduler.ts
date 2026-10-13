@@ -1,7 +1,7 @@
 import { validPreflight, installedPreflight, type Preflight, type PreflightReceipt } from './schedule-preflight.js'
 import { assertEffort, assertScheduledModel } from './model-policy.js'
 import { needsFailureReview } from './failure.js'
-import { mkdir, open, readFile, rm, stat, writeFile, readdir } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile, rename, link, rm, stat } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { ControlStore, type Owner, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
@@ -12,7 +12,7 @@ import { type AiPreset, type ExecutionChoice, isExecutionChoice, persistedPreset
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
 import { quotaCategory, quotaScope } from './setup-fallback.js'
 import { RunStore, type RunRecord } from './runs.js'
-import { Scripts, assertScriptArgs, assertScriptId, definitionDirectory, writeDefinition as atomic, type ScriptRunRef } from './scripts.js'
+import { Scripts, assertScriptArgs, assertScriptId, type ScriptRunRef } from './scripts.js'
 
 export type Schedule = {
   originRunId?: string
@@ -58,20 +58,32 @@ export const occurrenceOf = (s: Schedule, r: RunRecord): boolean =>
 export const holdsSchedule = (s: Schedule, r: RunRecord): boolean =>
   occurrenceOf(s, r) && Boolean(r.interrupted || (s.when === 'unreviewed-failures' && r.status === 'failed'))
 const inFlight = (r: RunRecord) => r.status === 'queued' || r.status === 'running'
+const atomic = async (file: string, value: unknown, exclusive = false) => {
+  const tmp = `${file}.${randomUUID()}.tmp`
+  try {
+    await writeFile(tmp,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'})
+    if (exclusive) await link(tmp,file)
+    else await rename(tmp,file)
+  } finally { await rm(tmp,{force:true}) }
+}
 const validContinuing = (ids: unknown) => ids === undefined ||
   (Array.isArray(ids) && ids.length > 0 && ids.length <= 100 && ids.every(id => typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id)))
 export class Scheduler {
   private dir: string
   constructor(private controlDir: string, private checkPreflight = installedPreflight) { this.dir = join(controlDir,'schedules') }
-  private async ensure() { await definitionDirectory(this.controlDir,this.dir) }
+  private async ensure() { await mkdir(this.dir,{recursive:true,mode:0o700}) }
   // Definition writes and dispatch commits for one task exclude each other
   // across the relay and CLI processes. Holders need milliseconds; an older
   // lock was left by a crashed process.
   private async lock(id: string, wait = true): Promise<(() => Promise<void>) | undefined> {
     await this.ensure()
-    const file = join(this.dir,assertId(id)+'.lock')
+    const file = join(this.dir,assertId(id)+'.lock'), token = randomUUID()
     for (let attempt = 0; ; attempt++) {
-      try { await (await open(file,'wx',0o600)).close(); return () => rm(file,{force:true}) }
+      try {
+        await writeFile(file,token,{mode:0o600,flag:'wx'})
+        // Release only this holder's lock, never one taken after it was broken as stale.
+        return async () => { if (await readFile(file,'utf8').catch(() => '') === token) await rm(file,{force:true}) }
+      }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
         if (Date.now() - await stat(file).then(lock => lock.mtimeMs, () => Date.now()) > 30000) { await rm(file,{force:true}); continue }
@@ -260,7 +272,10 @@ export class Scheduler {
     const retried: string[] = []
     // An edit that replaced the occurrence's revision meanwhile wins over the requeue.
     for (const run of ready) await this.locked(run.scheduled!.id, async () => {
-      if (!await this.current(run, owner)) { if (runId) throw new Error('Schedule changed; inspect the run before retrying'); return }
+      if (!await this.current(run, owner) || (await runs.list()).some(other => other.id !== run.id && other.scheduled?.id === run.scheduled!.id && inFlight(other))) {
+        if (runId) throw new Error('Schedule changed or has another occurrence in flight; inspect the run before retrying')
+        return
+      }
       await runs.patch(run.id, { status: 'queued', quotaWait: {}, pid: undefined, endedAt: undefined,
         exitCode: undefined, failure: undefined, failureReason: undefined, failureReview: undefined })
       retried.push(run.id)

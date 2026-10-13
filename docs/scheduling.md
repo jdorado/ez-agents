@@ -42,20 +42,22 @@ An edit never disrupts an occurrence that is already queued or running:
   running occurrences listed in `continuingRunIds` finish with the instructions,
   engine, model, effort, fallbacks, delivery binding and revision they captured,
   including fallback advancement and quota retries. The next occurrence of the new
-  revision waits for them, as usual for one task. An interruption of a continuing
-  occurrence holds the new revision until the next explicit edit.
+  revision waits for them, as usual for one task. A continuing occurrence that is
+  interrupted (or fails, for a `--when unreviewed-failures` schedule) holds the
+  new revision until the next explicit edit.
 
 The compare, idle check and write happen under the task's lock, which dispatch,
-`trigger`, `pause`, `resume` and `remove` also take; a due occurrence therefore
+`trigger`, `pause`, `resume`, `remove` and quota `retry` also take; a due occurrence therefore
 lands either before the edit (and is protected as above) or after it, on the new
 revision. Edit needs the running relay to read queued and running occurrences;
 an unavailable relay rejects the edit rather than assuming the task is idle.
-Other schedule commands keep working with the relay stopped.
+`list`, `show`, `create`, `pause`, `resume`, `remove` and script registration keep
+working with the relay stopped.
 
-Definitions are private files owned by the agent runtime user. A root operator
-command, such as `docker compose exec relay ezenciel-agents-schedule ...`, saves
-schedule and script definitions with the control directory's owner so the relay
-can still read them.
+Definitions are private files owned by the agent runtime user. A root invocation,
+such as `docker compose exec relay ezenciel-agents-schedule ...`, first switches to
+the user and group that own the control directory, so saved definitions stay
+readable by the relay and root never writes through paths the agent controls.
 
 `running` gives one read-only view of **queued and running current-owner
 foreground turns (Telegram/application) and scheduled runs** in the bound relay.

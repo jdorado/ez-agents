@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chown, mkdir, mkdtemp, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -113,6 +113,29 @@ test('edit compares the read revision, refuses busy tasks unless staged and need
  await ledger.stop()
  await assert.rejects(exec(process.execPath,[bin,'edit','daily','--expected-revision',staged.revision,'--stage',...task('Offline')],{env}),/Relay unavailable/)
  assert.equal((await cli('show','daily')).revision,staged.revision)
+})
+
+test('a root operator command acts as the control directory owner and cannot follow a planted symlink',{skip:process.geteuid?.()!==0},async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-schedule-root-')),target=await mkdtemp(join(tmpdir(),'ez-root-target-')),runtime=20000
+ t.after(()=>Promise.all([rm(dir,{recursive:true,force:true}),rm(target,{recursive:true,force:true})]))
+ const control=new ControlStore(dir,1000);await control.requestPairing(101,101);await control.approveOwner(101)
+ const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
+ const workspace=join(dir,'workspace');await mkdir(workspace);await writeFile(join(workspace,'guard.mjs'),'')
+ // The runtime user owns its control directory, as the container entrypoint provisions it.
+ await chown(dir,runtime,runtime);for(const name of await readdir(dir))await chown(join(dir,name),runtime,runtime)
+ await chown(join(workspace,'guard.mjs'),runtime,runtime)
+ const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:'',EZ_AGENT_WORKSPACE:workspace}
+ const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env,cwd:workspace})).stdout)
+ const task=['--model','gpt-6-astra','--every-seconds','3600','--text','Root operator']
+ const created=await cli('create','daily',...task)
+ const edited=await cli('edit','daily','--expected-revision',created.revision,...task)
+ await cli('script','register','guard','--file','guard.mjs','--interpreter','node')
+ for(const path of ['schedules','schedules/daily.json',`schedules/daily.${edited.revision}.cursor`,'scripts/guard.json'])
+  assert.equal((await stat(join(dir,path))).uid,runtime,path)
+ // An agent can replace its own control subdirectory; root must not write through it.
+ await rm(join(dir,'schedules'),{recursive:true});await symlink(target,join(dir,'schedules'))
+ await assert.rejects(exec(process.execPath,[bin,'create','other',...task],{env}),/EACCES|permission denied/)
+ assert.deepEqual(await readdir(target),[]);assert.equal((await stat(target)).uid,0)
 })
 
 test('executor PATH exposes the extensionless scheduler command',async()=>{
