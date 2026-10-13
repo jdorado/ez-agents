@@ -155,7 +155,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         if (!activeChild || (await runs.running(false))?.id !== id) throw new Error('Application cancellation unavailable')
         stoppedRuns.add(id)
         ownerStopped.add(activeChild)
-        terminateJob(activeChild)
+        void terminateJob(activeChild).then(stopped => { if (!stopped) stoppedRuns.delete(id) })
       }
     }),
   })
@@ -291,6 +291,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         activeTypingTimer = null
       }
       if (run.scheduled) background.delete(run.id)
+      // A later ordered setup can fail after an earlier attempt held the slot.
+      else if (activeChild && childRuns.get(activeChild) === run.id) activeChild = null
       stoppedRuns.delete(run.id)
       const unavailable = error instanceof SetupsUnavailableError
       if (unavailable && run.scheduled && run.execution) {
@@ -478,6 +480,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         if (run.scheduled) background.set(run.id,child)
         else activeChild = child
         childRuns.set(child, run.id)
+        // A stop that arrived while this setup was launching reached only the
+        // previous attempt; stop the new one before it does any work.
+        if (await runCancelled()) { ownerStopped.add(child); void terminateJob(child) }
         const finished = new Promise<number | null>((resolve) => {
           if (child.exitCode !== null || child.signalCode !== null) resolve(child.exitCode)
           else child.once('close', resolve)

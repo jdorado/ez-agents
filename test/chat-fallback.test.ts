@@ -139,6 +139,29 @@ test('owner stop cancels the turn and never advances to another login', async ()
   } finally { await f.close() }
 })
 
+test('an exhausted chain fails the turn and leaves the chat free for the next turn', async () => {
+  const f = await fixture('exhausted', [{ lines: [quota], code: 1 }, { lines: [quota], code: 1 }, { lines: [work], code: 0 }], { chain: [chain[0]] })
+  try {
+    const first = await f.turn()
+    assert.equal(first.status, 'failed'); assert.equal(first.failureReason, 'setups-unavailable')
+    assert.match(f.sent.join('\n'), /could not start\. Every task setup was unavailable/)
+    // Both logins are cooling down; a present owner still gets them tried in order.
+    const second = await f.turn()
+    assert.equal(second.status, 'completed'); assert.equal(f.launches.length, 3)
+  } finally { await f.close() }
+})
+
+test('a stop that arrives while the next login is launching stops that login', async () => {
+  const stop = { relay: undefined as ReturnType<typeof createRelay> | undefined }
+  const f = await fixture('stop-switch', [{ lines: [quota], code: 1 }, { lines: [work], hold: true, beforeExit: async () => { await stop.relay!.bot.handleUpdate(message(99, '/stop')) } }])
+  stop.relay = f.relay
+  try {
+    const run = await f.turn()
+    assert.equal(run.status, 'cancelled'); assert.equal(f.launches.length, 2)
+    assert.deepEqual(run.attempts!.map(a => a.outcome), ['failed', 'cancelled'])
+  } finally { await f.close() }
+})
+
 test('access denial, revoked owner authority and uncertain outcomes stop the chain without replay', async () => {
   const cases: [string, Script, string | undefined][] = [
     ['denied', { lines: [{ type: 'assistant', error: 'oauth_org_not_allowed' }, quota], code: 1 }, 'access-denied'],
