@@ -29,6 +29,7 @@ import { ControlStore, telegramOwner, ownerId, ownerEpoch, type Owner, type Sess
 import { ApprovalStore } from './approval.js'
 import { CliUnavailableError, startExecutorJob, attachHostJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
 import { attemptFailure, continuationLine, nextSetup, quotaScope, quotaWait, quotaCategory, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
+import { telemetryObserver } from './run-telemetry.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, activeSetup, saveRunHandoff, takeRunHandoff, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
@@ -95,6 +96,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let activeTypingTimer: ReturnType<typeof setInterval> | null = null
   let activeBackend = false
   const ownerStopped = new WeakSet<ChildProcess>()
+  // Runs the owner stopped; an ordered run never advances to its next setup.
+  const stoppedRuns = new Set<string>()
   // Host-transport executors outlive this relay; a graceful stop hands them off.
   const hostTransport = async () => !config.channelBackendUrl && await usesFileTransport(config.controlDir)
   const childRuns = new WeakMap<ChildProcess, string>()
@@ -150,8 +153,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         const child = background.get(id)
         if (child) { await scheduler.cancel(id); terminateJob(child); return }
         if (!activeChild || (await runs.running(false))?.id !== id) throw new Error('Application cancellation unavailable')
+        stoppedRuns.add(id)
         ownerStopped.add(activeChild)
-        terminateJob(activeChild)
+        void terminateJob(activeChild).then(stopped => { if (!stopped) stoppedRuns.delete(id) })
       }
     }),
   })
@@ -287,6 +291,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         activeTypingTimer = null
       }
       if (run.scheduled) background.delete(run.id)
+      // A later ordered setup can fail after an earlier attempt held the slot.
+      else if (activeChild && childRuns.get(activeChild) === run.id) activeChild = null
+      stoppedRuns.delete(run.id)
       const unavailable = error instanceof SetupsUnavailableError
       if (unavailable && run.scheduled && run.execution) {
         const owner = (await control.status()).owner
@@ -326,10 +333,20 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       const selected = script ? initialPreset('codex') : run.taskId ? (started.execution?.preset.cli === 'codex' ? started.execution.preset : initialPreset('codex')) : (adopted ? activeSetup(started) : started.execution!.preset)
       if (!selected) throw new Error('Handed-off run has no authorized saved setup')
       if (run.scheduled && !script) assertScheduledModel(selected.model)
-      // A scheduled occurrence may name ordered fallback setups. They share this
-      // run, workspace and concurrency slot; each is tried at most once.
-      const candidates = run.scheduled && !script ? setupCandidates(started.execution!, await control.scheduledSetupHealth(owner)) : [selected]
-      const ordered = Boolean(run.scheduled && !script)
+      // Owner-enabled telemetry is fixed for the run once it starts.
+      const telemetryOn = !script && !run.taskId && (adopted ? Boolean(run.telemetry) : Boolean((await control.status()).runTelemetry))
+      if (telemetryOn && !adopted) await runs.patch(run.id, { telemetry: true })
+      // A scheduled occurrence, or chat/application work with a captured chain,
+      // may name ordered fallback setups. They share this run, workspace and
+      // execution slot; each is tried at most once. Telemetry also records attempts.
+      const chat = !startsOwnSession
+      const ordered = Boolean(!script && !run.taskId && (run.scheduled || started.execution?.fallbacks?.length || telemetryOn))
+      const candidates = run.scheduled && !script ? setupCandidates(started.execution!, await control.scheduledSetupHealth(owner))
+        : ordered ? [started.execution!.preset, ...started.execution!.fallbacks ?? []] : [selected]
+      const runCancelled = async () => stoppedRuns.has(run.id) || Boolean(run.scheduled && await scheduler.cancelled(run.id))
+      // Authority is rechecked before every later setup.
+      const authorized = async (current: Owner) => ownsRun(current, run) && (run.scheduled ? await scheduler.current(run, current)
+        : !executionBlockReason(run, current) && (!(run.application || run.delivery) || await applicationChannel.bindings.authorize(run).then(() => true, () => false)))
       let attempts: SetupAttempt[] = [...run.attempts ?? []]
       // Keep audit history and partial-work facts; a wake starts a new attempt round.
       const roundStart = adopted ? run.attemptRound ?? 0 : attempts.length
@@ -339,14 +356,23 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       // Advance only after an eligible failure (see attemptFailure) of a current,
       // uncancelled occurrence. Setups in an exhausted scope are skipped and recorded.
+      // Owner-present work (chat, application, event sources) never refuses on
+      // recorded quota health alone: when every saved login is cooling down, it
+      // tries them in order instead.
+      let ignoreHealth = false
       const advance = async (): Promise<AiPreset | undefined> => {
         let preset: AiPreset | undefined
-        const current = !shuttingDown && !await scheduler.cancelled(run.id) ? (await control.status()).owner : undefined
-        if (current && ownsRun(current, run) && await scheduler.current(run, current)) {
-          const next = nextSetup(candidates, attempts.slice(roundStart), await setupAvailability(current, run.id))
+        const current = !shuttingDown && !await runCancelled() ? (await control.status()).owner : undefined
+        if (current && await authorized(current)) {
+          const round = attempts.slice(roundStart)
+          let next = nextSetup(candidates, round, ignoreHealth ? {} : await setupAvailability(current, run.id))
+          if (!next.preset && !run.scheduled && !round.length && !ignoreHealth) { ignoreHealth = true; next = nextSetup(candidates, round) }
           attempts = [...attempts, ...next.skipped]
           if (!next.preset) {
             await runs.patch(run.id, { attempts })
+            // Owner-present work whose setup already began work ends as that
+            // run's failure; it did start.
+            if (!run.scheduled && round.some(a => a.category?.endsWith('after-work-began'))) return undefined
             throw new SetupsUnavailableError(unavailableSummary(attempts))
           }
           preset = next.preset
@@ -354,11 +380,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         await runs.patch(run.id, { attempts })
         return preset
       }
-      // Each attempt is a fresh native session: a rejected Claude attempt already
-      // claimed its ID, and a session cannot resume under another login's home.
-      const launchSetup = async (preset: AiPreset): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; preset: AiPreset }> => {
+      // A scheduled attempt is a fresh native session: a rejected Claude attempt
+      // already claimed its ID, and a session cannot resume under another login's
+      // home. An ordered chat attempt resumes its own login's conversation session.
+      type Launched = { child: ChildProcess; cleanup: () => Promise<void>; preset: AiPreset; resumed?: boolean }
+      const launchSetup = async (preset: AiPreset): Promise<Launched> => {
         for (;;) {
-          const sessionId = attempts.length ? randomUUID() : session.nativeSessionId || session.sessionId
+          const setup = preset
+          const engine = chat && ordered ? await control.engineSession(session.sessionId, setup) : undefined
+          const sessionId = engine ? engine.nativeSessionId || engine.sessionId : attempts.length ? randomUUID() : session.nativeSessionId || session.sessionId
+          const resumed = engine ? engine.hasStarted : session.hasStarted
           const continuation = continuationLine(started.id, attempts)
           if (ordered) {
             attempts = [...attempts, { preset, quotaScope: quotaScope(preset), outcome: 'running', sessionId, startedAt: new Date().toISOString() }]
@@ -384,16 +415,19 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               codexAutoCompactTokens: config.codexAutoCompactTokens,
               codexSandbox: !run.taskId && preset.cli === 'codex' ? config.codexSandbox : undefined,
               sessionId,
-              isResume: session.hasStarted,
+              isResume: resumed,
               promptSuffix: runPromptSuffix(started),
               taskRun: Boolean(run.taskId),
               nativeSession: Boolean(run.scheduled),
+              structuredOutput: ordered,
+              telemetry: telemetryOn,
               onSession: run.external || run.taskId ? undefined : async (id) => {
                 if (ordered) attempts = attempts.map(a => a.sessionId === sessionId ? { ...a, sessionId: id } : a)
                 await runs.patch(run.id, { nativeSessionId: id, ...(ordered ? { attempts } : {}) })
-                if (!run.scheduled) await control.saveNativeSession(session.sessionId, id)
+                if (engine) await control.saveEngineSession(session.sessionId, setup, id)
+                else if (!run.scheduled) await control.saveNativeSession(session.sessionId, id)
               },
-            }), preset }
+            }), preset, resumed }
           } catch (error) {
             if (ordered && !(error instanceof CliUnavailableError)) {
               settle({ outcome: 'failed', category: 'uncertain' })
@@ -407,7 +441,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           }
         }
       }
-      const watch = async ({ child, cleanup, preset }: Awaited<ReturnType<typeof launchSetup>>): Promise<void> => {
+      const watch = async ({ child, cleanup, preset, resumed }: Launched): Promise<void> => {
         const executionStarted = performance.now()
         // Attach before disk writes: a fast child can close while PID persistence
         // is pending, and Node drains its remaining pipes during process close.
@@ -417,6 +451,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         // Structured startup events decide whether a failed setup may advance.
         const startup = ordered ? startupObserver() : undefined
         let probing = Boolean(run.quotaWait)
+        // A resumed Codex session reports its session-wide total.
+        const telemetry = telemetryOn ? telemetryObserver({ cumulativeSession: Boolean(resumed) && ['codex', 'codex-gui'].includes(preset.cli) }) : undefined
+        if (telemetry) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => telemetry.write(chunk))
         if (startup) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => {
           startup.write(chunk)
           if (probing && startup.accepted()) {
@@ -447,6 +484,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         if (run.scheduled) background.set(run.id,child)
         else activeChild = child
         childRuns.set(child, run.id)
+        // A stop that arrived while this setup was launching reached only the
+        // previous attempt; stop the new one before it does any work.
+        if (await runCancelled()) { ownerStopped.add(child); void terminateJob(child) }
         const finished = new Promise<number | null>((resolve) => {
           if (child.exitCode !== null || child.signalCode !== null) resolve(child.exitCode)
           else child.once('close', resolve)
@@ -476,6 +516,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           }
         }
         const finalize = async (code: number | null, cancelled: boolean, failed: boolean) => {
+          stoppedRuns.delete(run.id)
           await runs.patch(started.id, { status: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', quotaWait: undefined, endedAt: new Date().toISOString(), exitCode: code,
             ...(script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
             ...(failed ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(timedOut ? `Script exceeded its ${script!.registration.timeoutSeconds}s timeout and was terminated` : errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
@@ -491,16 +532,17 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
                 await cleanup()
                 // The next relay records a handed-off run's result.
                 if (handedOff.has(child)) return
-                if (code === 0 && !run.external && !run.taskId && !run.scheduled) await control.markSessionStarted(session.sessionId)
-                const cancelled = !timedOut && (ownerStopped.has(child) || Boolean(run.scheduled && await scheduler.cancelled(run.id)))
-                if (timedOut) failureReason = 'script-timeout'
                 const observed = startup?.result()
+                if (chat && ordered) await control.settleEngineSession(session.sessionId, preset, code === 0 || Boolean(observed?.workBegan))
+                else if (code === 0 && chat) await control.markSessionStarted(session.sessionId)
+                const cancelled = !timedOut && (ownerStopped.has(child) || await runCancelled())
+                if (timedOut) failureReason = 'script-timeout'
                 const rejected = observed?.rejection && !observed.workBegan ? observed.rejection : undefined
                 // A rejection before work is a failure even when the CLI exits 0.
                 const failed = !cancelled && (code !== 0 || timedOut || Boolean(rejected) || quotaCategory(observed?.rejection?.category))
                 if (startup) {
                   const { continues, ...failure } = failed ? attemptFailure(observed!) : { continues: false }
-                  settle({ outcome: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', exitCode: code, ...failure })
+                  settle({ outcome: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', exitCode: code, ...failure, ...(telemetry ? { telemetry: telemetry.result() } : {}) })
                   if (!cancelled) await control.recordSetupOutcome(owner, attempts.at(-1)!)
                   await runs.patch(run.id, { attempts })
                   eligible = continues && !interrupted
@@ -522,7 +564,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               try {
                 const next = await advance()
                 if (next) return await watch(await launchSetup(next))
-                const cancelled = await scheduler.cancelled(run.id)
+                const cancelled = await runCancelled()
                 await finalize(code, cancelled, !cancelled)
                 free()
                 setImmediate(() => { void runs.nextQueued().then(queued => { if (queued && !shuttingDown) return startJob(queued) }).catch(console.error) })
@@ -972,7 +1014,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if (activeChild) children.unshift([undefined, activeChild])
     let requested = true
     for (const [id, child] of children) {
-      if (!await terminateJob(child)) { requested = false; continue }
+      const runId = childRuns.get(child)
+      if (runId) stoppedRuns.add(runId)
+      if (!await terminateJob(child)) { requested = false; if (runId) stoppedRuns.delete(runId); continue }
       ownerStopped.add(child)
       if (id) await scheduler.cancel(id)
     }

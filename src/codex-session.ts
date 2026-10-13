@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { terminateJob, validateCodexProvider, type CodexProviderBinding } from './executor.js'
 import { codexRejection, codexResetAt, startupLine } from './setup-fallback.js'
+import { telemetryObserver } from './run-telemetry.js'
 
-type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;additionalWorkspaces?:string[];model?:string;effort?:string;prompt:string;codexSandbox?:'external';codexProvider?:CodexProviderBinding}
+type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;additionalWorkspaces?:string[];model?:string;effort?:string;prompt:string;codexSandbox?:'external';codexProvider?:CodexProviderBinding;telemetry?:boolean}
 type Message = {id?:number;method?:string;params?:any;result?:any;error?:{message:string;code?:number}}
 
 // Keep Codex's native session alive. Codex itself starts goal continuation turns;
@@ -19,6 +20,15 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
   const child=io.launch?.() ?? spawn('codex',['app-server','--stdio','--disable','memories','--enable','skip_host_skill_discovery'],{cwd:options.workspace,env:process.env,stdio:['pipe','pipe','pipe']})
   const emit=io.emit ?? (line=>process.stdout.write(line+'\n'))
   let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=false,workBegan=false,resetAt:string|undefined
+  // Owner-enabled telemetry: app-server items and usage in the exec event shape.
+  const telemetry=options.telemetry ? telemetryObserver() : undefined
+  let reported=''
+  const observe=(event?:object)=>{
+    if(!telemetry)return
+    if(event)telemetry.write(JSON.stringify(event)+'\n')
+    const line=telemetry.summary();if(line!==reported){reported=line;emit(line)}
+  }
+  const tools:Record<string,string>={commandExecution:'command_execution',fileChange:'file_change',webSearch:'web_search',mcpToolCall:'mcp_tool_call'}
   let resolveDone!:(code:number)=>void
   const done=new Promise<number>(resolve=>{resolveDone=resolve})
   const pending=new Map<number,{resolve:(value:any)=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
@@ -65,6 +75,11 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     if(message.method==='account/rateLimits/updated')resetAt=codexResetAt(message.params?.rateLimits) ?? resetAt
     if(message.params?.threadId!==threadId)return
     if(message.method==='turn/started'){activeTurn=message.params.turn.id;sawTurn=true}
+    const item=message.params?.item
+    if((message.method==='item/started'||message.method==='item/completed') && tools[item?.type])
+      observe({type:message.method==='item/started'?'item.started':'item.completed',item:{id:item.id,type:tools[item.type],server:item.server,tool:item.tool,status:['failed','declined'].includes(item.status)?'failed':'completed'}})
+    if(message.method==='thread/tokenUsage/updated'){const total=message.params.tokenUsage?.total
+      observe({type:'turn.completed',usage:{input_tokens:total?.inputTokens,cached_input_tokens:total?.cachedInputTokens,output_tokens:total?.outputTokens}})}
     // Any item beyond the echoed input means the provider accepted the turn.
     if(message.method==='item/started' && message.params.item?.type!=='userMessage' && !workBegan){workBegan=true;emit(startupLine({workBegan}))}
     if(message.method==='thread/goal/updated')settled(message.params.goal)
@@ -74,6 +89,7 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
       if(message.params.turn.status!=='completed'){
         if(message.params.turn.status==='interrupted')finish(130)
         else {
+          observe({type:'turn.failed'})
           const rejected=codexRejection(message.params.turn.error?.codexErrorInfo)
           const category=!workBegan || rejected==='quota' ? rejected : undefined
           if(category)emit(startupLine({workBegan,rejection:{category,...(category==='quota' && resetAt ? {resetAt} : {})}}))
@@ -100,6 +116,7 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
     })
     threadId=result.thread?.id
     if(!threadId)throw new Error('Codex did not return a native thread ID')
+    telemetry?.model(result.model)
     emit(JSON.stringify({type:'thread.started',thread_id:threadId}))
     await request('turn/start',{threadId,input:[{type:'text',text:options.prompt}],model:options.model,effort:options.effort,
       ...(options.codexSandbox === 'external' ? {sandboxPolicy:{type:'externalSandbox',networkAccess:'enabled'}} : {})})

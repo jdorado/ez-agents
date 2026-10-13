@@ -10,7 +10,8 @@ import { desktopCodexPath } from './desktop-bridge.js'
 import { AUTH_PROFILE_CLIS, claudeAuthEnvironment, cliHome, isAuthProfile, listAuthProfiles } from './auth-profile.js'
 
 export type AiPreset = { id: string; name: string; cli: string; provider?: string; authProfile?: string; model?: string; effort?: string }
-// Scheduled fallback setups retain the native rejection/partial-work boundaries.
+// Ordered fallback setups (scheduled tasks, or the owner's chat chain captured
+// when work is queued) retain the native rejection/partial-work boundaries.
 export type ExecutionChoice = { sessionId: string; preset: AiPreset; fallbacks?: AiPreset[] }
 export type ModelChoice = { cli: string; provider?: string; authProfile?: string; model?: string; name: string; efforts: string[] }
 type Engine = { cli?: string; authProfile?: string }
@@ -34,6 +35,21 @@ export const isExecutionChoice = (v: unknown): v is ExecutionChoice => {
   const c = v as ExecutionChoice | undefined
   return Boolean(c && /^[0-9a-f-]{36}$/i.test(c.sessionId) && isPreset(c.preset) &&
     (c.fallbacks === undefined || (Array.isArray(c.fallbacks) && c.fallbacks.length > 0 && c.fallbacks.every(isPreset))))
+}
+// The owner's chat fallback chain for one captured primary choice. A same-client
+// entry without provider, model or effort keeps the primary's settings, so other
+// logins preserve each conversation's or role's model and effort. Entries equal
+// to an earlier setup are dropped.
+export const resolveFallbacks = (primary: AiPreset, chain: AiPreset[] = []): AiPreset[] | undefined => {
+  const resolved: AiPreset[] = []
+  for (const entry of chain) {
+    const inherit = entry.cli === primary.cli && entry.provider === undefined && entry.model === undefined && entry.effort === undefined
+    const { provider, model, effort } = inherit ? primary : entry
+    const preset: AiPreset = { id: entry.id, name: entry.name, cli: entry.cli, ...(provider ? { provider } : {}),
+      ...(entry.authProfile ? { authProfile: entry.authProfile } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}) }
+    if (![primary, ...resolved].some(other => sameChoice(other, preset))) resolved.push({ ...preset, name: presetLabel(preset).slice(0, 80) })
+  }
+  return resolved.length ? resolved : undefined
 }
 export const presetLabel = (p: AiPreset) => `${p.cli}${p.authProfile ? `@${p.authProfile}` : ''}${p.provider ? ` (${p.provider})` : ''} · ${p.model || 'client default'} · ${p.effort || 'default effort'}`
 // OpenCode encodes its provider in the native provider/model identifier.

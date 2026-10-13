@@ -349,7 +349,7 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         if (typeof payload.runId !== 'string' || !payload.runId) throw new Error('Run ID is required')
         if (!payload.change || typeof payload.change !== 'object') throw new Error('Patch change is required')
         // Setup attempts select what the host admits; only the relay records them.
-        if (['attempts', 'attemptRound', 'quotaWait'].some(key => key in (payload.change as Record<string, unknown>))) throw new Error('Setup attempts and quota admission are relay-owned')
+        if (['attempts', 'attemptRound', 'quotaWait', 'telemetry'].some(key => key in (payload.change as Record<string, unknown>))) throw new Error('Setup attempts, telemetry and quota admission are relay-owned')
         return runs.patch(payload.runId, payload.change as never)
       }
       case 'taskApplication': {

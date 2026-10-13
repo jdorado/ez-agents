@@ -1,6 +1,8 @@
 import { presetLabel, presetProvider, sameChoice, type AiPreset, type ExecutionChoice } from './ai.js'
+import type { AttemptTelemetry } from './run-telemetry.js'
 
-// Ordered task setups for one scheduled occurrence. Core advances only on typed
+// Ordered setups for one scheduled occurrence or captured chat/application
+// turn. Core advances only on typed
 // evidence: a missing CLI or a provider rejection before any model output or
 // tool item, or a usage limit the run ended on after work began (continued in a
 // fresh session that is told so). Anything else stops the chain.
@@ -17,6 +19,8 @@ export type SetupAttempt = {
   sessionId?: string
   startedAt?: string
   endedAt?: string
+  // Present only when the owner enabled run telemetry for this run.
+  telemetry?: AttemptTelemetry
 }
 
 const categories: StartupCategory[] = ['cli-unavailable', 'login-unavailable', 'quota', 'credits-required', 'provider-rejected', 'access-denied']
@@ -163,7 +167,7 @@ export const startupObserver = () => {
       else if (rejection?.category !== 'access-denied') rejection = undefined
       return
     }
-    if (event?.type === 'thread.started' || event?.type === 'result' ||
+    if (event?.type === 'thread.started' || event?.type === 'result' || event?.type === 'ez.telemetry' ||
         (event?.type === 'system' && event.subtype === 'init')) return
     if (event?.type === 'rate_limit_event') {
       const info = event.rate_limit_info

@@ -341,6 +341,51 @@ the profile entries in Choose AI, or `ezenciel-agents-schedule create ...
 profile starts a new native conversation, and a run whose request names another
 profile than its captured choice is rejected before launch.
 
+## Chat fallback chain
+
+Chat and application turns can name an ordered chain after the selected AI, for
+example Claude default → three other Claude logins → Codex:
+
+```sh
+ezenciel-agents-ai fallbacks --fallback cli=claude,auth-profile=claude2 \
+  --fallback cli=claude,auth-profile=claude3 --fallback cli=claude,auth-profile=claude4 \
+  --fallback cli=codex,model=gpt-6.1-sol,effort=xhigh
+```
+
+An entry for the selected AI's CLI without provider, model or effort keeps the
+turn's own model and effort, so every role keeps its settings on other logins.
+Each queued turn captures the chain with its choice; later edits apply to later
+turns only. `fallbacks` alone shows the resulting order and `--clear` removes it.
+Profiles must be provisioned and models advertised before they are saved.
+
+The rules of [ordered setup fallback](scheduling.md#ordered-setup-fallback)
+apply: core advances only on typed evidence that a setup was unavailable or
+rejected before work, or stopped at its usage limit (the next setup is told the
+work may be partly applied). Access denial, other failures after work began,
+unknown outcomes, owner stop and revoked owner or application authority end the
+turn without replay. A login cooling down after a recorded quota rejection is
+skipped while another is available; when all are, they are tried in order.
+Codex chat turns report no typed usage-limit rejection, so a Codex setup
+advances only when its CLI is unavailable; put Codex last in the chain.
+Each login keeps its own native session for the conversation, created on first
+use and resumed on later turns; a session never resumes under another login. A
+fallback login's first turn does not see the conversation's earlier native
+history; durable context lives in the workspace.
+
+## Run telemetry
+
+`ezenciel-agents-ai telemetry on` (off by default) records, for every attempt
+started afterwards, the model the client reported, input/output/cache-read/
+cache-write token counts, tool call counts, errors and observed durations by
+tool name, and error categories. They appear in each attempt of
+`ezenciel-agents-schedule run RUN_ID`. Counts come from structured client
+events: repeated per-message usage is counted once, a client's cumulative total
+replaces partial sums, and `coverage`/`gaps` label anything missing or partial,
+such as a resumed Codex session whose total may include earlier turns. Prompts,
+model text, tool arguments and results, credentials and reasoning are never
+read into telemetry, and no cost or historical usage is derived. Records stay
+in relay memory with the run and reset on restart.
+
 ## OpenCode auth
 
 Isolated agents run the image OpenCode with `XDG_DATA_HOME` set to the
