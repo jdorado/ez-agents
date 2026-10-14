@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Restore opt-in Antigravity CLI execution through the existing native transport with exact conversation IDs, native model discovery and unchanged Codex defaults. Host installation and owner-provisioned authentication/command permissions are required; isolated images do not bundle Antigravity.
+- Restore opt-in Antigravity CLI execution through the existing native transport with exact conversation IDs, native model discovery and unchanged Codex defaults. Runs use `--dangerously-skip-permissions` like Claude. Host installation and owner sign-in are required; isolated images do not bundle Antigravity.
 
 ## 0.1.0-beta.58
 

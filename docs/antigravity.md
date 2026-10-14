@@ -20,12 +20,11 @@ complete sign-in. Native settings/keyring access are owned by the CLI. Named Ez
 login profiles and API-key forwarding are not part of this adapter.
 See [Google's authentication guide](https://antigravity.google/docs/cli/install/).
 
-Native command permission is separate from Ez's existing plugin authority.
-The adapter does not bypass permission prompts. The owner must approve any
-persistent, scoped native command grants needed to invoke the installed `ez`
-and delivery commands. A native exit code of zero does not prove a command ran:
-headless commands can be soft-denied. Keep filesystem and network isolation
-intact; do not grant broad shell access just to obtain a passing smoke.
+Headless runs cannot answer permission prompts, so Ez passes
+`--dangerously-skip-permissions`, exactly as it does for Claude Code. Without it
+every command is auto-denied and the turn ends successfully with no reply. Ez
+plugin authority and the host user's own filesystem and network isolation remain
+the boundary; do not hand-edit the CLI's `settings.json` permission grants.
 
 Ez sends one literal stdin message and closes input. Antigravity owns context,
 loads the workspace's `AGENTS.md`, and emits its native conversation ID. Ez

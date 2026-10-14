@@ -21,11 +21,12 @@ let input='';process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>{
  else process.stdout.write(JSON.stringify({event:'result',result:{conversation_id:id,status:'SUCCESS',response:'fixture'}})+'\\n');
 });`
 
-test('Antigravity uses exact native IDs, literal stdin and existing command permissions', () => {
+test('Antigravity uses exact native IDs, literal stdin and the same headless approval flag as Claude', () => {
  const build=EXECUTOR_REGISTRY.agy.buildArgs
  const args=build({workspace:'/mind',controlDir:'/control',toolsHome:'/tools',isResume:true,sessionId:'native-first',model:'native-model',effort:'high'},'', '--help')
- assert.deepEqual(args,['--input-format','stream-json','--output-format','stream-json','--print-timeout','0','--conversation','native-first','--add-dir','/control','--add-dir','/tools','--model','native-model','--effort','high'])
- assert.ok(!args.includes('--continue') && !args.includes('--dangerously-skip-permissions') && !args.includes('--help'))
+ assert.deepEqual(args,['--input-format','stream-json','--output-format','stream-json','--print-timeout','0','--dangerously-skip-permissions','--conversation','native-first','--add-dir','/control','--add-dir','/tools','--model','native-model','--effort','high'])
+ assert.ok(!args.includes('--continue') && !args.includes('--help'))
+ assert.ok(EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/mind'},'','hi').includes('--dangerously-skip-permissions'))
  assert.throws(()=>build({workspace:'/mind',isResume:true},'','hi'),/native conversation ID/)
  assert.throws(()=>build({workspace:'/mind',isResume:true,sessionId:'../other'},'','hi'),/native conversation ID/)
  assert.throws(()=>build({workspace:'/mind',effort:'ultra'},'','hi'),/reasoning effort/)

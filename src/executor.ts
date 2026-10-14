@@ -175,7 +175,9 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
     buildArgs: (opts) => {
       // One literal stdin turn; the native CLI owns the conversation and waits
       // for completion after EOF. Never resume the shared latest conversation.
-      const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--print-timeout', '0']
+      // Headless runs cannot prompt, so without the claude-equivalent flag every
+      // command is silently auto-denied and the turn ends SUCCESS with no reply.
+      const args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--print-timeout', '0', '--dangerously-skip-permissions']
       if (opts.isResume) {
         if (!opts.sessionId || !/^[a-zA-Z0-9_-]{1,160}$/.test(opts.sessionId)) throw new Error('Antigravity resume requires a native conversation ID')
         args.push('--conversation', opts.sessionId)
