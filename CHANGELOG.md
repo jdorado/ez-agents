@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Restore opt-in Antigravity CLI execution through the existing native transport with exact conversation IDs, native model discovery and unchanged Codex defaults. Runs use `--dangerously-skip-permissions` like Claude. Host installation and owner sign-in are required; isolated images do not bundle Antigravity.
+
 ## 0.1.0-beta.58
 
 Versions 0.1.0-beta.53 through 0.1.0-beta.57 were used only by private QA candidates; this release follows the newest installed candidate (0.1.0-beta.58.rc.1) so it can upgrade in place.

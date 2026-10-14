@@ -85,7 +85,7 @@ export const discoverDefaults = async (cwd: string, options: {
   const run = options.run ?? command
   const text = async (file: string) => { try { return await readFile(file, 'utf8') } catch { return '' } }
   const json = async (file: string) => { try { return record(JSON.parse(await text(file))) } catch { return {} } }
-  const clients = ['grok', 'codex', 'claude', 'opencode']
+  const clients = ['grok', 'codex', 'claude', 'opencode', 'agy']
   const results = await Promise.all(clients.map(async (cli): Promise<AiPreset | undefined> => {
     if (!(await available(cli))) return
     let model: string | undefined, effort: string | undefined

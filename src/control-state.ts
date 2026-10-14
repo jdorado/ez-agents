@@ -183,7 +183,7 @@ const withChain = (choice: ExecutionChoice, chain?: AiPreset[]): ExecutionChoice
 }
 
 // Clients that report their own native session ID; others use the Ez-assigned ID.
-const reportsNativeSession = (cli?: string) => ['codex', 'codex-gui', 'opencode'].includes(cli ?? '')
+const reportsNativeSession = (cli?: string) => ['codex', 'codex-gui', 'opencode', 'agy'].includes(cli ?? '')
 
 const rememberPreset = (state: ControlState) => {
   const preset = state.ai?.presets.find(p => p.id === state.ai!.selectedId)
@@ -582,7 +582,7 @@ export class ControlStore {
       const preset = session.preset ?? ai?.presets.find(p => sameEngine(p, session))
       if (!ai || !preset || !sameEngine(preset, session))
         throw new Error('This older conversation has no saved AI binding. Start a new conversation.')
-      if (session.hasStarted && ['codex', 'codex-gui', 'opencode'].includes(session.cli!) && !session.nativeSessionId)
+      if (session.hasStarted && ['codex', 'codex-gui', 'opencode', 'agy'].includes(session.cli!) && !session.nativeSessionId)
         throw new Error('This conversation has no native session ID. Start a new conversation.')
       assertEffort(preset.effort, preset.model, preset.cli)
       rememberPreset(state)
@@ -821,7 +821,7 @@ export class ControlStore {
       : state.sessions?.find((s) => s.sessionId === choice.sessionId)
     if (!session?.cli || !sameEngine(session, choice.preset))
       throw new Error('Conversation has no matching CLI binding for this client and auth profile. Use New conversation explicitly; files are preserved.')
-    if (session.hasStarted && ['codex', 'codex-gui', 'opencode'].includes(session.cli) && !session.nativeSessionId)
+    if (session.hasStarted && ['codex', 'codex-gui', 'opencode', 'agy'].includes(session.cli) && !session.nativeSessionId)
       throw new Error('Native session ID missing. Use New conversation explicitly; no automatic reset.')
     return session
   }

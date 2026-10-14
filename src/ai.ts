@@ -20,7 +20,7 @@ export const sameEngine = (a: Engine, b: Engine) => a.cli === b.cli && a.authPro
 export const sameChoice = (a: Omit<AiPreset, 'id' | 'name'>, b: Omit<AiPreset, 'id' | 'name'>) =>
   sameEngine(a, b) && a.provider === b.provider && a.model === b.model && a.effort === b.effort
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
-const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'pi']
+const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'pi', 'agy']
 const nativeEffort = (cli: string, effort: string) =>
   cli === 'pi' ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) : true
 export const isPreset = (p: unknown): p is AiPreset => {
@@ -119,6 +119,22 @@ export const readOpencodeModels = async (run?: (args: string[]) => Promise<strin
   return []
 }
 
+// Antigravity publishes its model slugs through its native metadata command.
+// Only table rows become catalog entries; never persist diagnostics or credentials.
+export const readAntigravityModels = async (run?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
+  const exec = run ?? (async (args: string[]) => {
+    const invocation = executorInvocation('agy', args)
+    return (await promisify(execFile)(invocation.command, invocation.args, { env: executorEnvironment(), timeout: 8000, maxBuffer: 2 * 1024 * 1024 })).stdout
+  })
+  try {
+    const rows = (await exec(['models'])).split(/\r?\n/).flatMap(line => {
+      const match = line.match(/^\s*([a-z0-9][a-z0-9_./:-]*)(?:\t+| {2,})([^\r\n]+)$/)
+      return match && safe(match[1]) ? [{ cli: 'agy', model: match[1], name: match[2].trim().slice(0, 80), efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }] : []
+    })
+    return rows.filter((row, index) => rows.findIndex(other => other.model === row.model) === index)
+  } catch { return [] }
+}
+
 // User-curated entries live in the agent's own setup (control/ai-models.json),
 // never in the repo. They pin models the native catalogs may not currently
 // serve (e.g. paid tiers) and merge ahead of discovered entries, so selection
@@ -191,7 +207,7 @@ export const claudeCatalogModels = async (run?: (args: string[]) => Promise<stri
   return [...fallback, ...[...new Set(aliases)].map((alias) => ({ cli: 'claude', model: alias, name: `claude · ${alias}`, efforts: levels }))]
 }
 
-export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[], curationDir?: string, codexRunner?: (args: string[], env: NodeJS.ProcessEnv) => Promise<string>, claudeRunner?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
+export const readModels = async (home = homedir(), available = installed, codexHome = join(home, '.codex'), opencodeRunner?: (args: string[]) => Promise<string>, opencodeDataHome?: string, opencodeAllowlist?: string[], curationDir?: string, codexRunner?: (args: string[], env: NodeJS.ProcessEnv) => Promise<string>, claudeRunner?: (args: string[]) => Promise<string>, agyRunner?: (args: string[]) => Promise<string>): Promise<ModelChoice[]> => {
   const models: ModelChoice[] = []
   const record = (value: unknown): Record<string, unknown> =>
     value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
@@ -225,6 +241,7 @@ export const readModels = async (home = homedir(), available = installed, codexH
     models.push(...(desktop.length ? desktop : [{ cli: 'codex-gui', name: 'codex-gui · desktop', efforts: [] }]))
   }
   if (await available('claude')) models.push(...await claudeCatalogModels(claudeRunner))
+  if (await available('agy')) models.push({ cli: 'agy', name: 'Antigravity · client default', efforts: [] }, ...await readAntigravityModels(agyRunner))
   const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
   if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, allow))
   // Pi has separate provider configuration. OpenCode's catalog cannot
