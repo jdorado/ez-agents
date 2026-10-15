@@ -198,9 +198,14 @@ export const startupObserver = () => {
     }
     if (event?.type === 'result') {
       terminal = nativeTerminal(event)
-      // A success or a different terminal limit supersedes an earlier quota.
+      // An error-flagged success envelope can end a typed usage rejection.
+      // Keep that rejection only without a competing or unknown stop reason.
+      const failedUsageLimit = terminal.subtype === 'success' && terminal.isError === true &&
+        ['quota', 'credits-required'].includes(rejection?.category ?? '') &&
+        (terminal.stopReason == null || ['end_turn', 'stop_sequence'].includes(terminal.stopReason))
+      // A real success or a different terminal limit supersedes an earlier quota.
       // Only the existing typed rejection can authorize setup continuation.
-      if (terminal.subtype !== 'error_during_execution' && !(event.subtype === undefined && event.is_error === true) && rejection?.category !== 'access-denied') rejection = undefined
+      if (!failedUsageLimit && terminal.subtype !== 'error_during_execution' && !(event.subtype === undefined && event.is_error === true) && rejection?.category !== 'access-denied') rejection = undefined
       return
     }
     if (event?.type === 'thread.started' || event?.type === 'ez.telemetry' ||

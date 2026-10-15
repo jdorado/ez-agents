@@ -64,6 +64,26 @@ test('only a usage limit the run ended on continues after work began',()=>{
   assert.deepEqual(attemptFailure({workBegan:false,rejection:{category:'quota',resetAt:limitReset}}),{category:'quota',resetAt:limitReset,continues:true})
 })
 
+test('error-flagged success preserves only a final typed usage limit',()=>{
+  const terminal={type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'}
+  const tool={type:'assistant',message:{content:[{type:'tool_use'}]}}
+  for(const began of [false,true])for(const error of ['rate_limit','billing_error']){
+    const lines=[...(began?[tool]:[]),{type:'assistant',error}]
+    const state=observe(...lines,terminal)
+    const category=error==='rate_limit'?'quota':'credits-required'
+    assert.equal(state.rejection?.category,category)
+    assert.deepEqual(state.nativeTerminal,{status:'failed',subtype:'success',isError:true,stopReason:'stop_sequence'})
+    assert.equal(attemptFailure(state).category,began?category+'-after-work-began':category)
+    assert.equal(attemptFailure(state).continues,true)
+    assert.equal(observe(startupLine(state)).rejection?.category,category,'host summaries retain the typed rejection')
+    for(const stop_reason of ['max_tokens','model_context_window_exceeded','refusal','pause_turn','unknown'])
+      assert.equal(observe(...lines,{...terminal,stop_reason}).rejection,undefined,'a competing or unknown stop supersedes the limit')
+    assert.equal(observe(...lines,tool,terminal).rejection,undefined,'later work supersedes the limit')
+  }
+  assert.equal(observe(terminal).rejection,undefined,'an error flag alone never establishes quota')
+  assert.equal(observe({type:'assistant',error:'oauth_org_not_allowed'},tool,limitMessage,terminal).rejection?.category,'access-denied')
+})
+
 test('only scheduled Claude runs stream structured events',()=>{
   assert.deepEqual(EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/w',nativeSession:true},'','').slice(-3),['--output-format','stream-json','--verbose'])
   assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/w'},'','').includes('stream-json'))
@@ -322,10 +342,13 @@ test('arbitrary mixed setup lists preserve CLI, provider, model and effort per a
 
 test('a usage limit after work began continues the same run on the next login, told so',async()=>{
   const opus={...claudeA,effort:'xhigh'},profiles=['claude2','claude3','claude4'].map((authProfile,i)=>({...opus,id:`fallback-${i}`,authProfile}))
-  for(const event of [work,{type:'system',subtype:'hook_started'}]){
+  for(const event of [work,{type:'system',subtype:'hook_started'}])for(const terminal of [
+    {type:'result',is_error:true},
+    {type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'},
+  ]){
     // Default login stops mid-run, claude2 is already exhausted before work, claude3 completes.
-    const f=await fixture('mid-run-limit',[{lines:[{type:'system',subtype:'init'},event,limitEvent,limitMessage,{type:'result',is_error:true}],code:1},
-      {lines:[limitEvent,limitMessage],code:1},{lines:[work],code:0}],profiles,opus)
+    const f=await fixture('mid-run-limit',[{lines:[{type:'system',subtype:'init'},event,limitEvent,limitMessage,terminal],code:1},
+      {lines:[limitEvent,limitMessage,terminal],code:1},{lines:[work],code:0}],profiles,opus)
     try{
       const run=await f.done()
       assert.equal(run.status,'completed');assert.equal(run.id,f.run.id)
@@ -340,6 +363,10 @@ test('a usage limit after work began continues the same run on the next login, t
       assert.deepEqual(f.prompts,[f.prompts[0],[...f.prompts[0],fact],[...f.prompts[0],fact]])
       assert.ok(!f.prompts[0].some(text=>text.includes('continues')))
       assert.equal((await f.runs.list()).filter(r=>r.scheduled?.id==='daily').length,1)
+      const saved=await f.scheduler.get('daily')
+      assert.equal((await f.scheduler.trigger(saved.id,saved.revision,'fallback-mid-run-limit',f.owner,f.runs)).id,run.id)
+      await f.relay.drainSources()
+      assert.equal(f.launches.length,3,'reconciling the same occurrence never repeats its successful work')
     }finally{await f.close()}
   }
 })
@@ -361,15 +388,20 @@ test('a run that reaches the limit on every login waits and manually continues t
 })
 
 test('cancellation stops the chain',async()=>{
-  const f=await fixture('cancel',[{lines:[quota,{type:'result',subtype:'error_during_execution',is_error:true}],hold:true}])
-  try{
-    await until(async()=>Boolean((await f.runs.get(f.run.id))?.pid))
-    await f.scheduler.cancel(f.run.id)
-    await f.relay.drainSources()
-    const run=await f.done()
-    assert.equal(run.status,'cancelled');assert.equal(f.launches.length,1)
-    assert.deepEqual(run.attempts!.map(a=>a.outcome),['cancelled'])
-  }finally{await f.close()}
+  for(const terminal of [
+    {type:'result',subtype:'error_during_execution',is_error:true},
+    {type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'},
+  ]){
+    const f=await fixture('cancel',[{lines:[quota,terminal],hold:true}])
+    try{
+      await until(async()=>Boolean((await f.runs.get(f.run.id))?.pid))
+      await f.scheduler.cancel(f.run.id)
+      await f.relay.drainSources()
+      const run=await f.done()
+      assert.equal(run.status,'cancelled');assert.equal(f.launches.length,1)
+      assert.deepEqual(run.attempts!.map(a=>a.outcome),['cancelled'])
+    }finally{await f.close()}
+  }
 })
 
 test('a staged edit lets the running occurrence continue to its saved fallback on captured settings',async()=>{
