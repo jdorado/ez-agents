@@ -109,6 +109,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   let retirements=[];
   let reloadPending;
   let reloadReady=false;
+  let handoff=false;
   let admissionReady=false;
   const generations=new Map();
   const removeContainer=async id=>{
@@ -224,6 +225,16 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       if(!/^[a-f0-9]{12,64}$/.test(workerOwner.containerId))throw Error('Invalid isolated worker identity');
       if((await execute('docker',['inspect','--format','{{.State.Running}}',workerOwner.containerId],{stdoutOnly:true}).catch(()=>''))?.trim()==='true')container=workerOwner.containerId;
     }
+    // A reloading predecessor hands its executor generations over running:
+    // keep the claiming worker and reap retiring ones after their work ends.
+    if(host.isolation==='isolated')for(const name of (await fs.readdir(directory)).filter(n=>/^ez-executor-.+\.json$/.test(n))){
+      const project=name.slice(0,-5),file=path.join(directory,name);
+      const id=await execute('docker',['compose','--project-name',project,'--file',file,'ps','-aq','executor'],{stdoutOnly:true}).then(o=>o.trim(),()=>null);
+      if(id==='')await fs.rm(file,{force:true});
+      if(!/^[a-f0-9]{12,64}$/.test(id||''))continue;
+      generations.set(id,{project,file});
+      if(container&&id.startsWith(container))container=id;else retirements.push({container:id});
+    }
     const interrupted=(await jobs(home)).find(j=>j.status==='applying');
     if(interrupted){
       const refreshPluginBroker=await refreshRequirement(interrupted);
@@ -252,8 +263,12 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       // unclaimed requests remain running throughout this supervisor restart.
       if(!admissionReady&&!reloadPending&&(!isolated||container)){await fs.rm(pause,{force:true});admissionReady=true;}
       if(reloadPending) {
-        // Hold new turns while existing generations finish. Queued requests
-        // cannot block a restart that leaves the relay and its ledger running.
+        // Container workers outlive this process and the successor adopts
+        // them, so reload never holds new turns behind long native work.
+        if(container){handoff=true;reloadReady=true;return;}
+        // A host worker exits with its supervisor: hold new turns while
+        // existing generations finish. Queued requests cannot block a restart
+        // that leaves the relay and its ledger running.
         await atomic(pause,{id:reloadPending.id});
         if(await idle(agent.controlDir,{pendingRequests:false,relayRequired:true})){reloadReady=true;return;}
       }
@@ -296,8 +311,12 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       await sleep(500);
     }
   }finally {
-    clearInterval(beat);await stopHost();
-    for(const item of retirements){if(item.container){await execute('docker',['stop','--time','10',item.container]);await removeContainer(item.container);}else if(item.child.exitCode===null)item.child.kill('SIGTERM');}await fs.rm(lock,{force:true});
+    clearInterval(beat);
+    if(!handoff){
+      await stopHost();
+      for(const item of retirements){if(item.container){await execute('docker',['stop','--time','10',item.container]);await removeContainer(item.container);}else if(item.child.exitCode===null)item.child.kill('SIGTERM');}
+    }
+    await fs.rm(lock,{force:true});
     if(!reloadReady) {
       if(!admissionReady&&inheritedPause)await atomic(pause,inheritedPause);
       else if(!(await jobs(home)).some(j=>j.status==='applying'))await fs.rm(pause,{force:true});
