@@ -233,7 +233,9 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       if(id==='')await fs.rm(file,{force:true});
       if(!/^[a-f0-9]{12,64}$/.test(id||''))continue;
       generations.set(id,{project,file});
-      if(container&&id.startsWith(container))container=id;else retirements.push({container:id});
+      // Never retire the lock holder; an unconfirmed one stays as before.
+      if(workerOwner?.containerId&&id.startsWith(workerOwner.containerId)){if(container)container=id;}
+      else retirements.push({container:id});
     }
     const interrupted=(await jobs(home)).find(j=>j.status==='applying');
     if(interrupted){

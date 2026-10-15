@@ -600,7 +600,7 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  assert.equal(await closed3,0,third.output());
 });
 
-test('isolated supervisor reload hands live executors to its successor without holding admission',async t=>{
+test('isolated supervisor reload hands live executors to its successor without holding admission',{timeout:60000},async t=>{
  const f=await fixture(t),fake=path.join(f.root,'fake'),host=path.join(f.agent.controlDir,'host-executor');
  await fs.mkdir(fake);await fs.mkdir(host,{recursive:true});
  await atomic(path.join(f.config.deploymentDir,'host-executor.json'),{cli:'grok',isolation:'isolated',agents:[f.agent]});
@@ -651,6 +651,10 @@ else if(a[0]==='cp')fs.readFileSync(0);
  assert.deepEqual(stops(successor).map(a=>a[a.indexOf('--project-name')+1]),['ez-executor-old-1']);
  assert.deepEqual(Object.keys(await read(store)),[replacement]);
  assert.equal(second.p.exitCode,null,second.output());
+ // The adopted worker is tracked by its full ID and generation on shutdown.
+ const shutdown=(await calls()).length;second.p.kill('SIGTERM');assert.equal(await second.closed,0,second.output());
+ const final=(await calls()).slice(shutdown);
+ assert.deepEqual(stops(final).filter(a=>a[0]!=='stop').map(a=>a[0]==='rm'?'rm':a[a.indexOf('--project-name')+1]),[containers[replacement].project]);
 });
 
 test('queued upgrades keep admission open while busy and release a raced or aborted pause',async t=>{
