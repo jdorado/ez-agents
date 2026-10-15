@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Reload an isolated supervisor after a core update without holding new turns behind long native work. Executor containers keep running across the reload; the successor adopts the claiming worker and removes retiring generations after their work ends. Host-process workers keep the existing drain.
+
 ## 0.1.0-beta.58
 
 Versions 0.1.0-beta.53 through 0.1.0-beta.57 were used only by private QA candidates; this release follows the newest installed candidate (0.1.0-beta.58.rc.1) so it can upgrade in place.
