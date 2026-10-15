@@ -294,6 +294,22 @@ test('a lease from another PID namespace is live while its call container runs, 
  await docker(`console.log('false')`);
  await assert.rejects(locked(f.home,async()=>{}),/Stale command invocation lease/); // stopped but not removed: inspect first
 });
+test('a draining lifecycle change waits for an exited call to finish releasing its lease',async t=>{
+ const f=await fixture(t);
+ const directory=path.join(f.home,'command-invocations');await fs.mkdir(directory,{recursive:true});
+ const lease=path.join(directory,'00000000-0000-4000-8000-000000000003.json');
+ await fs.writeFile(lease,JSON.stringify({pid:1,container:'exiting-call',pidNamespace:'pid:[4026531999]'}),{mode:0o600});
+ const path0=process.env.PATH;process.env.PATH=f.fake+path.delimiter+path0;t.after(()=>{process.env.PATH=path0;});
+ // docker run --rm: the container has exited and is being removed; the broker releases the lease next.
+ const file=path.join(f.fake,'docker'),seen=path.join(f.fake,'inspected');
+ await fs.writeFile(file,`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){console.log('false');require('fs').appendFileSync(${JSON.stringify(seen)},'x')}\n`,{mode:0o700});
+ let activated=false,failure;const drain=locked(f.home,async()=>{activated=true;},{drainInvocations:true}).catch(error=>{failure=error;});
+ // Let the drain observe the exited container more than once before it is removed.
+ for(let i=0;i<200&&!failure&&(await fs.readFile(seen,'utf8').catch(()=>'')).length<2;i++)await new Promise(resolve=>setTimeout(resolve,25));
+ assert.equal(failure,undefined);assert.equal(activated,false);
+ await fs.writeFile(file+'.next',`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){console.error('Error: No such object: exiting-call');process.exit(1)}\n`,{mode:0o700});await fs.rename(file+'.next',file);
+ await drain;assert.equal(activated,true);await assert.rejects(fs.access(lease),{code:'ENOENT'});
+});
 test('changed source, symlinks, reserved aliases, arbitrary Docker fields rejected',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
  await fs.writeFile(path.join(f.source,'client.mjs'),'changed');await assert.rejects(f.call('plugins','install','sample','--source',f.source,'--revision',p.revision));

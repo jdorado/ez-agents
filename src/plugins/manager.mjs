@@ -79,7 +79,7 @@ async function activeInvocations(home) {
     const state=await run(['container','inspect','--format','{{.State.Running}}',lease.container],{capture:true});
     // Foreign leases: the call container's own state is the only liveness signal.
     if(state.code===0&&foreign&&state.stdout.trim()==='true')return true;
-    if(state.code===0)throw Error(`Stale command invocation lease; inspect container ${lease.container} before recovery`);
+    if(state.code===0)throw Object.assign(Error(`Stale command invocation lease; inspect container ${lease.container} before recovery`),{stale:true});
     if(!/No such (?:object|container)/i.test(state.stderr+state.stdout))throw Error('Unable to verify a stale command invocation lease; inspect Docker before recovery');
     await fs.rm(path.join(directory,file));
   }
@@ -110,7 +110,17 @@ export async function locked(home, fn, {allowInvocations=false, waitMs=0, upgrad
     await handle.writeFile(JSON.stringify({pid:process.pid,...(drainInvocations?{kind:'plugin-upgrade'}:{})}));
     // Keep admission closed while already-started calls release their leases.
     // This is a lifecycle barrier, not an agent-turn drain or a command retry.
-    while(!allowInvocations&&await activeInvocations(home)) {
+    let staleSince;
+    while(!allowInvocations) {
+      let active;
+      try {active=await activeInvocations(home);staleSince=undefined;}
+      catch(error) {
+        // A call that just exited is still removing its container and releasing
+        // its lease; a drain reports only a stop that outlasts this grace.
+        if(!drainInvocations||!error.stale||Date.now()-(staleSince??=Date.now())>30000)throw error;
+        active=true;
+      }
+      if(!active)break;
       if(!drainInvocations)throw Error('Plugin commands are active; retry the registry or lifecycle change after they finish');
       signal?.throwIfAborted();
       await new Promise(resolve=>setTimeout(resolve,25));
