@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { ownerRun } from './helpers/owner-run.js'
 import { serveTestLedger } from './helpers/ledger.js'
-import { RunStore } from '../src/runs.js'
+import { RunStore, retentionBoundary } from '../src/runs.js'
 import { ControlStore } from '../src/control-state.js'
 import { runEvidence, projectRunEvidence } from '../src/run-evidence.js'
 
@@ -87,8 +87,8 @@ test('evidence lists the setups a run tried in order with typed outcomes, clocks
   const claude = { id: 'claude', name: secret, cli: 'claude', model: 'opus', effort: 'high' }
   const second = { ...claude, id: 'fallback-0', authProfile: 'claude2' }
   const codex = { id: 'codex', name: 'codex', cli: 'codex', model: 'gpt-6-sol', effort: 'xhigh' }
-  const telemetry = { coverage: 'complete', model: 'gpt-6-sol', tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, source: 'native-total' },
-    tools: { calls: 1, completed: 1, errors: 0, durationMs: 40, byName: { command: { calls: 1, completed: 1, errors: 0, durationMs: 40 } } }, prompt: secret }
+  const telemetry = { coverage: 'complete', model: 'gpt-6-sol', tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, source: 'native-total', note: 'LEAKPROSE token=abc123' },
+    tools: { calls: 1, completed: 1, errors: 0, durationMs: 40, note: 'LEAKPROSE', byName: { command: { calls: 1, completed: 1, errors: 0, durationMs: 40, note: 'LEAKPROSE' } } }, prompt: secret }
   await runs.patch('owner_run', { attempts: [
     { preset: claude, quotaScope: 'claude', outcome: 'failed', category: 'quota', resetAt: at(3600), exitCode: 1, startedAt: at(0), endedAt: at(1) },
     { preset: second, quotaScope: 'claude@claude2', outcome: 'skipped', category: 'same-quota-scope', startedAt: at(1), endedAt: at(1) },
@@ -107,12 +107,14 @@ test('evidence lists the setups a run tried in order with typed outcomes, clocks
   assert.equal(attempts[2].telemetry!.tools!.byName.command.durationMs, 40)
   assert.equal(attempts[3].quotaScope, undefined)
   assert.equal(attempts[3].startedAt, undefined)
-  assert.ok(!JSON.stringify(result).includes('Private prose') && !JSON.stringify(result).includes('abc123'), 'prose, names and unknown fields are dropped')
+  assert.ok(!/Private prose|abc123|LEAKPROSE/.test(JSON.stringify(result)), 'prose, names and unknown fields are dropped, nested ones too')
   // A long quota wait cannot make one page unbounded.
-  await runs.patch('owner_run', { attempts: Array.from({ length: 55 }, () => ({ preset: claude, quotaScope: 'claude', outcome: 'failed' as const })) })
-  const long = (await runEvidence(dir)).runs[0] as { attempts: unknown[]; attemptsTruncated?: boolean }
+  // The latest are kept, so a recovery after many quota rounds is still listed, numbered by its place in the run.
+  await runs.patch('owner_run', { attempts: Array.from({ length: 55 }, (_, i) => ({ preset: i === 54 ? codex : claude, quotaScope: i === 54 ? 'codex' : 'claude', outcome: i === 54 ? 'completed' as const : 'failed' as const, exitCode: i })) })
+  const long = (await runEvidence(dir)).runs[0] as { attempts: { attempt: number; setup: { cli: string }; outcome: string; exitCode: number }[]; attemptsTruncated?: boolean; nativeTerminals: unknown[] }
   assert.equal(long.attempts.length, 50)
   assert.equal(long.attemptsTruncated, true)
+  assert.deepEqual([long.attempts[0].attempt, long.attempts[0].exitCode, long.attempts.at(-1)!.attempt, long.attempts.at(-1)!.setup.cli, long.attempts.at(-1)!.outcome], [6, 5, 55, 'codex', 'completed'])
 })
 
 test('evidence states where retained history begins and counts what the caps dropped', async t => {
@@ -137,4 +139,21 @@ test('evidence states where retained history begins and counts what the caps dro
   const one = await runEvidence(dir, { runId: 'owner_run' })
   assert.equal(one.coverage.total, 1)
   assert.equal(one.coverage.retention.prunedTerminalRuns, 2)
+})
+
+test('evidence counts outbox items the cap dropped and owner runs retained from before the ledger started', async t => {
+  const start = Date.parse(retentionBoundary('any').ledgerStartedAt)
+  t.mock.timers.enable({ apis: ['Date'], now: start - 86_400_000 })
+  const { dir, runs } = await fixture(t) // paired and first run created a day before this ledger began
+  t.mock.timers.reset()
+  const before = await runEvidence(dir)
+  assert.equal(before.coverage.retention.retainedBeforeLedgerStart, 1)
+  assert.equal(before.coverage.retention.prunedTerminalOutbox, 0)
+  for (let i = 0; i < 2002; i++) {
+    const item = await runs.enqueueMessage('owner_run', `m${i}`)
+    await runs.claimOutbox(item.id); await runs.markOutboxSent(item.id, [i + 1])
+  }
+  const after = await runEvidence(dir, { limit: 1 })
+  assert.deepEqual([after.coverage.retention.prunedTerminalOutbox, after.coverage.retention.prunedTerminalRuns, after.coverage.retention.retainedBeforeLedgerStart], [2, 0, 1])
+  assert.equal(after.runs[0].deliveries.length, 2000)
 })

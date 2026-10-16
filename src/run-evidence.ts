@@ -15,9 +15,11 @@ const MAX_ATTEMPTS = 50
 
 // The ordered setups a run actually tried: closed-shape fields only (typed outcome and
 // category, clocks, native terminal and opt-in telemetry counts), never prose or content.
+// A very long quota wait keeps the latest MAX_ATTEMPTS, so the recovery stays visible;
+// `attempt` is the setup's position in the whole run.
 function attempts(run: RunRecord) {
-  const all = run.attempts ?? []
-  return all.slice(0, MAX_ATTEMPTS).map((attempt, index) => ({ attempt: index + 1,
+  const all = run.attempts ?? [], skipped = Math.max(0, all.length - MAX_ATTEMPTS)
+  return all.slice(skipped).map((attempt, index) => ({ attempt: skipped + index + 1,
     setup: { cli: shaped(attempt.preset?.cli, identifier), provider: shaped(attempt.preset?.provider, identifier),
       authProfile: shaped(attempt.preset?.authProfile, identifier), model: shaped(attempt.preset?.model, identifier), effort: shaped(attempt.preset?.effort, identifier) },
     quotaScope: shaped(attempt.quotaScope, /^[a-z][a-zA-Z0-9@_./:-]{0,199}$/),

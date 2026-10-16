@@ -437,11 +437,13 @@ This reads the live relay through its existing authenticated socket, under the
 bound operator or an active unrestricted Telegram owner run. Application/channel,
 external and isolated-task callers cannot use it. It exposes only current-owner
 Telegram foreground/scheduled runs, stable IDs, clocks/status/presets, the ordered
-setups each run tried (`attempts`: CLI, login profile, model, effort, typed outcome and
-category, reset time, exit code, clocks, typed native terminal and, when run telemetry
-is on, its counts), failure
+setups each run tried (`attempts`: CLI, provider, login profile, model, effort, quota
+scope, typed outcome and category, reset time, exit code, clocks, typed native terminal
+and, when run telemetry is on, its counts), failure
 metadata without prose, and retained run-associated outbox metadata. A skipped setup
-appears with its typed reason, so a chain shows each saved login at most once. No native
+appears with its typed reason, so one availability check shows each saved login once and
+a quota wait keeps its earlier rounds. A run lists its latest 50 attempts, numbered by
+position in the whole run, with `attemptsTruncated` when more were made. No native
 session, prompt, reasoning, tool arguments/results, message text or channel identity
 is returned. Failure text is represented by its SHA-256, not copied or diagnosed.
 
@@ -455,7 +457,9 @@ be inferred. Unassociated deliveries and excluded scopes remain unknown.
 
 `coverage.retention` states the boundary of that history: `ledgerStartedAt` is when
 this relay's memory began, `prunedTerminalRuns` and `prunedTerminalOutbox` count what
-the caps dropped since, `oldestRetainedRunAt` is the oldest retained owner run and
+the caps dropped since (ledger-wide counts, not only this owner's rows),
+`oldestRetainedRunAt` is the oldest retained owner run of any status (an unfinished run
+can make it older than every surviving terminal run, so it is a conservative bound) and
 `retainedBeforeLedgerStart` counts runs a graceful restart handed over. A cut older
 than `ledgerStartedAt` cannot be continued from this ledger: record the gap with its
 two clocks instead of inferring a cause, and compare `ledgerStartedAt` across reads to

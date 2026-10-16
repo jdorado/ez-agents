@@ -34,8 +34,16 @@ export const validTelemetry = (value: unknown): AttemptTelemetry | undefined => 
   if (v.tokens !== undefined && !(isCounts(v.tokens) && ['native-total', 'message-sum'].includes(v.tokens.source))) return undefined
   if (v.tools !== undefined && !(isStats(v.tools) && v.tools.byName && typeof v.tools.byName === 'object' &&
     Object.keys(v.tools.byName).length <= MAX_NAMES + 1 && Object.entries(v.tools.byName).every(([name, stats]) => code(name) && isStats(stats)))) return undefined
-  const { coverage, gaps, model, tokens, tools, errors } = v
-  return JSON.parse(JSON.stringify({ coverage, gaps, model, tokens, tools, errors }))
+  // Rebuilt from the known keys: a forwarded summary may carry extra fields beside the counts, and none survive.
+  const counts = (c: TokenCounts): TokenCounts => ({ input: c.input, output: c.output, cacheRead: c.cacheRead, cacheWrite: c.cacheWrite })
+  const stats = (c: ToolStats): ToolStats => ({ calls: c.calls, completed: c.completed, errors: c.errors, durationMs: c.durationMs })
+  const clean: AttemptTelemetry = { coverage: v.coverage }
+  if (v.gaps !== undefined) clean.gaps = [...v.gaps]
+  if (v.model !== undefined) clean.model = v.model
+  if (v.tokens !== undefined) clean.tokens = { ...counts(v.tokens), source: v.tokens.source }
+  if (v.tools !== undefined) clean.tools = { ...stats(v.tools), byName: Object.fromEntries(Object.entries(v.tools.byName).map(([name, entry]) => [name, stats(entry)])) }
+  if (v.errors !== undefined) clean.errors = [...v.errors]
+  return clean
 }
 
 export const telemetryLine = (telemetry: AttemptTelemetry): string => JSON.stringify({ type: 'ez.telemetry', telemetry })
