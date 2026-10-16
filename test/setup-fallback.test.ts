@@ -8,6 +8,7 @@ import { once } from 'node:events'
 import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore, activeSetup } from '../src/runs.js'
+import { runEvidence } from '../src/run-evidence.js'
 import { Scheduler } from '../src/scheduler.js'
 import { CliUnavailableError, EXECUTOR_REGISTRY, type ExecutorOptions } from '../src/executor.js'
 import { attemptFailure, codexRejection, nextSetup, quotaScope, setupCandidates, startupObserver, startupLine } from '../src/setup-fallback.js'
@@ -131,7 +132,7 @@ test('same-settings login choices rotate from the last success, preserving expli
 })
 
 type Script={lines?:unknown[];stderr?:string;code?:number;unavailable?:boolean;hold?:boolean;session?:string;stage?:string}
-const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA)=>{
+const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA,options:{telemetry?:boolean}={})=>{
   const dir=await mkdtemp(join(tmpdir(),`ez-fallback-${name}-`)),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
   const launches:ExecutorOptions[]=[],prompts:string[][]=[],admitted:(AiPreset|undefined)[]=[],sent:string[]=[]
   const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(texts,options)=>{
@@ -146,6 +147,7 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
   })
   relay.bot.api.config.use(async(_prev,method,payload)=>{if(method==='sendMessage')sent.push((payload as {text:string}).text);return {ok:true,result:{message_id:42}} as never})
   await control.requestPairing(101,101);await control.approveOwner(101)
+  if(options.telemetry)await control.setRunTelemetry(true)
   const owner=(await control.status()).owner!
   const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,...(fallbacks.length ? {fallbacks} : {})},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
   const run=await scheduler.trigger(saved.id,saved.revision,'fallback-'+name,owner,runs)
@@ -296,6 +298,31 @@ test('four Claude accounts advance in order on quota rejection before work',asyn
     assert.ok(f.launches.every(l=>l.runId===run.id))
     assert.deepEqual(run.attempts!.map(a=>[a.quotaScope,a.outcome]),[
       ['claude','failed'],['claude@claude2','failed'],['claude@claude3','failed'],['claude@claude4','completed']])
+  }finally{await f.close()}
+})
+
+test('the five-setup chain (four Claude logins, then Codex) recovers on its fifth setup once, and evidence lists every attempt',async()=>{
+  const profiles=['claude2','claude3','claude4']
+  const claudes=profiles.map((authProfile,i)=>({...claudeA,id:`fallback-${i}`,authProfile,effort:'high'}))
+  const f=await fixture('five-setups',[{lines:[quota],code:1},{lines:[quota],code:1},{lines:[quota],code:1},{lines:[quota],code:1},{lines:[work],code:0}],
+    [...claudes,{...codexA,effort:'xhigh'}],{...claudeA,effort:'high'},{telemetry:true})
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'completed')
+    assert.deepEqual(f.launches.map(l=>[l.cli,l.authProfile,l.model,l.effort]),[
+      ['claude',undefined,'opus','high'],['claude','claude2','opus','high'],['claude','claude3','opus','high'],['claude','claude4','opus','high'],['codex',undefined,'gpt-6-sol','xhigh']])
+    assert.equal(new Set(f.launches.map(l=>l.sessionId)).size,5)
+    assert.ok(f.launches.every(l=>l.runId===run.id),'one occurrence, never a second run')
+    const evidence=(await runEvidence(f.dir)).runs.find(r=>r.id===run.id)!
+    assert.deepEqual(evidence.attempts.map(a=>[a.attempt,a.setup.cli,a.setup.authProfile,a.outcome,a.category]),[
+      [1,'claude',undefined,'failed','quota'],[2,'claude','claude2','failed','quota'],[3,'claude','claude3','failed','quota'],
+      [4,'claude','claude4','failed','quota'],[5,'codex',undefined,'completed',undefined]])
+    assert.deepEqual(evidence.attempts.slice(0,4).map(a=>a.telemetry?.errors),Array(4).fill(['rate_limit']))
+    assert.ok(evidence.attempts.every(a=>a.telemetry!==undefined&&a.startedAt&&a.endedAt),'every attempt carries its clocks and telemetry')
+    const saved=await f.scheduler.get('daily')
+    assert.equal((await f.scheduler.trigger(saved.id,saved.revision,'fallback-five-setups',f.owner,f.runs)).id,run.id)
+    await f.relay.drainSources()
+    assert.equal(f.launches.length,5,'the same occurrence key never launches a setup twice')
   }finally{await f.close()}
 })
 

@@ -103,6 +103,18 @@ export const retainedOutbox = (controlDir: string): StoredOutboxItem[] => [...ou
 const MAX_TERMINAL_RUNS = 2000
 const MAX_TERMINAL_OUTBOX = 2000
 
+// Where this ledger's history begins and what the caps dropped since, so a read
+// can bound a gap exactly instead of inferring a restart from missing rows.
+const ledgerStartedAt = new Date().toISOString()
+const prunedByControl = new Map<string, { terminalRuns: number; terminalOutbox: number }>()
+const prunedFor = (controlDir: string) => {
+  let counts = prunedByControl.get(controlDir)
+  if (!counts) { counts = { terminalRuns: 0, terminalOutbox: 0 }; prunedByControl.set(controlDir, counts) }
+  return counts
+}
+export const retentionBoundary = (controlDir: string) => ({ ledgerStartedAt, prunedTerminalRuns: prunedFor(controlDir).terminalRuns,
+  prunedTerminalOutbox: prunedFor(controlDir).terminalOutbox, maxTerminalRuns: MAX_TERMINAL_RUNS, maxTerminalOutbox: MAX_TERMINAL_OUTBOX })
+
 const runsByControl = new Map<string, Map<string, RunRecord>>()
 const outboxByControl = new Map<string, Map<string, StoredOutboxItem>>()
 const deliveryWaiters = new Map<string, Map<string, Set<() => void>>>()
@@ -135,11 +147,11 @@ const notifyDelivery = (controlDir: string, id: string): void => {
 const pruneTerminals = (controlDir: string): void => {
   const store = runsFor(controlDir)
   const terminal = [...store.values()].filter(run => ['completed', 'failed', 'cancelled'].includes(run.status)).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-  for (const run of terminal.slice(0, Math.max(0, terminal.length - MAX_TERMINAL_RUNS))) store.delete(run.id)
+  for (const run of terminal.slice(0, Math.max(0, terminal.length - MAX_TERMINAL_RUNS))) { store.delete(run.id); prunedFor(controlDir).terminalRuns++ }
   const outbox = outboxFor(controlDir)
   const settled = [...outbox.values()].filter(item => item.state === 'sent' || item.state === 'failed').sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   for (const item of settled.slice(0, Math.max(0, settled.length - MAX_TERMINAL_OUTBOX))) {
-    if (!deliveryWaiters.get(controlDir)?.has(item.id)) outbox.delete(item.id)
+    if (!deliveryWaiters.get(controlDir)?.has(item.id)) { outbox.delete(item.id); prunedFor(controlDir).terminalOutbox++ }
   }
 }
 

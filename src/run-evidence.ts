@@ -1,12 +1,34 @@
 import { createHash } from 'node:crypto'
 import { readOnlyOwner, requireOwnerExecution } from './execution-authority.js'
 import { ownsRun, assertId } from './identity.js'
-import { RunStore, retainedOutbox, type RunRecord, type StoredOutboxItem } from './runs.js'
+import { RunStore, retainedOutbox, retentionBoundary, type RunRecord, type StoredOutboxItem } from './runs.js'
 import type { Owner } from './control-state.js'
 import { validNativeTerminal } from './setup-fallback.js'
+import { validTelemetry } from './run-telemetry.js'
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 const version = (value?: string) => value && /^[0-9A-Za-z.+-]{1,80}$/.test(value) ? value : undefined
+const shaped = (value: unknown, pattern: RegExp): string | undefined => typeof value === 'string' && pattern.test(value) ? value : undefined
+const clock = (value: unknown): string | undefined => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : undefined
+const identifier = /^[a-zA-Z0-9_./:-]{1,160}$/
+const MAX_ATTEMPTS = 50
+
+// The ordered setups a run actually tried: closed-shape fields only (typed outcome and
+// category, clocks, native terminal and opt-in telemetry counts), never prose or content.
+// A very long quota wait keeps the latest MAX_ATTEMPTS, so the recovery stays visible;
+// `attempt` is the setup's position in the whole run.
+function attempts(run: RunRecord) {
+  const all = run.attempts ?? [], skipped = Math.max(0, all.length - MAX_ATTEMPTS)
+  return all.slice(skipped).map((attempt, index) => ({ attempt: skipped + index + 1,
+    setup: { cli: shaped(attempt.preset?.cli, identifier), provider: shaped(attempt.preset?.provider, identifier),
+      authProfile: shaped(attempt.preset?.authProfile, identifier), model: shaped(attempt.preset?.model, identifier), effort: shaped(attempt.preset?.effort, identifier) },
+    quotaScope: shaped(attempt.quotaScope, /^[a-z][a-zA-Z0-9@_./:-]{0,199}$/),
+    outcome: shaped(attempt.outcome, /^[a-z]{1,16}$/), category: shaped(attempt.category, /^[a-z][a-z-]{0,63}$/), resetAt: clock(attempt.resetAt),
+    exitCode: Number.isSafeInteger(attempt.exitCode) ? attempt.exitCode : attempt.exitCode === null ? null : undefined,
+    startedAt: clock(attempt.startedAt), endedAt: clock(attempt.endedAt),
+    nativeTerminal: attempt.nativeTerminal ? validNativeTerminal(attempt.nativeTerminal) : undefined,
+    telemetry: validTelemetry(attempt.telemetry) }))
+}
 
 function delivery(item: StoredOutboxItem) {
   const receipt = item.receipt as { messageIds?: unknown; deliveredAt?: unknown } | undefined
@@ -42,6 +64,7 @@ export function projectRunEvidence(runs: RunRecord[], outbox: StoredOutboxItem[]
       nativeSessionRecorded: Boolean(run.nativeSessionId),
       nativeTerminals: (run.attempts ?? []).flatMap((attempt, index) => attempt.nativeTerminal ?
         [{ attempt: index + 1, ...validNativeTerminal(attempt.nativeTerminal) }] : []),
+      attempts: attempts(run), ...((run.attempts?.length ?? 0) > MAX_ATTEMPTS ? { attemptsTruncated: true } : {}),
       toolDelegationMetadata: { state: 'unavailable', reason: 'The relay does not retain native tool or delegation events.' },
       deliveries: outbox.filter(item => item.runId === run.id && item.chatId === owner.telegramChatId &&
         Date.parse(item.createdAt) >= Date.parse(owner.telegramLinkedAt ?? owner.pairedAt))
@@ -64,8 +87,9 @@ export async function runEvidence(controlDir: string, options: EvidenceOptions =
   }
   const owner = await readOnlyOwner(controlDir)
   if (!owner) throw new Error('No authorized owner')
-  const records = projectRunEvidence(await new RunStore(controlDir).list(), retainedOutbox(controlDir), owner)
-    .filter(run => options.runId === undefined || run.id === assertId(options.runId))
+  const retained = projectRunEvidence(await new RunStore(controlDir).list(), retainedOutbox(controlDir), owner)
+  const records = retained.filter(run => options.runId === undefined || run.id === assertId(options.runId))
+  const boundary = retentionBoundary(controlDir)
   if (options.runId !== undefined && !records.length) throw new Error('Unknown owner run')
   const snapshotSha256 = sha256(JSON.stringify(records))
   if (options.expected !== undefined && options.expected !== snapshotSha256) throw new Error('Evidence changed; restart at offset zero')
@@ -75,6 +99,10 @@ export async function runEvidence(controlDir: string, options: EvidenceOptions =
     coverage: { scope: 'current-owner Telegram foreground and scheduled runs', total: records.length, offset, limit, returned: page.length,
       nextOffset: offset + page.length < records.length ? offset + page.length : null,
       history: 'relay memory; resets on restart; at most 2000 terminal runs and 2000 terminal outbox items retained',
+      // Rows before ledgerStartedAt are gone unless a graceful stop handed the run over; terminal rows the caps
+      // dropped since then are counted. A cut older than ledgerStartedAt cannot be continued from this ledger.
+      retention: { ...boundary, oldestRetainedRunAt: retained[0]?.createdAt ?? null,
+        retainedBeforeLedgerStart: retained.filter(run => Date.parse(run.createdAt) < Date.parse(boundary.ledgerStartedAt)).length },
       completeness: 'retained records only; older history and unassociated deliveries unknown',
       excluded: ['external tasks', 'isolated tasks', 'application/channel runs', 'native sessions', 'tool/delegation events', 'failure/review prose', 'message content', 'recipient-side content readback'] },
     runs: page }
