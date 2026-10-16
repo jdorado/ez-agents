@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.59
 
 - Let a schedule run an installed plugin command directly, with no model and no workspace file: `ezenciel-agents-schedule script register ID --plugin PLUGIN --arg=...` registers `ez PLUGIN ARGS...`, run through the agent's own broker launcher at the plugin's installed revision. Script schedules, timeouts, run records and the no-retry rule apply unchanged. A workspace no longer needs a launcher script to run mechanical plugin work on a timer.
 - Make the read-only `evidence` export prove fallback recovery and bound its own history. Each run now lists the ordered setups it tried (latest 50; CLI, provider, login profile, model, effort, quota scope, typed outcome and category, reset time, exit code, clocks, native terminal and opt-in telemetry counts, never prose), and `coverage.retention` states when the relay's memory began, how many terminal runs and outbox items the caps dropped and the oldest retained run, so a gap before the retained cut is bounded by clocks instead of inferred from missing rows.
