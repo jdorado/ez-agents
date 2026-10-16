@@ -261,6 +261,27 @@ workspace (including symlink escapes) and shell command strings are rejected.
 Core invokes `interpreter entry registrationArgs... scheduleArgs...` directly,
 without a shell. Missing interpreters fail clearly; nothing is installed.
 
+### Plugin command registrations
+
+Mechanical work that an installed plugin already does needs no workspace file.
+Register the plugin command instead:
+
+```sh
+ezenciel-agents-schedule script register book-freshness --plugin ezstocks \
+  --arg=strategy --arg=account-cut --arg=sync --arg=--if-older-minutes=50
+ezenciel-agents-schedule create book-freshness --script book-freshness \
+  --cron '15 * * * *' --timezone Asia/Dubai
+```
+
+Core runs `ez PLUGIN registrationArgs... scheduleArgs...` through the agent's
+own `ez` launcher, so the call goes through the plugin broker exactly as an
+agent turn's would, under this run's identity and at the plugin's installed
+revision. The registration records the plugin name instead of an entry point
+and hash; `update` keeps the kind unless `--file` and `--interpreter` are given.
+Everything else below applies unchanged: one occurrence at a time, timeout, no
+automatic retry or model fallback, run records and `EZ_*` identifiers (no
+`EZ_SCRIPT_SHA256`). The plugin command owns its own validation and readback.
+
 When an occurrence is queued, the run captures the current registration
 revision and hash. Immediately before spawning, the executor requires that
 revision to be current and the entry-point bytes to match. Changed bytes fail

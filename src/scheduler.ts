@@ -47,7 +47,7 @@ const validExecution = (s: Pick<Schedule,'execution'|'script'|'text'>) => s.scri
 // The run carries the registration revision/hash current when it was queued.
 const scriptRef = async (controlDir: string, s: Schedule, owner: Owner): Promise<ScriptRunRef> => {
   const ref: ScriptRunRef = { id: s.script!.id, args: s.script!.args }
-  try { const r = await new Scripts(controlDir).owned(s.script!.id, owner); return { ...ref, revision: r.revision, sha256: r.sha256 } }
+  try { const r = await new Scripts(controlDir).owned(s.script!.id, owner); return { ...ref, revision: r.revision, ...(r.sha256 ? { sha256: r.sha256 } : {}) } }
   catch { return ref }
 }
 const runTexts = (s: Schedule, dueAt: string) => s.script ? [`[schedule ${s.id} due ${dueAt}] script ${s.script.id}`] : [`[schedule ${s.id} due ${dueAt}]`, s.text]
