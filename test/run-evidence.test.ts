@@ -115,6 +115,9 @@ test('evidence lists the setups a run tried in order with typed outcomes, clocks
   assert.equal(long.attempts.length, 50)
   assert.equal(long.attemptsTruncated, true)
   assert.deepEqual([long.attempts[0].attempt, long.attempts[0].exitCode, long.attempts.at(-1)!.attempt, long.attempts.at(-1)!.setup.cli, long.attempts.at(-1)!.outcome], [6, 5, 55, 'codex', 'completed'])
+  await runs.patch('owner_run', { attempts: Array.from({ length: 50 }, () => ({ preset: claude, quotaScope: 'claude', outcome: 'failed' as const })) })
+  const exact = (await runEvidence(dir)).runs[0] as { attempts: unknown[]; attemptsTruncated?: boolean }
+  assert.deepEqual([exact.attempts.length, exact.attemptsTruncated], [50, undefined])
 })
 
 test('evidence states where retained history begins and counts what the caps dropped', async t => {
@@ -150,7 +153,7 @@ test('evidence counts outbox items the cap dropped and owner runs retained from 
   assert.equal(before.coverage.retention.retainedBeforeLedgerStart, 1)
   assert.equal(before.coverage.retention.prunedTerminalOutbox, 0)
   for (let i = 0; i < 2002; i++) {
-    const item = await runs.enqueueMessage('owner_run', `m${i}`)
+    const item = await runs.enqueueMessage('owner_run', `m${i}`, { id: `out_${i}` }) // generated ids can collide within one millisecond
     await runs.claimOutbox(item.id); await runs.markOutboxSent(item.id, [i + 1])
   }
   const after = await runEvidence(dir, { limit: 1 })

@@ -441,7 +441,7 @@ setups each run tried (`attempts`: CLI, provider, login profile, model, effort, 
 scope, typed outcome and category, reset time, exit code, clocks, typed native terminal
 and, when run telemetry is on, its counts), failure
 metadata without prose, and retained run-associated outbox metadata. A skipped setup
-appears with its typed reason, so one availability check shows each saved login once and
+appears with its typed reason, so one availability check lists each setup at most once and
 a quota wait keeps its earlier rounds. A run lists its latest 50 attempts, numbered by
 position in the whole run, with `attemptsTruncated` when more were made. No native
 session, prompt, reasoning, tool arguments/results, message text or channel identity
