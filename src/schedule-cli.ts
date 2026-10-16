@@ -69,7 +69,7 @@ bytes refuse to run until an explicit script update. The hash covers that file o
 A --plugin registration needs no workspace file: it runs 'ez PLUGIN ARGS...' through the agent's installed launcher, so a
 mechanical plugin command (for example --plugin ezstocks --arg=strategy --arg=account-cut --arg=sync) runs on a timer without a model.
 Script runs receive EZ_RUN_ID, EZ_SCHEDULE_ID, EZ_SCHEDULE_REVISION, EZ_DUE_AT, EZ_SCRIPT_ID, EZ_SCRIPT_REVISION and
-EZ_SCRIPT_SHA256 plus the normal executor allowlist. Stdout/stderr are bounded diagnostics in run, never owner messages.
+EZ_SCRIPT_SHA256 (file registrations only) plus the normal executor allowlist. Stdout/stderr are bounded diagnostics in run, never owner messages.
 Script runs have a timeout (default ${DEFAULT_SCRIPT_TIMEOUT_SECONDS}s) and are never retried automatically.
 Context reads the current run only.
 Running is read-only and defaults to readable output; --json exports sanitized metadata.

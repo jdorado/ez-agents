@@ -278,9 +278,10 @@ own `ez` launcher, so the call goes through the plugin broker exactly as an
 agent turn's would, under this run's identity and at the plugin's installed
 revision. The registration records the plugin name instead of an entry point
 and hash; `update` keeps the kind unless `--file` and `--interpreter` are given.
-Everything else below applies unchanged: one occurrence at a time, timeout, no
-automatic retry or model fallback, run records and `EZ_*` identifiers (no
-`EZ_SCRIPT_SHA256`). The plugin command owns its own validation and readback.
+Everything else below applies unchanged: one occurrence at a time, no automatic
+retry or model fallback, run records and `EZ_*` identifiers (no
+`EZ_SCRIPT_SHA256`). The effective time limit is the lower of the registration's
+timeout and the plugin broker's own call limit. The plugin command owns its own validation and readback.
 
 When an occurrence is queued, the run captures the current registration
 revision and hash. Immediately before spawning, the executor requires that
