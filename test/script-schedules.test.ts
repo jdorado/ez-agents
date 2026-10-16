@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { once } from 'node:events'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile, access } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createRelay } from '../src/index.js'
@@ -57,7 +58,7 @@ test('script registration confines the entry point, rejects shell strings and re
   const f = await setup(); t.after(() => rm(f.root, { recursive: true, force: true }))
   const base = { id: 'guard', owner: f.owner, workspace: f.workspace, interpreter: 'node', args: [], timeoutSeconds: 60 }
   const saved = await f.scripts.save({ ...base, entry: 'scripts/guard.mjs' }, true)
-  assert.equal(saved.entry, join('scripts', 'guard.mjs')); assert.match(saved.sha256, /^[a-f0-9]{64}$/)
+  assert.equal(saved.entry, join('scripts', 'guard.mjs')); assert.match(saved.sha256!, /^[a-f0-9]{64}$/)
   await assert.rejects(f.scripts.save({ ...base, entry: 'scripts/guard.mjs' }, true), /already registered/)
   await writeFile(join(f.root, 'outside.mjs'), 'process.exit(0)')
   await assert.rejects(f.scripts.save({ ...base, id: 'escape', entry: '../outside.mjs' }, true), /inside the agent workspace/)
@@ -216,4 +217,95 @@ test('script schedules run with zero LLM invocations, exact revision receipts, i
   await relay.drainSources(); await finished(agentRun.id)
   assert.equal((await f.runs.get(agentRun.id))?.status, 'completed')
   assert.equal(agentLaunches.length, 1); assert.equal(agentLaunches[0].model, 'gpt-6-astra'); assert.equal(agentLaunches[0].nativeSession, true)
+})
+
+// A plugin registration needs no workspace file: Core runs `ez PLUGIN ARGS...`.
+const fakeLauncher = `#!${process.execPath}
+const { writeFileSync } = require('node:fs')
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('EZ_')))
+writeFileSync('plugin-' + process.env.EZ_RUN_ID + '.json', JSON.stringify({ argv: process.argv.slice(2), env,
+  leaked: ['TELEGRAM_BOT_TOKEN', 'EZ_TEST_SECRET'].filter(k => process.env[k] !== undefined) }))
+console.log('{"stored_book_changed":false}')
+process.exit(process.argv.includes('--fail') ? 4 : 0)
+`
+
+test('plugin registrations run an installed plugin command on a schedule with no workspace file or model', async t => {
+  const f = await setup(); t.after(() => rm(f.root, { recursive: true, force: true }))
+  const savedEnv = { PATH: process.env.PATH, TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN, EZ_TEST_SECRET: process.env.EZ_TEST_SECRET, EZ_PLUGIN_BROKER_SOCKET: process.env.EZ_PLUGIN_BROKER_SOCKET }
+  t.after(() => { for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v } })
+  // The run goes through the agent's own `ez` broker launcher; this broker records what it is asked.
+  const requests: any[] = []
+  const socket = join(await mkdtemp(join(tmpdir(), 'ezb-')), 's')
+  const broker = createServer(connection => connection.on('data', chunk => {
+    for (const line of chunk.toString().split('\n').filter(Boolean)) {
+      const request = JSON.parse(line); requests.push(request)
+      connection.write(JSON.stringify(request.operation === 'resolve' ? { ok: true, revision: 'rev-1', capability: 'cap-1' }
+        : { ok: true, stdout: '{"stored_book_changed":false}\n', code: request.args.includes('--fail') ? 4 : 0 }) + '\n')
+    }
+  }))
+  broker.listen(socket); await once(broker, 'listening'); t.after(() => broker.close())
+  process.env.EZ_PLUGIN_BROKER_SOCKET = socket
+  process.env.TELEGRAM_BOT_TOKEN = '123456:secret-token-value-for-tests-only'; process.env.EZ_TEST_SECRET = 'do-not-inherit'
+  process.env.PATH = `${f.fakeBin}:${process.env.PATH}`
+  const base = { id: 'book', owner: f.owner, workspace: f.workspace, args: ['strategy', 'account-cut', 'sync'], timeoutSeconds: 60 }
+  await assert.rejects(f.scripts.save({ ...base, plugin: 'ezstocks', pathValue: f.fakeBin }, true), /not installed/)
+  for (const bad of ['EzStocks', '-x', '../ezstocks', 'ez stocks', '', 'plugins', '9lives'])
+    await assert.rejects(f.scripts.save({ ...base, plugin: bad }, true), /installed plugin command/)
+  await assert.rejects(f.scripts.save({ ...base, plugin: 'ezstocks', entry: 'scripts/guard.mjs', interpreter: 'node' }, true), /either a workspace entry point/)
+  await assert.rejects(f.scripts.save({ ...base, plugin: 'ezstocks', interpreter: 'node' }, true), /omit --interpreter/)
+  const binDir = fileURLToPath(new URL('../bin', import.meta.url))
+  const registration = await f.scripts.save({ ...base, plugin: 'ezstocks', pathValue: binDir }, true)
+  assert.equal(registration.plugin, 'ezstocks'); assert.equal(registration.interpreter, 'ez')
+  assert.equal(registration.entry, undefined); assert.equal(registration.sha256, undefined)
+  assert.deepEqual(await f.scripts.get('book'), registration)
+
+  const relay = createRelay({ workspace: f.workspace, controlDir: f.dir, pairingTtlMs: 1000, executorTimeoutMs: 0, executorCli: 'codex', telegramBotToken: 'fixture' },
+    async (texts, options) => { assert.ok(options.script, 'only the plugin command may launch'); return startExecutorJob(texts, options) })
+  relay.bot.api.config.use(async () => ({ ok: true, result: { message_id: 42 } }) as never)
+  t.after(() => relay.stop())
+  const schedule = await f.scheduler.save({ id: 'book-freshness', name: 'Book', text: '', owner: f.owner, enabled: true, trigger: { cron: '15 * * * *', timezone: 'Asia/Dubai', start: new Date().toISOString() }, script: { id: 'book', args: ['--if-older-minutes=50'] } }, true)
+  const finished = (id: string) => until(async () => ['completed', 'failed', 'cancelled'].includes((await f.runs.get(id))?.status ?? ''))
+
+  const run = await f.scheduler.trigger(schedule.id, schedule.revision, 'plugin-1', f.owner, f.runs)
+  await relay.drainSources(); await finished(run.id)
+  const done = (await f.runs.get(run.id))!
+  assert.equal(done.status, 'completed', done.output); assert.equal(done.exitCode, 0); assert.equal(done.execution, undefined)
+  assert.deepEqual(done.script, { id: 'book', args: ['--if-older-minutes=50'], revision: registration.revision })
+  assert.match(done.output!, /stored_book_changed/)
+  assert.deepEqual(requests.map(r => [r.operation, r.runId, r.alias]), [['resolve', run.id, 'ezstocks'], ['invoke', run.id, 'ezstocks']])
+  assert.deepEqual(requests[1].args, ['strategy', 'account-cut', 'sync', '--if-older-minutes=50'])
+  assert.doesNotMatch(JSON.stringify(requests), /secret-token|do-not-inherit/)
+  await assert.rejects(access(join(f.root, 'llm-invocations')))
+
+  // A failing plugin command is a failed run, never retried; a changed registration refuses a queued run.
+  await f.scripts.save({ ...base, plugin: 'ezstocks', args: ['--fail'], pathValue: binDir }, false)
+  const failing = await f.scheduler.trigger(schedule.id, schedule.revision, 'plugin-2', f.owner, f.runs)
+  await relay.drainSources(); await finished(failing.id)
+  assert.equal((await f.runs.get(failing.id))?.status, 'failed'); assert.equal((await f.runs.get(failing.id))?.exitCode, 4)
+  assert.equal((await f.runs.list()).filter(r => r.scheduled?.id === 'book-freshness').length, 2)
+  await assert.rejects(f.scripts.verifiedInvocation({ id: 'book', args: [], revision: registration.revision }, f.workspace), /changed after this run was queued/)
+})
+
+test('script CLI registers, shows and updates plugin commands and keeps their kind', async t => {
+  const f = await setup(); t.after(() => rm(f.root, { recursive: true, force: true }))
+  const ledger = await serveTestLedger(f.dir); t.after(() => ledger.stop())
+  await writeFile(join(f.fakeBin, 'ez'), fakeLauncher); await chmod(join(f.fakeBin, 'ez'), 0o755)
+  const execution = await f.control.captureChoice(initialPreset('codex'))
+  const turn = await f.runs.create({ chatId: 101, telegramUserId: 101, texts: ['register it'], execution })
+  await f.runs.patch(turn.id, { status: 'running' })
+  const env = { ...process.env, PATH: `${f.fakeBin}:${process.env.PATH}`, EZ_CONTROL_DIR: f.dir, EZ_RUN_ID: turn.id, EZ_AGENT_WORKSPACE: f.workspace }
+  const cli = async (...args: string[]) => JSON.parse((await exec(process.execPath, [bin, ...args], { env, cwd: f.workspace })).stdout)
+  const registered = await cli('script', 'register', 'book', '--plugin', 'ezstocks', '--arg=strategy', '--arg=account-cut', '--arg=sync')
+  assert.equal(registered.plugin, 'ezstocks'); assert.deepEqual(registered.args, ['strategy', 'account-cut', 'sync'])
+  const shown = await cli('script', 'show', 'book')
+  assert.equal(shown.plugin, 'ezstocks'); assert.equal(shown.matchesRegistration, undefined)
+  const updated = await cli('script', 'update', 'book', '--timeout-seconds', '120')
+  assert.equal(updated.plugin, 'ezstocks'); assert.equal(updated.timeoutSeconds, 120); assert.deepEqual(updated.args, registered.args)
+  await assert.rejects(cli('script', 'register', 'mixed', '--plugin', 'ezstocks', '--file', 'scripts/guard.mjs', '--interpreter', 'node'), /either --plugin or --file/)
+  await assert.rejects(cli('script', 'register', 'none'), /--plugin/)
+  // Switching kinds is explicit.
+  const asFile = await cli('script', 'update', 'book', '--file', 'scripts/guard.mjs', '--interpreter', 'node')
+  assert.equal(asFile.plugin, undefined); assert.equal(asFile.entry, join('scripts', 'guard.mjs'))
+  const schedule = await cli('create', 'book-freshness', '--script', 'book', '--cron', '15 * * * *', '--timezone', 'Asia/Dubai')
+  assert.equal(schedule.executionType, 'script')
 })

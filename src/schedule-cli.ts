@@ -38,7 +38,7 @@ const fallbackSetup = (spec: string, index: number): AiPreset => {
 
 async function main() {
   const { values:v, positionals:[action='list',id,scriptId] } = parseArgs({allowPositionals:true,options:{
-    script:{type:'string'}, arg:{type:'string',multiple:true}, file:{type:'string'}, interpreter:{type:'string'}, 'timeout-seconds':{type:'string'},
+    script:{type:'string'}, arg:{type:'string',multiple:true}, file:{type:'string'}, interpreter:{type:'string'}, plugin:{type:'string'}, 'timeout-seconds':{type:'string'},
     cli:{type:'string'}, 'auth-profile':{type:'string'}, model:{type:'string'}, effort:{type:'string'}, fallback:{type:'string',multiple:true}, 'clear-fallbacks':{type:'boolean'},
     'expected-revision':{type:'string'}, stage:{type:'boolean'},
     json:{type:'boolean'}, all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
@@ -60,14 +60,16 @@ async function main() {
     [--preflight-file FILE | --clear-preflight]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
   script list | show SCRIPT_ID | remove SCRIPT_ID
-  script register|update SCRIPT_ID --file WORKSPACE_PATH --interpreter COMMAND [--arg=VALUE ...] [--timeout-seconds N]
+  script register|update SCRIPT_ID (--file WORKSPACE_PATH --interpreter COMMAND | --plugin PLUGIN) [--arg=VALUE ...] [--timeout-seconds N]
 Execution types: agent (prompt, engine, auth profile, model, effort) or script (registered script ID and saved arguments).
 --auth-profile runs a Codex/Claude task under that provisioned login (ezenciel-agents-ai profiles); --cli alone uses the default login.
 A script registration references an entry point inside the agent workspace and records its SHA-256. Core invokes
 the installed interpreter with the entry point and arguments directly, without a shell or a model. Changed entry-point
 bytes refuse to run until an explicit script update. The hash covers that file only, not imported dependencies.
+A --plugin registration needs no workspace file: it runs 'ez PLUGIN ARGS...' through the agent's installed launcher, so a
+mechanical plugin command (for example --plugin ezstocks --arg=strategy --arg=account-cut --arg=sync) runs on a timer without a model.
 Script runs receive EZ_RUN_ID, EZ_SCHEDULE_ID, EZ_SCHEDULE_REVISION, EZ_DUE_AT, EZ_SCRIPT_ID, EZ_SCRIPT_REVISION and
-EZ_SCRIPT_SHA256 plus the normal executor allowlist. Stdout/stderr are bounded diagnostics in run, never owner messages.
+EZ_SCRIPT_SHA256 (file registrations only) plus the normal executor allowlist. Stdout/stderr are bounded diagnostics in run, never owner messages.
 Script runs have a timeout (default ${DEFAULT_SCRIPT_TIMEOUT_SECONDS}s) and are never retried automatically.
 Context reads the current run only.
 Running is read-only and defaults to readable output; --json exports sanitized metadata.
@@ -165,8 +167,8 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     else if(id==='show'){
       const registration=await scripts.owned(scriptId,owner)
       let current:string|null=null
-      try{current=await fileSha256((await workspaceEntry(workspace,registration.entry)).file)}catch{}
-      result={...registration,currentSha256:current,matchesRegistration:current===registration.sha256,
+      if(registration.entry)try{current=await fileSha256((await workspaceEntry(workspace,registration.entry)).file)}catch{}
+      result={...registration,...(registration.plugin ? {} : {currentSha256:current,matchesRegistration:current===registration.sha256}),
         schedules:(await scheduler.list()).filter(s=>owned(s) && s.script?.id===scriptId).map(s=>s.id)}
     }else if(id==='remove'){
       const users=(await scheduler.list()).filter(s=>owned(s) && s.script?.id===scriptId).map(s=>s.id)
@@ -174,9 +176,14 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
       await scripts.remove(scriptId,owner);result={removed:scriptId}
     }else if(id==='register' || id==='update'){
       const previous=id==='update' ? await scripts.owned(scriptId,owner) : undefined
-      if(id==='register' && (!v.file || !v.interpreter))throw new Error('Register requires --file and --interpreter')
+      if(v.plugin!==undefined && (v.file!==undefined || v.interpreter!==undefined))throw new Error('Use either --plugin or --file with --interpreter')
+      if(id==='register' && v.plugin===undefined && (!v.file || !v.interpreter))throw new Error('Register requires --file and --interpreter, or --plugin')
       const timeout=v['timeout-seconds']===undefined ? previous?.timeoutSeconds ?? DEFAULT_SCRIPT_TIMEOUT_SECONDS : Number(v['timeout-seconds'])
-      result=await scripts.save({id:scriptId,owner,workspace,entry:v.file ? resolve(v.file) : previous!.entry,interpreter:v.interpreter ?? previous!.interpreter,
+      // An update keeps the registration's kind unless the caller names the other one.
+      const plugin=v.plugin ?? (v.file===undefined && v.interpreter===undefined ? previous?.plugin : undefined)
+      const target=plugin!==undefined ? {plugin} : {entry:v.file ? resolve(v.file) : previous?.entry,interpreter:v.interpreter ?? (previous?.plugin ? undefined : previous?.interpreter)}
+      if(plugin===undefined && (!target.entry || !target.interpreter))throw new Error('A file registration needs --file and --interpreter')
+      result=await scripts.save({id:scriptId,owner,workspace,...target,
         args:v.arg ?? previous?.args ?? [],timeoutSeconds:timeout,pathValue:executorEnvironment().PATH},id==='register')
     }else throw new Error('Unknown script action; use --help')
   }else if(action==='evidence'){
