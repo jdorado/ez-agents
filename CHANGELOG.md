@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Correct `docs/responsive-channels.md`: it still said global managed guidance tells the agent to hand independent work to an immediate scheduled turn, but that guidance left AGENTS.md with the `ez tools` footer in 0.1.0-beta.50. The page now says the delegation hint, and the rule that a scheduled turn runs its work directly, belong to each workspace's own instructions. Documentation only.
 - Let a core or plugin update wait briefly for a plugin call that just exited to release its lease, instead of rolling back. A stopped call that outlasts 30 seconds is still reported as stale.
 - Reload an isolated supervisor after a core update without holding new turns behind long native work. Executor containers keep running across the reload; the successor adopts the claiming worker and removes retiring generations after their work ends. Host-process workers keep the existing drain.
 
