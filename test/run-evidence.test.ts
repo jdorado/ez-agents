@@ -79,3 +79,62 @@ test('revoked owners, restricted callers and unrelated bindings are excluded', a
   await new ControlStore(dir, 1000).revokeOwner()
   await assert.rejects(runEvidence(dir), /No authorized owner/)
 })
+
+test('evidence lists the setups a run tried in order with typed outcomes, clocks and opt-in telemetry, and nothing else', async t => {
+  const { dir, runs } = await fixture(t)
+  const secret = 'Private prose, token=abc123'
+  const at = (second: number) => new Date(Date.UTC(2026, 9, 16, 4, 0, second)).toISOString()
+  const claude = { id: 'claude', name: secret, cli: 'claude', model: 'opus', effort: 'high' }
+  const second = { ...claude, id: 'fallback-0', authProfile: 'claude2' }
+  const codex = { id: 'codex', name: 'codex', cli: 'codex', model: 'gpt-6-sol', effort: 'xhigh' }
+  const telemetry = { coverage: 'complete', model: 'gpt-6-sol', tokens: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, source: 'native-total' },
+    tools: { calls: 1, completed: 1, errors: 0, durationMs: 40, byName: { command: { calls: 1, completed: 1, errors: 0, durationMs: 40 } } }, prompt: secret }
+  await runs.patch('owner_run', { attempts: [
+    { preset: claude, quotaScope: 'claude', outcome: 'failed', category: 'quota', resetAt: at(3600), exitCode: 1, startedAt: at(0), endedAt: at(1) },
+    { preset: second, quotaScope: 'claude@claude2', outcome: 'skipped', category: 'same-quota-scope', startedAt: at(1), endedAt: at(1) },
+    { preset: codex, quotaScope: 'codex', outcome: 'completed', exitCode: 0, startedAt: at(1), endedAt: at(9),
+      nativeTerminal: { status: 'completed', subtype: 'success', isError: false, stopReason: 'end_turn' }, telemetry: telemetry as any },
+    { preset: codex, quotaScope: secret, outcome: 'failed', category: secret as any, exitCode: 'private' as any, startedAt: secret, endedAt: at(9) },
+  ] })
+  const result = await runEvidence(dir)
+  const attempts = result.runs[0].attempts
+  assert.deepEqual(attempts.map(a => [a.attempt, a.setup.cli, a.setup.authProfile, a.setup.model, a.setup.effort, a.outcome, a.category, a.exitCode]), [
+    [1, 'claude', undefined, 'opus', 'high', 'failed', 'quota', 1], [2, 'claude', 'claude2', 'opus', 'high', 'skipped', 'same-quota-scope', undefined],
+    [3, 'codex', undefined, 'gpt-6-sol', 'xhigh', 'completed', undefined, 0], [4, 'codex', undefined, 'gpt-6-sol', 'xhigh', 'failed', undefined, undefined]])
+  assert.deepEqual([attempts[0].resetAt, attempts[0].startedAt, attempts[2].endedAt], [at(3600), at(0), at(9)])
+  assert.deepEqual(attempts[2].nativeTerminal, { status: 'completed', subtype: 'success', isError: false, stopReason: 'end_turn' })
+  assert.equal(attempts[2].telemetry!.tokens!.output, 5)
+  assert.equal(attempts[2].telemetry!.tools!.byName.command.durationMs, 40)
+  assert.equal(attempts[3].quotaScope, undefined)
+  assert.equal(attempts[3].startedAt, undefined)
+  assert.ok(!JSON.stringify(result).includes('Private prose') && !JSON.stringify(result).includes('abc123'), 'prose, names and unknown fields are dropped')
+  // A long quota wait cannot make one page unbounded.
+  await runs.patch('owner_run', { attempts: Array.from({ length: 55 }, () => ({ preset: claude, quotaScope: 'claude', outcome: 'failed' as const })) })
+  const long = (await runEvidence(dir)).runs[0] as { attempts: unknown[]; attemptsTruncated?: boolean }
+  assert.equal(long.attempts.length, 50)
+  assert.equal(long.attemptsTruncated, true)
+})
+
+test('evidence states where retained history begins and counts what the caps dropped', async t => {
+  const { dir, runs } = await fixture(t)
+  const first = await runEvidence(dir)
+  const retention = first.coverage.retention
+  assert.ok(Number.isFinite(Date.parse(retention.ledgerStartedAt)) && Date.parse(retention.ledgerStartedAt) <= Date.parse(first.readStartedAt))
+  assert.deepEqual([retention.prunedTerminalRuns, retention.prunedTerminalOutbox, retention.maxTerminalRuns, retention.maxTerminalOutbox, retention.retainedBeforeLedgerStart], [0, 0, 2000, 2000, 0])
+  assert.equal(retention.oldestRetainedRunAt, first.runs[0].createdAt)
+  // Past the cap the oldest terminal runs are dropped, and the read says how many.
+  for (let i = 0; i < 2002; i++) {
+    const id = `bulk_${i}`
+    await runs.create({ id, chatId: 101, telegramUserId: 101, texts: ['t'] })
+    await runs.patch(id, { status: 'completed' })
+  }
+  const after = await runEvidence(dir, { limit: 1 })
+  assert.equal(after.coverage.retention.prunedTerminalRuns, 2)
+  assert.equal(after.coverage.total, 2001)
+  assert.equal(after.coverage.retention.oldestRetainedRunAt, after.runs[0].createdAt)
+  assert.equal(after.coverage.retention.ledgerStartedAt, retention.ledgerStartedAt)
+  // A single-run read still reports the whole ledger's boundary, not the filtered rows.
+  const one = await runEvidence(dir, { runId: 'owner_run' })
+  assert.equal(one.coverage.total, 1)
+  assert.equal(one.coverage.retention.prunedTerminalRuns, 2)
+})

@@ -436,9 +436,12 @@ For a shareable operational projection, use `evidence [RUN_ID] --offset 0 --limi
 This reads the live relay through its existing authenticated socket, under the
 bound operator or an active unrestricted Telegram owner run. Application/channel,
 external and isolated-task callers cannot use it. It exposes only current-owner
-Telegram foreground/scheduled runs, stable IDs, clocks/status/presets, typed native
-terminal outcomes by attempt, failure
-metadata without prose, and retained run-associated outbox metadata. No native
+Telegram foreground/scheduled runs, stable IDs, clocks/status/presets, the ordered
+setups each run tried (`attempts`: CLI, login profile, model, effort, typed outcome and
+category, reset time, exit code, clocks, typed native terminal and, when run telemetry
+is on, its counts), failure
+metadata without prose, and retained run-associated outbox metadata. A skipped setup
+appears with its typed reason, so a chain shows each saved login at most once. No native
 session, prompt, reasoning, tool arguments/results, message text or channel identity
 is returned. Failure text is represented by its SHA-256, not copied or diagnosed.
 
@@ -449,6 +452,15 @@ a fresh traversal. Each page recomputes the projection; no snapshot store or
 background capture is added. History resets on relay restart and is bounded to
 2000 terminal runs and 2000 terminal outbox items; full historical coverage cannot
 be inferred. Unassociated deliveries and excluded scopes remain unknown.
+
+`coverage.retention` states the boundary of that history: `ledgerStartedAt` is when
+this relay's memory began, `prunedTerminalRuns` and `prunedTerminalOutbox` count what
+the caps dropped since, `oldestRetainedRunAt` is the oldest retained owner run and
+`retainedBeforeLedgerStart` counts runs a graceful restart handed over. A cut older
+than `ledgerStartedAt` cannot be continued from this ledger: record the gap with its
+two clocks instead of inferring a cause, and compare `ledgerStartedAt` across reads to
+see that the relay restarted between them. Nothing is persisted to recover the
+earlier interval; the owning agent's saved receipts remain the durable record.
 
 Delivery records identify queued/sent/failed/unknown state and whether a retained
 Telegram receipt contains a valid clock and returned message IDs (only their count
