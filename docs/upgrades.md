@@ -22,6 +22,9 @@ Compatible main upgrades also finish their advisory workspace/native-client
 backup before closing admission or stopping the relay. Large native histories do
 not extend the swap's delivery outage. These live-state copies are best effort;
 rollback restores code and configuration, never the backup over active state.
+Control backups omit disposable native diagnostic `logs_N.sqlite` databases and
+their WAL/SHM files under `cli/`; native auth, session history, other databases
+and workspace files remain included. The live originals are untouched.
 
 The owner chooses the saved update policy. The host supervisor owns
 interruption-safe replacement. There is one host service per agent, not a second

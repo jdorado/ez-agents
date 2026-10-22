@@ -34,8 +34,15 @@ export function execute(command,args,options={}) {
 export async function textAtomic(file,text) {
   const tmp=file+'.update.tmp';await fs.writeFile(tmp,text,{mode:0o600});await fs.rename(tmp,file);
 }
-export async function backupStateDirectory(source,destination,omit=[]) {
-  await fs.cp(source,destination,{recursive:true,filter:async entry=>!omit.includes(path.relative(source,entry).split(path.sep)[0])&&!(await fs.lstat(entry)).isSocket()});
+export async function backupStateDirectory(source,destination,omit=[],{skipNativeLogs=false}={}) {
+  await fs.cp(source,destination,{recursive:true,filter:async entry=>{
+    const relative=path.relative(source,entry),first=relative.split(path.sep)[0];
+    if(omit.includes(first))return false;
+    // Codex diagnostic databases are disposable and their live WALs can be huge.
+    // Preserve native auth, session history and other databases in the backup.
+    if(skipNativeLogs&&first==='cli'&&/^logs_\d+\.sqlite(?:-(?:wal|shm))?$/.test(path.basename(entry)))return false;
+    return !(await fs.lstat(entry)).isSocket();
+  }});
 }
 export const pluginArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
 export async function packageManager(root,run=execute) {
@@ -198,7 +205,7 @@ export async function perform(home,job,hooks) {
       const backupState=async()=>{
         await fs.mkdir(backup,{mode:0o700});
         await backupStateDirectory(config.workspace,path.join(backup,'workspace'));
-        await backupStateDirectory(agent.controlDir,path.join(backup,'control'),hooks.preserveRuns ? ['host-executor'] : []);
+        await backupStateDirectory(agent.controlDir,path.join(backup,'control'),hooks.preserveRuns ? ['host-executor'] : [],{skipNativeLogs:true});
         for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
       };
       // Native client state can be many gigabytes. This advisory copy never

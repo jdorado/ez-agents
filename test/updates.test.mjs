@@ -36,6 +36,27 @@ test('main upgrade backup omits a live plugin socket and keeps private files',as
  assert.deepEqual(await fs.readdir(destination),['state.json']);
 });
 
+test('control backup skips native diagnostic databases while retaining sessions and source logs',async t=>{
+ const root=await fs.mkdtemp('/tmp/ez-upgrade-native-logs-');
+ t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const source=path.join(root,'control'),destination=path.join(root,'backup');
+ const native='cli/codex/tasks/example';
+ const logs=['logs_1.sqlite','logs_2.sqlite','logs_2.sqlite-wal','logs_2.sqlite-shm'];
+ const retained=[`${native}/auth.json`,`${native}/sessions/turn.jsonl`,`${native}/state_5.sqlite`,'logs_2.sqlite','cli/notes.md'];
+ for(const name of [...logs.map(name=>`${native}/${name}`),...retained]) {
+  const file=path.join(source,name);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,'synthetic state');
+ }
+ await backupStateDirectory(source,destination,[],{skipNativeLogs:true});
+ for(const name of logs) {
+  await assert.rejects(fs.access(path.join(destination,native,name)),{code:'ENOENT'});
+  assert.equal(await fs.readFile(path.join(source,native,name),'utf8'),'synthetic state');
+ }
+ for(const name of retained)assert.equal(await fs.readFile(path.join(destination,name),'utf8'),'synthetic state');
+ const workspaceCopy=path.join(root,'workspace-copy');
+ await backupStateDirectory(source,workspaceCopy);
+ await fs.access(path.join(workspaceCopy,native,logs[0]));
+});
+
 test('supervisor forwards only provider keys declared by the agent installation',()=>{
  const host={agents:[{codexProviders:[{envKey:'OPENROUTER_API_KEY'}]}]};
  assert.deepEqual(providerEnvironment(host,{OPENROUTER_API_KEY:'provider-secret',TELEGRAM_BOT_TOKEN:'relay-secret'}),{OPENROUTER_API_KEY:'provider-secret'});
