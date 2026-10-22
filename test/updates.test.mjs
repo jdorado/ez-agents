@@ -57,6 +57,26 @@ test('control backup skips native diagnostic databases while retaining sessions 
  await fs.access(path.join(workspaceCopy,native,logs[0]));
 });
 
+test('state backup preserves shared cache hardlinks without linking to live state',async t=>{
+ const root=await fs.mkdtemp('/tmp/ez-upgrade-hardlinks-');
+ t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const source=path.join(root,'control'),destination=path.join(root,'backup');
+ const first='cli/task-a/cache/asset',second='cli/task-b/cache/asset';
+ for(const name of [first,second])await fs.mkdir(path.dirname(path.join(source,name)),{recursive:true});
+ await fs.writeFile(path.join(source,first),'shared cache',{mode:0o600});
+ await fs.link(path.join(source,first),path.join(source,second));
+ await fs.writeFile(path.join(source,'distinct'),'shared cache');
+ await backupStateDirectory(source,destination);
+ const original=await fs.stat(path.join(source,first)),a=await fs.stat(path.join(destination,first)),b=await fs.stat(path.join(destination,second));
+ assert.equal(a.ino,b.ino);assert.equal(a.dev,b.dev);assert.equal(a.nlink,2);
+ assert.notEqual(a.ino,original.ino);assert.equal(a.mode&0o777,0o600);
+ assert.notEqual((await fs.stat(path.join(destination,'distinct'))).ino,a.ino);
+ await fs.writeFile(path.join(destination,second),'changed backup');
+ assert.equal(await fs.readFile(path.join(destination,first),'utf8'),'changed backup');
+ assert.equal(await fs.readFile(path.join(source,first),'utf8'),'shared cache');
+ assert.equal(await fs.readFile(path.join(source,second),'utf8'),'shared cache');
+});
+
 test('supervisor forwards only provider keys declared by the agent installation',()=>{
  const host={agents:[{codexProviders:[{envKey:'OPENROUTER_API_KEY'}]}]};
  assert.deepEqual(providerEnvironment(host,{OPENROUTER_API_KEY:'provider-secret',TELEGRAM_BOT_TOKEN:'relay-secret'}),{OPENROUTER_API_KEY:'provider-secret'});
