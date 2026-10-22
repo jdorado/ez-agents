@@ -35,13 +35,27 @@ export async function textAtomic(file,text) {
   const tmp=file+'.update.tmp';await fs.writeFile(tmp,text,{mode:0o600});await fs.rename(tmp,file);
 }
 export async function backupStateDirectory(source,destination,omit=[],{skipNativeLogs=false}={}) {
-  await fs.cp(source,destination,{recursive:true,filter:async entry=>{
+  const hardlinks=new Map();
+  await fs.cp(source,destination,{recursive:true,filter:async(entry,target)=>{
     const relative=path.relative(source,entry),first=relative.split(path.sep)[0];
     if(omit.includes(first))return false;
     // Codex diagnostic databases are disposable and their live WALs can be huge.
     // Preserve native auth, session history and other databases in the backup.
     if(skipNativeLogs&&first==='cli'&&/^logs_\d+\.sqlite(?:-(?:wal|shm))?$/.test(path.basename(entry)))return false;
-    return !(await fs.lstat(entry)).isSocket();
+    const stat=await fs.lstat(entry,{bigint:true});
+    if(stat.isSocket())return false;
+    // Native task homes share plugin caches. Link backup copies to each other,
+    // never to live state, so a backup does not multiply those caches on disk.
+    if(stat.isFile()&&stat.nlink>1n) {
+      const key=`${stat.dev}:${stat.ino}`,existing=hardlinks.get(key);
+      if(existing)await fs.link(await existing,target);
+      else {
+        const copied=fs.copyFile(entry,target).then(()=>target);
+        hardlinks.set(key,copied);await copied;
+      }
+      return false;
+    }
+    return true;
   }});
 }
 export const pluginArgs = record => ['compose','--project-name',record.project,'--file',record.compose];

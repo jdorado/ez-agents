@@ -25,6 +25,8 @@ rollback restores code and configuration, never the backup over active state.
 Control backups omit disposable native diagnostic `logs_N.sqlite` databases and
 their WAL/SHM files under `cli/`; native auth, session history, other databases
 and workspace files remain included. The live originals are untouched.
+Hardlinked files remain shared within each backup, with independent copies from
+live state, so native task plugin caches are not duplicated for every task.
 
 The owner chooses the saved update policy. The host supervisor owns
 interruption-safe replacement. There is one host service per agent, not a second
