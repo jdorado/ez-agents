@@ -57,7 +57,7 @@ jobs:
           docker build --target test -t ezenciel-agents-tests "$release_dir/package"
           # Runtime CI uses the reviewed native baseline, not a moving registry tag.
           # Keep this in sync with TASK_CODEX_VERSION when native audit advances.
-          docker build --target runtime --build-arg CODEX_CLI_VERSION=0.163.0 -t ezenciel-agents:local "$release_dir/package"
+          docker build --target runtime --build-arg CODEX_CLI_VERSION=0.164.0 -t ezenciel-agents:local "$release_dir/package"
       - run: node docker/smoke.mjs
       - run: node docker/status-smoke.mjs
       - run: node docker/isolated-executor-smoke.mjs
