@@ -48,6 +48,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   const tasks = new Tasks(root,async () => ({buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'})), drain = taskRequests(tasks)
   const proposal: any = await tasks.ownerCall('owner', 'start', { sourceId: 'fixture', conversationId: 'contact-a', purpose: 'Book dinner without payment', context: 'Two people at 7pm', hours: 1 })
   assert.equal(proposal.state, 'active')
+  incoming.receivedAt = Date.now()
   const runs = new RunStore(root), run = await runs.create({id:'event_document_fixture',taskId:proposal.id,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'fixture',bindingId:(await tasks.get(proposal.id))!.bindingId,eventIds:['1','2','3']}})
   await runs.patch(run.id, { status: 'running' })
   const bindings=new ApplicationBindings(root), owner=(await new ControlStore(root,900000).status()).owner!
