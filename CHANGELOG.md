@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.60
 
 - Advance the restricted messaging task audit baseline to Codex 0.164.0. Keep the exact-version gate and bounded MCP tool surface; align runtime CI and the host task fixture with the audited baseline.
 
