@@ -27,7 +27,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   await writeFile(`${root}/AGENTS.md`, 'PRIVATE_CANARY_DO_NOT_LOAD')
   await writeFile(`${home}/config.toml`, 'invalid = [ syntax')
   const requests: any[] = [], sends: any[] = []
-  const incoming={id:'1',conversationId:'contact-a',receivedAt:Date.now()+1000,text:'shop.txt attached'}
+  const incoming={id:'1',conversationId:'contact-a',receivedAt:0,text:'shop.txt attached'}
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64')
   const videoPath = `${root}/fixture.mp4`
   await promisify(execFile)('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=64x64:d=1','-c:v','mpeg4',videoPath])
@@ -48,6 +48,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
   const tasks = new Tasks(root,async () => ({buffer:Buffer.from('OggSfixture OpusHead'),mimeType:'audio/ogg'})), drain = taskRequests(tasks)
   const proposal: any = await tasks.ownerCall('owner', 'start', { sourceId: 'fixture', conversationId: 'contact-a', purpose: 'Book dinner without payment', context: 'Two people at 7pm', hours: 1 })
   assert.equal(proposal.state, 'active')
+  incoming.receivedAt = Date.now()
   const runs = new RunStore(root), run = await runs.create({id:'event_document_fixture',taskId:proposal.id,chatId:101,telegramUserId:101,texts:[],external:{sourceId:'fixture',bindingId:(await tasks.get(proposal.id))!.bindingId,eventIds:['1','2','3']}})
   await runs.patch(run.id, { status: 'running' })
   const bindings=new ApplicationBindings(root), owner=(await new ControlStore(root,900000).status()).owner!
@@ -100,7 +101,8 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     let stderr = ''; child.stderr!.on('data', c => { stderr += c }); child.stdout!.resume()
     const code = await new Promise(r => child!.on('close', r))
     assert.equal(code, 0, `Requires audited Codex ${TASK_CODEX_VERSION}: ${stderr}`)
-    assert.equal(launchRequests,1, 'Native MCP uses the installed isolated broker launcher without tools home')
+    const toolResults = requests.map(request => request.input.filter((item:any) => item.type === 'function_call_output'))
+    assert.equal(launchRequests,1, 'Native MCP uses the installed isolated broker launcher without tools home: '+JSON.stringify(toolResults))
     assert.ok(requests.length === 10, 'Native tool call completed a second model turn')
     assert.ok(!JSON.stringify(requests).includes('PRIVATE_CANARY_DO_NOT_LOAD'))
     assert.ok(JSON.stringify(requests).includes('https://fixture.example/#launch='))
@@ -108,6 +110,7 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     const messages=requests[0].input.filter((v:any)=>v.role==='user')
     assert.ok(messages.some((m:any)=>m.content.some((c:any)=>c.text===JSON.stringify({event:'task_activated',taskId:proposal.id}))))
     const tools = requests[0].tools ?? requests[0].input.find((v: any) => v.type === 'additional_tools')?.tools
+    assert.deepEqual([...new Set(tools.map((tool:any) => tool.type))].sort(), ['function', 'namespace'])
     assert.deepEqual(tools.filter((t: any) => t.type === 'function').map((t: any) => t.name).sort(), ['list_mcp_resource_templates', 'list_mcp_resources', 'read_mcp_resource', 'request_user_input'])
     const namespaces = tools.filter((t: any) => t.type === 'namespace')
     assert.equal(namespaces.length, 1); assert.equal(namespaces[0].name, 'mcp__ez')
