@@ -243,12 +243,13 @@ test('file RPC verifies stored authority rather than role supplied in request', 
 
 test('approved initial task crosses the real host file client and uses a fresh restricted runtime', async t => {
   const { serveHostExecutor } = await import('../src/host-executor.js')
+  const { TASK_CODEX_VERSION } = await import('../src/task-executor.js')
   const { spawn } = await import('node:child_process')
   const { fileURLToPath } = await import('node:url')
   const { isHostRunId } = await import('../src/host-executor-protocol.js')
   const f = await fixture(t), { run } = await f.activate()
   assert.ok(isHostRunId(run.id))
-  await writeFile(join(f.dir, 'codex'), `#!${process.execPath}\nif(process.argv[2]==='--version')console.log('codex-cli 0.160.1');else if(process.argv[2]==='debug')console.log(JSON.stringify({models:[{slug:'fixture',tool_mode:'code_mode_only',apply_patch_tool_type:'freeform',multi_agent_version:'v2'}]}));else console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),control:process.env.EZ_CONTROL_DIR}));`, { mode: 0o700 })
+  await writeFile(join(f.dir, 'codex'), `#!${process.execPath}\nif(process.argv[2]==='--version')console.log('codex-cli ${TASK_CODEX_VERSION}');else if(process.argv[2]==='debug')console.log(JSON.stringify({models:[{slug:'fixture',tool_mode:'code_mode_only',apply_patch_tool_type:'freeform',multi_agent_version:'v2'}]}));else console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),control:process.env.EZ_CONTROL_DIR}));`, { mode: 0o700 })
   const priorPath = process.env.PATH
   process.env.PATH = `${f.dir}:${priorPath}`
   const abort = new AbortController(), host = serveHostExecutor({ cli: 'codex', agents: [{ name: 'test', workspace: f.dir, controlDir: f.dir, binDir: f.dir }] }, abort.signal)
