@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 import { readFile } from 'node:fs/promises'
-import { loadControlConfig, telegramToken } from './config.js'
+import { loadControlConfig, telegramToken, actAsControlOwner } from './config.js'
 import { ControlStore, sameOwner, ownerId } from './control-state.js'
 import { ApplicationBindings, applicationScope, validateApplicationRegistration } from './application-channel.js'
 import { initialPreset } from './ai.js'
@@ -15,11 +15,14 @@ async function main() {
   } })
   if (values.help) { console.log('ezenciel-agents-application --id CHANNEL --token-file PRIVATE_FILE [--owner-id VERIFIED_OWNER_ID] [--share-owner] [--rotate] | --id CHANNEL --task-launch-command COMMAND --task-launch-args JSON --task-launch-tasks JSON | --id CHANNEL --disable-task-launch | --id CHANNEL --revoke | --list | --id CHANNEL --import-scope SCOPE --native-session ID --cli CLI'); return }
   if (process.env.EZ_RUN_ID) throw new Error('Application authority is configured by the installing administrator outside agent turns')
-  const config = loadControlConfig(), control = new ControlStore(config.controlDir, config.pairingTtlMs)
+  // Read the administrator's private token file before acting as the control owner.
+  const registrationToken = values['token-file'] ? (await readFile(values['token-file'], 'utf8')).trim() : null
+  const config = loadControlConfig()
+  actAsControlOwner(config.controlDir)
+  const control = new ControlStore(config.controlDir, config.pairingTtlMs)
   if (values.owner && values['owner-id']) throw new Error('Choose one owner registration form')
   if (values['owner-id'] && (!values.id || !values['token-file'] || values.revoke || values.list || values['import-scope'])) throw new Error('--owner-id requires channel registration')
   if (values.owner && (telegramToken(process.env) || !values.id || !values['token-file'] || values.revoke || values.list || values['import-scope'])) throw new Error('--owner bootstrap requires an agent without a Telegram bot')
-  const registrationToken = values['token-file'] ? (await readFile(values['token-file'], 'utf8')).trim() : null
   if (values.owner || values['owner-id']) validateApplicationRegistration(values.id!, registrationToken)
   const owner = values['owner-id'] ? await control.registerOwner(values['owner-id']) : values.owner ? await control.bootstrapApplicationOwner(Number(values.owner)) : (await control.status()).owner
   if (!owner) throw new Error('Register an owner with --owner-id or pair a Telegram owner')

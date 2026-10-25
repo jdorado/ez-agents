@@ -3,6 +3,7 @@ import { repairEnabled } from './repair-policy.js'
 import { isolationTransport, resolveIsolation, type IsolationClass } from './isolation.js'
 import path from 'node:path'
 import { homedir } from 'node:os'
+import { statSync } from 'node:fs'
 
 export type ControlConfig = {
   controlDir: string
@@ -49,6 +50,16 @@ export const loadControlConfig = (env: NodeJS.ProcessEnv = process.env): Control
     controlDir: path.resolve(env.EZ_CONTROL_DIR?.trim() || path.join(stateHome, 'ezenciel-agents')),
     pairingTtlMs: positiveInteger(env.EZ_PAIRING_TTL_SECONDS, 'EZ_PAIRING_TTL_SECONDS', 900) * 1_000,
   }
+}
+
+// An administrator command run as root (for example `docker compose exec relay ...`)
+// acts as the user that owns the control directory: the state it writes stays
+// readable by the relay, and root never writes through agent-owned paths.
+export const actAsControlOwner = (controlDir: string): void => {
+  if (process.geteuid?.() !== 0) return
+  let owner
+  try { owner = statSync(controlDir) } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+  process.setgroups!([owner.gid]); process.setgid!(owner.gid); process.setuid!(owner.uid)
 }
 
 export const telegramToken = (env: NodeJS.ProcessEnv = process.env): string => {
