@@ -91,6 +91,13 @@ ezenciel-agents-application --owner-id verified-account --id web --token-file /p
 ezenciel-agents-application --id phone --token-file /private/phone-token --share-owner
 ```
 
+Run as root inside the relay container (`docker compose exec relay ...`), the
+application, owner, source, schedule and AI commands act as the user that owns the
+control directory, so the state they write stays readable by the relay. The
+application command reads `--token-file` before switching, so the token file may
+stay private to root. A missing control directory is an error rather than a
+root-owned directory.
+
 The application backend receives that token through its secret store. Core stores
 only its SHA-256 digest, bound to the installation owner. Channel IDs are arbitrary
 labels, not a predefined provider list. The trusted adapter verifies its provider's

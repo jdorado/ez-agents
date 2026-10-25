@@ -1,4 +1,4 @@
-import { loadControlConfig } from './config.js'
+import { loadControlConfig, actAsControlOwner } from './config.js'
 import { ControlStore } from './control-state.js'
 import { parseOwnerArgs } from './owner-args.js'
 
@@ -11,6 +11,7 @@ if (process.argv.slice(2).some(arg => arg === '--help' || arg === '-h')) {
 const { command, value } = parseOwnerArgs(process.argv.slice(2))
 if (process.env.EZ_RUN_ID && command !== 'status') throw new Error('Owner registration and channel linking require the installing administrator')
 const config = loadControlConfig()
+actAsControlOwner(config.controlDir)
 const store = new ControlStore(config.controlDir, config.pairingTtlMs)
 
 const usage = (): never => {
