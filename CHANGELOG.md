@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-beta.62
+
+- Run root administrator commands as the owner of the control directory. `ezenciel-agents-application`, `-owner`, `-source`, `-schedule` and `-ai`, run as root inside the relay container (`docker compose exec relay …`), now switch to the user that owns the control directory before writing, as `-schedule` already did. Before this, they could leave `control-state.json`, `application-bindings.json` or `event-sources.json` root-owned and unreadable by the relay, which locked out owner checks, application channels or event sources. The application command reads `--token-file` before switching, so the token file may stay private to root. As root, a missing control directory is now an error instead of a root-owned directory. A file an earlier root run already left root-owned still needs one `chown` to the relay user. ([#308](https://github.com/jdorado/ez-agents/issues/308), [#310](https://github.com/jdorado/ez-agents/pull/310))
+
 ## 0.1.0-beta.61
 
 - Add scoped application tasks (version-5 grants) for applications that keep their own conversation records, such as SMS or voice outreach. One owner approval covers a declared batch of up to 1,000 scope IDs on one application channel binding, with owner-set caps within core ceilings (8 outstanding, 60 runs and replies per hour, 1,000 total; the total revokes the grant). Each scope runs as its own restricted task. ([#304](https://github.com/jdorado/ez-agents/issues/304))
