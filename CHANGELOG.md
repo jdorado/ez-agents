@@ -1,12 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.61
 
 - Add scoped application tasks (version-5 grants) for applications that keep their own conversation records, such as SMS or voice outreach. One owner approval covers a declared batch of up to 1,000 scope IDs on one application channel binding, with owner-set caps within core ceilings (8 outstanding, 60 runs and replies per hour, 1,000 total; the total revokes the grant). Each scope runs as its own restricted task. ([#304](https://github.com/jdorado/ez-agents/issues/304))
 - Applications start or resume a scope's task with `POST /v1/task-events` `{eventId, scope}`. Event IDs are idempotent and remembered in the grant; scopes without an active grant are refused and recorded, never routed to the owner. Replies go to that run's application inbox. ([#303](https://github.com/jdorado/ez-agents/issues/303))
 - Scoped grants can include installed `taskScope` read and write commands. Core fills the run's `{scope}` and passes a 60-second scope token in `EZ_PLUGIN_CONTEXT`; the application backend verifies it with `POST /v1/task-scope`, and revocation, expiry or the end of the call invalidates it. ([#301](https://github.com/jdorado/ez-agents/issues/301))
 - A scoped grant can name a read capability as its context source. Core fetches it fresh before every run, fails the run if the fetch fails, and records the fetch receipt. ([#302](https://github.com/jdorado/ez-agents/issues/302))
-- Isolated executors now run restricted task capabilities through the plugin broker, which resolves the run's capability lease with the relay. File capabilities remain host-only.
+- Isolated executors now run restricted task capabilities through the plugin broker, which resolves the run's capability lease with the relay. Existing channel queries therefore also work under isolation; file capabilities remain host-only.
+- Run the upgrade's Codex version lookup under the candidate's pinned pnpm. Outside the candidate directory a Corepack shim could fall back to a broken last-known-good pnpm and fail every core upgrade before installation. Agents still on 0.1.0-beta.60 or earlier keep the old updater for this upgrade; if it fails with a missing `pnpm.cjs`, run `corepack install -g pnpm@10.30.3` as the supervisor user and prepare the candidate again. ([#306](https://github.com/jdorado/ez-agents/pull/306))
+- Keep `application-bindings.json` readable by the relay when `ezenciel-agents-application` runs as root inside the relay container. Registration, rotation and revocation previously left it root-owned, so every application channel returned 401. A file already left root-owned needs one `chown` to the relay user. Other root-run administration writes are tracked in [#308](https://github.com/jdorado/ez-agents/issues/308). ([#307](https://github.com/jdorado/ez-agents/pull/307))
+
+Beta limits: scoped application tasks were accepted on an isolated agent with a synthetic application plugin and stand-in backend (no real correspondents). Delivery of replies to correspondents and its provider receipts belong to the application. Task runs remain in relay memory, so a restart drops an in-flight run while its event stays recorded; the application continues with a new event ID.
 
 ## 0.1.0-beta.60
 
