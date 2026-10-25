@@ -238,6 +238,12 @@ declare schema compatibility. Code rollback **does not rewind private state**,
 provider cursors or operation receipts; uncertain actions are never replayed.
 Docker health is not proof of live provider identity or delivery.
 
+Plugin recovery keeps already-running containers only when every declared
+service is healthy and its image matches the saved plugin revision. It restores
+the saved registry and Compose bindings without another restart in that case.
+Missing, unhealthy, stopped or unverified images follow the normal replacement
+path; no private state or provider operation is replayed.
+
 The updater also records the exact Library beta14 command migration: it removes
 the retired `library-document` route and changes `library-query` from
 `query-context` to `search`, while requiring every other manifest and deployment

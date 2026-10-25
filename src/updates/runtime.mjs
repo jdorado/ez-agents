@@ -314,11 +314,14 @@ export async function recover(home,job,hooks) {
         job.rollbackBrokerReadiness=await refreshBroker(config,run,pinned);
       } else {
         const b=job.rollback;
-        await run('docker',[...pluginArgs(b.record),'stop']);
+        const {pluginStatus}=await import('./status.mjs');
+        const current=b.running?await pluginStatus(b.record,run):null;
+        const retained=current?.runningVersion===b.record.manifest.version&&current.services.every(service=>service.health==='healthy');
+        if(!retained)await run('docker',[...pluginArgs(b.record),'stop']);
         await atomic(b.record.compose,b.compose);await atomic(path.join(home,'registry.json'),b.registry);
         job.rollbackBrokerReadiness=hooks.refreshPluginBroker?await refreshBroker(config,run):await verifyBroker(config,run);
         await publishBrokerPlugins(home,(await state(home)).agent.controlDir);
-        if(b.running)await run('docker',[...pluginArgs(b.record),'up','-d','--wait','--wait-timeout','90','--no-build']);
+        if(b.running&&!retained)await run('docker',[...pluginArgs(b.record),'up','-d','--wait','--wait-timeout','90','--no-build']);
       }
       job.status='rolled-back';
     }else job.status='failed';

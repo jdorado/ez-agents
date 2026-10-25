@@ -814,6 +814,25 @@ test('private plugins retain explicit local-file preparation and application gua
  const result=await perform(f.home,submitted,runtime(f));assert.equal(result.status,'completed');
 });
 
+for(const mode of ['exact','wrong-image','unhealthy','missing','unverifiable']) test(`plugin recovery preserves only healthy containers matching the saved revision: ${mode}`,async t=>{
+ const f=await fixture(t,'plugin'),job=await queued(f),r=runtime(f);await perform(f.home,job,r);
+ const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
+ const calls=[],expected='sha256:'+'b'.repeat(64),execute=async(command,args,options)=>{
+  calls.push([command,...args]);
+  if(args.includes('ps')&&args.includes('--format'))return JSON.stringify(mode==='missing'?[]:[{ID:'a'.repeat(64),Service:'sample',State:'running',Health:mode==='unhealthy'?'unhealthy':'healthy'}]);
+  if(args[0]==='image'&&args[1]==='inspect') {if(mode==='unverifiable')throw Error('Image cannot be verified');return expected;}
+  if(args[0]==='inspect'&&args.includes('{{.Image}}'))return mode==='wrong-image'?'sha256:'+'c'.repeat(64):expected;
+  if(mode==='exact'&&(args.includes('stop')||args.includes('up')))throw Error('Healthy restored plugin must remain running');
+  return r.execute(command,args,options);
+ };
+ const result=await perform(f.home,interrupted,{...r,execute});
+ assert.equal(result.status,'rolled-back');
+ assert.equal(calls.some(c=>c.includes('up')),mode!=='exact');
+ assert.equal(calls.some(c=>c.includes('stop')),mode!=='exact');
+ assert.equal((await read(path.join(f.home,'registry.json'))).plugins.sample.revision,f.record.revision);
+ assert(!calls.some(c=>c[0]==='stopHost'));
+});
+
 for(const mode of ['exact','wrong-image','unhealthy']) test(`recovery reuses only a healthy retained pinned relay: ${mode}`,async t=>{
  const f=await fixture(t),job=await queued(f),r=runtime(f);await perform(f.home,job,r);
  const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
