@@ -27,10 +27,9 @@ export function validateApplicationRegistration(id: string, token: string | null
 }
 
 // Administration commands may run as root inside the relay container. Keep the
-// state file owned like its control directory so the relay can read it; this also
-// repairs a file an earlier root registration left unreadable.
+// state file's existing owner (the directory's for a first file) so the relay can read it.
 async function writeBindings(file: string, bindings: Binding[]) {
-  const owner = await stat(dirname(file)), temporary = `${file}.${randomUUID()}.tmp`
+  const owner = await stat(file).catch(() => stat(dirname(file))), temporary = `${file}.${randomUUID()}.tmp`
   try {
     await writeFile(temporary, JSON.stringify(bindings), { mode: 0o600, flag: 'wx' })
     const created = await stat(temporary)
