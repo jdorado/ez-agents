@@ -436,7 +436,7 @@ test('shareTelegram bindings list Telegram intake and admit one run with context
   assert.equal((await attach(finished.id,sharedToken,{context:{}})).status,409)
 })
 
-test('administrator task grant replacement preserves the runtime file owner', {skip:process.getuid?.()!==0},async()=>{
+test('administrator binding and task grant changes preserve the runtime file owner', {skip:process.getuid?.()!==0},async()=>{
   const dir=await mkdtemp(join(tmpdir(),'ez-app-grant-owner-'))
   try {
     const who=await owner(dir),bindings=new ApplicationBindings(dir)
@@ -448,6 +448,10 @@ test('administrator task grant replacement preserves the runtime file owner', {s
     assert.equal(saved.uid,20000);assert.equal(saved.gid,20000);assert.equal(saved.mode&0o777,0o600)
     await bindings.taskLaunch('voice',null)
     const disabled=await stat(file);assert.equal(disabled.uid,20000);assert.equal(disabled.gid,20000)
+    await bindings.register('phone',token(),who)
+    const registered=await stat(file);assert.equal(registered.uid,20000);assert.equal(registered.gid,20000);assert.equal(registered.mode&0o777,0o600)
+    await bindings.register('phone',null,who)
+    const revoked=await stat(file);assert.equal(revoked.uid,20000);assert.equal(revoked.gid,20000)
   }finally{await rm(dir,{recursive:true,force:true})}
 })
 

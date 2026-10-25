@@ -6,6 +6,7 @@ import { authProfileStatus, readModels, presetLabel, presetProvider, resolveFall
 import { cliHome, provisionedHome } from './auth-profile.js'
 import { ControlStore } from './control-state.js'
 import { resolveIsolation } from './isolation.js'
+import { actAsControlOwner } from './config.js'
 
 const usage='Usage: ezenciel-agents-ai list | select --cli <installed-cli> [--auth-profile <name>] [--provider <provider>] [--model <model>] [--effort <effort>] | default | profiles | profile add --cli codex|claude --auth-profile <name> | fallbacks [--fallback cli=CLI[,auth-profile=NAME][,provider=ID][,model=MODEL][,effort=EFFORT] ... | --clear] | telemetry [on|off]'
 const {values,positionals}=parseArgs({allowPositionals:true,options:{help:{type:'boolean'},cli:{type:'string'},'auth-profile':{type:'string'},provider:{type:'string'},model:{type:'string'},effort:{type:'string'},fallback:{type:'string',multiple:true},clear:{type:'boolean'}}})
@@ -15,6 +16,7 @@ if(values.help){
 }
 if (!process.env.EZ_CONTROL_DIR) throw new Error('Use this agent’s bound control directory')
 const controlDir=process.env.EZ_CONTROL_DIR
+actAsControlOwner(controlDir)
 const authProfile=values['auth-profile']
 const catalog=():Promise<ModelChoice[]>=>(process.env.EZ_AI_CATALOG==='host'||(process.env.EZ_AI_CATALOG===undefined&&resolveIsolation(process.env)==='host-capable'))
   ? readFile(join(controlDir,'host-executor','models.json'),'utf8').then(text=>JSON.parse(text))

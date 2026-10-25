@@ -538,11 +538,17 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
                 const cancelled = !timedOut && (ownerStopped.has(child) || await runCancelled())
                 if (timedOut) failureReason = 'script-timeout'
                 const rejected = observed?.rejection && !observed.workBegan ? observed.rejection : undefined
-                // A rejection before work is a failure even when the CLI exits 0.
-                const failed = !cancelled && (code !== 0 || timedOut || Boolean(rejected) || quotaCategory(observed?.rejection?.category))
+                const terminalFailed = observed?.nativeTerminal && observed.nativeTerminal.status !== 'completed'
+                if (terminalFailed && !interrupted && !timedOut) {
+                  failureReason = 'native-terminal-outcome'
+                  if (!errorTail) errorTail = `Native result ${observed.nativeTerminal!.status}: ${observed.nativeTerminal!.subtype}`
+                }
+                // Native terminal errors/incomplete results override exit zero.
+                const failed = !cancelled && (code !== 0 || timedOut || interrupted || Boolean(rejected) || quotaCategory(observed?.rejection?.category) || Boolean(terminalFailed))
                 if (startup) {
                   const { continues, ...failure } = failed ? attemptFailure(observed!) : { continues: false }
-                  settle({ outcome: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', exitCode: code, ...failure, ...(telemetry ? { telemetry: telemetry.result() } : {}) })
+                  settle({ outcome: cancelled ? 'cancelled' : failed ? 'failed' : 'completed', exitCode: code, ...failure,
+                    ...(observed?.nativeTerminal ? { nativeTerminal: observed.nativeTerminal } : {}), ...(telemetry ? { telemetry: telemetry.result() } : {}) })
                   if (!cancelled) await control.recordSetupOutcome(owner, attempts.at(-1)!)
                   await runs.patch(run.id, { attempts })
                   eligible = continues && !interrupted
@@ -621,7 +627,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (foreground.taskId) {
             const task = await tasks.authorize(foreground,false)
             const ownerWaiting=(await inbox.status()).pending>0 || (await runs.list()).some(run=>run.status==='queued'&&!run.taskId&&!run.scheduled)
-            if (task.anyConversation && ownerWaiting) throw new Error('Owner input preempts public work')
+            if ((task.anyConversation || task.version === 5) && ownerWaiting) throw new Error('Owner input preempts public work')
           }
         }
         catch { ownerStopped.add(activeChild); terminateJob(activeChild) }

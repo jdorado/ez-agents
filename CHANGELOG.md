@@ -4,6 +4,34 @@
 
 - Restore opt-in Antigravity CLI execution through the existing native transport with exact conversation IDs, native model discovery and unchanged Codex defaults. Runs use `--dangerously-skip-permissions` like Claude. Host installation and owner sign-in are required; isolated images do not bundle Antigravity.
 
+## 0.1.0-beta.62
+
+- Run root administrator commands as the owner of the control directory. `ezenciel-agents-application`, `-owner`, `-source`, `-schedule` and `-ai`, run as root inside the relay container (`docker compose exec relay …`), now switch to the user that owns the control directory before writing, as `-schedule` already did. Before this, they could leave `control-state.json` or `event-sources.json` root-owned and unreadable by the relay, which locked out owner checks or event sources. (`application-bindings.json` was already protected in 0.1.0-beta.61.) The application command reads `--token-file` before switching, so the token file may stay private to root. As root, a missing control directory is now an error instead of a root-owned directory. A file an earlier root run already left root-owned still needs one `chown` to the relay user. ([#308](https://github.com/jdorado/ez-agents/issues/308), [#310](https://github.com/jdorado/ez-agents/pull/310))
+
+## 0.1.0-beta.61
+
+- Add scoped application tasks (version-5 grants) for applications that keep their own conversation records, such as SMS or voice outreach. One owner approval covers a declared batch of up to 1,000 scope IDs on one application channel binding, with owner-set caps within core ceilings (8 outstanding, 60 runs and replies per hour, 1,000 total; the total revokes the grant). Each scope runs as its own restricted task. ([#304](https://github.com/jdorado/ez-agents/issues/304))
+- Applications start or resume a scope's task with `POST /v1/task-events` `{eventId, scope}`. Event IDs are idempotent and remembered in the grant; scopes without an active grant are refused and recorded, never routed to the owner. Replies go to that run's application inbox. ([#303](https://github.com/jdorado/ez-agents/issues/303))
+- Scoped grants can include installed `taskScope` read and write commands. Core fills the run's `{scope}` and passes a 60-second scope token in `EZ_PLUGIN_CONTEXT`; the application backend verifies it with `POST /v1/task-scope`, and revocation, expiry or the end of the call invalidates it. ([#301](https://github.com/jdorado/ez-agents/issues/301))
+- A scoped grant can name a read capability as its context source. Core fetches it fresh before every run, fails the run if the fetch fails, and records the fetch receipt. ([#302](https://github.com/jdorado/ez-agents/issues/302))
+- Isolated executors now run restricted task capabilities through the plugin broker, which resolves the run's capability lease with the relay. Existing channel queries therefore also work under isolation; file capabilities remain host-only.
+- Run the upgrade's Codex version lookup under the candidate's pinned pnpm. Outside the candidate directory a Corepack shim could fall back to a broken last-known-good pnpm and fail every core upgrade before installation. Agents still on 0.1.0-beta.60 or earlier keep the old updater for this upgrade; if it fails with a missing `pnpm.cjs`, run `corepack install -g pnpm@10.30.3` as the supervisor user and prepare the candidate again. ([#306](https://github.com/jdorado/ez-agents/pull/306))
+- Keep `application-bindings.json` readable by the relay when `ezenciel-agents-application` runs as root inside the relay container. Registration, rotation and revocation previously left it root-owned, so every application channel returned 401. A file already left root-owned needs one `chown` to the relay user. Other root-run administration writes are tracked in [#308](https://github.com/jdorado/ez-agents/issues/308). ([#307](https://github.com/jdorado/ez-agents/pull/307))
+
+Beta limits: scoped application tasks were accepted on an isolated agent with a synthetic application plugin and stand-in backend (no real correspondents). Delivery of replies to correspondents and its provider receipts belong to the application. Task runs remain in relay memory, so a restart drops an in-flight run while its event stays recorded; the application continues with a new event ID.
+
+## 0.1.0-beta.60
+
+- Advance the restricted messaging task audit baseline to Codex 0.164.0. Keep the exact-version gate and bounded MCP tool surface; align runtime CI and the host task fixture with the audited baseline.
+
+## 0.1.0-beta.59
+
+- Let a schedule run an installed plugin command directly, with no model and no workspace file: `ezenciel-agents-schedule script register ID --plugin PLUGIN --arg=...` registers `ez PLUGIN ARGS...`, run through the agent's own broker launcher at the plugin's installed revision. Script schedules, timeouts, run records and the no-retry rule apply unchanged. A workspace no longer needs a launcher script to run mechanical plugin work on a timer.
+- Make the read-only `evidence` export prove fallback recovery and bound its own history. Each run now lists the ordered setups it tried (latest 50; CLI, provider, login profile, model, effort, quota scope, typed outcome and category, reset time, exit code, clocks, native terminal and opt-in telemetry counts, never prose), and `coverage.retention` states when the relay's memory began, how many terminal runs and outbox items the caps dropped and the oldest retained run, so a gap before the retained cut is bounded by clocks instead of inferred from missing rows.
+- Correct `docs/responsive-channels.md`: it still said global managed guidance tells the agent to hand independent work to an immediate scheduled turn, but that guidance left AGENTS.md with the `ez tools` footer in 0.1.0-beta.50. The page now says the delegation hint, and the rule that a scheduled turn runs its work directly, belong to each workspace's own instructions. Documentation only.
+- Let a core or plugin update wait briefly for a plugin call that just exited to release its lease, instead of rolling back. A stopped call that outlasts 30 seconds is still reported as stale.
+- Reload an isolated supervisor after a core update without holding new turns behind long native work. Executor containers keep running across the reload; the successor adopts the claiming worker and removes retiring generations after their work ends. Host-process workers keep the existing drain.
+
 ## 0.1.0-beta.58
 
 Versions 0.1.0-beta.53 through 0.1.0-beta.57 were used only by private QA candidates; this release follows the newest installed candidate (0.1.0-beta.58.rc.1) so it can upgrade in place.

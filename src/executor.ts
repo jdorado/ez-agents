@@ -575,7 +575,7 @@ export const startScriptJob = async (
   const environment: NodeJS.ProcessEnv = {
     ...executorJobEnv(options),
     EZ_SCHEDULE_ID: script.scheduleId, EZ_SCHEDULE_REVISION: script.scheduleRevision, EZ_DUE_AT: script.dueAt,
-    EZ_SCRIPT_ID: script.id, EZ_SCRIPT_REVISION: script.revision, EZ_SCRIPT_SHA256: script.sha256,
+    EZ_SCRIPT_ID: script.id, EZ_SCRIPT_REVISION: script.revision, ...(script.sha256 ? { EZ_SCRIPT_SHA256: script.sha256 } : {}),
   }
   const verified = await new Scripts(options.controlDir).verifiedInvocation(script, options.workspace, environment.PATH)
   let invocation = executorInvocation(verified.command, verified.args)

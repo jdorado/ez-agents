@@ -34,8 +34,29 @@ export function execute(command,args,options={}) {
 export async function textAtomic(file,text) {
   const tmp=file+'.update.tmp';await fs.writeFile(tmp,text,{mode:0o600});await fs.rename(tmp,file);
 }
-export async function backupStateDirectory(source,destination,omit=[]) {
-  await fs.cp(source,destination,{recursive:true,filter:async entry=>!omit.includes(path.relative(source,entry).split(path.sep)[0])&&!(await fs.lstat(entry)).isSocket()});
+export async function backupStateDirectory(source,destination,omit=[],{skipNativeLogs=false}={}) {
+  const hardlinks=new Map();
+  await fs.cp(source,destination,{recursive:true,filter:async(entry,target)=>{
+    const relative=path.relative(source,entry),first=relative.split(path.sep)[0];
+    if(omit.includes(first))return false;
+    // Codex diagnostic databases are disposable and their live WALs can be huge.
+    // Preserve native auth, session history and other databases in the backup.
+    if(skipNativeLogs&&first==='cli'&&/^logs_\d+\.sqlite(?:-(?:wal|shm))?$/.test(path.basename(entry)))return false;
+    const stat=await fs.lstat(entry,{bigint:true});
+    if(stat.isSocket())return false;
+    // Native task homes share plugin caches. Link backup copies to each other,
+    // never to live state, so a backup does not multiply those caches on disk.
+    if(stat.isFile()&&stat.nlink>1n) {
+      const key=`${stat.dev}:${stat.ino}`,existing=hardlinks.get(key);
+      if(existing)await fs.link(await existing,target);
+      else {
+        const copied=fs.copyFile(entry,target).then(()=>target);
+        hardlinks.set(key,copied);await copied;
+      }
+      return false;
+    }
+    return true;
+  }});
 }
 export const pluginArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
 export async function packageManager(root,run=execute) {
@@ -185,7 +206,9 @@ export async function perform(home,job,hooks) {
       const deployment=JSON.parse(await run('docker',[...relayArgs(config),'config','--format','json'],{stdoutOnly:true}));
       const args=deployment.services?.relay?.build?.args||{};
       if(typeof args!=='object'||Array.isArray(args))throw Error('Invalid relay build arguments');
-      job.codexVersion=await latestCodexVersion(run,job.packageManager);await save();
+      // Run the lookup under the candidate's pinned manager: outside that directory a
+      // Corepack shim falls back to its last-known-good pnpm, which may be broken.
+      job.codexVersion=await latestCodexVersion((command,args,options)=>run(command,args,{...options,cwd:root}),job.packageManager);await save();
       const effective={...args,CODEX_CLI_VERSION:job.codexVersion};
       const buildArgs=Object.keys(effective).sort().flatMap(key=>{
         const value=effective[key];
@@ -198,7 +221,7 @@ export async function perform(home,job,hooks) {
       const backupState=async()=>{
         await fs.mkdir(backup,{mode:0o700});
         await backupStateDirectory(config.workspace,path.join(backup,'workspace'));
-        await backupStateDirectory(agent.controlDir,path.join(backup,'control'),hooks.preserveRuns ? ['host-executor'] : []);
+        await backupStateDirectory(agent.controlDir,path.join(backup,'control'),hooks.preserveRuns ? ['host-executor'] : [],{skipNativeLogs:true});
         for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
       };
       // Native client state can be many gigabytes. This advisory copy never

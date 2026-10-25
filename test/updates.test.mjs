@@ -36,6 +36,47 @@ test('main upgrade backup omits a live plugin socket and keeps private files',as
  assert.deepEqual(await fs.readdir(destination),['state.json']);
 });
 
+test('control backup skips native diagnostic databases while retaining sessions and source logs',async t=>{
+ const root=await fs.mkdtemp('/tmp/ez-upgrade-native-logs-');
+ t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const source=path.join(root,'control'),destination=path.join(root,'backup');
+ const native='cli/codex/tasks/example';
+ const logs=['logs_1.sqlite','logs_2.sqlite','logs_2.sqlite-wal','logs_2.sqlite-shm'];
+ const retained=[`${native}/auth.json`,`${native}/sessions/turn.jsonl`,`${native}/state_5.sqlite`,'logs_2.sqlite','cli/notes.md'];
+ for(const name of [...logs.map(name=>`${native}/${name}`),...retained]) {
+  const file=path.join(source,name);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,'synthetic state');
+ }
+ await backupStateDirectory(source,destination,[],{skipNativeLogs:true});
+ for(const name of logs) {
+  await assert.rejects(fs.access(path.join(destination,native,name)),{code:'ENOENT'});
+  assert.equal(await fs.readFile(path.join(source,native,name),'utf8'),'synthetic state');
+ }
+ for(const name of retained)assert.equal(await fs.readFile(path.join(destination,name),'utf8'),'synthetic state');
+ const workspaceCopy=path.join(root,'workspace-copy');
+ await backupStateDirectory(source,workspaceCopy);
+ await fs.access(path.join(workspaceCopy,native,logs[0]));
+});
+
+test('state backup preserves shared cache hardlinks without linking to live state',async t=>{
+ const root=await fs.mkdtemp('/tmp/ez-upgrade-hardlinks-');
+ t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const source=path.join(root,'control'),destination=path.join(root,'backup');
+ const first='cli/task-a/cache/asset',second='cli/task-b/cache/asset';
+ for(const name of [first,second])await fs.mkdir(path.dirname(path.join(source,name)),{recursive:true});
+ await fs.writeFile(path.join(source,first),'shared cache',{mode:0o600});
+ await fs.link(path.join(source,first),path.join(source,second));
+ await fs.writeFile(path.join(source,'distinct'),'shared cache');
+ await backupStateDirectory(source,destination);
+ const original=await fs.stat(path.join(source,first)),a=await fs.stat(path.join(destination,first)),b=await fs.stat(path.join(destination,second));
+ assert.equal(a.ino,b.ino);assert.equal(a.dev,b.dev);assert.equal(a.nlink,2);
+ assert.notEqual(a.ino,original.ino);assert.equal(a.mode&0o777,0o600);
+ assert.notEqual((await fs.stat(path.join(destination,'distinct'))).ino,a.ino);
+ await fs.writeFile(path.join(destination,second),'changed backup');
+ assert.equal(await fs.readFile(path.join(destination,first),'utf8'),'changed backup');
+ assert.equal(await fs.readFile(path.join(source,first),'utf8'),'shared cache');
+ assert.equal(await fs.readFile(path.join(source,second),'utf8'),'shared cache');
+});
+
 test('supervisor forwards only provider keys declared by the agent installation',()=>{
  const host={agents:[{codexProviders:[{envKey:'OPENROUTER_API_KEY'}]}]};
  assert.deepEqual(providerEnvironment(host,{OPENROUTER_API_KEY:'provider-secret',TELEGRAM_BOT_TOKEN:'relay-secret'}),{OPENROUTER_API_KEY:'provider-secret'});
@@ -115,9 +156,9 @@ test('root preparation leaves private plugin updates readable by the installer',
  await exec('setpriv',['--reuid=20001','--regid=20002','--clear-groups','--no-new-privs',process.execPath,'-e',script]);
 });
 function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},latest='0.160.0'}={}) {
- const calls=[];let failed=false,brokerImage='sha256:'+'a'.repeat(64);
+ const calls=[],lookups=[];let failed=false,brokerImage='sha256:'+'a'.repeat(64);
  const execute=async(command,args,opts)=>{
-  calls.push([command,...args]);if(args.includes('view'))return JSON.stringify(latest);if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
+  calls.push([command,...args]);if(args.includes('view')){lookups.push(opts?.cwd);return JSON.stringify(latest);}if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
   if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
   if(args.includes('ps'))return stopped?'':'a'.repeat(64);
@@ -131,7 +172,7 @@ function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},l
   if(args[0]==='run')await fs.writeFile(opts.outputFile,'retained-private-state',{mode:0o600});
   return '';
  };
- return {calls,execute,stopHost:async()=>calls.push(['stopHost']),startHost:async root=>calls.push(['startHost',root])};
+ return {calls,lookups,execute,stopHost:async()=>calls.push(['stopHost']),startHost:async root=>calls.push(['startHost',root])};
 }
 async function queued(f) {
  const job=await prepare(f.home,f.target,{file:await f.pack()});await atomic(path.join(f.home,'updates/supervisor.json'),{at:Date.now()});
@@ -340,7 +381,9 @@ test('latest overrides stale deployment pins and changing latest changes image b
   assert.equal((await perform(f.home,job,r)).status,'completed');
   const build=r.calls.find(c=>c[0]==='docker'&&c[1]==='build'),tag=build[build.indexOf('-t')+1];
   assert.ok(build.includes(`CODEX_CLI_VERSION=${pin}`));
-  assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).codexVersion,pin);
+  const saved=await read(path.join(jobPath(f.home,job.id),'job.json'));
+  assert.equal(saved.codexVersion,pin);
+  assert.deepEqual(r.lookups,[saved.root]);
   assert.match(await fs.readFile(path.join(f.config.deploymentDir,'docker.env'),'utf8'),new RegExp(tag));
   tags.push(tag);hashes.push(job.sha256);
  }
@@ -598,6 +641,63 @@ for(const provider of ['pnpm','corepack']) test(`supervisor with only ${provider
  assert.equal(await fs.readFile(held,'utf8'),'queued request');
  await wait(()=>third.p.exitCode!==null||third.p.signalCode!==null);
  assert.equal(await closed3,0,third.output());
+});
+
+test('isolated supervisor reload hands live executors to its successor without holding admission',{timeout:60000},async t=>{
+ const f=await fixture(t),fake=path.join(f.root,'fake'),host=path.join(f.agent.controlDir,'host-executor');
+ await fs.mkdir(fake);await fs.mkdir(host,{recursive:true});
+ await atomic(path.join(f.config.deploymentDir,'host-executor.json'),{cli:'grok',isolation:'isolated',agents:[f.agent]});
+ const pkg=await read(path.join(f.old,'package.json'));pkg.ezRelease={...pkg.ezRelease,runHandoff:1,containerExecutor:1};await atomic(path.join(f.old,'package.json'),pkg);
+ // Synthetic Docker: one record per container. The retiring generation runs long native work.
+ const store=path.join(f.root,'docker.json'),log=path.join(f.root,'docker.jsonl'),retiring='a'.repeat(64),retiringFile=path.join(f.home,'updates','ez-executor-old-1.json');
+ await atomic(store,{[retiring]:{project:'ez-executor-old-1',running:true}});await atomic(retiringFile,{services:{}});
+ await atomic(path.join(host,'worker.lock'),{containerId:retiring.slice(0,12)});
+ const active=path.join(host,'r_long.running.json');await fs.writeFile(active,'{}');
+ const job={id:'0b6f3c2e-5d4a-4c1b-9e8f-7a6b5c4d3e2f',target:'main',status:'applying',preserveRuns:true,rollback:{env:"COMPOSE_PROJECT_NAME='ez-agent-fixture'\n",packageRoot:f.old}};
+ await fs.mkdir(jobPath(f.home,job.id));await atomic(path.join(jobPath(f.home,job.id),'job.json'),job);
+ await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}
+const fs=require('fs'),a=process.argv.slice(2),file=${JSON.stringify(store)},s=JSON.parse(fs.readFileSync(file)),host=${JSON.stringify(host)};
+fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');
+const save=()=>fs.writeFileSync(file,JSON.stringify(s)),find=x=>Object.keys(s).find(id=>id.startsWith(x)),p=a[a.indexOf('--project-name')+1];
+if(a.includes('config'))console.log(JSON.stringify({services:{relay:{image:'relay',volumes:[],environment:{}}}}));
+else if(a.includes('create')){s[require('crypto').randomBytes(32).toString('hex')]={project:p,running:false};save();}
+else if(a.includes('ps')&&a.includes('executor'))console.log(Object.keys(s).find(id=>s[id].project===p)||'');
+else if(a.includes('down')){for(const id of Object.keys(s))if(s[id].project===p)delete s[id];save();}
+else if(a[0]==='start'){const id=find(a[1]);s[id].running=true;save();const c=id.slice(0,12);fs.writeFileSync(host+'/worker.lock',JSON.stringify({containerId:c}));fs.writeFileSync(host+'/heartbeat.json',JSON.stringify({containerExecutor:true,containerId:c,at:Date.now()}));}
+else if(a[0]==='inspect')console.log(String(!!s[find(a[a.length-1])]?.running));
+else if(a[0]==='kill')fs.rmSync(host+'/worker.lock',{force:true});
+else if(a[0]==='cp')fs.readFileSync(0);
+`,{mode:0o755});
+ const wrapper=path.join(f.root,'supervisor.mjs'),module=new URL('../src/updates/supervisor.mjs',import.meta.url).href;
+ await fs.writeFile(wrapper,`import {supervise} from ${JSON.stringify(module)};const a=new AbortController();process.on('SIGTERM',()=>a.abort());await supervise(${JSON.stringify(f.config.deploymentDir)},a.signal,{discover:async()=>[]});`);
+ const start=()=>{const p=spawn(process.execPath,[wrapper],{env:{...process.env,PATH:fake},stdio:['ignore','pipe','pipe']});let output='';p.stdout.on('data',b=>output+=b);p.stderr.on('data',b=>output+=b);return {p,output:()=>output,closed:new Promise(resolve=>p.once('close',resolve))};};
+ const wait=async fn=>{for(let i=0;i<150;i++){const result=await fn();if(result)return result;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out');};
+ const calls=async()=>(await fs.readFile(log,'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+ const stops=list=>list.filter(a=>a[0]==='stop'||a[0]==='rm'||a.includes('down'));
+ // Rollback recovery completes; the reload exits while the retired generation still runs native work.
+ const first=start();t.after(()=>first.p.kill('SIGTERM'));
+ assert.equal(await first.closed,0,first.output());
+ assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).status,'rolled-back');
+ await assert.rejects(fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')),{code:'ENOENT'},'reload never holds admission');
+ const containers=await read(store),replacement=Object.keys(containers).find(id=>id!==retiring);
+ assert.deepEqual(Object.values(containers).map(c=>c.running),[true,true],'both generations keep running');
+ assert.deepEqual(stops(await calls()),[],'reload stops no executor');
+ assert.equal(await fs.readFile(active,'utf8'),'{}');
+ // The successor adopts the claiming worker and reaps the retiring generation only after it exits.
+ const before=(await calls()).length,second=start();t.after(()=>second.p.kill('SIGTERM'));
+ await wait(async()=>(await calls()).slice(before).some(a=>a[0]==='inspect'&&a.at(-1)===retiring));
+ assert.equal((await read(store))[retiring].running,true);
+ const state=await read(store);state[retiring].running=false;await atomic(store,state);await fs.rm(active);
+ await wait(async()=>!(await fs.access(retiringFile).then(()=>true,()=>false)));
+ const successor=(await calls()).slice(before);
+ assert.deepEqual(successor.filter(a=>a.includes('create')||a[0]==='start'),[],'successor adopts the running worker');
+ assert.deepEqual(stops(successor).map(a=>a[a.indexOf('--project-name')+1]),['ez-executor-old-1']);
+ assert.deepEqual(Object.keys(await read(store)),[replacement]);
+ assert.equal(second.p.exitCode,null,second.output());
+ // The adopted worker is tracked by its full ID and generation on shutdown.
+ const shutdown=(await calls()).length;second.p.kill('SIGTERM');assert.equal(await second.closed,0,second.output());
+ const final=(await calls()).slice(shutdown);
+ assert.deepEqual(stops(final).filter(a=>a[0]!=='stop').map(a=>a[0]==='rm'?'rm':a[a.indexOf('--project-name')+1]),[containers[replacement].project]);
 });
 
 test('queued upgrades keep admission open while busy and release a raced or aborted pause',async t=>{

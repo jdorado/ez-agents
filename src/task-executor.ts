@@ -8,12 +8,13 @@ import { promisify } from 'node:util'
 import { readRun } from './delivery-socket.js'
 import {ApplicationBindings} from './application-channel.js'
 import { Tasks } from './tasks.js'
+import { invokeTaskCapability } from './task-capability.js'
 import { provisionedHome } from './auth-profile.js'
 import { executorEnvironment, executorInvocation, terminateJob, type ExecutorOptions } from './executor.js'
 
 // This adapter is deliberately version-pinned: a new native tool default needs
 // a fresh tool-inventory audit before external correspondence can use it.
-export const TASK_CODEX_VERSION = '0.160.1'
+export const TASK_CODEX_VERSION = '0.164.0'
 export const taskDisabledFeatures = ['apps', 'browser_use', 'computer_use', 'in_app_browser', 'image_generation',
   'memories', 'goals', 'multi_agent', 'multi_agent_v2', 'hooks', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host',
   'skill_search', 'skill_mcp_dependency_install', 'tool_suggest', 'workspace_dependencies', 'view_image']
@@ -46,8 +47,10 @@ export async function startTaskExecutor(options: ExecutorOptions) {
   const task = await new Tasks(options.controlDir).authorize(run, false)
   const applications=(run.application || task.anyConversation) ? [] : (await new ApplicationBindings(options.controlDir).list()).filter(b=>b.taskLaunch && (b.taskLaunch.tasks==="all" || b.taskLaunch.tasks.includes(task.id))).map(b=>b.id)
   const capabilityNames = (task.capabilities ?? []).map(item => `capability_${item.id}`)
-  const toolNames = [...(task.anyConversation ? ['context','read_attachment','send'] : ['context','read_attachment','send','note','report','complete']),...capabilityNames,...(applications.length?["browser_link"]:[])]
-  if ((capabilityNames.length || (applications.length && !process.env.EZ_PLUGIN_BROKER_SOCKET)) && !options.toolsHome) throw new Error('Channel capabilities require an installed tool registry')
+  const toolNames = [...(task.version === 5 ? ['context','send'] : task.anyConversation ? ['context','read_attachment','send'] : ['context','read_attachment','send','note','report','complete']),...capabilityNames,...(applications.length?["browser_link"]:[])]
+  if ((capabilityNames.length || applications.length) && !options.toolsHome && !process.env.EZ_PLUGIN_BROKER_SOCKET) throw new Error('Channel capabilities require an installed tool registry')
+  // A scoped grant's context source is fetched fresh before every run; failure fails the run.
+  const appContext = task.contextCapability ? (await invokeTaskCapability(options.controlDir, options.runId, options.toolsHome, task.contextCapability, undefined)).output : undefined
   const environment = executorEnvironment()
   const versionInvocation = executorInvocation('codex', ['--version'])
   const version = await promisify(execFile)(versionInvocation.command, versionInvocation.args, { env: environment })
@@ -65,7 +68,9 @@ export async function startTaskExecutor(options: ExecutorOptions) {
     await symlink(auth, join(home, 'auth.json'))
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)),
       fileURLToPath(new URL('./task-mcp.ts', import.meta.url)), options.controlDir, options.runId, options.toolsHome ?? '', JSON.stringify(task.capabilities ?? []),JSON.stringify(applications)]
-    const prompt = JSON.stringify({event: run.external ? 'correspondence_received' : 'task_activated', taskId: run.taskId})
+    const prompt = JSON.stringify(task.version === 5
+      ? {event: 'application_event', taskId: run.taskId, scope: run.application!.scope, ...(appContext === undefined ? {} : {context: appContext})}
+      : {event: run.external ? 'correspondence_received' : 'task_activated', taskId: run.taskId})
     const invocation = executorInvocation('codex', taskArguments(directory, broker, prompt, toolNames, options, Object.fromEntries(['EZ_PLUGIN_BROKER_SOCKET','EZ_DELIVERY_SOCKET'].flatMap(key=>environment[key] ? [[key,environment[key]]] : []))))
     const child = spawn(invocation.command, invocation.args, {
       cwd: directory, env: { ...environment, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',

@@ -8,6 +8,7 @@ import { once } from 'node:events'
 import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore, activeSetup } from '../src/runs.js'
+import { runEvidence } from '../src/run-evidence.js'
 import { Scheduler } from '../src/scheduler.js'
 import { CliUnavailableError, EXECUTOR_REGISTRY, type ExecutorOptions } from '../src/executor.js'
 import { attemptFailure, codexRejection, nextSetup, quotaScope, setupCandidates, startupObserver, startupLine } from '../src/setup-fallback.js'
@@ -21,7 +22,7 @@ const observe=(...lines:unknown[])=>{const o=startupObserver();o.write(lines.map
 
 test('startup observer advances only on typed rejection before any work',()=>{
   assert.deepEqual(observe({type:'system',subtype:'init'},{type:'rate_limit_event',rate_limit_info:{status:'rejected',resetsAt:1791460800}},{type:'assistant',error:'rate_limit',message:{content:[]}},{type:'result',is_error:true}),
-    {workBegan:false,rejection:{category:'quota',resetAt:'2026-10-08T12:00:00.000Z'}})
+    {workBegan:false,rejection:{category:'quota',resetAt:'2026-10-08T12:00:00.000Z'},nativeTerminal:{status:'failed',subtype:'unknown',isError:true}})
   assert.equal(observe({type:'assistant',error:'authentication_failed'}).rejection?.category,'login-unavailable')
   assert.equal(observe({type:'assistant',error:'model_not_found'}).rejection?.category,'provider-rejected')
   // Real output, unknown errors and unparseable lines all count as work.
@@ -43,7 +44,7 @@ const limitReset='2026-10-09T18:10:00.000Z'
 test('only a usage limit the run ended on continues after work began',()=>{
   const tool={type:'assistant',message:{content:[{type:'tool_use'}]}},hook={type:'system',subtype:'hook_started'}
   const ended=observe({type:'system',subtype:'init'},tool,limitEvent,limitMessage,{type:'result',is_error:true})
-  assert.deepEqual(ended,{workBegan:true,rejection:{category:'quota',resetAt:limitReset}})
+  assert.deepEqual(ended,{workBegan:true,rejection:{category:'quota',resetAt:limitReset},nativeTerminal:{status:'failed',subtype:'unknown',isError:true}})
   assert.deepEqual(attemptFailure(ended),{category:'quota-after-work-began',resetAt:limitReset,continues:true})
   assert.equal(attemptFailure(observe(hook,limitMessage)).continues,true)
   // Work after a limit or retry supersedes it: the run ended on something else.
@@ -62,6 +63,26 @@ test('only a usage limit the run ended on continues after work began',()=>{
   assert.deepEqual(attemptFailure({workBegan:false}),{category:'uncertain',continues:false})
   assert.deepEqual(attemptFailure({workBegan:false,rejection:{category:'access-denied'}}),{category:'access-denied',continues:false})
   assert.deepEqual(attemptFailure({workBegan:false,rejection:{category:'quota',resetAt:limitReset}}),{category:'quota',resetAt:limitReset,continues:true})
+})
+
+test('error-flagged success preserves only a final typed usage limit',()=>{
+  const terminal={type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'}
+  const tool={type:'assistant',message:{content:[{type:'tool_use'}]}}
+  for(const began of [false,true])for(const error of ['rate_limit','billing_error']){
+    const lines=[...(began?[tool]:[]),{type:'assistant',error}]
+    const state=observe(...lines,terminal)
+    const category=error==='rate_limit'?'quota':'credits-required'
+    assert.equal(state.rejection?.category,category)
+    assert.deepEqual(state.nativeTerminal,{status:'failed',subtype:'success',isError:true,stopReason:'stop_sequence'})
+    assert.equal(attemptFailure(state).category,began?category+'-after-work-began':category)
+    assert.equal(attemptFailure(state).continues,true)
+    assert.equal(observe(startupLine(state)).rejection?.category,category,'host summaries retain the typed rejection')
+    for(const stop_reason of ['max_tokens','model_context_window_exceeded','refusal','pause_turn','unknown'])
+      assert.equal(observe(...lines,{...terminal,stop_reason}).rejection,undefined,'a competing or unknown stop supersedes the limit')
+    assert.equal(observe(...lines,tool,terminal).rejection,undefined,'later work supersedes the limit')
+  }
+  assert.equal(observe(terminal).rejection,undefined,'an error flag alone never establishes quota')
+  assert.equal(observe({type:'assistant',error:'oauth_org_not_allowed'},tool,limitMessage,terminal).rejection?.category,'access-denied')
 })
 
 test('only scheduled Claude runs stream structured events',()=>{
@@ -110,8 +131,8 @@ test('same-settings login choices rotate from the last success, preserving expli
   assert.equal(nextSetup([b,c,a],[{preset:b,quotaScope:'claude@claude2',outcome:'failed',category:'quota'}]).preset,c,'rotation never retries an attempted login')
 })
 
-type Script={lines?:unknown[];code?:number;unavailable?:boolean;hold?:boolean;session?:string;stage?:string}
-const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA)=>{
+type Script={lines?:unknown[];stderr?:string;code?:number;unavailable?:boolean;hold?:boolean;session?:string;stage?:string}
+const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA,options:{telemetry?:boolean}={})=>{
   const dir=await mkdtemp(join(tmpdir(),`ez-fallback-${name}-`)),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
   const launches:ExecutorOptions[]=[],prompts:string[][]=[],admitted:(AiPreset|undefined)[]=[],sent:string[]=[]
   const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(texts,options)=>{
@@ -121,11 +142,12 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
     if(script.stage){const s=await scheduler.get('daily');await scheduler.edit({...s,text:script.stage},s.revision,()=>runs.list(),true)}
     if (script.session) await options.onSession?.(script.session)
     const out=(script.lines ?? []).map(l=>typeof l==='string'?l:JSON.stringify(l)).join('\n')
-    const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(out ? out+'\n' : '')});setTimeout(()=>process.exit(${script.code ?? 0}),${script.hold ? 60000 : 10})`],{detached:process.platform!=='win32'})
+    const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(out ? out+'\n' : '')});process.stderr.write(${JSON.stringify(script.stderr ?? '')});setTimeout(()=>process.exit(${script.code ?? 0}),${script.hold ? 60000 : 10})`],{detached:process.platform!=='win32'})
     await once(child,'spawn');return {child,cleanup:async()=>{},stdout:''}
   })
   relay.bot.api.config.use(async(_prev,method,payload)=>{if(method==='sendMessage')sent.push((payload as {text:string}).text);return {ok:true,result:{message_id:42}} as never})
   await control.requestPairing(101,101);await control.approveOwner(101)
+  if(options.telemetry)await control.setRunTelemetry(true)
   const owner=(await control.status()).owner!
   const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,...(fallbacks.length ? {fallbacks} : {})},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
   const run=await scheduler.trigger(saved.id,saved.revision,'fallback-'+name,owner,runs)
@@ -134,6 +156,59 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
     close:async()=>{await relay.stop();await rm(dir,{recursive:true,force:true})}}
 }
 const quota={type:'assistant',error:'rate_limit'},work={type:'assistant',message:{content:[{type:'text',text:'working'}]}}
+
+test('typed native terminal error with exit zero fails without replay',async()=>{
+  const f=await fixture('terminal-error-zero',[{lines:[work,{type:'result',subtype:'error_during_execution',is_error:true,stop_reason:null}],code:0}])
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'failed')
+    assert.equal(f.launches.length,1)
+    assert.equal(run.attempts![0].outcome,'failed')
+    assert.equal(run.attempts![0].category,'after-work-began')
+    assert.deepEqual(run.attempts![0].nativeTerminal,{status:'failed',subtype:'error_during_execution',isError:true,stopReason:null})
+    assert.equal(run.failureReason,'native-terminal-outcome')
+    const saved=await f.scheduler.get('daily')
+    assert.equal((await f.scheduler.trigger(saved.id,saved.revision,'fallback-terminal-error-zero',f.owner,f.runs)).id,run.id)
+    await f.relay.drainSources()
+    assert.equal(f.launches.length,1,'same occurrence identity cannot replay partial work')
+  }finally{await f.close()}
+})
+
+test('native success including no-op completes; incomplete and conflicting terminal fields stop',async()=>{
+  for(const [name,result,expected] of [
+    ['noop',{subtype:'success',is_error:false,stop_reason:'end_turn'},'completed'],
+    ['truncated',{subtype:'success',is_error:false,stop_reason:'max_tokens'},'failed'],
+    ['max-turns',{subtype:'error_max_turns',is_error:false},'failed'],
+    ['unknown',{subtype:'new-native-subtype',is_error:false},'failed'],
+    ['conflicting',{subtype:'success',is_error:true},'failed'],
+  ] as const){
+    const f=await fixture('terminal-'+name,[{lines:[{type:'result',...result,result:'private model prose',errors:['private provider prose']}],code:0}])
+    try{
+      const run=await f.done()
+      assert.equal(run.status,expected,name);assert.equal(f.launches.length,1,name)
+      assert.doesNotMatch(JSON.stringify(run.attempts),/private|new-native-subtype/)
+    }finally{await f.close()}
+  }
+  for(const result of [{subtype:'success',is_error:false},{subtype:'error_max_turns',is_error:true},{subtype:'unknown',is_error:true}])
+    assert.equal(observe(work,quota,{type:'result',...result}).rejection,undefined)
+  const o=startupObserver()
+  const json=JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,stop_reason:'private-secret-code',result:'private text'})
+  o.write(json.slice(0,10));o.write(json.slice(10))
+  const nativeTerminal=o.result().nativeTerminal
+  assert.deepEqual(nativeTerminal,{status:'failed',subtype:'error_during_execution',isError:true,stopReason:'unknown'})
+  assert.deepEqual(observe(startupLine({workBegan:true,nativeTerminal})).nativeTerminal,nativeTerminal)
+  assert.doesNotMatch(o.summary(),/private/)
+})
+
+test('transport interruption overrides native success and exit zero without replay',async()=>{
+  const f=await fixture('terminal-interrupted',[{lines:[{type:'result',subtype:'success',is_error:false}],stderr:'Host executor client interrupted by transport loss',code:0}])
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'failed');assert.equal(run.interrupted,true)
+    assert.equal(run.failureReason,'host-executor-transport-interrupted')
+    assert.equal(f.launches.length,1)
+  }finally{await f.close()}
+})
 
 test('a quota rejection before work advances within the same occurrence, skipping the exhausted scope',async()=>{
   const f=await fixture('advance',[{lines:[{type:'rate_limit_event',rate_limit_info:{status:'rejected',resetsAt:1791460800}},quota],code:1},{lines:[startupLine({workBegan:true})],code:0}])
@@ -226,6 +301,31 @@ test('four Claude accounts advance in order on quota rejection before work',asyn
   }finally{await f.close()}
 })
 
+test('the five-setup chain (four Claude logins, then Codex) recovers on its fifth setup once, and evidence lists every attempt',async()=>{
+  const profiles=['claude2','claude3','claude4']
+  const claudes=profiles.map((authProfile,i)=>({...claudeA,id:`fallback-${i}`,authProfile,effort:'high'}))
+  const f=await fixture('five-setups',[{lines:[quota],code:1},{lines:[quota],code:1},{lines:[quota],code:1},{lines:[quota],code:1},{lines:[work],code:0}],
+    [...claudes,{...codexA,effort:'xhigh'}],{...claudeA,effort:'high'},{telemetry:true})
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'completed')
+    assert.deepEqual(f.launches.map(l=>[l.cli,l.authProfile,l.model,l.effort]),[
+      ['claude',undefined,'opus','high'],['claude','claude2','opus','high'],['claude','claude3','opus','high'],['claude','claude4','opus','high'],['codex',undefined,'gpt-6-sol','xhigh']])
+    assert.equal(new Set(f.launches.map(l=>l.sessionId)).size,5)
+    assert.ok(f.launches.every(l=>l.runId===run.id),'one occurrence, never a second run')
+    const evidence=(await runEvidence(f.dir)).runs.find(r=>r.id===run.id)!
+    assert.deepEqual(evidence.attempts.map(a=>[a.attempt,a.setup.cli,a.setup.authProfile,a.outcome,a.category]),[
+      [1,'claude',undefined,'failed','quota'],[2,'claude','claude2','failed','quota'],[3,'claude','claude3','failed','quota'],
+      [4,'claude','claude4','failed','quota'],[5,'codex',undefined,'completed',undefined]])
+    assert.deepEqual(evidence.attempts.slice(0,4).map(a=>a.telemetry?.errors),Array(4).fill(['rate_limit']))
+    assert.ok(evidence.attempts.every(a=>a.telemetry!==undefined&&a.startedAt&&a.endedAt),'every attempt carries its clocks and telemetry')
+    const saved=await f.scheduler.get('daily')
+    assert.equal((await f.scheduler.trigger(saved.id,saved.revision,'fallback-five-setups',f.owner,f.runs)).id,run.id)
+    await f.relay.drainSources()
+    assert.equal(f.launches.length,5,'the same occurrence key never launches a setup twice')
+  }finally{await f.close()}
+})
+
 test('later tasks reuse the last working login and retain quota resets in owner control state',async()=>{
   const primary={...claudeA,effort:'xhigh'},profiles=['claude2','claude3'].map((authProfile,i)=>({...primary,id:`fallback-${i}`,authProfile}))
   const resetAt=new Date(Date.now()+3600_000).toISOString(),limit={type:'ez.startup',workBegan:false,rejection:{category:'quota',resetAt}}
@@ -269,10 +369,13 @@ test('arbitrary mixed setup lists preserve CLI, provider, model and effort per a
 
 test('a usage limit after work began continues the same run on the next login, told so',async()=>{
   const opus={...claudeA,effort:'xhigh'},profiles=['claude2','claude3','claude4'].map((authProfile,i)=>({...opus,id:`fallback-${i}`,authProfile}))
-  for(const event of [work,{type:'system',subtype:'hook_started'}]){
+  for(const event of [work,{type:'system',subtype:'hook_started'}])for(const terminal of [
+    {type:'result',is_error:true},
+    {type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'},
+  ]){
     // Default login stops mid-run, claude2 is already exhausted before work, claude3 completes.
-    const f=await fixture('mid-run-limit',[{lines:[{type:'system',subtype:'init'},event,limitEvent,limitMessage,{type:'result',is_error:true}],code:1},
-      {lines:[limitEvent,limitMessage],code:1},{lines:[work],code:0}],profiles,opus)
+    const f=await fixture('mid-run-limit',[{lines:[{type:'system',subtype:'init'},event,limitEvent,limitMessage,terminal],code:1},
+      {lines:[limitEvent,limitMessage,terminal],code:1},{lines:[work],code:0}],profiles,opus)
     try{
       const run=await f.done()
       assert.equal(run.status,'completed');assert.equal(run.id,f.run.id)
@@ -287,6 +390,10 @@ test('a usage limit after work began continues the same run on the next login, t
       assert.deepEqual(f.prompts,[f.prompts[0],[...f.prompts[0],fact],[...f.prompts[0],fact]])
       assert.ok(!f.prompts[0].some(text=>text.includes('continues')))
       assert.equal((await f.runs.list()).filter(r=>r.scheduled?.id==='daily').length,1)
+      const saved=await f.scheduler.get('daily')
+      assert.equal((await f.scheduler.trigger(saved.id,saved.revision,'fallback-mid-run-limit',f.owner,f.runs)).id,run.id)
+      await f.relay.drainSources()
+      assert.equal(f.launches.length,3,'reconciling the same occurrence never repeats its successful work')
     }finally{await f.close()}
   }
 })
@@ -308,15 +415,20 @@ test('a run that reaches the limit on every login waits and manually continues t
 })
 
 test('cancellation stops the chain',async()=>{
-  const f=await fixture('cancel',[{lines:[quota],hold:true}])
-  try{
-    await until(async()=>Boolean((await f.runs.get(f.run.id))?.pid))
-    await f.scheduler.cancel(f.run.id)
-    await f.relay.drainSources()
-    const run=await f.done()
-    assert.equal(run.status,'cancelled');assert.equal(f.launches.length,1)
-    assert.deepEqual(run.attempts!.map(a=>a.outcome),['cancelled'])
-  }finally{await f.close()}
+  for(const terminal of [
+    {type:'result',subtype:'error_during_execution',is_error:true},
+    {type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'},
+  ]){
+    const f=await fixture('cancel',[{lines:[quota,terminal],hold:true}])
+    try{
+      await until(async()=>Boolean((await f.runs.get(f.run.id))?.pid))
+      await f.scheduler.cancel(f.run.id)
+      await f.relay.drainSources()
+      const run=await f.done()
+      assert.equal(run.status,'cancelled');assert.equal(f.launches.length,1)
+      assert.deepEqual(run.attempts!.map(a=>a.outcome),['cancelled'])
+    }finally{await f.close()}
+  }
 })
 
 test('a staged edit lets the running occurrence continue to its saved fallback on captured settings',async()=>{
@@ -380,7 +492,7 @@ test('host transport admits only the active task setup and profile, forwards onl
     await runs.patch(id,{status:'running',attempts:[{preset:primary,quotaScope:'claude',outcome:'running'}]})
     server=serveHostExecutor({cli:'claude',agents:[{name:'t',workspace,controlDir,binDir:join(root,'bin')}]},abort.signal,async(_texts,options)=>{
       launched.push({cli:options.cli,model:options.model,authProfile:options.authProfile})
-      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({...revoked,error:{...revoked.error,message:'secret provider diagnostic'}}),JSON.stringify({...retry,error:'secret provider diagnostic'})].join('\n')+'\n':''
+      const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({...revoked,error:{...revoked.error,message:'secret provider diagnostic'}}),JSON.stringify({...retry,error:'secret provider diagnostic'})].join('\n')+'\n':JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,stop_reason:null,result:'secret provider diagnostic',errors:['secret provider diagnostic']})
       const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(lines)});process.exit(1)`])
       return {child,cleanup:async()=>{},stdout:''}
     },async()=>[{cli:'claude',authProfile:'work',model:'opus',name:'Work',efforts:[]}])
@@ -397,7 +509,12 @@ test('host transport admits only the active task setup and profile, forwards onl
     // The relay advances: the next attempt reuses the run ID.
     await runs.patch(id,{attempts:[{preset:primary,quotaScope:'claude',outcome:'failed',category:'login-unavailable'},{preset:claudeB,quotaScope:'claude',outcome:'running'}]})
     await request({cli:'claude',model:'sonnet'})
-    await events();await remove(join(directory,id+'.events'))
+    const terminalEvents=await events()
+    assert.match(terminalEvents,/nativeTerminal/)
+    assert.doesNotMatch(terminalEvents,/secret provider diagnostic/)
+    const last=terminalEvents.trim().split('\n').map(l=>JSON.parse(l)).filter(e=>e.stream==='stdout').at(-1)
+    assert.deepEqual(JSON.parse(last.text).nativeTerminal,{status:'failed',subtype:'error_during_execution',isError:true,stopReason:null})
+    await remove(join(directory,id+'.events'))
     assert.deepEqual(launched.map(l=>[l.cli,l.model,l.authProfile]),[['claude','opus','work'],['claude','sonnet',undefined]])
     await request({cli:'claude',model:'sonnet',authProfile:'work'})
     assert.match(await events(),/auth profile does not match its captured AI selection/)

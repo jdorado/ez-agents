@@ -5,11 +5,12 @@ import path from 'node:path'
 import { type Owner, sameOwner, validOwner } from './control-state.js'
 import { assertId } from './identity.js'
 
-// Registered scripts reference agent-owned code in the workspace. Core keeps
-// only the registration: no second source copy, interpreter or dependency setup.
+// Registered scripts reference agent-owned code in the workspace, or name an
+// installed plugin command run through the agent's `ez` launcher (no workspace
+// file). Core keeps only the registration: no source copy or dependency setup.
 export type ScriptRegistration = {
   version: 1; id: string; revision: string; owner: Owner
-  entry: string; interpreter: string; args: string[]; sha256: string
+  entry?: string; interpreter: string; args: string[]; sha256?: string; plugin?: string
   timeoutSeconds: number; registeredAt: string; updatedAt: string
 }
 // Captured on the run when an occurrence is queued; the launcher verifies it.
@@ -19,6 +20,17 @@ export const DEFAULT_SCRIPT_TIMEOUT_SECONDS = 900
 export const MAX_SCRIPT_TIMEOUT_SECONDS = 21600
 const SCRIPT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const COMMAND = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/
+// Same alias rule as the `ez` launcher; its management words are not plugins.
+const PLUGIN_COMMAND = /^[a-z][a-z0-9-]{0,39}$/
+const RESERVED = ['plugins', 'tools', 'status', 'updates', 'message', 'owner', 'approval', 'react', 'setup', 'help', 'version']
+// A plugin registration runs `ez PLUGIN ARGS...` through the agent's broker
+// launcher, exactly as an agent turn would; the broker pins the plugin revision.
+export const PLUGIN_LAUNCHER = 'ez'
+
+export const assertPluginCommand = (value: unknown): string => {
+  if (typeof value !== 'string' || !PLUGIN_COMMAND.test(value) || RESERVED.includes(value)) throw new Error('Plugin must be an installed plugin command name such as ezstocks')
+  return value
+}
 
 export const assertScriptId = (id: unknown): string => {
   if (typeof id !== 'string' || !SCRIPT_ID.test(id)) throw new Error('Script ID must be 1-64 lowercase letters, digits, _ or -')
@@ -97,9 +109,12 @@ export class Scripts {
 
   async get(id: string): Promise<ScriptRegistration> {
     const s = JSON.parse(await readFile(path.join(this.dir, assertId(assertScriptId(id)) + '.json'), 'utf8')) as ScriptRegistration
+    const file = typeof s.entry === 'string' && Boolean(s.entry) && !path.isAbsolute(s.entry) && !s.entry.split(/[\\/]/).includes('..') &&
+      typeof s.sha256 === 'string' && /^[a-f0-9]{64}$/.test(s.sha256) && s.plugin === undefined
+    const plugin = s.plugin !== undefined && s.entry === undefined && s.sha256 === undefined && s.interpreter === PLUGIN_LAUNCHER &&
+      (() => { try { return assertPluginCommand(s.plugin) === s.plugin } catch { return false } })()
     if (s.version !== 1 || s.id !== id || typeof s.revision !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(s.revision) || !validOwner(s.owner) ||
-      typeof s.entry !== 'string' || !s.entry || path.isAbsolute(s.entry) || s.entry.split(/[\\/]/).includes('..') ||
-      !/^[a-f0-9]{64}$/.test(s.sha256)) throw new Error('Invalid script registration')
+      !(file || plugin)) throw new Error('Invalid script registration')
     assertInterpreter(s.interpreter); assertScriptArgs(s.args); assertTimeout(s.timeoutSeconds)
     return s
   }
@@ -127,17 +142,27 @@ export class Scripts {
     return result
   }
 
-  // Register or explicitly update: hashes the current entry-point bytes.
-  async save(input: { id: string; owner: Owner; workspace: string; entry: string; interpreter: string; args: string[]; timeoutSeconds: number; pathValue?: string }, create: boolean): Promise<ScriptRegistration> {
+  // Register or explicitly update: hashes the current entry-point bytes, or
+  // records a plugin command (whose revision the plugin manager already pins).
+  async save(input: { id: string; owner: Owner; workspace: string; entry?: string; interpreter?: string; plugin?: string; args: string[]; timeoutSeconds: number; pathValue?: string }, create: boolean): Promise<ScriptRegistration> {
     assertScriptId(input.id)
     if (!validOwner(input.owner)) throw new Error('Script registration requires the paired owner')
+    if ((input.plugin === undefined) === (input.entry === undefined)) throw new Error('Register either a workspace entry point (--file, --interpreter) or a plugin command (--plugin)')
     const previous = create ? undefined : await this.owned(input.id, input.owner)
-    const { file, relative } = await workspaceEntry(input.workspace, input.entry)
-    await resolveInterpreter(assertInterpreter(input.interpreter), input.pathValue, input.workspace)
     const now = new Date().toISOString()
-    const s: ScriptRegistration = { version: 1, id: input.id, revision: randomUUID(), owner: input.owner, entry: relative,
-      interpreter: input.interpreter, args: assertScriptArgs(input.args), sha256: await fileSha256(file),
+    const common = { version: 1 as const, id: input.id, revision: randomUUID(), owner: input.owner, args: assertScriptArgs(input.args),
       timeoutSeconds: assertTimeout(input.timeoutSeconds), registeredAt: previous?.registeredAt ?? now, updatedAt: now }
+    let s: ScriptRegistration
+    if (input.plugin !== undefined) {
+      const plugin = assertPluginCommand(input.plugin)
+      if (input.interpreter !== undefined && input.interpreter !== PLUGIN_LAUNCHER) throw new Error('A plugin command runs through the ez launcher; omit --interpreter')
+      await resolveInterpreter(PLUGIN_LAUNCHER, input.pathValue, input.workspace)
+      s = { ...common, interpreter: PLUGIN_LAUNCHER, plugin }
+    } else {
+      const { file, relative } = await workspaceEntry(input.workspace, input.entry!)
+      await resolveInterpreter(assertInterpreter(input.interpreter), input.pathValue, input.workspace)
+      s = { ...common, entry: relative, interpreter: input.interpreter!, sha256: await fileSha256(file) }
+    }
     await mkdir(this.dir, { recursive: true, mode: 0o700 })
     try { await atomic(path.join(this.dir, s.id + '.json'), s, create) }
     catch (error) {
@@ -155,11 +180,12 @@ export class Scripts {
   // Executor-side check, immediately before spawn: the queued registration
   // revision must still be current and the entry-point bytes must match it.
   async verifiedInvocation(ref: ScriptRunRef, workspace: string, pathValue?: string) {
-    if (!validScriptRunRef(ref) || !ref.revision || !ref.sha256) throw new Error(`Script ${ref?.id ?? ''} was not registered when queued`)
+    if (!validScriptRunRef(ref) || !ref.revision) throw new Error(`Script ${ref?.id ?? ''} was not registered when queued`)
     let s: ScriptRegistration
     try { s = await this.get(ref.id) } catch { throw new Error(`Script ${ref.id} registration is unavailable`) }
     if (s.revision !== ref.revision || s.sha256 !== ref.sha256) throw new Error(`Script ${ref.id} registration changed after this run was queued`)
-    const { file } = await workspaceEntry(workspace, s.entry)
+    if (s.plugin) return { command: await resolveInterpreter(PLUGIN_LAUNCHER, pathValue, workspace), args: [s.plugin, ...s.args, ...ref.args], registration: s }
+    const { file } = await workspaceEntry(workspace, s.entry!)
     if (await fileSha256(file) !== s.sha256) throw new Error(`Script ${ref.id} entry point changed since registration; inspect it and run an explicit registration update`)
     const command = await resolveInterpreter(s.interpreter, pathValue, workspace)
     return { command, args: [file, ...s.args, ...ref.args], registration: s }

@@ -19,7 +19,8 @@ Before the first PR, provide:
   changes and requested review; see [plugin metadata](plugins.md#exposure-declarations).
   These are self-reported capabilities, never permission grants or safety certificates.
   A dedicated query-only alias may opt into restricted channel use with
-  `channelQuery: true` and the required explicit non-writing exposure fields.
+  `channelQuery: true` and the required explicit non-writing exposure fields;
+  a scope-bound application alias declares `taskScope: "read"` or `"write"`.
 - Private state locations, start/stop/status, backup, migration/rollback limits,
   data-preserving uninstall and separate account revocation instructions.
 - Offline contract/negative tests and CI. Verify snapshot installation and CLI

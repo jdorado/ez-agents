@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { CliUnavailableError, startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
 import { activeSetup } from './runs.js'
 import { startupLine, startupObserver } from './setup-fallback.js'
-import { telemetryObserver } from './run-telemetry.js'
+import { telemetryLine, telemetryObserver } from './run-telemetry.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
 import { readModels, sameEngine, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
@@ -298,6 +298,11 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid,started:job.child.pid ? await processStart(job.child.pid) : undefined,hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}),{mode:0o600})
               cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{}); const now=new Date();void utimes(base+'.events',now,now).catch(()=>{})},250)
               const code=await closed
+              // Flush a final JSON envelope even when the CLI omitted a newline.
+              if (startup) {
+                const next = [startupLine(startup.result()), ...(telemetry ? [telemetryLine(telemetry.result())] : [])].join('\n')
+                if (next !== summary) emit({stream:'stdout',text:next+'\n'})
+              }
               if (cancellation) clearInterval(cancellation)
               await job.cleanup()
               job = undefined

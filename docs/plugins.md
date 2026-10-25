@@ -218,6 +218,13 @@ in an owner-approved restricted channel grant, not an activated permission or a
 safety label for the rest of the plugin. Mixed read/write aliases are ineligible;
 publish a dedicated query-only alias.
 
+For scoped application tasks, declare `"taskScope": "read"` or `"write"` on a
+dedicated alias instead. Both require external input, no external sends and no
+interactive review; `read` also requires no record changes, and `write` must state
+`changesRecords` explicitly. Such a command receives its scope as a fixed argument
+and a short-lived scope token in `EZ_PLUGIN_CONTEXT`; its backend verifies the token
+with core before acting (see [scoped application tasks](application-channel.md#scoped-application-tasks)).
+
 For original file bytes, declare `"channelFile": true` instead, with the same
 read-only exposure fields. The approved task capability must specify
 `"output": "file"`. Its command accepts one literal input and writes only the

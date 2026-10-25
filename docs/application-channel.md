@@ -91,6 +91,13 @@ ezenciel-agents-application --owner-id verified-account --id web --token-file /p
 ezenciel-agents-application --id phone --token-file /private/phone-token --share-owner
 ```
 
+Run as root inside the relay container (`docker compose exec relay ...`), the
+application, owner, source, schedule and AI commands act as the user that owns the
+control directory, so the state they write stays readable by the relay. The
+application command reads `--token-file` before switching, so the token file may
+stay private to root. A missing control directory is an error rather than a
+root-owned directory.
+
 The application backend receives that token through its secret store. Core stores
 only its SHA-256 digest, bound to the installation owner. Channel IDs are arbitrary
 labels, not a predefined provider list. The trusted adapter verifies its provider's
@@ -482,3 +489,33 @@ inbox as text; it does not send an additional channel message. The task bearer
 is hashed in core storage, stays in the trusted backend and expires no later
 than the task. Changed retries and cross-task/application use fail closed.
 No contributor becomes an installation owner.
+
+## Scoped application tasks
+
+An application that keeps its own conversation records (for example an SMS or
+voice backend receiving provider webhooks) can have the agent hold many bounded
+conversations, one per application scope, without core polling the application.
+The owner grants a batch of scope IDs once through `ezenciel-agents-task
+--application` (see [authority boundaries](architecture/authority-boundaries.md#scoped-application-tasks)).
+
+`POST /v1/task-events` with `{eventId, scope}` says "new correspondence for this
+scope". It carries no message body. Core matches the active grant of this binding
+that lists the scope, starts one restricted task run and returns its run snapshot
+(202). The same event ID returns that run again (200) and never starts a second
+one under that grant, even after the run ended. A scope without an active grant from this binding
+returns 404 and is recorded (latest 100) in private
+`control/task-event-refusals.json`; it is never routed to the owner agent. Admission
+caps return 429: retry later with the same event ID. The run reads current content
+through its approved scoped capabilities. Its replies are text messages in that
+run's snapshot (`GET /v1/runs/<id>`), which the application delivers through its
+own provider and records as its own receipts. Owner messages preempt a running
+scoped run, as with public channel work; post a new event to continue that scope.
+
+Scoped plugin commands receive the scope and a short-lived token in
+`EZ_PLUGIN_CONTEXT`, as `{"task":{"taskId","scope","capability","access","token","expiresAt"}}`.
+Before honouring a read or write, the application backend checks the token with
+`POST /v1/task-scope` and `{token}` under its own binding. A 200 returns
+`{taskId,scope,capability,command,access,expiresAt}`; the backend keeps the call
+inside that scope and refuses writes for `read` access. Any other binding, an
+expired token (60 seconds, or once the call is recorded), an ended run, or a
+revoked or expired grant returns 403. Core does not interpret application data.

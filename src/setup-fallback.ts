@@ -8,6 +8,31 @@ import type { AttemptTelemetry } from './run-telemetry.js'
 // fresh session that is told so). Anything else stops the chain.
 export type StartupCategory = 'cli-unavailable' | 'login-unavailable' | 'quota' | 'credits-required' | 'provider-rejected' | 'access-denied'
 export type StartupRejection = { category: StartupCategory; resetAt?: string }
+const resultSubtypes = ['success', 'error_during_execution', 'error_max_turns', 'error_max_budget_usd', 'error_max_structured_output_retries'] as const
+const stopReasons = ['end_turn', 'stop_sequence', 'max_tokens', 'tool_use', 'pause_turn', 'refusal', 'model_context_window_exceeded'] as const
+export type NativeTerminal = {
+  status: 'completed' | 'failed' | 'incomplete'
+  subtype: typeof resultSubtypes[number] | 'unknown'
+  isError?: boolean
+  stopReason?: typeof stopReasons[number] | 'unknown' | null
+}
+
+// Closed native result fields only. Never retain result/errors prose, arbitrary
+// codes or tool content. Unknown or contradictory completion is incomplete.
+const nativeTerminal = (event: any): NativeTerminal => {
+  const subtype = resultSubtypes.includes(event?.subtype) ? event.subtype as NativeTerminal['subtype'] : 'unknown'
+  const isError = typeof event?.is_error === 'boolean' ? event.is_error : undefined
+  const stopReason = event?.stop_reason === undefined ? undefined : event.stop_reason === null ? null :
+    stopReasons.includes(event.stop_reason) ? event.stop_reason as NativeTerminal['stopReason'] : 'unknown'
+  const status = isError === true || subtype.startsWith('error_') ? 'failed' :
+    subtype === 'success' && isError === false && (stopReason == null || ['end_turn', 'stop_sequence'].includes(stopReason)) ? 'completed' : 'incomplete'
+  return { status, subtype, ...(isError === undefined ? {} : { isError }), ...(stopReason === undefined ? {} : { stopReason }) }
+}
+
+export const validNativeTerminal = (value: unknown): NativeTerminal => {
+  const v = value as NativeTerminal | undefined
+  return nativeTerminal({ subtype: v?.subtype, is_error: v?.isError, stop_reason: v?.stopReason })
+}
 export type AttemptCategory = StartupCategory | 'quota-after-work-began' | 'credits-required-after-work-began' | 'after-work-began' | 'uncertain' | 'same-quota-scope' | 'same-login-scope'
 export type SetupAttempt = {
   preset: AiPreset
@@ -19,6 +44,7 @@ export type SetupAttempt = {
   sessionId?: string
   startedAt?: string
   endedAt?: string
+  nativeTerminal?: NativeTerminal
   // Present only when the owner enabled run telemetry for this run.
   telemetry?: AttemptTelemetry
 }
@@ -139,8 +165,9 @@ export const codexResetAt = (limits: any): string | undefined => {
   return resets.length ? epochSeconds(Math.max(...resets)) : undefined
 }
 
-export const startupLine = (state: { workBegan: boolean; rejection?: StartupRejection }): string =>
-  JSON.stringify({ type: 'ez.startup', workBegan: state.workBegan, ...(state.rejection ? { rejection: state.rejection } : {}) })
+export const startupLine = (state: { workBegan: boolean; rejection?: StartupRejection; nativeTerminal?: NativeTerminal }): string =>
+  JSON.stringify({ type: 'ez.startup', workBegan: state.workBegan, ...(state.rejection ? { rejection: state.rejection } : {}),
+    ...(state.nativeTerminal ? { nativeTerminal: validNativeTerminal(state.nativeTerminal) } : {}) })
 
 // Reads structured stdout only: Ez transport summaries (`ez.startup`) and
 // Claude stream-json envelopes. Model text is never inspected. Any event that
@@ -149,6 +176,7 @@ export const startupLine = (state: { workBegan: boolean; rejection?: StartupReje
 // an access denial, which always stops the chain.
 export const startupObserver = () => {
   let buffer = '', workBegan = false, rejection: StartupRejection | undefined
+  let terminal: NativeTerminal | undefined
   const reject = (value: StartupRejection) => { if (rejection?.category !== 'access-denied') rejection = value }
   const work = () => { workBegan = true; if (rejection?.category !== 'access-denied') rejection = undefined }
   const line = (text: string) => {
@@ -165,9 +193,22 @@ export const startupObserver = () => {
       if (r && categories.includes(r.category) && (r.resetAt === undefined || Number.isFinite(reset)))
         reject({ category: r.category, ...(r.resetAt === undefined ? {} : { resetAt: new Date(reset).toISOString() }) })
       else if (rejection?.category !== 'access-denied') rejection = undefined
+      if (event.nativeTerminal !== undefined) terminal = validNativeTerminal(event.nativeTerminal)
       return
     }
-    if (event?.type === 'thread.started' || event?.type === 'result' || event?.type === 'ez.telemetry' ||
+    if (event?.type === 'result') {
+      terminal = nativeTerminal(event)
+      // An error-flagged success envelope can end a typed usage rejection.
+      // Keep that rejection only without a competing or unknown stop reason.
+      const failedUsageLimit = terminal.subtype === 'success' && terminal.isError === true &&
+        ['quota', 'credits-required'].includes(rejection?.category ?? '') &&
+        (terminal.stopReason == null || ['end_turn', 'stop_sequence'].includes(terminal.stopReason))
+      // A real success or a different terminal limit supersedes an earlier quota.
+      // Only the existing typed rejection can authorize setup continuation.
+      if (!failedUsageLimit && terminal.subtype !== 'error_during_execution' && !(event.subtype === undefined && event.is_error === true) && rejection?.category !== 'access-denied') rejection = undefined
+      return
+    }
+    if (event?.type === 'thread.started' || event?.type === 'ez.telemetry' ||
         (event?.type === 'system' && event.subtype === 'init')) return
     if (event?.type === 'rate_limit_event') {
       const info = event.rate_limit_info
@@ -191,8 +232,8 @@ export const startupObserver = () => {
       buffer = lines.pop() ?? ''
       for (const text of lines) line(text)
     },
-    result: () => { line(buffer); buffer = ''; return { workBegan, rejection } },
+    result: () => { line(buffer); buffer = ''; return { workBegan, rejection, ...(terminal ? { nativeTerminal: terminal } : {}) } },
     accepted: () => workBegan && !rejection,
-    summary: () => startupLine({ workBegan, rejection }),
+    summary: () => startupLine({ workBegan, rejection, nativeTerminal: terminal }),
   }
 }

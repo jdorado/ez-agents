@@ -160,7 +160,7 @@ schedule removal, a policy or unknown error, an interrupted transport, or any
 other failure after work began. Evidence comes from structured events only: Codex
 native-session `codexErrorInfo` and Claude `stream-json` error fields (scheduled
 Claude runs use `--output-format stream-json`; the host forwards only a compact
-startup summary). Other engines advance only when their CLI is unavailable.
+startup and typed terminal-outcome summary). Other engines advance only when their CLI is unavailable.
 
 After work begins, only a typed Codex or Claude usage limit, or a Claude
 credits-required rejection, permits continuation. The run must have ended on
@@ -169,6 +169,10 @@ under another login's configuration home, so the next eligible setup starts a fr
 session with the saved prompt plus one factual line naming the run, the stopped
 setup, its native session and reset time, and that its work may be partly applied.
 The agent reconciles from its own records; core replays nothing else.
+
+A Claude `success` envelope with `is_error:true` remains failed. It preserves a
+final typed usage rejection only without a competing or unknown stop reason;
+the envelope alone never establishes quota.
 
 These same completion and fallback rules apply after a graceful relay upgrade
 adopts a running native session. Adoption attaches to that session; only an
@@ -256,6 +260,28 @@ It references the workspace file; core keeps no source copy. Paths outside the
 workspace (including symlink escapes) and shell command strings are rejected.
 Core invokes `interpreter entry registrationArgs... scheduleArgs...` directly,
 without a shell. Missing interpreters fail clearly; nothing is installed.
+
+### Plugin command registrations
+
+Mechanical work that an installed plugin already does needs no workspace file.
+Register the plugin command instead:
+
+```sh
+ezenciel-agents-schedule script register book-freshness --plugin ezstocks \
+  --arg=strategy --arg=account-cut --arg=sync --arg=--if-older-minutes=50
+ezenciel-agents-schedule create book-freshness --script book-freshness \
+  --cron '15 * * * *' --timezone Asia/Dubai
+```
+
+Core runs `ez PLUGIN registrationArgs... scheduleArgs...` through the agent's
+own `ez` launcher, so the call goes through the plugin broker exactly as an
+agent turn's would, under this run's identity and at the plugin's installed
+revision. The registration records the plugin name instead of an entry point
+and hash; `update` keeps the kind unless `--file` and `--interpreter` are given.
+Everything else below applies unchanged: one occurrence at a time, no automatic
+retry or model fallback, run records and `EZ_*` identifiers (no
+`EZ_SCRIPT_SHA256`). The effective time limit is the lower of the registration's
+timeout and the plugin broker's own call limit. The plugin command owns its own validation and readback.
 
 When an occurrence is queued, the run captures the current registration
 revision and hash. Immediately before spawning, the executor requires that
@@ -374,7 +400,16 @@ in-flight process or prove whether an external side effect happened.
 
 The host and relay must be online. Paused/completed schedule definitions and task
 artifacts are retained. The agent sends through the normal Telegram outbox;
-`completed` means executor exit, while provider delivery is recorded separately.
+`completed` means executor completion without a known typed native error or
+incomplete terminal result; it does not certify domain work. Claude's native
+`result` subtype, `is_error` and stop reason override exit zero when they report
+failure, truncation or an unknown completion. Each observed result is retained
+as an allowlisted `nativeTerminal` on the attempt, even with telemetry off;
+`evidence` exports these fields without native sessions or prose. Unknown codes
+are labelled `unknown`, and absent result evidence is not backfilled. The host
+and relay must both carry this contract; an older host cannot supply fields it
+discarded. Provider delivery is recorded separately. The owning agent or plugin
+owns the saved complete/incomplete domain receipt, including a no-change result.
 A timeout or ambiguous send must not cause blind replay of the whole task.
 
 ## Failure-review stop
@@ -423,8 +458,14 @@ For a shareable operational projection, use `evidence [RUN_ID] --offset 0 --limi
 This reads the live relay through its existing authenticated socket, under the
 bound operator or an active unrestricted Telegram owner run. Application/channel,
 external and isolated-task callers cannot use it. It exposes only current-owner
-Telegram foreground/scheduled runs, stable IDs, clocks/status/presets, failure
-metadata without prose, and retained run-associated outbox metadata. No native
+Telegram foreground/scheduled runs, stable IDs, clocks/status/presets, the ordered
+setups each run tried (`attempts`: CLI, provider, login profile, model, effort, quota
+scope, typed outcome and category, reset time, exit code, clocks, typed native terminal
+and, when run telemetry is on, its counts), failure
+metadata without prose, and retained run-associated outbox metadata. A skipped setup
+appears with its typed reason, so one availability check lists each setup at most once and
+a quota wait keeps its earlier rounds. A run lists its latest 50 attempts, numbered by
+position in the whole run, with `attemptsTruncated` when more were made. No native
 session, prompt, reasoning, tool arguments/results, message text or channel identity
 is returned. Failure text is represented by its SHA-256, not copied or diagnosed.
 
@@ -435,6 +476,17 @@ a fresh traversal. Each page recomputes the projection; no snapshot store or
 background capture is added. History resets on relay restart and is bounded to
 2000 terminal runs and 2000 terminal outbox items; full historical coverage cannot
 be inferred. Unassociated deliveries and excluded scopes remain unknown.
+
+`coverage.retention` states the boundary of that history: `ledgerStartedAt` is when
+this relay's memory began, `prunedTerminalRuns` and `prunedTerminalOutbox` count what
+the caps dropped since (ledger-wide counts, not only this owner's rows),
+`oldestRetainedRunAt` is the oldest retained owner run of any status (an unfinished run
+can make it older than every surviving terminal run, so it is a conservative bound) and
+`retainedBeforeLedgerStart` counts runs a graceful restart handed over. A cut older
+than `ledgerStartedAt` cannot be continued from this ledger: record the gap with its
+two clocks instead of inferring a cause, and compare `ledgerStartedAt` across reads to
+see that the relay restarted between them. Nothing is persisted to recover the
+earlier interval; the owning agent's saved receipts remain the durable record.
 
 Delivery records identify queued/sent/failed/unknown state and whether a retained
 Telegram receipt contains a valid clock and returned message IDs (only their count

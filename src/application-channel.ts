@@ -1,7 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, open, unlink, stat, chown } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { ControlStore, sessionTitle, telegramOwner, type ControlGuard, type Owner, type SessionState, sameOwner, validOwner, ownerId, ownerEpoch } from './control-state.js'
 import { RunStore, type RunRecord, type OutboxItem } from './runs.js'
 import { ownsRun } from './identity.js'
@@ -26,6 +26,17 @@ export function validateApplicationRegistration(id: string, token: string | null
   if (!applicationId(id) || (token !== null && !/^[A-Za-z0-9_-]{43,200}$/.test(token))) throw new Error('Use a simple application ID and a random token of at least 256 bits encoded as base64url')
 }
 
+// Administration commands may run as root inside the relay container. Keep the
+// state file's existing owner (the directory's for a first file) so the relay can read it.
+async function writeBindings(file: string, bindings: Binding[]) {
+  const owner = await stat(file).catch(() => stat(dirname(file))), temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporary, JSON.stringify(bindings), { mode: 0o600, flag: 'wx' })
+    const created = await stat(temporary)
+    if (created.uid !== owner.uid || created.gid !== owner.gid) await chown(temporary, owner.uid, owner.gid)
+    await rename(temporary, file)
+  } finally { await unlink(temporary).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }) }
+}
 export class ApplicationBindings {
   constructor(private controlDir: string) {}
   async list(): Promise<Binding[]> {
@@ -48,10 +59,7 @@ export class ApplicationBindings {
       if (token && bindings.some(item => item.id !== id && item.tokenHash === hash(token))) throw new Error('Application credential already registered')
       if (token !== null && existing && !rotate) throw new Error('Application already registered; rotate its token or revoke before replacing its authority')
       const binding = token === null ? undefined : rotate ? {...existing!, tokenHash: hash(token)} : { id, bindingId: randomUUID(), tokenHash: hash(token), owner, ...(shareTelegram ? { shareTelegram: true } : {}) }
-      const next = [...bindings.filter(item => item.id !== id), ...(binding ? [binding] : [])]
-      const temporary = `${file}.${randomUUID()}.tmp`
-      await writeFile(temporary, JSON.stringify(next), { mode: 0o600 })
-      await rename(temporary, file)
+      await writeBindings(file, [...bindings.filter(item => item.id !== id), ...(binding ? [binding] : [])])
       return binding
     } finally { await lock.close(); await unlink(`${file}.lock`) }
   }
@@ -63,13 +71,7 @@ export class ApplicationBindings {
       const owner=(await new ControlStore(this.controlDir,900000).status()).owner
       if(!binding || !sameOwner(binding.owner,owner))throw Error('Application authority revoked')
       if(launch)binding.taskLaunch=launch; else delete binding.taskLaunch
-      const previous=await stat(file),tmp=`${file}.${randomUUID()}.tmp`
-      try {
-        await writeFile(tmp,JSON.stringify(bindings),{mode:0o600,flag:'wx'})
-        const created=await stat(tmp)
-        if(created.uid!==previous.uid || created.gid!==previous.gid)await chown(tmp,previous.uid,previous.gid)
-        await rename(tmp,file)
-      }finally{await unlink(tmp).catch(error=>{if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error})}
+      await writeBindings(file,bindings)
     }finally{await lock.close();await unlink(`${file}.lock`)}
   }
   async authenticate(token: string): Promise<Binding> {
@@ -342,6 +344,21 @@ export class ApplicationChannel {
         if(Object.keys(v).length!==1 || typeof v.taskToken!=='string' || !/^[a-f0-9]{64}$/.test(v.taskToken))throw Error('Invalid application task request')
         const access=await new Tasks(this.options.controlDir).applicationAccess(hash(v.taskToken),binding.bindingId)
         send(200,{taskId:access.task.id,expiresAt:access.expiresAt,purpose:access.task.purpose});return
+      }
+      if (request.method === 'POST' && (path === '/v1/task-events' || path === '/v1/task-scope')) {
+        let raw=''; for await (const chunk of request) { raw += chunk; if (Buffer.byteLength(raw) > 1024) throw new Error('Invalid application task request') }
+        const input = JSON.parse(raw), tasks = new Tasks(this.options.controlDir)
+        if (path === '/v1/task-scope') {
+          if (!input || Object.keys(input).length !== 1 || !('token' in input)) throw new Error('Invalid application task request')
+          try { send(200, await tasks.verifyScopeToken(binding.bindingId, input.token)) } catch { send(403, {error: 'Task scope token is invalid, expired or revoked'}) }
+          return
+        }
+        const admitted = await tasks.applicationEvent(binding.bindingId, input)
+        if ('refused' in admitted) { send(404, {error: admitted.refused}); return }
+        if ('defer' in admitted) { send(429, {error: admitted.defer}); return }
+        if (!admitted.duplicate) this.options.wake()
+        const run = await this.runs.get(admitted.runId)
+        send(admitted.duplicate ? 200 : 202, {...(run ? await this.snapshot(binding.bindingId, run.id) : {id: admitted.runId}), duplicate: admitted.duplicate}); return
       }
       if (path === '/v1/telegram' && request.method === 'GET') {
         if ([...url.searchParams.keys()].length) throw new Error('Invalid application Telegram request')
