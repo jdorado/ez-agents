@@ -28,4 +28,6 @@ Authorization, sandboxing and tool handlers enforce contact and lifecycle limits
 An owner-approved channel capability adds only a fixed installed alias declared
 as a read-only channel query; it does not expose the workspace, shell, owner
 session or other installed tools.
+A scoped application grant may also declare scope-bound read and write commands
+for the application that owns the conversation record.
 Group notifications carry event data; CLI help owns operations.
