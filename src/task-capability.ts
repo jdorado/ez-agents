@@ -1,48 +1,80 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 import { executorEnvironment } from './executor.js'
+import { taskCall } from './task-rpc.js'
+import { taskCommandAllowed } from './plugins/exposure.mjs'
 import type { TaskCapability } from './tasks.js'
 import {attachmentLimit,stageTaskAttachment,type TaskAttachment} from './task-attachments.js'
 
 const execute = promisify(execFile)
+const MAX_OUTPUT = 131072
 
 export async function assertChannelQuery(toolsHome: string | undefined, capability: TaskCapability) {
   if (!toolsHome || !path.isAbsolute(toolsHome)) throw new Error('Channel capabilities require an installed tool registry')
   const registry = JSON.parse(await readFile(path.join(toolsHome,'registry.json'),'utf8')) as {
-    commands?: Record<string,string>, plugins?: Record<string,{manifest?:{commands?:Record<string,{channelQuery?:boolean,channelFile?:boolean,exposure?:Record<string,boolean>}>}}>
+    commands?: Record<string,string>, plugins?: Record<string,{manifest?:{commands?:Record<string,unknown>}}>
   }
   const command = registry.plugins?.[registry.commands?.[capability.command] ?? '']?.manifest?.commands?.[capability.command]
-  const exposure = command?.exposure
-  if ((capability.output==='file'?command?.channelFile:command?.channelQuery) !== true || exposure?.receivesExternalContent !== true || exposure.sendsExternally !== false ||
-      exposure.changesRecords !== false || exposure.requiresReview !== false)
-    throw new Error(`Capability ${capability.id} is not an installed read-only channel query`)
+  if (!taskCommandAllowed(command, capability))
+    throw new Error(`Capability ${capability.id} is not an installed ${capability.access ? `scoped ${capability.access}` : 'read-only channel query'} command`)
 }
 
-export async function runTaskCapability(toolsHome: string | undefined, capability: TaskCapability, input: string, staging?:{controlDir:string;runId:string;lease:string}):Promise<{output:string;attachment?:never}|{attachment:TaskAttachment;output?:never}> {
-  await assertChannelQuery(toolsHome,capability)
-  const home = toolsHome!
+type Grant = {lease:string;token?:string}
+// Isolated executors have no registry: the broker resolves the lease with the relay.
+function brokerCapability(runId: string, input: string, grant: Grant): Promise<{stdout:string;code:number}> {
+  return new Promise((resolve,reject)=>{
+    const child=spawn(process.execPath,[fileURLToPath(new URL('../bin/ez',import.meta.url)),'--task-capability'],{env:{...executorEnvironment(),EZ_RUN_ID:runId},stdio:['pipe','pipe','pipe']})
+    let stdout='';const timer=setTimeout(()=>{child.kill();reject(Error('Channel capability timed out'))},30000)
+    child.stdout.on('data',chunk=>{stdout+=chunk;if(Buffer.byteLength(stdout)>MAX_OUTPUT){child.kill();reject(Error('Channel capability output is too large'))}})
+    child.stderr.resume();child.on('error',reject)
+    child.on('close',code=>{clearTimeout(timer);resolve({stdout,code:code??1})})
+    child.stdin.end(JSON.stringify({lease:grant.lease,input,...(grant.token?{token:grant.token}:{})}))
+  })
+}
+
+export async function runTaskCapability(toolsHome: string | undefined, capability: TaskCapability, input: string, staging?:{controlDir:string;runId:string;lease:string;token?:string}):Promise<{output:string;attachment?:never}|{attachment:TaskAttachment;output?:never}> {
+  const isolated = !!process.env.EZ_PLUGIN_BROKER_SOCKET
+  if (!isolated) await assertChannelQuery(toolsHome,capability)
   const args = [capability.command, ...capability.args.map(value => value === '{input}' ? input : value)]
   if(capability.output==='file') {
     if(!staging)throw Error('File capability requires task staging')
-    const result=await execute(path.join(home,'bin','ez'),args,{encoding:'buffer',env:executorEnvironment(),timeout:30000,maxBuffer:attachmentLimit})
+    if(isolated)throw Error('File capabilities are unavailable to isolated executors')
+    const result=await execute(path.join(toolsHome!,'bin','ez'),args,{encoding:'buffer',env:executorEnvironment(),timeout:30000,maxBuffer:attachmentLimit})
     const attachment=await stageTaskAttachment(staging.controlDir,staging.runId,staging.lease,input,result.stdout)
     return {attachment}
   }
   let stdout = '', code = 0
-  try {
-    const result = await execute(path.join(home,'bin','ez'),args,{encoding:'utf8',env:executorEnvironment(),timeout:15000,maxBuffer:131072})
+  if (isolated) {
+    if (!staging) throw Error('Isolated capabilities require a task lease')
+    ;({stdout, code} = await brokerCapability(staging.runId, input, staging))
+  } else try {
+    // A scoped call names only its lease; the manager has the relay resolve it to the
+    // command vector and scope context, which reaches that plugin as EZ_PLUGIN_CONTEXT.
+    const context = capability.access && staging ? {EZ_CONTROL_DIR: staging.controlDir, EZ_RUN_ID: staging.runId, EZ_TASK_CAPABILITY: JSON.stringify({lease: staging.lease, input, ...(staging.token ? {token: staging.token} : {})})} : {}
+    const result = await execute(path.join(toolsHome!,'bin','ez'),args,{encoding:'utf8',env:{...executorEnvironment(),...context},timeout:15000,maxBuffer:MAX_OUTPUT})
     stdout = result.stdout
   } catch (error) {
     const failure = error as Error & {stdout?:string;code?:number|string}
     stdout = typeof failure.stdout === 'string' ? failure.stdout : ''
     code = typeof failure.code === 'number' ? failure.code : 1
   }
-  if (Buffer.byteLength(stdout) > 131072) throw new Error('Channel capability output is too large')
+  if (Buffer.byteLength(stdout) > MAX_OUTPUT) throw new Error('Channel capability output is too large')
   if (code !== 0 || !stdout.trim()) throw new Error(`Channel capability failed with exit ${code}`)
   return {output:stdout}
+}
+
+// The trusted task broker's one capability path: the relay authorizes a lease
+// (and, for scoped grants, mints the token), the plugin runs, the relay records it.
+export async function invokeTaskCapability(controlDir: string, runId: string, toolsHome: string | undefined, id: string, input: string | undefined) {
+  const begun = await taskCall(controlDir,runId,'worker','capability_begin',{id,...(input === undefined ? {} : {input})}) as {capability:TaskCapability;lease:string;token?:string}
+  const result = await runTaskCapability(toolsHome,begun.capability,input ?? '',{controlDir,runId,lease:begun.lease,token:begun.token})
+  const receipt = result.output === undefined ? {} : {outputSha256:createHash('sha256').update(result.output).digest('hex'),bytes:Buffer.byteLength(result.output)}
+  await taskCall(controlDir,runId,'worker','capability_result',{id,...(input === undefined ? {} : {input}),lease:begun.lease,...receipt,...('attachment' in result && result.attachment?{attachment:result.attachment}:{})})
+  return result
 }
 
 export async function launchTaskApplication(toolsHome: string | undefined, launch:{command:string;args:string[]}, input:unknown, runId:string):Promise<unknown> {

@@ -152,6 +152,18 @@ and the source-wide public backlog is bounded. Core admits at most 60 public
 conversations and 60 replies per hour. A grant revokes after 1,000 conversations
 or replies so the owner must review continued broad access.
 
+## Application conversations
+
+When the owner asks the agent to hold many similar conversations that an
+application records (for example an outreach batch), grant that batch once with
+`--application APP --scope-file FILE` instead of one task per contact. The scope
+file is a JSON array or one application scope ID per line. Capabilities use the
+application's `taskScope` aliases with `{scope}` in their fixed arguments; name the
+read alias that returns the current record with `--context-capability`. Choose
+caps for the batch with `--max-outstanding`, `--max-hourly` and `--max-total`
+(defaults 8, 60 and 1,000, which are also the ceilings). The application starts
+each run with an event for its scope; replies return to the application.
+
 `start` returns active only after the provider accepts the watch and core saves
 the scoped grant. `propose` instead presents the exact scope for owner confirmation.
 Ordinary messages inside an active grant need no repeated confirmations. Incoming-only grants create
