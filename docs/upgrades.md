@@ -130,8 +130,10 @@ Reconcile the job's completed stages and installed state before retrying.
 ## Agent interface
 
 Telegram `/status` shows the relay's loaded version, fresh host version and
-installed plugin versions alongside work/queue health. The host heartbeat carries
-only plugin IDs/versions; the relay gets no plugin registry or Docker access.
+installed plugin versions alongside work/queue health. Isolated deployments read
+plugin IDs/versions from the broker's generated inventory, even while an executor
+heartbeat is fresh. Host-capable deployments use fresh host heartbeat metadata.
+The relay gets no plugin registry or Docker access.
 Plugin versions in Telegram are explicitly installed versions, not live-provider
 verification. Stale or legacy host metadata is shown as unavailable/unknown.
 

@@ -47,3 +47,23 @@ test('Telegram software status uses loaded version and only fresh host plugin me
   await writeFile(path.join(root,'plugin-broker-plugins.json'),'broken')
   assert((await softwareStatus(root,'isolated')).includes('Plugins: isolated broker · versions via `ez tools list`'))
 })
+
+test('isolated software status uses broker inventory with a fresh executor heartbeat', async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'ez-isolated-status-'))
+  t.after(()=>rm(root,{recursive:true,force:true}))
+  await mkdir(path.join(root,'host-executor'))
+  const heartbeat=path.join(root,'host-executor/heartbeat.json')
+  const inventory=path.join(root,'plugin-broker-plugins.json')
+  await writeFile(inventory,JSON.stringify({version:1,plugins:[{id:'example',version:'1.2.3',source:'/private/source'}]}))
+  for (const plugins of [null,[],[{id:'outdated',version:'0.0.1'}]]) {
+    await writeFile(heartbeat,JSON.stringify({at:Date.now(),version:'1.0.0',containerExecutor:true,plugins}))
+    const lines=await softwareStatus(root,'isolated')
+    assert(lines.includes('Host transport: running · v1.0.0'))
+    assert(lines.includes('Plugins: example 1.2.3'))
+    assert(!lines.includes('Plugins: unknown'))
+    assert(!JSON.stringify(lines).includes('/private'))
+  }
+  await rm(inventory)
+  assert((await softwareStatus(root,'isolated')).includes('Plugins: isolated broker · versions via `ez tools list`'))
+  assert((await softwareStatus(root,'host-capable')).includes('Plugins: outdated 0.0.1'))
+})
