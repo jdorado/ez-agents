@@ -57,8 +57,9 @@ export const loadControlConfig = (env: NodeJS.ProcessEnv = process.env): Control
 // readable by the relay, and root never writes through agent-owned paths.
 export const actAsControlOwner = (controlDir: string): void => {
   if (process.geteuid?.() !== 0) return
-  let owner
-  try { owner = statSync(controlDir) } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+  // A missing directory would be created root-owned and lock the relay out.
+  const owner = statSync(controlDir, { throwIfNoEntry: false })
+  if (!owner) throw new Error(`Control directory ${controlDir} does not exist; run inside the agent's relay`)
   process.setgroups!([owner.gid]); process.setgid!(owner.gid); process.setuid!(owner.uid)
 }
 

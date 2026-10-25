@@ -24,6 +24,14 @@ test('root administrator commands write control state as the control directory o
   assert.equal((await run('ezenciel-agents-application', '--id', 'web', '--token-file', token)).ok, true)
   assert.equal((await run('ezenciel-agents-source', '--name', 'unused', '--remove')).ok, true)
   await exec(process.execPath, [bin('ezenciel-agents-owner'), 'status'], {env})
-  for (const file of await readdir(dir)) assert.equal((await stat(join(dir, file))).uid, runtime, file)
+  // Rewrites control-state.json; as root it previously came out root:600.
+  await run('ezenciel-agents-ai', 'telemetry', 'on')
+  assert.equal((await new ControlStore(dir, 1000).status()).runTelemetry, true)
+  for (const file of await readdir(dir)) {
+    const owner = await stat(join(dir, file)); assert.deepEqual([owner.uid, owner.gid], [runtime, runtime], file)
+  }
+  // Root never creates a missing control directory it would then own.
+  const missing = join(dir, 'missing')
+  await assert.rejects(exec(process.execPath, [bin('ezenciel-agents-source'), '--list'], {env: {...env, EZ_CONTROL_DIR: missing}}), /does not exist/)
   for (const file of ['application-bindings.json', 'event-sources.json', 'control-state.json']) assert.ok((await readdir(dir)).includes(file), file)
 })
