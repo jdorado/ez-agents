@@ -100,6 +100,13 @@ const main = async () => {
     process.stdout.write(JSON.stringify({commands:['tools list [--details]','tools skill <plugin> <declared-path>','<registered CLI> ...'],native:await installedNativeHelp(fileURLToPath(new URL('.',import.meta.url)))})+'\n');
     return;
   }
+  if(args[0]==='--task-capability') {
+    if(args.length!==1 || !runId || !RUN_ID.test(runId))throw Error('Active task run required')
+    const result=await request({version:1,id:randomUUID(),operation:'task-capability',runId,stdin:await readStdin()})
+    if(!result?.ok)throw Error(result?.error || 'Task capability failed')
+    if(result.stdout)process.stdout.write(result.stdout)
+    process.exitCode=result.code;return
+  }
   if(args[0]==='--task-application') {
     if(args.length!==1 || !runId || !RUN_ID.test(runId))throw Error('Active task run required')
     const result=await request({version:1,id:randomUUID(),operation:'task-launch',runId,stdin:await readStdin()})

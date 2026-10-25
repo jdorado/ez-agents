@@ -343,6 +343,21 @@ export class ApplicationChannel {
         const access=await new Tasks(this.options.controlDir).applicationAccess(hash(v.taskToken),binding.bindingId)
         send(200,{taskId:access.task.id,expiresAt:access.expiresAt,purpose:access.task.purpose});return
       }
+      if (request.method === 'POST' && (path === '/v1/task-events' || path === '/v1/task-scope')) {
+        let raw=''; for await (const chunk of request) { raw += chunk; if (Buffer.byteLength(raw) > 1024) throw new Error('Invalid application task request') }
+        const input = JSON.parse(raw), tasks = new Tasks(this.options.controlDir)
+        if (path === '/v1/task-scope') {
+          if (!input || Object.keys(input).length !== 1 || !('token' in input)) throw new Error('Invalid application task request')
+          try { send(200, await tasks.verifyScopeToken(binding.bindingId, input.token)) } catch { send(403, {error: 'Task scope token is invalid, expired or revoked'}) }
+          return
+        }
+        const admitted = await tasks.applicationEvent(binding.bindingId, input)
+        if ('refused' in admitted) { send(404, {error: admitted.refused}); return }
+        if ('defer' in admitted) { send(429, {error: admitted.defer}); return }
+        if (!admitted.duplicate) this.options.wake()
+        const run = await this.runs.get(admitted.runId)
+        send(admitted.duplicate ? 200 : 202, {...(run ? await this.snapshot(binding.bindingId, run.id) : {id: admitted.runId}), duplicate: admitted.duplicate}); return
+      }
       if (path === '/v1/telegram' && request.method === 'GET') {
         if ([...url.searchParams.keys()].length) throw new Error('Invalid application Telegram request')
         if (!binding.shareTelegram) { send(403, { error: 'Application authority does not permit Telegram connection' }); return }

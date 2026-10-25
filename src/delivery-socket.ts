@@ -42,6 +42,7 @@ export type DeliverySocketOp =
   | { op: 'list'; payload?: Record<string, never> }
   | { op: 'patch'; payload: { runId: string; change: Record<string, unknown> } }
   | { op: 'taskApplication'; payload: {runId:string;ticketHash:string} }
+  | { op: 'taskCapability'; payload: {runId:string;lease:string;input?:string;token?:string} }
   | { op: 'authorize'; payload: { runId: string } }
   | { op: 'receipt'; payload: { context: unknown; id: string } }
   | { op: 'history'; payload: { runId: string; limit?: number; messageId?: number } }
@@ -355,6 +356,10 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
       case 'taskApplication': {
         const p=op.payload as {runId:string;ticketHash:string}
         return new Tasks(controlDir).authorizeApplicationLaunch(p.runId,p.ticketHash)
+      }
+      case 'taskCapability': {
+        const p=op.payload as {runId:string}
+        return new Tasks(controlDir).capabilityGrant(p.runId,op.payload)
       }
       case 'authorize': {
         const runId = (op.payload as { runId?: unknown } | undefined)?.runId

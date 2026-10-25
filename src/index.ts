@@ -627,7 +627,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (foreground.taskId) {
             const task = await tasks.authorize(foreground,false)
             const ownerWaiting=(await inbox.status()).pending>0 || (await runs.list()).some(run=>run.status==='queued'&&!run.taskId&&!run.scheduled)
-            if (task.anyConversation && ownerWaiting) throw new Error('Owner input preempts public work')
+            if ((task.anyConversation || task.version === 5) && ownerWaiting) throw new Error('Owner input preempts public work')
           }
         }
         catch { ownerStopped.add(activeChild); terminateJob(activeChild) }

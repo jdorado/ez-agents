@@ -7,6 +7,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { prepareCommand, registry, run as dockerRun, stewardOwned, publishBrokerPlugins } from './plugins/manager.mjs';
+import { taskCommandAllowed } from './plugins/exposure.mjs';
 
 const MAX_FRAME = 4 * 1024 * 1024;
 const MAX_ARGS = 100;
@@ -225,6 +226,17 @@ const authorizeTaskLaunch=async(binding,request)=>{
   if(input.taskId!==grant.taskId || input.expiresAt!==grant.expiresAt)throw Error('Task launch authority mismatch')
   return grant.launch
 }
+// A restricted task's capability: the relay resolves the lease to its fixed command
+// and arguments; only an installed command eligible for that grant may run.
+const authorizeTaskCapability=async(binding,request)=>{
+  const input=JSON.parse(request.stdin)
+  if(!input || Object.keys(input).some(k=>!['lease','input','token'].includes(k)))throw Error('Invalid task capability input')
+  const grant=await callDeliverySocket(deliverySocketPath(binding.controlDir),{op:'taskCapability',payload:{runId:request.runId,...input}})
+  if(grant.output==='file')throw Error('File capabilities are unavailable to isolated executors')
+  const selected=recordForAlias(await registry(binding.home),grant.command)
+  if(!taskCommandAllowed(selected.command,grant))throw Error('Task capability is not an eligible installed command')
+  return {grant,selected}
+}
 const invokePlugin = async (binding, request, signal, scheduledPreflight = false) => {
   const startedAt = new Date().toISOString();
   let plugin = request.alias;
@@ -236,7 +248,7 @@ const invokePlugin = async (binding, request, signal, scheduledPreflight = false
       if(request.operation==='task-launch') {
         const launch=await authorizeTaskLaunch(binding,request)
         if(launch.command!==request.alias || JSON.stringify(launch.args)!==JSON.stringify(request.args))throw Error('Task launch command changed')
-      }else await authorize(binding, request.runId);
+      }else if(request.operation!=='task-capability') await authorize(binding, request.runId);
     }
     const current = await registry(binding.home);
     const selected = recordForAlias(current, request.alias);
@@ -249,6 +261,7 @@ const invokePlugin = async (binding, request, signal, scheduledPreflight = false
       invocation: true,
       signal,
       environment: { EZ_CONTROL_DIR: binding.controlDir, ...(scheduledPreflight ? {} : {EZ_RUN_ID: request.runId}), EZ_DELIVERY_SOCKET: process.env.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir) },
+      taskContext: request.pluginContext,
     });
     try {
       result = await dockerRun(command.argv, {
@@ -296,8 +309,12 @@ export async function validateBrokerRequest(request, workspace) {
     if(Object.keys(request).some(k=>!['version','id','operation','scheduleId','revision'].includes(k))) throw Error('Unexpected schedule preflight field');
     return request;
   }
-  if (!['resolve', 'invoke', 'manager','task-launch'].includes(request.operation)) throw Error('Unknown plugin broker operation');
+  if (!['resolve', 'invoke', 'manager','task-launch','task-capability'].includes(request.operation)) throw Error('Unknown plugin broker operation');
   validId(request.runId, RUN_ID, 'plugin run ID');
+  if(request.operation==='task-capability') {
+    if(Object.keys(request).some(k=>!['version','id','operation','runId','stdin'].includes(k)))throw Error('Unexpected task capability field')
+    boundedString(request.stdin,4096,'task capability stdin');return request
+  }
   if(request.operation==='task-launch') {
     if(Object.keys(request).some(k=>!['version','id','operation','runId','stdin'].includes(k)))throw Error('Unexpected task launch field')
     boundedString(request.stdin,1024,'task launch stdin');return request
@@ -367,6 +384,11 @@ export async function servePluginBroker(binding, signal = new AbortController().
             setTimeout(() => admissions.delete(capability), ADMISSION_TTL_MS).unref();
             response(socket, { version: 1, id: request.id, ok: true, plugin: selected.plugin, alias: request.alias, revision: selected.record.revision, capability });
             return;
+          }
+          if(request.operation==='task-capability') {
+            const {grant,selected}=await authorizeTaskCapability(binding,request)
+            const result=await invokePlugin(binding,{version:1,id:request.id,operation:request.operation,runId:request.runId,alias:grant.command,args:grant.args,revision:selected.record.revision,pluginContext:grant.pluginContext},abort.signal)
+            response(socket,{version:1,id:request.id,...result});return
           }
           if(request.operation==='task-launch') {
             const launch=await authorizeTaskLaunch(binding,request)

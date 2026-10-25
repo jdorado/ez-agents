@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add scoped application tasks (version-5 grants) for applications that keep their own conversation records, such as SMS or voice outreach. One owner approval covers a declared batch of up to 1,000 scope IDs on one application channel binding, with owner-set caps within core ceilings (8 outstanding, 60 runs and replies per hour, 1,000 total; the total revokes the grant). Each scope runs as its own restricted task. ([#304](https://github.com/jdorado/ez-agents/issues/304))
+- Applications start or resume a scope's task with `POST /v1/task-events` `{eventId, scope}`. Event IDs are idempotent and remembered in the grant; scopes without an active grant are refused and recorded, never routed to the owner. Replies go to that run's application inbox. ([#303](https://github.com/jdorado/ez-agents/issues/303))
+- Scoped grants can include installed `taskScope` read and write commands. Core fills the run's `{scope}` and passes a 60-second scope token in `EZ_PLUGIN_CONTEXT`; the application backend verifies it with `POST /v1/task-scope`, and revocation, expiry or the end of the call invalidates it. ([#301](https://github.com/jdorado/ez-agents/issues/301))
+- A scoped grant can name a read capability as its context source. Core fetches it fresh before every run, fails the run if the fetch fails, and records the fetch receipt. ([#302](https://github.com/jdorado/ez-agents/issues/302))
+- Isolated executors now run restricted task capabilities through the plugin broker, which resolves the run's capability lease with the relay. File capabilities remain host-only.
+
 ## 0.1.0-beta.60
 
 - Advance the restricted messaging task audit baseline to Codex 0.164.0. Keep the exact-version gate and bounded MCP tool surface; align runtime CI and the host task fixture with the audited baseline.
