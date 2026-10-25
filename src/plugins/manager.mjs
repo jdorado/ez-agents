@@ -473,14 +473,18 @@ const authorizedApplicationRun = async (controlDir,runId,socketPath) => {
     run.ownerId!==ownerKey(state.owner)||run.ownerEpoch!==ownerEpoch(state.owner))throw Error('Application authority revoked');
   return application;
 };
+// A restricted task capability names only its lease: the relay resolves it to the
+// exact command vector and scope context, so a caller cannot choose either.
+export async function taskPluginContext(alias,args,environment=process.env) {
+  const rawDir=environment.EZ_CONTROL_DIR?.trim(),runId=environment.EZ_RUN_ID?.trim();
+  if(!rawDir||!path.isAbsolute(rawDir)||!runId||!/^[A-Za-z0-9_-]+$/.test(runId))throw Error('Task capability requires its active run');
+  const lease=JSON.parse(environment.EZ_TASK_CAPABILITY);
+  if(!lease||typeof lease!=='object'||Object.keys(lease).some(key=>!['lease','input','token'].includes(key)))throw Error('Invalid task capability lease');
+  const grant=await callDeliverySocket(environment.EZ_DELIVERY_SOCKET?.trim()||path.join(rawDir,'delivery.sock'),{op:'taskCapability',payload:{runId,...lease}});
+  if(grant?.command!==alias||JSON.stringify(grant.args)!==JSON.stringify(args))throw Error('Task capability command changed');
+  return grant.pluginContext===undefined?undefined:JSON.stringify(grant.pluginContext);
+}
 export async function applicationPluginContext(pluginId, environment=process.env) {
-  // A restricted scoped-task call carries its own context: a scope and a short-lived
-  // token the application backend verifies with core. Forged values verify nowhere.
-  if(environment.EZ_TASK_PLUGIN_CONTEXT!==undefined){
-    const context=JSON.parse(environment.EZ_TASK_PLUGIN_CONTEXT);
-    if(!context||typeof context!=='object'||Array.isArray(context)||Buffer.byteLength(environment.EZ_TASK_PLUGIN_CONTEXT)>16*1024)throw Error('Invalid task plugin context');
-    return JSON.stringify(context);
-  }
   const rawDir=environment.EZ_CONTROL_DIR?.trim(),runId=environment.EZ_RUN_ID?.trim();
   if(!rawDir||!runId)return undefined;
   if(!path.isAbsolute(rawDir))throw Error('Plugin context requires a bound active run');
@@ -515,7 +519,7 @@ export async function publishBrokerPlugins(home,controlDir) {
   await stewardOwned(file);
 }
 // The lock protects admission and compose refresh, never a persistent connection.
-export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false,environment=process.env,signal}={}) {
+export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false,environment=process.env,signal,taskContext}={}) {
   strings(args);
   return locked(home,async()=>{
     const config=await json(path.join(home,'config.json')),r=await registry(home);
@@ -531,7 +535,8 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     // variable interpolation in both Compose v1 and v2, so the container never
     // receives it; a one-shot override file sets the service environment
     // directly and keeps the value out of the process argument list.
-    const context=await applicationPluginContext(record.manifest.id,environment);
+    // The broker passes a relay-resolved task context; host task calls resolve their lease here.
+    const context=taskContext!==undefined?JSON.stringify(taskContext):environment.EZ_TASK_CAPABILITY!==undefined?await taskPluginContext(alias,args,environment):await applicationPluginContext(record.manifest.id,environment);
     let contextFile;
     if(context!==undefined){
       await privateDir(path.join(home,'plugin-context'));

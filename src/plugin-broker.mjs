@@ -260,7 +260,8 @@ const invokePlugin = async (binding, request, signal, scheduledPreflight = false
       revision: request.revision,
       invocation: true,
       signal,
-      environment: { EZ_CONTROL_DIR: binding.controlDir, ...(scheduledPreflight ? {} : {EZ_RUN_ID: request.runId}), EZ_DELIVERY_SOCKET: process.env.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir), ...(request.pluginContext ? {EZ_TASK_PLUGIN_CONTEXT: JSON.stringify(request.pluginContext)} : {}) },
+      environment: { EZ_CONTROL_DIR: binding.controlDir, ...(scheduledPreflight ? {} : {EZ_RUN_ID: request.runId}), EZ_DELIVERY_SOCKET: process.env.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir) },
+      taskContext: request.pluginContext,
     });
     try {
       result = await dockerRun(command.argv, {

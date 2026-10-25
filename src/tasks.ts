@@ -405,6 +405,7 @@ export class Tasks {
       if (budget.runs >= limits.hourly || outstanding >= limits.outstanding) return {defer: 'Task admission limit reached; retry later'}
       budget.runs++; budget.totalRuns++; task.seenEvents!.push(eventId)
       await this.save(task)
+      await runs.pruneTaskHistory(task.id)
       await runs.create({id: runId, ownerId: ownerId(task.owner), ownerEpoch: ownerEpoch(task.owner), taskId: task.id, texts: [],
         application: {bindingId, scope, requestId: eventId, taskScope: true}})
       return {runId, duplicate: false}
@@ -500,7 +501,7 @@ export class Tasks {
         if (!selected || (takesInput(selected) ? !bounded(args.input, 1000) : args.input !== undefined)) throw new Error('Channel capability is not authorized or has invalid input')
         const inputHash = createHash('sha256').update(typeof args.input === 'string' ? args.input : '').digest('hex')
         const key = `${run.id}_${selected.id}_${inputHash}`
-        const prior = task.capabilityOperations?.[key]
+        const prior = task.capabilityOperations?.[scope && typeof args.lease === 'string' ? `${key}_${args.lease}` : key]
         if (command === 'capability_result') {
           if (!prior || prior.lease !== args.lease) throw new Error('Channel capability lease is invalid')
           if(selected.output==='file') {
@@ -519,18 +520,18 @@ export class Tasks {
         const token = scope ? randomBytes(32).toString('hex') : undefined
         const scoped = token ? {runId: run.id, tokenHash: createHash('sha256').update(token).digest('hex'), tokenExpiresAt: Date.now() + 60000} : {}
         const resolved = scope ? {...selected, args: selected.args.map(arg => arg === '{scope}' ? scope : arg)} : selected
-        const minted = token ? {token, pluginContext: {task: {taskId: task.id, scope, capability: selected.id, access: selected.access, token, expiresAt: scoped.tokenExpiresAt}}} : {}
-        if (prior) {
-          if (token) { Object.assign(prior, scoped, {state: 'authorized'}); await this.save(task) }
-          return {capability:resolved,lease:prior.lease,...minted}
+        // Text queries reuse their lease; scoped calls get their own lease and token each.
+        if (prior && !scope) {
+          if (prior.state !== 'authorized') { prior.state = 'authorized'; await this.save(task) }
+          return {capability:resolved,lease:prior.lease}
         }
         const active=(await new RunStore(this.controlDir).list()).filter(item=>item.taskId===task.id&&['queued','running'].includes(item.status)).map(item=>`${item.id}_`)
         task.capabilityOperations = Object.fromEntries(Object.entries(task.capabilityOperations ?? {}).filter(([item]) => active.some(prefix=>item.startsWith(prefix))))
         if (Object.keys(task.capabilityOperations ?? {}).filter(item => item.startsWith(`${run.id}_`)).length >= (scope ? 16 : 8)) throw new Error('Channel capability limit reached')
         const operation = {capabilityId:selected.id,inputHash,lease:randomUUID(),state:'authorized' as const,...scoped}
-        task.capabilityOperations = {...task.capabilityOperations,[key]:operation}
+        task.capabilityOperations = {...task.capabilityOperations,[scope ? `${key}_${operation.lease}` : key]:operation}
         await this.save(task)
-        return {capability:resolved,lease:operation.lease,...minted}
+        return {capability:resolved,lease:operation.lease,...(token ? {token} : {})}
       }
       if (!bounded(args.text, 4096)) throw new Error('Supply text (maximum 4096 characters)')
       if (scope && command !== 'send') throw new Error('Application tasks reply and use their capabilities only')

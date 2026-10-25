@@ -495,7 +495,7 @@ The owner grants a batch of scope IDs once through `ezenciel-agents-task
 scope". It carries no message body. Core matches the active grant of this binding
 that lists the scope, starts one restricted task run and returns its run snapshot
 (202). The same event ID returns that run again (200) and never starts a second
-one, even after the run ended. A scope without an active grant from this binding
+one under that grant, even after the run ended. A scope without an active grant from this binding
 returns 404 and is recorded (latest 100) in private
 `control/task-event-refusals.json`; it is never routed to the owner agent. Admission
 caps return 429: retry later with the same event ID. The run reads current content

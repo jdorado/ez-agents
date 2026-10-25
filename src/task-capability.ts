@@ -36,7 +36,7 @@ function brokerCapability(runId: string, input: string, grant: Grant): Promise<{
   })
 }
 
-export async function runTaskCapability(toolsHome: string | undefined, capability: TaskCapability, input: string, staging?:{controlDir:string;runId:string;lease:string;token?:string;pluginContext?:unknown}):Promise<{output:string;attachment?:never}|{attachment:TaskAttachment;output?:never}> {
+export async function runTaskCapability(toolsHome: string | undefined, capability: TaskCapability, input: string, staging?:{controlDir:string;runId:string;lease:string;token?:string}):Promise<{output:string;attachment?:never}|{attachment:TaskAttachment;output?:never}> {
   const isolated = !!process.env.EZ_PLUGIN_BROKER_SOCKET
   if (!isolated) await assertChannelQuery(toolsHome,capability)
   const args = [capability.command, ...capability.args.map(value => value === '{input}' ? input : value)]
@@ -52,8 +52,9 @@ export async function runTaskCapability(toolsHome: string | undefined, capabilit
     if (!staging) throw Error('Isolated capabilities require a task lease')
     ;({stdout, code} = await brokerCapability(staging.runId, input, staging))
   } else try {
-    // The scope and its token reach only this plugin call, as its EZ_PLUGIN_CONTEXT.
-    const context = staging?.pluginContext ? {EZ_TASK_PLUGIN_CONTEXT: JSON.stringify(staging.pluginContext)} : {}
+    // A scoped call names only its lease; the manager has the relay resolve it to the
+    // command vector and scope context, which reaches that plugin as EZ_PLUGIN_CONTEXT.
+    const context = capability.access && staging ? {EZ_CONTROL_DIR: staging.controlDir, EZ_RUN_ID: staging.runId, EZ_TASK_CAPABILITY: JSON.stringify({lease: staging.lease, input, ...(staging.token ? {token: staging.token} : {})})} : {}
     const result = await execute(path.join(toolsHome!,'bin','ez'),args,{encoding:'utf8',env:{...executorEnvironment(),...context},timeout:15000,maxBuffer:MAX_OUTPUT})
     stdout = result.stdout
   } catch (error) {
@@ -69,8 +70,8 @@ export async function runTaskCapability(toolsHome: string | undefined, capabilit
 // The trusted task broker's one capability path: the relay authorizes a lease
 // (and, for scoped grants, mints the token), the plugin runs, the relay records it.
 export async function invokeTaskCapability(controlDir: string, runId: string, toolsHome: string | undefined, id: string, input: string | undefined) {
-  const begun = await taskCall(controlDir,runId,'worker','capability_begin',{id,...(input === undefined ? {} : {input})}) as {capability:TaskCapability;lease:string;token?:string;pluginContext?:unknown}
-  const result = await runTaskCapability(toolsHome,begun.capability,input ?? '',{controlDir,runId,lease:begun.lease,token:begun.token,pluginContext:begun.pluginContext})
+  const begun = await taskCall(controlDir,runId,'worker','capability_begin',{id,...(input === undefined ? {} : {input})}) as {capability:TaskCapability;lease:string;token?:string}
+  const result = await runTaskCapability(toolsHome,begun.capability,input ?? '',{controlDir,runId,lease:begun.lease,token:begun.token})
   const receipt = result.output === undefined ? {} : {outputSha256:createHash('sha256').update(result.output).digest('hex'),bytes:Buffer.byteLength(result.output)}
   await taskCall(controlDir,runId,'worker','capability_result',{id,...(input === undefined ? {} : {input}),lease:begun.lease,...receipt,...('attachment' in result && result.attachment?{attachment:result.attachment}:{})})
   return result

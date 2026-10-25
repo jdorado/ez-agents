@@ -347,7 +347,7 @@ export class ApplicationChannel {
         let raw=''; for await (const chunk of request) { raw += chunk; if (Buffer.byteLength(raw) > 1024) throw new Error('Invalid application task request') }
         const input = JSON.parse(raw), tasks = new Tasks(this.options.controlDir)
         if (path === '/v1/task-scope') {
-          if (!input || Object.keys(input).length !== 1) throw new Error('Invalid application task request')
+          if (!input || Object.keys(input).length !== 1 || !('token' in input)) throw new Error('Invalid application task request')
           try { send(200, await tasks.verifyScopeToken(binding.bindingId, input.token)) } catch { send(403, {error: 'Task scope token is invalid, expired or revoked'}) }
           return
         }
