@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-beta.63.rc.1 — private candidate
+
+- Preserve already-restored healthy plugin containers during updater recovery only when every service image matches the saved revision, avoiding unnecessary restart/health failures. Unverified, missing and unhealthy services retain normal replacement.
+
 ## 0.1.0-beta.62
 
 - Run root administrator commands as the owner of the control directory. `ezenciel-agents-application`, `-owner`, `-source`, `-schedule` and `-ai`, run as root inside the relay container (`docker compose exec relay …`), now switch to the user that owns the control directory before writing, as `-schedule` already did. Before this, they could leave `control-state.json` or `event-sources.json` root-owned and unreadable by the relay, which locked out owner checks or event sources. (`application-bindings.json` was already protected in 0.1.0-beta.61.) The application command reads `--token-file` before switching, so the token file may stay private to root. As root, a missing control directory is now an error instead of a root-owned directory. A file an earlier root run already left root-owned still needs one `chown` to the relay user. ([#308](https://github.com/jdorado/ez-agents/issues/308), [#310](https://github.com/jdorado/ez-agents/pull/310))
