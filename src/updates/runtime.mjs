@@ -206,7 +206,9 @@ export async function perform(home,job,hooks) {
       const deployment=JSON.parse(await run('docker',[...relayArgs(config),'config','--format','json'],{stdoutOnly:true}));
       const args=deployment.services?.relay?.build?.args||{};
       if(typeof args!=='object'||Array.isArray(args))throw Error('Invalid relay build arguments');
-      job.codexVersion=await latestCodexVersion(run,job.packageManager);await save();
+      // Run the lookup under the candidate's pinned manager: outside that directory a
+      // Corepack shim falls back to its last-known-good pnpm, which may be broken.
+      job.codexVersion=await latestCodexVersion((command,args,options)=>run(command,args,{...options,cwd:root}),job.packageManager);await save();
       const effective={...args,CODEX_CLI_VERSION:job.codexVersion};
       const buildArgs=Object.keys(effective).sort().flatMap(key=>{
         const value=effective[key];

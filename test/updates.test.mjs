@@ -156,9 +156,9 @@ test('root preparation leaves private plugin updates readable by the installer',
  await exec('setpriv',['--reuid=20001','--regid=20002','--clear-groups','--no-new-privs',process.execPath,'-e',script]);
 });
 function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},latest='0.160.0'}={}) {
- const calls=[];let failed=false,brokerImage='sha256:'+'a'.repeat(64);
+ const calls=[],lookups=[];let failed=false,brokerImage='sha256:'+'a'.repeat(64);
  const execute=async(command,args,opts)=>{
-  calls.push([command,...args]);if(args.includes('view'))return JSON.stringify(latest);if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
+  calls.push([command,...args]);if(args.includes('view')){lookups.push(opts?.cwd);return JSON.stringify(latest);}if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
   if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
   if(args.includes('ps'))return stopped?'':'a'.repeat(64);
@@ -172,7 +172,7 @@ function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},l
   if(args[0]==='run')await fs.writeFile(opts.outputFile,'retained-private-state',{mode:0o600});
   return '';
  };
- return {calls,execute,stopHost:async()=>calls.push(['stopHost']),startHost:async root=>calls.push(['startHost',root])};
+ return {calls,lookups,execute,stopHost:async()=>calls.push(['stopHost']),startHost:async root=>calls.push(['startHost',root])};
 }
 async function queued(f) {
  const job=await prepare(f.home,f.target,{file:await f.pack()});await atomic(path.join(f.home,'updates/supervisor.json'),{at:Date.now()});
@@ -381,7 +381,9 @@ test('latest overrides stale deployment pins and changing latest changes image b
   assert.equal((await perform(f.home,job,r)).status,'completed');
   const build=r.calls.find(c=>c[0]==='docker'&&c[1]==='build'),tag=build[build.indexOf('-t')+1];
   assert.ok(build.includes(`CODEX_CLI_VERSION=${pin}`));
-  assert.equal((await read(path.join(jobPath(f.home,job.id),'job.json'))).codexVersion,pin);
+  const saved=await read(path.join(jobPath(f.home,job.id),'job.json'));
+  assert.equal(saved.codexVersion,pin);
+  assert.deepEqual(r.lookups,[saved.root]);
   assert.match(await fs.readFile(path.join(f.config.deploymentDir,'docker.env'),'utf8'),new RegExp(tag));
   tags.push(tag);hashes.push(job.sha256);
  }
