@@ -110,7 +110,8 @@ contain exactly one `{scope}`, which core fills with the run's scope, and may en
 in `-- {input}` for one model-supplied string. Each call gets a fresh 60-second
 scope token through `EZ_PLUGIN_CONTEXT`; the plugin and its backend verify it with
 core and keep every read and write inside that scope. Core still rechecks the
-grant, the installed declaration and the run before each call. Writes stay
+grant, the installed declaration and the run before each call. A scoped run makes
+at most 16 capability calls, including its context fetch, and 30 replies. Writes stay
 ordinary plugin operations with their own idempotency and receipts.
 
 A grant may name one inputless read capability as its context source
