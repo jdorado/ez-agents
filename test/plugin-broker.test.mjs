@@ -296,3 +296,10 @@ test('isolated client does not wait forever on an inherited open stdin socket', 
   assert.equal((await finish(piped)).code, 0);
   assert.equal(invokes.at(-1).stdin, 'late');
 });
+
+test('the isolated broker accepts a task capability only as a bounded lease request', async () => {
+  const request = { version: 1, id: randomUUID(), operation: 'task-capability', runId: 'r_app_1', stdin: JSON.stringify({ lease: 'l', input: 'x', token: 'f'.repeat(64) }) };
+  assert.equal(await validateBrokerRequest(request, '/tmp'), request);
+  await assert.rejects(validateBrokerRequest({ ...request, alias: 'crm-scope-write', args: ['note'] }, '/tmp'), /Unexpected task capability field/);
+  await assert.rejects(validateBrokerRequest({ ...request, stdin: 'x'.repeat(5000) }, '/tmp'), /stdin/);
+});

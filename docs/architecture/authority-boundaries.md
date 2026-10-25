@@ -83,6 +83,43 @@ grant lifecycle/admin commands or an operation with
 unbounded or uncertain external effects through this query-shaped interface.
 Those require a purpose-built tool contract with its own idempotency and receipts.
 
+## Scoped application tasks
+
+Version-5 grants bind the audience to one application channel binding and a
+declared batch of up to 1,000 application scope IDs (for example one outreach
+lead each). The owner turn uses `ezenciel-agents-task start|propose --application APP
+--scope-file FILE` with purpose, shareable context, optional capabilities and an
+expiry or `--until-revoked`. Each scope runs as its own isolated task conversation;
+the batch shares only its admission budget. The owner chooses caps at approval
+within core ceilings: outstanding runs (at most 8), runs and replies per hour (at
+most 60) and total runs (at most 1,000). Reaching the total revokes the grant for
+every scope and requires fresh owner review. Revocation cancels queued runs, stops
+running ones on the next check, refuses new events and invalidates scope tokens.
+
+Runs start only from authenticated application events for a granted scope
+([application channel](../application-channel.md#scoped-application-tasks)); they
+create no opening run. Event IDs are remembered in the grant, so a duplicate does
+nothing. The runner gets `context`, `send` and its approved capabilities; it has
+no notes, reports, attachments or cross-scope state. `send` places text in the
+event run's application inbox; the application owns delivery to its correspondent.
+
+Scoped capabilities name an installed alias whose manifest declares
+`taskScope: "read"` or `"write"` with explicit exposure: external input, no external
+sends, no interactive review, and for `read` no record changes. Fixed arguments
+contain exactly one `{scope}`, which core fills with the run's scope, and may end
+in `-- {input}` for one model-supplied string. Each call gets a fresh 60-second
+scope token through `EZ_PLUGIN_CONTEXT`; the plugin and its backend verify it with
+core and keep every read and write inside that scope. Core still rechecks the
+grant, the installed declaration and the run before each call. Writes stay
+ordinary plugin operations with their own idempotency and receipts.
+
+A grant may name one inputless read capability as its context source
+(`--context-capability`). Core runs it before every run, after admission and
+before the native session starts, and gives its bounded output (128 KiB) to that
+session in the activation event, so each run sees the current application record.
+A failed fetch fails the run rather than proceeding without context. The fetch
+receipt (output SHA-256 and size; latest 100 runs) is kept in the grant.
+
 ## Ongoing conversation permissions
 
 Incoming-only proposals may use `--until-revoked` for an ongoing conversation.

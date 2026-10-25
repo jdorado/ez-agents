@@ -3,6 +3,8 @@ export type ApplicationOrigin = {
   scope: string
   requestId: string
   taskAccess?: string
+  // Run started by an application event for a scoped task grant (tasks.ts).
+  taskScope?: true
   followTelegram?: boolean
   inputText?: string
   attachmentHash?: string
@@ -14,6 +16,7 @@ export const validApplicationOrigin = (value: unknown): value is ApplicationOrig
   const origin = value as ApplicationOrigin | undefined
   return !!origin && /^[a-f0-9-]{36}$/.test(origin.bindingId) && applicationId(origin.scope) && applicationId(origin.requestId) &&
     (origin.taskAccess === undefined || /^[a-f0-9]{64}$/.test(origin.taskAccess)) &&
+    (origin.taskScope === undefined || origin.taskScope === true) &&
     (origin.followTelegram === undefined || typeof origin.followTelegram === 'boolean') &&
     (origin.inputText === undefined || (typeof origin.inputText === 'string' && origin.inputText.length <= 16000)) &&
     (origin.attachmentHash === undefined || /^[a-f0-9]{64}$/.test(origin.attachmentHash)) &&

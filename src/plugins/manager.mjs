@@ -209,7 +209,11 @@ export function validate(m,d,files) {
   if(JSON.stringify(Object.keys(m.commands).sort())!==JSON.stringify(Object.keys(d.commands).sort())) throw Error('Command bindings must match manifest');
   for(const [alias,c] of Object.entries(m.commands)) {
     id(alias); if(reserved.has(alias)) throw Error('Reserved alias');
-    keys(c,['executable','args','exposure','channelQuery','channelFile']); strings(c.args); exposure(c.exposure);
+    keys(c,['executable','args','exposure','channelQuery','channelFile','taskScope']); strings(c.args); exposure(c.exposure);
+    if(c.taskScope!==undefined && (!['read','write'].includes(c.taskScope) || c.channelQuery || c.channelFile)) throw Error('taskScope must be read or write, on a dedicated alias');
+    if(c.taskScope && (c.exposure?.receivesExternalContent!==true || c.exposure?.sendsExternally!==false || c.exposure?.requiresReview!==false ||
+      (c.taskScope==='read' ? c.exposure?.changesRecords!==false : typeof c.exposure?.changesRecords!=='boolean')))
+      throw Error('Scoped task commands must explicitly accept external input without sends or review, and read commands without writes');
     if(c.channelFile!==undefined && c.channelFile!==true) throw Error('channelFile must be true when declared');
     if(c.channelFile && c.channelQuery)throw Error('Choose one channel output type');
     if(c.channelQuery!==undefined && c.channelQuery!==true) throw Error('channelQuery must be true when declared');
@@ -470,6 +474,13 @@ const authorizedApplicationRun = async (controlDir,runId,socketPath) => {
   return application;
 };
 export async function applicationPluginContext(pluginId, environment=process.env) {
+  // A restricted scoped-task call carries its own context: a scope and a short-lived
+  // token the application backend verifies with core. Forged values verify nowhere.
+  if(environment.EZ_TASK_PLUGIN_CONTEXT!==undefined){
+    const context=JSON.parse(environment.EZ_TASK_PLUGIN_CONTEXT);
+    if(!context||typeof context!=='object'||Array.isArray(context)||Buffer.byteLength(environment.EZ_TASK_PLUGIN_CONTEXT)>16*1024)throw Error('Invalid task plugin context');
+    return JSON.stringify(context);
+  }
   const rawDir=environment.EZ_CONTROL_DIR?.trim(),runId=environment.EZ_RUN_ID?.trim();
   if(!rawDir||!runId)return undefined;
   if(!path.isAbsolute(rawDir))throw Error('Plugin context requires a bound active run');
