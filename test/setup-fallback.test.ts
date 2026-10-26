@@ -85,6 +85,25 @@ test('error-flagged success preserves only a final typed usage limit',()=>{
   assert.equal(observe({type:'assistant',error:'oauth_org_not_allowed'},tool,limitMessage,terminal).rejection?.category,'access-denied')
 })
 
+test('error-flagged success preserves typed startup rejection without authorizing replay after work',()=>{
+  const terminal={type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'}
+  const tool={type:'assistant',message:{content:[{type:'tool_use'}]}}
+  for(const [error,category] of [['authentication_failed','login-unavailable'],['model_not_found','provider-rejected']] as const){
+    const rejection={type:'assistant',error,isApiErrorMessage:true}
+    const state=observe({type:'system',subtype:'init'},rejection,terminal)
+    assert.equal(state.rejection?.category,category)
+    assert.equal(attemptFailure(state).continues,true)
+    assert.equal(observe(startupLine(state)).rejection?.category,category,'host and relay retain the same rejection')
+    assert.equal(attemptFailure(observe(tool,rejection,terminal)).continues,false,'work before authentication failure cannot replay')
+    assert.equal(observe(rejection,tool,terminal).rejection,undefined,'later work supersedes rejection')
+    assert.equal(observe(rejection,{...terminal,is_error:false}).rejection,undefined,'real success supersedes rejection')
+    for(const stop_reason of ['max_tokens','refusal','unknown'])
+      assert.equal(observe(rejection,{...terminal,stop_reason}).rejection,undefined,'competing stop cannot advance')
+  }
+  assert.equal(attemptFailure(observe({type:'assistant',error:'unknown'},terminal)).continues,false)
+  assert.equal(attemptFailure(observe({type:'assistant',error:'oauth_org_not_allowed'},terminal)).continues,false)
+})
+
 test('only scheduled Claude runs stream structured events',()=>{
   assert.deepEqual(EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/w',nativeSession:true},'','').slice(-3),['--output-format','stream-json','--verbose'])
   assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/w'},'','').includes('stream-json'))
@@ -156,6 +175,30 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
     close:async()=>{await relay.stop();await rm(dir,{recursive:true,force:true})}}
 }
 const quota={type:'assistant',error:'rate_limit'},work={type:'assistant',message:{content:[{type:'text',text:'working'}]}}
+
+test('scheduled rotation reaches saved Codex after quota and typed authentication failures',async()=>{
+  const third={...claudeA,id:'third',authProfile:'claude3'}
+  const fourth={...claudeA,id:'fourth',authProfile:'claude4'}
+  const terminal={type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'}
+  const auth={type:'assistant',error:'authentication_failed',isApiErrorMessage:true}
+  const f=await fixture('quota-auth-rotation',[
+    {lines:[quota,terminal],code:1},
+    {lines:[auth,terminal],code:1},
+    {lines:[startupLine({workBegan:true})],code:0},
+  ],[fourth,codexA],third)
+  try{
+    const run=await f.done()
+    assert.equal(run.status,'completed')
+    assert.deepEqual(run.attempts!.map(a=>[a.quotaScope,a.category,a.outcome]),[
+      ['claude@claude3','quota','failed'],['claude@claude4','login-unavailable','failed'],['codex',undefined,'completed'],
+    ])
+    assert.equal(f.launches.length,3)
+    const saved=await f.scheduler.get('daily')
+    assert.equal((await f.scheduler.trigger(saved.id,saved.revision,'fallback-quota-auth-rotation',f.owner,f.runs)).id,run.id)
+    await f.relay.drainSources()
+    assert.equal(f.launches.length,3,'reconciling the same occurrence never dispatches again')
+  }finally{await f.close()}
+})
 
 test('typed native terminal error with exit zero fails without replay',async()=>{
   const f=await fixture('terminal-error-zero',[{lines:[work,{type:'result',subtype:'error_during_execution',is_error:true,stop_reason:null}],code:0}])
