@@ -202,7 +202,7 @@ export const startupObserver = () => {
       // Keep that rejection only without a competing or unknown stop reason.
       const failedRejection = terminal.subtype === 'success' && terminal.isError === true && rejection !== undefined &&
         (terminal.stopReason == null || ['end_turn', 'stop_sequence'].includes(terminal.stopReason))
-      // A real success or a different terminal limit supersedes an earlier quota.
+      // A real success or a different terminal limit supersedes an earlier rejection.
       // Only the existing typed rejection can authorize setup continuation.
       if (!failedRejection && terminal.subtype !== 'error_during_execution' && !(event.subtype === undefined && event.is_error === true) && rejection?.category !== 'access-denied') rejection = undefined
       return

@@ -170,9 +170,9 @@ session with the saved prompt plus one factual line naming the run, the stopped
 setup, its native session and reset time, and that its work may be partly applied.
 The agent reconciles from its own records; core replays nothing else.
 
-A Claude `success` envelope with `is_error:true` remains failed. It preserves a
-final typed usage rejection only without a competing or unknown stop reason;
-the envelope alone never establishes quota.
+A Claude `success` envelope with `is_error:true` remains failed. It preserves the
+final typed rejection (usage limit, credits, login or provider) only without a
+competing or unknown stop reason; the envelope alone never establishes one.
 
 These same completion and fallback rules apply after a graceful relay upgrade
 adopts a running native session. Adoption attaches to that session; only an
