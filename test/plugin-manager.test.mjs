@@ -249,9 +249,19 @@ test('concurrent registered commands release the registry lock before execution'
  assert.deepEqual(outputs.map(result=>JSON.parse(result.stdout)).sort(),[['first'],['second']]);
  await f.call('plugins','uninstall','sample');
 });
+test('a plugin call silences host Compose v2 progress and warnings, and leaves the isolated Compose v1 argv alone',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ const saved=process.env.EZ_DOCKER_COMPOSE;t.after(()=>{if(saved===undefined)delete process.env.EZ_DOCKER_COMPOSE;else process.env.EZ_DOCKER_COMPOSE=saved;});
+ const home=await fs.realpath(f.home);delete process.env.EZ_DOCKER_COMPOSE;
+ const host=await prepareCommand(home,'sample',['ping']);
+ assert.deepEqual(host.argv.slice(0,5),['--log-level','error','compose','--progress','quiet']);assert.ok(host.argv.includes('run'));
+ process.env.EZ_DOCKER_COMPOSE='standalone';
+ const isolated=await prepareCommand(home,'sample',['ping']);
+ assert.equal(isolated.argv[0],'compose');assert.equal(isolated.argv.includes('--progress'),false);assert.equal(isolated.argv.includes('--log-level'),false);
+});
 test('unconfirmed direct-command cancellation retains its lifecycle lease',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
- await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='compose'&&a.includes('run')){console.log('ready');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)}else if(a[0]==='container'&&a[1]==='rm'){console.error('daemon unavailable');process.exit(19)}else if(a[0]==='container'&&a[1]==='inspect'){console.log('still-running')}\n`,{mode:0o700});
+ await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst a=process.argv.slice(2);if(a.includes('compose')&&a.includes('run')){console.log('ready');process.on('SIGTERM',()=>{});setInterval(()=>{},1000)}else if(a[0]==='container'&&a[1]==='rm'){console.error('daemon unavailable');process.exit(19)}else if(a[0]==='container'&&a[1]==='inspect'){console.log('still-running')}\n`,{mode:0o700});
  const child=spawn(path.join(f.home,'bin','ez'),['sample','wait'],{env:f.env,stdio:['ignore','pipe','pipe']});t.after(()=>child.kill('SIGKILL'));
  let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
  await once(child.stdout,'data');child.kill('SIGTERM');
