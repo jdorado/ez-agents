@@ -65,7 +65,7 @@ test('only a usage limit the run ended on continues after work began',()=>{
   assert.deepEqual(attemptFailure({workBegan:false,rejection:{category:'quota',resetAt:limitReset}}),{category:'quota',resetAt:limitReset,continues:true})
 })
 
-test('error-flagged success preserves only a final typed usage limit',()=>{
+test('error-flagged success preserves a final typed usage limit',()=>{
   const terminal={type:'result',subtype:'success',is_error:true,stop_reason:'stop_sequence'}
   const tool={type:'assistant',message:{content:[{type:'tool_use'}]}}
   for(const began of [false,true])for(const error of ['rate_limit','billing_error']){
