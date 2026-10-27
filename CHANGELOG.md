@@ -2,9 +2,9 @@
 
 ## 0.1.0-beta.63
 
-- Continue to the next saved setup when a Claude login rejects authentication before any work. Claude ends a typed `authentication_failed` (or provider) rejection with a `success` result flagged `is_error:true`. Earlier versions kept only usage-limit rejections through that envelope. They classified the attempt as `uncertain` and stopped the chain, so the run failed with `Native result failed: success` without trying the remaining saved logins or engines. Failures after work began, access denial, unknown errors and competing stop reasons still stop the chain. ([#315](https://github.com/jdorado/ez-agents/pull/315))
+- Continue to the next saved setup when a Claude login rejects authentication before any work. Claude ends a typed `authentication_failed` (or provider) rejection with a `success` result flagged `is_error:true`. Earlier versions kept only usage-limit rejections through that envelope. They classified the attempt as `uncertain` and stopped the chain, so the run failed with `Native result failed: success` without trying the remaining saved logins or engines. A login or provider rejection after work began, access denial, unknown errors and competing stop reasons still stop the chain. ([#315](https://github.com/jdorado/ez-agents/pull/315))
 
-Beta limit: a logged-out login still counts as available when every working login is at its usage limit. In that case the occurrence fails instead of waiting for a reset. Log the profile back in (`ezenciel-agents-ai profiles` shows its status) or remove it from the fallback chain.
+Beta limits: a logged-out login still counts as available when every other saved setup is at its usage limit. In that case the occurrence fails instead of waiting for a reset. Log the profile back in (`ezenciel-agents-ai profiles` shows its status) or remove it from the fallback chain.
 
 ## 0.1.0-beta.62
 
