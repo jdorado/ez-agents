@@ -346,7 +346,7 @@ for (for example an API-key login) shows `no limit data returned` or a short
 unavailable status. The default logins of a host-capable agent are the host's
 own login, which the relay container may not be able to read, so those lines can
 show an error; isolated agents and named profiles keep their login in their own
-home and are read normally. Logins are read at the same time, but the bot
+home and are expected to be read from there. Logins are read at the same time, but the bot
 answers no other message until the reply is built, up to 20 seconds when a
 client hangs. The reply carries only percentages, clocks, scope names and short
 status words. Nothing is stored.
