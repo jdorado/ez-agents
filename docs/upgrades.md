@@ -18,15 +18,12 @@ The main target and installed plugins version independently.
 
 Handoff-compatible core upgrades build while native work continues; activation briefly holds new turn admission. The current native executor retires from claiming new work; the replacement claims new requests while the retiring generation finishes its existing runs. The relay adopts those runs without replay, preserving their schedule holds, cancellation and settled delivery receipts. After completion or rollback, an isolated supervisor reloads at once and never holds new turns behind long native work: its executor containers keep running, and the successor adopts the claiming worker and removes each retiring generation after its work ends. A host-process worker exits with its supervisor, so that reload holds new turn admission until existing native work finishes and its successor worker is ready. Queued requests remain in the running relay and file transport; they do not block this supervisor reload. OS service process-group cleanup therefore cannot kill a retiring generation or be starved by newly admitted work. Plugin upgrades build while native work continues. Activation closes the existing registry admission lock, drains in-flight plugin command leases, and replaces the plugin under that lock. New native plugin calls wait for admission; an outdated revision fails before provider execution and must be rediscovered. No admitted provider operation is replayed. The shared broker and native sessions remain running. Older runtimes without the handoff contract retain the full native-work drain. Isolated agents migrate once after live native work finishes to a separate, unprivileged executor container. Pending requests remain queued for that executor; its private binding is copied into the container as root-owned, group-readable and not writable by the configured runtime user. Existing named volumes are attached as external volumes. It uses the same file transport; later relay/runtime upgrades preserve that executor generation. No native CLI or provider credentials move to the host. A plugin update also retains that drain if an operator replaced the broker’s single-file host binding (for example to approve new network pins), because that case still requires broker recreation.
 
-Compatible main upgrades also finish their advisory workspace/native-client
-backup before closing admission or stopping the relay. Large native histories do
-not extend the swap's delivery outage. These live-state copies are best effort;
-rollback restores code and configuration, never the backup over active state.
-Control backups omit disposable native diagnostic `logs_N.sqlite` databases and
-their WAL/SHM files under `cli/`; native auth, session history, other databases
-and workspace files remain included. The live originals are untouched.
-Hardlinked files remain shared within each backup, with independent copies from
-live state, so native task plugin caches are not duplicated for every task.
+Main upgrades never copy the agent workspace or native client state (auth,
+session history, task homes); rollback restores code and configuration, never
+state, so those multi-gigabyte copies were never restored. Large native histories
+therefore add neither disk use nor delivery outage to the swap. The backup keeps
+only the small deployment files, saved before closing admission or stopping the
+relay.
 
 The owner chooses the saved update policy. The host supervisor owns
 interruption-safe replacement. There is one host service per agent, not a second
@@ -212,8 +209,9 @@ and unhealthy relays still require the normal Compose replacement.
 An update never wakes the agent or injects wrapper state into its session; the
 owner or agent inspects receipts with `ez updates` when asked.
 
-Backups contain credentials and must stay private. Main backups cover the
-canonical mind/control and deployment files. Plugins back up existing named
+Backups contain credentials and must stay private. Main backups cover only the
+deployment files (`docker.env`, `host-executor.json`, `agent.json`, `purpose.md`,
+`relay.env`). Plugins back up existing named
 volumes while their services are stopped, using the previous image's `tar` and
 read-only volume mounts; archive output is written by the host with mode 0600.
 No backup deletes live data or revokes credentials. After a successful update, the
