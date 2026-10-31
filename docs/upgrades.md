@@ -18,15 +18,12 @@ The main target and installed plugins version independently.
 
 Handoff-compatible core upgrades build while native work continues; activation briefly holds new turn admission. The current native executor retires from claiming new work; the replacement claims new requests while the retiring generation finishes its existing runs. The relay adopts those runs without replay, preserving their schedule holds, cancellation and settled delivery receipts. After completion or rollback, an isolated supervisor reloads at once and never holds new turns behind long native work: its executor containers keep running, and the successor adopts the claiming worker and removes each retiring generation after its work ends. A host-process worker exits with its supervisor, so that reload holds new turn admission until existing native work finishes and its successor worker is ready. Queued requests remain in the running relay and file transport; they do not block this supervisor reload. OS service process-group cleanup therefore cannot kill a retiring generation or be starved by newly admitted work. Plugin upgrades build while native work continues. Activation closes the existing registry admission lock, drains in-flight plugin command leases, and replaces the plugin under that lock. New native plugin calls wait for admission; an outdated revision fails before provider execution and must be rediscovered. No admitted provider operation is replayed. The shared broker and native sessions remain running. Older runtimes without the handoff contract retain the full native-work drain. Isolated agents migrate once after live native work finishes to a separate, unprivileged executor container. Pending requests remain queued for that executor; its private binding is copied into the container as root-owned, group-readable and not writable by the configured runtime user. Existing named volumes are attached as external volumes. It uses the same file transport; later relay/runtime upgrades preserve that executor generation. No native CLI or provider credentials move to the host. A plugin update also retains that drain if an operator replaced the broker’s single-file host binding (for example to approve new network pins), because that case still requires broker recreation.
 
-Compatible main upgrades also finish their advisory workspace/native-client
-backup before closing admission or stopping the relay. Large native histories do
-not extend the swap's delivery outage. These live-state copies are best effort;
-rollback restores code and configuration, never the backup over active state.
-Control backups omit disposable native diagnostic `logs_N.sqlite` databases and
-their WAL/SHM files under `cli/`; native auth, session history, other databases
-and workspace files remain included. The live originals are untouched.
-Hardlinked files remain shared within each backup, with independent copies from
-live state, so native task plugin caches are not duplicated for every task.
+Main upgrades never copy the agent workspace or native client state (auth,
+session history, task homes); rollback restores code and configuration, never
+state, so those multi-gigabyte copies were never restored. Large native histories
+therefore add neither disk use nor delivery outage to the swap. The backup keeps
+only the small deployment files, saved before closing admission or stopping the
+relay.
 
 The owner chooses the saved update policy. The host supervisor owns
 interruption-safe replacement. There is one host service per agent, not a second
@@ -130,8 +127,10 @@ Reconcile the job's completed stages and installed state before retrying.
 ## Agent interface
 
 Telegram `/status` shows the relay's loaded version, fresh host version and
-installed plugin versions alongside work/queue health. The host heartbeat carries
-only plugin IDs/versions; the relay gets no plugin registry or Docker access.
+installed plugin versions alongside work/queue health. Isolated deployments read
+plugin IDs/versions from the broker's generated inventory, even while an executor
+heartbeat is fresh. Host-capable deployments use fresh host heartbeat metadata.
+The relay gets no plugin registry or Docker access.
 Plugin versions in Telegram are explicitly installed versions, not live-provider
 verification. Stale or legacy host metadata is shown as unavailable/unknown.
 
@@ -210,20 +209,34 @@ and unhealthy relays still require the normal Compose replacement.
 An update never wakes the agent or injects wrapper state into its session; the
 owner or agent inspects receipts with `ez updates` when asked.
 
-Backups contain credentials and must stay private. Main backups cover the
-canonical mind/control and deployment files. Plugins back up existing named
+Backups contain credentials and must stay private. Main backups cover only the
+deployment files (`docker.env`, `host-executor.json`, `agent.json`, `purpose.md`,
+`relay.env`). Plugins back up existing named
 volumes while their services are stopped, using the previous image's `tar` and
 read-only volume mounts; archive output is written by the host with mode 0600.
 No backup deletes live data or revokes credentials. After a successful update, the
 supervisor retains the newest completed backup per target and removes backup
 directories from older terminal receipts (`completed`, `failed` or
 `rolled-back`). Queued, applying and recovery-required jobs are never pruned. Old
-package roots and images remain available until they are no longer needed for the
-active or immediate rollback path; backup cleanup does not remove them. A cleanup
+package roots remain available until they are no longer needed for the active or
+immediate rollback path; backup cleanup does not remove them. A cleanup
 failure is recorded on the completed receipt and does not turn a successful
 update into a rollback. The supervisor repeats this reconciliation at startup so
 a release restart also cleans backups left by a crash window or by the release
 that installed the policy.
+
+Each main update builds one relay image, tagged `ez-upgrade-<hash>` and recorded
+on its receipt as `image`. The hash includes the deployment directory, so agents
+sharing a Docker daemon never share a tag. After a successful main update, the
+updater removes the images recorded by that agent's other `completed`, `failed`
+or `rolled-back` receipts, keeping the new one. An unresolved recovery blocks new
+updates, so no pending rollback needs them, and Docker refuses to remove an image
+a container still uses, which is skipped. Each removal is limited to 30 seconds;
+an image that is in use or slow stays recorded and is tried again after the next
+update, and the receipt's `imageCleanup.removed` lists what was removed. A failure
+to read the receipts is recorded as `imageCleanupError`. Neither turns a successful
+update into a rollback. Images built by earlier versions carry no receipt record
+and stay until removed manually.
 
 The updater accepts only matching state-schema and protocol contracts and an
 unchanged effective deployment layout. The reviewed beta.34 runtime migration
@@ -237,6 +250,12 @@ reviewed migration rather than an override flag. Release authors must truthfully
 declare schema compatibility. Code rollback **does not rewind private state**,
 provider cursors or operation receipts; uncertain actions are never replayed.
 Docker health is not proof of live provider identity or delivery.
+
+Plugin recovery keeps already-running containers only when every declared
+service is healthy and its image matches the saved plugin revision. It restores
+the saved registry and Compose bindings without another restart in that case.
+Missing, unhealthy, stopped or unverified images follow the normal replacement
+path; no private state or provider operation is replayed.
 
 The updater also records the exact Library beta14 command migration: it removes
 the retired `library-document` route and changes `library-query` from

@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { parseEnv } from 'node:util';
 import { tmpdir } from 'node:os';
 import { atomic, compose, snapshot, checkFolders, locked, publishBrokerPlugins } from '../plugins/manager.mjs';
-import { read, state, eligibility, jobPath, cleanupStaleBackups } from './control.mjs';
+import { read, state, eligibility, jobPath, cleanupStaleBackups, cleanupStaleImages } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
 import { extract, digest } from './artifact.mjs';
 
@@ -33,30 +33,6 @@ export function execute(command,args,options={}) {
 }
 export async function textAtomic(file,text) {
   const tmp=file+'.update.tmp';await fs.writeFile(tmp,text,{mode:0o600});await fs.rename(tmp,file);
-}
-export async function backupStateDirectory(source,destination,omit=[],{skipNativeLogs=false}={}) {
-  const hardlinks=new Map();
-  await fs.cp(source,destination,{recursive:true,filter:async(entry,target)=>{
-    const relative=path.relative(source,entry),first=relative.split(path.sep)[0];
-    if(omit.includes(first))return false;
-    // Codex diagnostic databases are disposable and their live WALs can be huge.
-    // Preserve native auth, session history and other databases in the backup.
-    if(skipNativeLogs&&first==='cli'&&/^logs_\d+\.sqlite(?:-(?:wal|shm))?$/.test(path.basename(entry)))return false;
-    const stat=await fs.lstat(entry,{bigint:true});
-    if(stat.isSocket())return false;
-    // Native task homes share plugin caches. Link backup copies to each other,
-    // never to live state, so a backup does not multiply those caches on disk.
-    if(stat.isFile()&&stat.nlink>1n) {
-      const key=`${stat.dev}:${stat.ino}`,existing=hardlinks.get(key);
-      if(existing)await fs.link(await existing,target);
-      else {
-        const copied=fs.copyFile(entry,target).then(()=>target);
-        hardlinks.set(key,copied);await copied;
-      }
-      return false;
-    }
-    return true;
-  }});
 }
 export const pluginArgs = record => ['compose','--project-name',record.project,'--file',record.compose];
 export async function packageManager(root,run=execute) {
@@ -186,6 +162,10 @@ export async function perform(home,job,hooks) {
     job.status='completed';job.endedAt=new Date().toISOString();await save();
     try { job.cleanup=await cleanupStaleBackups(home);await save(); }
     catch(error) { job.cleanupError=error.message;await save().catch(()=>{}); }
+    if(job.image) {
+      try { job.imageCleanup=await cleanupStaleImages(home,run,job);await save(); }
+      catch(error) { job.imageCleanupError=error.message;await save().catch(()=>{}); }
+    }
     return job;
   };
   const fail=async(error,recoveryHooks)=>{
@@ -215,18 +195,17 @@ export async function perform(home,job,hooks) {
         if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)||typeof value!=='string'||value.includes('\0'))throw Error('Unresolved relay build argument');
         return ['--build-arg',`${key}=${value}`];
       });
-      const image=`ez-upgrade-${digest(JSON.stringify([job.sha256,buildArgs])).slice(0,24)}`;
+      // The deployment directory keeps one tag per agent, so removing one agent's
+      // old images never removes an image another agent on the host still pins.
+      const image=`ez-upgrade-${digest(JSON.stringify([job.sha256,buildArgs,config.deploymentDir])).slice(0,24)}`;
       await run('docker',['build','--target','runtime',...buildArgs,'-t',image,root]);
+      job.image=image;await save();
+      // Rollback restores code and configuration, never state. Keep only the small
+      // deployment files; the agent workspace and native client state (many
+      // gigabytes) are live data that no update rewinds, so they are not copied.
       const backup=path.join(dir,'backup');
-      const backupState=async()=>{
-        await fs.mkdir(backup,{mode:0o700});
-        await backupStateDirectory(config.workspace,path.join(backup,'workspace'));
-        await backupStateDirectory(agent.controlDir,path.join(backup,'control'),hooks.preserveRuns ? ['host-executor'] : [],{skipNativeLogs:true});
-        for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
-      };
-      // Native client state can be many gigabytes. This advisory copy never
-      // rewinds live state, so compatible generations keep serving throughout it.
-      if(hooks.preserveRuns)await backupState();
+      await fs.mkdir(backup,{mode:0o700});
+      for(const name of ['docker.env','host-executor.json','agent.json','purpose.md','relay.env'])await fs.copyFile(path.join(config.deploymentDir,name),path.join(backup,name));
       const envFile=path.join(config.deploymentDir,'docker.env'),oldEnv=await fs.readFile(envFile,'utf8');
       const cid=(await run('docker',[...relayArgs(config),'ps','-q','relay'])).trim();
       if(!cid||/\s/.test(cid))throw Error('Expected one running relay');
@@ -240,7 +219,6 @@ export async function perform(home,job,hooks) {
         if(hooks.preserveRuns)await atomic(pause,{id:job.id});
         try {
       await run('docker',[...relayArgs(config),'stop','relay']);await (hooks.preserveRuns ? hooks.retireHost() : hooks.stopHost());
-      if(!hooks.preserveRuns)await backupState();
       let env=oldEnv.split(job.previousRoot+path.sep).join(root+path.sep);env=envValue(env,'EZ_RELAY_IMAGE',image);
       await textAtomic(envFile,env);
       await bindUpdates(home,path.join(config.deploymentDir,'host-executor.json'),root);
@@ -314,11 +292,14 @@ export async function recover(home,job,hooks) {
         job.rollbackBrokerReadiness=await refreshBroker(config,run,pinned);
       } else {
         const b=job.rollback;
-        await run('docker',[...pluginArgs(b.record),'stop']);
+        const {pluginStatus}=await import('./status.mjs');
+        const current=b.running?await pluginStatus(b.record,run):null;
+        const retained=current?.runningVersion===b.record.manifest.version&&current.services.every(service=>service.health==='healthy');
+        if(!retained)await run('docker',[...pluginArgs(b.record),'stop']);
         await atomic(b.record.compose,b.compose);await atomic(path.join(home,'registry.json'),b.registry);
         job.rollbackBrokerReadiness=hooks.refreshPluginBroker?await refreshBroker(config,run):await verifyBroker(config,run);
         await publishBrokerPlugins(home,(await state(home)).agent.controlDir);
-        if(b.running)await run('docker',[...pluginArgs(b.record),'up','-d','--wait','--wait-timeout','90','--no-build']);
+        if(b.running&&!retained)await run('docker',[...pluginArgs(b.record),'up','-d','--wait','--wait-timeout','90','--no-build']);
       }
       job.status='rolled-back';
     }else job.status='failed';

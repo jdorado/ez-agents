@@ -175,6 +175,19 @@ export async function cleanupStaleBackups(home) {
   }
   return {kept:[...latest.values()].map(job=>job.id),removed};
 }
+// Remove the relay images this agent built for its other finished updates. An
+// unresolved recovery blocks new updates, so no pending job needs one; Docker
+// refuses to remove an image a container still uses, which is skipped. The
+// update still holds admission, so a hung daemon must not hold it for long.
+export async function cleanupStaleImages(home,run,current) {
+  const owned=/^ez-upgrade-[a-f0-9]{24}$/;
+  const stale=new Set((await jobs(home)).filter(job=>terminalStatuses.has(job.status)&&owned.test(job.image)&&job.image!==current.image).map(job=>job.image)),removed=[];
+  for(const image of stale) {
+    try { await run('docker',['image','rm',image],{timeout:30000});removed.push(image); }
+    catch { /* in use by a container, already gone, or slow: tried again after the next update */ }
+  }
+  return {removed};
+}
 async function requireSupervisor(directory) {
   const h=await read(path.join(directory,'supervisor.json'));
   if(!Number.isFinite(h.at)||Date.now()-h.at>10000||h.at>Date.now()+5000)throw Error('Upgrade supervisor is offline or heartbeat is invalid');

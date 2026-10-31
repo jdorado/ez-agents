@@ -8,8 +8,8 @@ import { spawn, execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
-import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
-import { perform, environment, packageManager, backupStateDirectory, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
+import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, cleanupStaleImages, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
+import { perform, environment, packageManager, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { TOOLS_LINE } from '../src/tools-line.mjs';
@@ -21,60 +21,6 @@ test('structured runtime output excludes warnings but failures retain diagnostic
  const script="process.stderr.write('Compose warning\\n');process.stdout.write(JSON.stringify({services:{}}));";
  assert.deepEqual(JSON.parse(await execute(process.execPath,['-e',script],{stdoutOnly:true})),{services:{}});
  await assert.rejects(execute(process.execPath,['-e',script+'process.exitCode=1'],{stdoutOnly:true}),/Compose warning/);
-});
-
-test('main upgrade backup omits a live plugin socket and keeps private files',async t=>{
- const root=await fs.mkdtemp('/tmp/ez-upgrade-socket-');
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const source=path.join(root,'control'),destination=path.join(root,'backup');
- await fs.mkdir(source);await fs.writeFile(path.join(source,'state.json'),'private state');
- const socket=path.join(source,'plugin-broker.sock'),server=createServer();
- await new Promise((resolve,reject)=>server.once('error',reject).listen(socket,resolve));
- t.after(()=>new Promise(resolve=>server.close(resolve)));
- await backupStateDirectory(source,destination);
- assert.equal(await fs.readFile(path.join(destination,'state.json'),'utf8'),'private state');
- assert.deepEqual(await fs.readdir(destination),['state.json']);
-});
-
-test('control backup skips native diagnostic databases while retaining sessions and source logs',async t=>{
- const root=await fs.mkdtemp('/tmp/ez-upgrade-native-logs-');
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const source=path.join(root,'control'),destination=path.join(root,'backup');
- const native='cli/codex/tasks/example';
- const logs=['logs_1.sqlite','logs_2.sqlite','logs_2.sqlite-wal','logs_2.sqlite-shm'];
- const retained=[`${native}/auth.json`,`${native}/sessions/turn.jsonl`,`${native}/state_5.sqlite`,'logs_2.sqlite','cli/notes.md'];
- for(const name of [...logs.map(name=>`${native}/${name}`),...retained]) {
-  const file=path.join(source,name);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,'synthetic state');
- }
- await backupStateDirectory(source,destination,[],{skipNativeLogs:true});
- for(const name of logs) {
-  await assert.rejects(fs.access(path.join(destination,native,name)),{code:'ENOENT'});
-  assert.equal(await fs.readFile(path.join(source,native,name),'utf8'),'synthetic state');
- }
- for(const name of retained)assert.equal(await fs.readFile(path.join(destination,name),'utf8'),'synthetic state');
- const workspaceCopy=path.join(root,'workspace-copy');
- await backupStateDirectory(source,workspaceCopy);
- await fs.access(path.join(workspaceCopy,native,logs[0]));
-});
-
-test('state backup preserves shared cache hardlinks without linking to live state',async t=>{
- const root=await fs.mkdtemp('/tmp/ez-upgrade-hardlinks-');
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const source=path.join(root,'control'),destination=path.join(root,'backup');
- const first='cli/task-a/cache/asset',second='cli/task-b/cache/asset';
- for(const name of [first,second])await fs.mkdir(path.dirname(path.join(source,name)),{recursive:true});
- await fs.writeFile(path.join(source,first),'shared cache',{mode:0o600});
- await fs.link(path.join(source,first),path.join(source,second));
- await fs.writeFile(path.join(source,'distinct'),'shared cache');
- await backupStateDirectory(source,destination);
- const original=await fs.stat(path.join(source,first)),a=await fs.stat(path.join(destination,first)),b=await fs.stat(path.join(destination,second));
- assert.equal(a.ino,b.ino);assert.equal(a.dev,b.dev);assert.equal(a.nlink,2);
- assert.notEqual(a.ino,original.ino);assert.equal(a.mode&0o777,0o600);
- assert.notEqual((await fs.stat(path.join(destination,'distinct'))).ino,a.ino);
- await fs.writeFile(path.join(destination,second),'changed backup');
- assert.equal(await fs.readFile(path.join(destination,first),'utf8'),'changed backup');
- assert.equal(await fs.readFile(path.join(source,first),'utf8'),'shared cache');
- assert.equal(await fs.readFile(path.join(source,second),'utf8'),'shared cache');
 });
 
 test('supervisor forwards only provider keys declared by the agent installation',()=>{
@@ -346,7 +292,7 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  await fs.writeFile(path.join(jobPath(f.home,job.id),'package/bin/example.mjs'),'tampered');
  const result=await perform(f.home,job,r);assert.equal(result.status,'completed');
  assert.equal(await fs.readFile(path.join(f.agent.workspace,'memory.md'),'utf8'),'retain me');
- assert.equal(await fs.readFile(path.join(jobPath(f.home,job.id),'backup/workspace/memory.md'),'utf8'),'retain me');
+ assert.deepEqual((await fs.readdir(path.join(jobPath(f.home,job.id),'backup'))).sort(),['agent.json','docker.env','host-executor.json','purpose.md','relay.env'],'backup keeps deployment files and never copies workspace or control state');
  await assert.rejects(fs.access(path.join(f.config.deploymentDir,'mind')));
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.notEqual(await fs.readFile(path.join(active,'bin/example.mjs'),'utf8'),'tampered');
@@ -395,6 +341,43 @@ test('update cleanup keeps the newest backup per target and ignores unfinished j
  await seed(older,'main','completed','2026-01-01T00:00:00.000Z');await seed(latest,'main','completed','2026-01-02T00:00:00.000Z');await seed(queued,'sample','queued','2026-01-03T00:00:00.000Z');await seed(rolledBack,'main','rolled-back','2026-01-03T00:00:00.000Z');
  const result=await cleanupStaleBackups(f.home);assert.deepEqual(result.kept,[latest]);assert.deepEqual(result.removed.sort(),[older,rolledBack].sort());
  await assert.rejects(fs.access(path.join(jobPath(f.home,older),'backup')));await fs.access(path.join(jobPath(f.home,latest),'backup'));await fs.access(path.join(jobPath(f.home,queued),'backup'));await assert.rejects(fs.access(path.join(jobPath(f.home,rolledBack),'backup')));
+});
+test('completed main update removes only this agent\'s older upgrade images and tolerates one in use',async t=>{
+ const f=await fixture(t),name=n=>`ez-upgrade-${n.repeat(24)}`;
+ const seed=async(id,status,image)=>{await fs.mkdir(jobPath(f.home,id),{recursive:true});await atomic(path.join(jobPath(f.home,id),'job.json'),{id,target:'main',status,image,createdAt:'2026-01-01T00:00:00.000Z',endedAt:'2026-01-01T00:00:00.000Z'});};
+ const id=n=>n.repeat(8)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(12);
+ await seed(id('1'),'completed',name('1'));await seed(id('2'),'failed',name('2'));await seed(id('3'),'rolled-back',name('3'));
+ await seed(id('5'),'completed',undefined);await seed(id('6'),'completed','alpine:latest');
+ const job=await queued(f),base=runtime(f);
+ await seed(id('4'),'applying',name('4'));
+ const r={...base,execute:async(c,a,o)=>{
+  if(a[0]==='image'&&a[1]==='rm'&&a[2]===name('2')){base.calls.push([c,...a]);throw Error('image is being used by a container');}
+  return base.execute(c,a,o);
+ }};
+ const result=await perform(f.home,job,r);assert.equal(result.status,'completed');
+ const built=base.calls.find(c=>c[1]==='build'),current=built[built.indexOf('-t')+1];
+ assert.match(current,/^ez-upgrade-[a-f0-9]{24}$/);assert.equal(result.image,current);
+ const removed=base.calls.filter(c=>c[1]==='image'&&c[2]==='rm').map(c=>c[3]).sort();
+ assert.deepEqual(removed,[name('1'),name('2'),name('3')],'only finished jobs\' own images are targeted: not the current, unfinished, legacy or foreign names');
+ assert.deepEqual(result.imageCleanup.removed.sort(),[name('1'),name('3')]);assert.equal(result.imageCleanupError,undefined);
+ assert.deepEqual((await read(path.join(jobPath(f.home,job.id),'job.json'))).imageCleanup.removed.sort(),[name('1'),name('3')]);
+});
+test('image cleanup never removes the current image when an older receipt names it, and bounds each removal',async t=>{
+ const f=await fixture(t),name=n=>`ez-upgrade-${n.repeat(24)}`,calls=[];
+ const seed=async(n,status,image)=>{const id=n.repeat(8)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(12);await fs.mkdir(jobPath(f.home,id),{recursive:true});await atomic(path.join(jobPath(f.home,id),'job.json'),{id,target:'main',status,image});};
+ // A retry of the same candidate on the same deployment builds the same tag.
+ await seed('1','failed',name('1'));await seed('2','completed',name('2'));
+ const result=await cleanupStaleImages(f.home,async(c,a,o)=>{calls.push([c,...a,o?.timeout]);},{image:name('1')});
+ assert.deepEqual(calls,[['docker','image','rm',name('2'),30000]]);assert.deepEqual(result.removed,[name('2')]);
+});
+test('upgrade image tags are unique per agent deployment for the same candidate',async t=>{
+ const tags=[],shas=[];
+ for(let i=0;i<2;i++) {
+  const f=await fixture(t),job=await queued(f),r=runtime(f);shas.push(job.sha256);
+  assert.equal((await perform(f.home,job,r)).status,'completed');
+  const built=r.calls.find(c=>c[1]==='build');tags.push(built[built.indexOf('-t')+1]);
+ }
+ assert.equal(shas[0],shas[1],'same candidate archive');assert.notEqual(tags[0],tags[1]);
 });
 test('failed preparation never stops runtime; failed activation rolls back code without rewinding state',async t=>{
  for(const stage of ['build','health']) {
@@ -814,6 +797,25 @@ test('private plugins retain explicit local-file preparation and application gua
  const result=await perform(f.home,submitted,runtime(f));assert.equal(result.status,'completed');
 });
 
+for(const mode of ['exact','wrong-image','unhealthy','missing','unverifiable']) test(`plugin recovery preserves only healthy containers matching the saved revision: ${mode}`,async t=>{
+ const f=await fixture(t,'plugin'),job=await queued(f),r=runtime(f);await perform(f.home,job,r);
+ const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
+ const calls=[],expected='sha256:'+'b'.repeat(64),execute=async(command,args,options)=>{
+  calls.push([command,...args]);
+  if(args.includes('ps')&&args.includes('--format'))return JSON.stringify(mode==='missing'?[]:[{ID:'a'.repeat(64),Service:'sample',State:'running',Health:mode==='unhealthy'?'unhealthy':'healthy'}]);
+  if(args[0]==='image'&&args[1]==='inspect') {if(mode==='unverifiable')throw Error('Image cannot be verified');return expected;}
+  if(args[0]==='inspect'&&args.includes('{{.Image}}'))return mode==='wrong-image'?'sha256:'+'c'.repeat(64):expected;
+  if(mode==='exact'&&(args.includes('stop')||args.includes('up')))throw Error('Healthy restored plugin must remain running');
+  return r.execute(command,args,options);
+ };
+ const result=await perform(f.home,interrupted,{...r,execute});
+ assert.equal(result.status,'rolled-back');
+ assert.equal(calls.some(c=>c.includes('up')),mode!=='exact');
+ assert.equal(calls.some(c=>c.includes('stop')),mode!=='exact');
+ assert.equal((await read(path.join(f.home,'registry.json'))).plugins.sample.revision,f.record.revision);
+ assert(!calls.some(c=>c[0]==='stopHost'));
+});
+
 for(const mode of ['exact','wrong-image','unhealthy']) test(`recovery reuses only a healthy retained pinned relay: ${mode}`,async t=>{
  const f=await fixture(t),job=await queued(f),r=runtime(f);await perform(f.home,job,r);
  const interrupted=await read(path.join(jobPath(f.home,job.id),'job.json'));interrupted.status='applying';
@@ -893,9 +895,7 @@ test('handoff-compatible core upgrade builds with native work active and retires
   if(args.includes('build')){await fs.access(claim);await assert.rejects(fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')),{code:'ENOENT'});await assert.rejects(fs.access(path.join(f.home,'registry.lock')),{code:'ENOENT'})}
   if(args.includes('stop')){
    const backup=path.join(jobPath(f.home,job.id),'backup');
-   assert.equal(await fs.readFile(path.join(backup,'workspace','TOOLS.md'),'utf8'),'My notes\n','state backup finishes before relay shutdown');
-   await fs.access(path.join(backup,'control'));
-   await assert.rejects(fs.access(path.join(backup,'control','host-executor')),{code:'ENOENT'});
+   assert.deepEqual((await fs.readdir(backup)).sort(),['agent.json','docker.env','host-executor.json','purpose.md','relay.env'],'deployment backup finishes before relay shutdown without copying state');
   }
   return execute(command,args,options)
  }

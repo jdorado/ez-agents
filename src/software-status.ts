@@ -21,7 +21,8 @@ export const softwareStatus = async (controlDir: string, isolation?: string): Pr
     host = h
     lines.push(`Env: ${envLabel(host, isolation)}`)
     lines.push(`Host transport: running · ${typeof h.version === 'string' ? `v${h.version}` : 'version unknown'}`)
-    if (!Array.isArray(h.plugins)) lines.push('Plugins: unknown')
+    if (isolation === 'isolated') lines.push((await brokerPlugins(controlDir)) ?? 'Plugins: isolated broker · versions via `ez tools list`')
+    else if (!Array.isArray(h.plugins)) lines.push('Plugins: unknown')
     else lines.push(`Plugins: ${h.plugins.length ? h.plugins.map((p: {id: string; version: string}) => `${p.id} ${p.version}`).join(', ') : 'none installed'}`)
   } catch {
     lines.push(`Env: ${envLabel(host, isolation)}`)

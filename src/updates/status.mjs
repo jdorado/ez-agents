@@ -19,7 +19,7 @@ async function relay(control) {
   return heartbeat(path.join(control,'heartbeat.json'),20000,true);
 }
 
-async function plugin(record,run) {
+export async function pluginStatus(record,run=execute) {
   const result={id:record.manifest.id,installedVersion:record.manifest.version,runningVersion:null,state:'unknown',services:[]};
   try {
     let rows;
@@ -62,7 +62,7 @@ export async function status(home,run=execute) {
   const binding=await read(path.join(home,'config.json')),registry=await read(path.join(home,'registry.json'));
   if(!Object.hasOwn(binding,'deploymentDir') && !Object.hasOwn(binding,'packageRoot')) return {
     main:null,scope:home,workspace:binding.workspace,
-    plugins:await Promise.all(Object.values(registry.plugins).map(record=>plugin(record,run))),
+    plugins:await Promise.all(Object.values(registry.plugins).map(record=>pluginStatus(record,run))),
     jobs:[],updates:'Unavailable without a relay deployment binding'
   };
   const {config,agent}=await state(home);
@@ -71,7 +71,7 @@ export async function status(home,run=execute) {
   return {
     main:{installedVersion,...await relay(agent.controlDir),
       host:await heartbeat(path.join(agent.controlDir,'host-executor/heartbeat.json'),15000)},
-    plugins:await Promise.all(Object.values(registry.plugins).map(record=>plugin(record,run))),
+    plugins:await Promise.all(Object.values(registry.plugins).map(record=>pluginStatus(record,run))),
     jobs:(await jobs(home)).map(({rollback,...job})=>job)
   };
 }

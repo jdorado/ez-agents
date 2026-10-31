@@ -388,6 +388,11 @@ async function refreshRecordCompose(home, config, record) {
 function dockerEnv() {
   return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','DOCKER_HOST','DOCKER_CONTEXT','DOCKER_CONFIG','BUILDX_CONFIG','EZ_DOCKER_COMPOSE'].filter(k=>process.env[k]!==undefined).map(k=>[k,process.env[k]]));
 }
+// A plugin call's stderr belongs to the agent. Host Compose v2 adds its container progress and the persisted
+// descriptor's `version` deprecation warning to every call; quiet both. The isolated broker's Compose v1 has neither
+// and rejects the flags, so its argv is unchanged.
+export const quietCompose = argv => process.env.EZ_DOCKER_COMPOSE === 'standalone' || argv[0] !== 'compose'
+  ? argv : ['--log-level','error','compose','--progress','quiet',...argv.slice(1)];
 const dockerInvocation = argv => process.env.EZ_DOCKER_COMPOSE === 'standalone' && argv[0] === 'compose'
   ? {command:'docker-compose',args:argv.slice(1)} : {command:'docker',args:argv};
 export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,timeoutMs=0,maxBytes=Infinity}={}) {
@@ -549,7 +554,7 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     }
     const invocationRelease=invocation?await invocationLease(home,container):undefined;
     const release=(invocationRelease||contextFile)?(async()=>{try{if(contextFile)await fs.rm(contextFile,{force:true});}finally{await invocationRelease?.();}}):undefined;
-    return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:[...composeArgs(record),...(contextFile?['--file',contextFile]:[]),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])],release};
+    return {container,plugin:record.manifest.id,revision:record.revision,contextFile,argv:quietCompose([...composeArgs(record),...(contextFile?['--file',contextFile]:[]),'run','--rm','--no-deps','-T','--name',container,...(publish?['--publish',publish]:[]),'--entrypoint',binding.argv[0],binding.service,...binding.argv.slice(1),...record.manifest.commands[alias].args,...args,...(binding.suffix||[])]),release};
   },{allowInvocations:true,waitMs:5000,upgradeWaitMs:invocation?300000:0,signal});
 }
 export async function init(home,workspace,catalogFile,hostConfig,standalone=false) {
