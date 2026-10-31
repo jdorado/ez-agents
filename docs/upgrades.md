@@ -218,12 +218,22 @@ No backup deletes live data or revokes credentials. After a successful update, t
 supervisor retains the newest completed backup per target and removes backup
 directories from older terminal receipts (`completed`, `failed` or
 `rolled-back`). Queued, applying and recovery-required jobs are never pruned. Old
-package roots and images remain available until they are no longer needed for the
-active or immediate rollback path; backup cleanup does not remove them. A cleanup
+package roots remain available until they are no longer needed for the active or
+immediate rollback path; backup cleanup does not remove them. A cleanup
 failure is recorded on the completed receipt and does not turn a successful
 update into a rollback. The supervisor repeats this reconciliation at startup so
 a release restart also cleans backups left by a crash window or by the release
 that installed the policy.
+
+Each main update builds one relay image, tagged `ez-upgrade-<hash>` and recorded
+on its receipt as `image`. The hash includes the deployment directory, so agents
+sharing a Docker daemon never share a tag. After a successful main update, the
+updater removes the images recorded by that agent's other `completed`, `failed`
+or `rolled-back` receipts, keeping the new one. An unresolved recovery blocks new
+updates, so no pending rollback needs them, and Docker refuses to remove an image
+a container still uses, which is skipped. Failures are recorded on the receipt as
+`imageCleanupError` and never turn a successful update into a rollback. Images
+built by earlier versions carry no receipt record and stay until removed manually.
 
 The updater accepts only matching state-schema and protocol contracts and an
 unchanged effective deployment layout. The reviewed beta.34 runtime migration

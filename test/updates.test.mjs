@@ -342,6 +342,35 @@ test('update cleanup keeps the newest backup per target and ignores unfinished j
  const result=await cleanupStaleBackups(f.home);assert.deepEqual(result.kept,[latest]);assert.deepEqual(result.removed.sort(),[older,rolledBack].sort());
  await assert.rejects(fs.access(path.join(jobPath(f.home,older),'backup')));await fs.access(path.join(jobPath(f.home,latest),'backup'));await fs.access(path.join(jobPath(f.home,queued),'backup'));await assert.rejects(fs.access(path.join(jobPath(f.home,rolledBack),'backup')));
 });
+test('completed main update removes only this agent\'s older upgrade images and tolerates one in use',async t=>{
+ const f=await fixture(t),name=n=>`ez-upgrade-${n.repeat(24)}`;
+ const seed=async(id,status,image)=>{await fs.mkdir(jobPath(f.home,id),{recursive:true});await atomic(path.join(jobPath(f.home,id),'job.json'),{id,target:'main',status,image,createdAt:'2026-01-01T00:00:00.000Z',endedAt:'2026-01-01T00:00:00.000Z'});};
+ const id=n=>n.repeat(8)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(12);
+ await seed(id('1'),'completed',name('1'));await seed(id('2'),'failed',name('2'));await seed(id('3'),'rolled-back',name('3'));
+ await seed(id('5'),'completed',undefined);await seed(id('6'),'completed','alpine:latest');
+ const job=await queued(f),base=runtime(f);
+ await seed(id('4'),'applying',name('4'));
+ const r={...base,execute:async(c,a,o)=>{
+  if(a[0]==='image'&&a[1]==='rm'&&a[2]===name('2')){base.calls.push([c,...a]);throw Error('image is being used by a container');}
+  return base.execute(c,a,o);
+ }};
+ const result=await perform(f.home,job,r);assert.equal(result.status,'completed');
+ const built=base.calls.find(c=>c[1]==='build'),current=built[built.indexOf('-t')+1];
+ assert.match(current,/^ez-upgrade-[a-f0-9]{24}$/);assert.equal(result.image,current);
+ const removed=base.calls.filter(c=>c[1]==='image'&&c[2]==='rm').map(c=>c[3]).sort();
+ assert.deepEqual(removed,[name('1'),name('2'),name('3')],'only finished jobs\' own images are targeted: not the current, unfinished, legacy or foreign names');
+ assert.deepEqual(result.imageCleanup.removed.sort(),[name('1'),name('3')]);assert.equal(result.imageCleanupError,undefined);
+ assert.deepEqual((await read(path.join(jobPath(f.home,job.id),'job.json'))).imageCleanup.removed.sort(),[name('1'),name('3')]);
+});
+test('upgrade image tags are unique per agent deployment for the same candidate',async t=>{
+ const tags=[],shas=[];
+ for(let i=0;i<2;i++) {
+  const f=await fixture(t),job=await queued(f),r=runtime(f);shas.push(job.sha256);
+  assert.equal((await perform(f.home,job,r)).status,'completed');
+  const built=r.calls.find(c=>c[1]==='build');tags.push(built[built.indexOf('-t')+1]);
+ }
+ assert.equal(shas[0],shas[1],'same candidate archive');assert.notEqual(tags[0],tags[1]);
+});
 test('failed preparation never stops runtime; failed activation rolls back code without rewinding state',async t=>{
  for(const stage of ['build','health']) {
   const f=await fixture(t),job=await queued(f),r=runtime(f,{fail:(_c,a)=>stage==='build'?a[0]==='build':a.includes('up')});
