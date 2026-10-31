@@ -177,13 +177,14 @@ export async function cleanupStaleBackups(home) {
 }
 // Remove the relay images this agent built for its other finished updates. An
 // unresolved recovery blocks new updates, so no pending job needs one; Docker
-// refuses to remove an image a container still uses, which is skipped.
+// refuses to remove an image a container still uses, which is skipped. The
+// update still holds admission, so a hung daemon must not hold it for long.
 export async function cleanupStaleImages(home,run,current) {
   const owned=/^ez-upgrade-[a-f0-9]{24}$/;
   const stale=new Set((await jobs(home)).filter(job=>terminalStatuses.has(job.status)&&owned.test(job.image)&&job.image!==current.image).map(job=>job.image)),removed=[];
   for(const image of stale) {
-    try { await run('docker',['image','rm',image]);removed.push(image); }
-    catch { /* in use by a container, or already gone */ }
+    try { await run('docker',['image','rm',image],{timeout:30000});removed.push(image); }
+    catch { /* in use by a container, already gone, or slow: tried again after the next update */ }
   }
   return {removed};
 }

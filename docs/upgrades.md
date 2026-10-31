@@ -231,9 +231,12 @@ sharing a Docker daemon never share a tag. After a successful main update, the
 updater removes the images recorded by that agent's other `completed`, `failed`
 or `rolled-back` receipts, keeping the new one. An unresolved recovery blocks new
 updates, so no pending rollback needs them, and Docker refuses to remove an image
-a container still uses, which is skipped. Failures are recorded on the receipt as
-`imageCleanupError` and never turn a successful update into a rollback. Images
-built by earlier versions carry no receipt record and stay until removed manually.
+a container still uses, which is skipped. Each removal is limited to 30 seconds;
+an image that is in use or slow stays recorded and is tried again after the next
+update, and the receipt's `imageCleanup.removed` lists what was removed. A failure
+to read the receipts is recorded as `imageCleanupError`. Neither turns a successful
+update into a rollback. Images built by earlier versions carry no receipt record
+and stay until removed manually.
 
 The updater accepts only matching state-schema and protocol contracts and an
 unchanged effective deployment layout. The reviewed beta.34 runtime migration

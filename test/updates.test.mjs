@@ -8,7 +8,7 @@ import { spawn, execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
-import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
+import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, cleanupStaleImages, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
 import { perform, environment, packageManager, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
@@ -361,6 +361,14 @@ test('completed main update removes only this agent\'s older upgrade images and 
  assert.deepEqual(removed,[name('1'),name('2'),name('3')],'only finished jobs\' own images are targeted: not the current, unfinished, legacy or foreign names');
  assert.deepEqual(result.imageCleanup.removed.sort(),[name('1'),name('3')]);assert.equal(result.imageCleanupError,undefined);
  assert.deepEqual((await read(path.join(jobPath(f.home,job.id),'job.json'))).imageCleanup.removed.sort(),[name('1'),name('3')]);
+});
+test('image cleanup never removes the current image when an older receipt names it, and bounds each removal',async t=>{
+ const f=await fixture(t),name=n=>`ez-upgrade-${n.repeat(24)}`,calls=[];
+ const seed=async(n,status,image)=>{const id=n.repeat(8)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(12);await fs.mkdir(jobPath(f.home,id),{recursive:true});await atomic(path.join(jobPath(f.home,id),'job.json'),{id,target:'main',status,image});};
+ // A retry of the same candidate on the same deployment builds the same tag.
+ await seed('1','failed',name('1'));await seed('2','completed',name('2'));
+ const result=await cleanupStaleImages(f.home,async(c,a,o)=>{calls.push([c,...a,o?.timeout]);},{image:name('1')});
+ assert.deepEqual(calls,[['docker','image','rm',name('2'),30000]]);assert.deepEqual(result.removed,[name('2')]);
 });
 test('upgrade image tags are unique per agent deployment for the same candidate',async t=>{
  const tags=[],shas=[];
