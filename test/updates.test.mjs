@@ -9,7 +9,7 @@ import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
-import { perform, environment, packageManager, backupStateDirectory, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
+import { perform, environment, packageManager, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { TOOLS_LINE } from '../src/tools-line.mjs';
@@ -21,60 +21,6 @@ test('structured runtime output excludes warnings but failures retain diagnostic
  const script="process.stderr.write('Compose warning\\n');process.stdout.write(JSON.stringify({services:{}}));";
  assert.deepEqual(JSON.parse(await execute(process.execPath,['-e',script],{stdoutOnly:true})),{services:{}});
  await assert.rejects(execute(process.execPath,['-e',script+'process.exitCode=1'],{stdoutOnly:true}),/Compose warning/);
-});
-
-test('main upgrade backup omits a live plugin socket and keeps private files',async t=>{
- const root=await fs.mkdtemp('/tmp/ez-upgrade-socket-');
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const source=path.join(root,'control'),destination=path.join(root,'backup');
- await fs.mkdir(source);await fs.writeFile(path.join(source,'state.json'),'private state');
- const socket=path.join(source,'plugin-broker.sock'),server=createServer();
- await new Promise((resolve,reject)=>server.once('error',reject).listen(socket,resolve));
- t.after(()=>new Promise(resolve=>server.close(resolve)));
- await backupStateDirectory(source,destination);
- assert.equal(await fs.readFile(path.join(destination,'state.json'),'utf8'),'private state');
- assert.deepEqual(await fs.readdir(destination),['state.json']);
-});
-
-test('control backup skips native diagnostic databases while retaining sessions and source logs',async t=>{
- const root=await fs.mkdtemp('/tmp/ez-upgrade-native-logs-');
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const source=path.join(root,'control'),destination=path.join(root,'backup');
- const native='cli/codex/tasks/example';
- const logs=['logs_1.sqlite','logs_2.sqlite','logs_2.sqlite-wal','logs_2.sqlite-shm'];
- const retained=[`${native}/auth.json`,`${native}/sessions/turn.jsonl`,`${native}/state_5.sqlite`,'logs_2.sqlite','cli/notes.md'];
- for(const name of [...logs.map(name=>`${native}/${name}`),...retained]) {
-  const file=path.join(source,name);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,'synthetic state');
- }
- await backupStateDirectory(source,destination,[],{skipNativeLogs:true});
- for(const name of logs) {
-  await assert.rejects(fs.access(path.join(destination,native,name)),{code:'ENOENT'});
-  assert.equal(await fs.readFile(path.join(source,native,name),'utf8'),'synthetic state');
- }
- for(const name of retained)assert.equal(await fs.readFile(path.join(destination,name),'utf8'),'synthetic state');
- const workspaceCopy=path.join(root,'workspace-copy');
- await backupStateDirectory(source,workspaceCopy);
- await fs.access(path.join(workspaceCopy,native,logs[0]));
-});
-
-test('state backup preserves shared cache hardlinks without linking to live state',async t=>{
- const root=await fs.mkdtemp('/tmp/ez-upgrade-hardlinks-');
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const source=path.join(root,'control'),destination=path.join(root,'backup');
- const first='cli/task-a/cache/asset',second='cli/task-b/cache/asset';
- for(const name of [first,second])await fs.mkdir(path.dirname(path.join(source,name)),{recursive:true});
- await fs.writeFile(path.join(source,first),'shared cache',{mode:0o600});
- await fs.link(path.join(source,first),path.join(source,second));
- await fs.writeFile(path.join(source,'distinct'),'shared cache');
- await backupStateDirectory(source,destination);
- const original=await fs.stat(path.join(source,first)),a=await fs.stat(path.join(destination,first)),b=await fs.stat(path.join(destination,second));
- assert.equal(a.ino,b.ino);assert.equal(a.dev,b.dev);assert.equal(a.nlink,2);
- assert.notEqual(a.ino,original.ino);assert.equal(a.mode&0o777,0o600);
- assert.notEqual((await fs.stat(path.join(destination,'distinct'))).ino,a.ino);
- await fs.writeFile(path.join(destination,second),'changed backup');
- assert.equal(await fs.readFile(path.join(destination,first),'utf8'),'changed backup');
- assert.equal(await fs.readFile(path.join(source,first),'utf8'),'shared cache');
- assert.equal(await fs.readFile(path.join(source,second),'utf8'),'shared cache');
 });
 
 test('supervisor forwards only provider keys declared by the agent installation',()=>{
@@ -346,7 +292,7 @@ test('main transaction stages before stopping, pins rollback image, preserves st
  await fs.writeFile(path.join(jobPath(f.home,job.id),'package/bin/example.mjs'),'tampered');
  const result=await perform(f.home,job,r);assert.equal(result.status,'completed');
  assert.equal(await fs.readFile(path.join(f.agent.workspace,'memory.md'),'utf8'),'retain me');
- assert.equal(await fs.readFile(path.join(jobPath(f.home,job.id),'backup/workspace/memory.md'),'utf8'),'retain me');
+ assert.deepEqual((await fs.readdir(path.join(jobPath(f.home,job.id),'backup'))).sort(),['agent.json','docker.env','host-executor.json','purpose.md','relay.env'],'backup keeps deployment files and never copies workspace or control state');
  await assert.rejects(fs.access(path.join(f.config.deploymentDir,'mind')));
  const active=(await read(path.join(f.home,'config.json'))).packageRoot;assert(active.endsWith('/runtime'));
  assert.notEqual(await fs.readFile(path.join(active,'bin/example.mjs'),'utf8'),'tampered');
@@ -893,9 +839,7 @@ test('handoff-compatible core upgrade builds with native work active and retires
   if(args.includes('build')){await fs.access(claim);await assert.rejects(fs.access(path.join(f.agent.controlDir,'upgrade-pause.json')),{code:'ENOENT'});await assert.rejects(fs.access(path.join(f.home,'registry.lock')),{code:'ENOENT'})}
   if(args.includes('stop')){
    const backup=path.join(jobPath(f.home,job.id),'backup');
-   assert.equal(await fs.readFile(path.join(backup,'workspace','TOOLS.md'),'utf8'),'My notes\n','state backup finishes before relay shutdown');
-   await fs.access(path.join(backup,'control'));
-   await assert.rejects(fs.access(path.join(backup,'control','host-executor')),{code:'ENOENT'});
+   assert.deepEqual((await fs.readdir(backup)).sort(),['agent.json','docker.env','host-executor.json','purpose.md','relay.env'],'deployment backup finishes before relay shutdown without copying state');
   }
   return execute(command,args,options)
  }
