@@ -335,6 +335,16 @@ unprovisioned or logged-out profile fails closed with the native error.
 method, credential file names) from the native CLI without tokens or account
 identifiers.
 
+Telegram `/usage` (owner only, no inference turn) shows each login's provider
+limits on demand: percent left and reset time per window, plus any saved quota
+block. Each client answers for its own bound home, so Ez never touches the
+credential. Codex limits come from that home's `codex app-server`
+(`account/rateLimits/read`); Claude limits from `claude -p /usage`, a local
+client command that spends no model tokens and prints the session (5h) and
+weekly percentages with their reset times. A login the client cannot report
+for (for example an API-key login) shows `no limit data returned`. The reply
+carries only percentages, clocks and short status words. Nothing is stored.
+
 Select a profile with `ezenciel-agents-ai select --cli claude --auth-profile work`,
 the profile entries in Choose AI, or `ezenciel-agents-schedule create ...
 --auth-profile work`. A conversation is bound to its CLI and profile; changing
