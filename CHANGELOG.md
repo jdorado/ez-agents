@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.65
+
+- Add an owner-only `/usage` Telegram command that shows each saved Codex and Claude login's provider limits: percent left and reset time per window, plus quota-block state from setup health. It lists the default logins and every named profile in one reply and starts no agent turn. Codex is read through `codex app-server` (`account/rateLimits/read`) and Claude through the local `claude -p /usage` command, which spends no model tokens. Each client runs with its own bound home and nothing is stored; the reply carries only percentages, clocks and short status words, never tokens, account identifiers or raw native output.
+
+Beta limits: Claude logins that use a `claude setup-token` token or an API key may not be allowed to read usage and then show `no limit data returned`. Token usage statistics and Codex credit balances are not shown. The command was run live against the default Codex and Claude logins on a Mac, not against named profiles or an installed relay; a Claude client older than 2.1.296 may not support `-p /usage` and then shows `usage unavailable`.
+
 ## 0.1.0-beta.64
 
 - Stop copying the agent workspace and native client state into main update backups. Rollback restores code and configuration only, so the copies in `tools/updates/<job>/backup/` were never restored, yet on an agent with heavy scheduled work they reached tens of gigabytes per update. The updater's cleanup could not delete them either: the agent makes finished task folders read-only and the copy kept those modes, so removing the older backups failed with `EACCES` and one host's disk filled up. The backup now keeps only the small deployment files. ([#318](https://github.com/jdorado/ez-agents/pull/318))
