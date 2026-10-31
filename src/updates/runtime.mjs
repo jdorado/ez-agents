@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { parseEnv } from 'node:util';
 import { tmpdir } from 'node:os';
 import { atomic, compose, snapshot, checkFolders, locked, publishBrokerPlugins } from '../plugins/manager.mjs';
-import { read, state, eligibility, jobPath, cleanupStaleBackups } from './control.mjs';
+import { read, state, eligibility, jobPath, cleanupStaleBackups, cleanupStaleImages } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
 import { extract, digest } from './artifact.mjs';
 
@@ -186,6 +186,10 @@ export async function perform(home,job,hooks) {
     job.status='completed';job.endedAt=new Date().toISOString();await save();
     try { job.cleanup=await cleanupStaleBackups(home);await save(); }
     catch(error) { job.cleanupError=error.message;await save().catch(()=>{}); }
+    if(job.image) {
+      try { job.imageCleanup=await cleanupStaleImages(home,run,job);await save(); }
+      catch(error) { job.imageCleanupError=error.message;await save().catch(()=>{}); }
+    }
     return job;
   };
   const fail=async(error,recoveryHooks)=>{
@@ -215,8 +219,11 @@ export async function perform(home,job,hooks) {
         if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)||typeof value!=='string'||value.includes('\0'))throw Error('Unresolved relay build argument');
         return ['--build-arg',`${key}=${value}`];
       });
-      const image=`ez-upgrade-${digest(JSON.stringify([job.sha256,buildArgs])).slice(0,24)}`;
+      // The deployment directory keeps one tag per agent, so removing one agent's
+      // old images never removes an image another agent on the host still pins.
+      const image=`ez-upgrade-${digest(JSON.stringify([job.sha256,buildArgs,config.deploymentDir])).slice(0,24)}`;
       await run('docker',['build','--target','runtime',...buildArgs,'-t',image,root]);
+      job.image=image;await save();
       const backup=path.join(dir,'backup');
       const backupState=async()=>{
         await fs.mkdir(backup,{mode:0o700});
