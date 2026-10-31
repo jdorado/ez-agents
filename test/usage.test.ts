@@ -11,14 +11,14 @@ const temp = async (t: test.TestContext, name: string) => {
   return root
 }
 
-const fakeCodex = (observed: string, reply: string) => `#!${process.execPath}
+const fakeCodex = (observed: string, reply: string, noise = '') => `#!${process.execPath}
 require('fs').writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ args: process.argv.slice(2), home: process.env.CODEX_HOME }))
 let buffer = ''
 process.stdin.on('data', chunk => {
   buffer += chunk
   for (let at = buffer.indexOf('\\n'); at >= 0; at = buffer.indexOf('\\n')) {
     const message = JSON.parse(buffer.slice(0, at)); buffer = buffer.slice(at + 1)
-    if (message.method === 'initialize') console.log(JSON.stringify({ id: message.id, result: {} }))
+    if (message.method === 'initialize') { ${noise}console.log(JSON.stringify({ id: message.id, result: {} })) }
     if (message.method === 'account/rateLimits/read') console.log(JSON.stringify({ id: message.id, ${reply} }))
   }
 })`
@@ -37,6 +37,11 @@ test('Codex limits come from the app-server of the bound home', { skip: process.
     { label: '7d', usedPercent: 49.4, resetsAt: 1900500000 },
   ])
   assert.deepEqual(JSON.parse(await readFile(observed, 'utf8')), { args: ['app-server', '--stdio'], home })
+
+  // A literal `null` line and a server message that carries a method are ignored.
+  const reply = `result: { rateLimits: { primary: { usedPercent: 28, windowDurationMins: 300, resetsAt: 1900000000 } } }`
+  await writeFile(path.join(bin, 'codex'), fakeCodex(observed, reply, `console.log('null'); console.log(JSON.stringify({ method: 'note', id: 2 })); `), { mode: 0o700 })
+  assert.deepEqual(await readCodexLimits(home), [{ label: '5h', usedPercent: 28, resetsAt: 1900000000 }])
 
   await writeFile(path.join(bin, 'codex'), fakeCodex(observed, `error: { message: 'not logged in' }`), { mode: 0o700 })
   await assert.rejects(readCodexLimits(home), /not logged in\?/)
@@ -72,9 +77,16 @@ test('Claude limits come from the local /usage command of the bound home', { ski
     { label: '5h', usedPercent: 15, resetsText: 'Oct 31 at 11:50am (Asia/Dubai)' },
     { label: '7d Fable', usedPercent: 0, resetsText: 'Oct 31 at 9pm (Asia/Dubai)' },
   ])
-  // The native client runs in the bound home with its own login; Ez never reads the token.
+  // The native client runs in the bound home; Ez only hands it the token, as execution does.
   assert.deepEqual(JSON.parse(await readFile(observed, 'utf8')), {
     args: ['-p', '/usage', '--output-format', 'json', '--no-session-persistence'], config: home, token: 'sk-ant-oat01-named_profile_token_value' })
+
+  // Free text from the client is reduced to plain name and date characters.
+  await install({ type: 'result', is_error: false, result: 'Current session: 5% used · resets Nov 1 at 9am (UTC\u001b[31m<b>)\nCurrent week (Opus <i>): 7% used' })
+  assert.deepEqual(await readClaudeLimits(home, 'work'), [
+    { label: '5h', usedPercent: 5, resetsText: 'Nov 1 at 9am (UTC31mb)' },
+    { label: '7d Opus i', usedPercent: 7 },
+  ])
 
   await install({ type: 'result', is_error: false, result: 'Usage is only available for subscription plans.' })
   assert.deepEqual(await readClaudeLimits(home, 'work'), [])
@@ -116,4 +128,9 @@ test('the report lists each login with percent left, resets and blocks, and neve
     '  unavailable',
   ].join('\n'))
   assert.equal(await usageReport(path.join(root, 'none'), {}, { readers, available: async () => false, now }), 'No Codex or Claude login is installed.')
+
+  // Many profiles stay under Telegram's reply limit, cut at a line break.
+  for (let index = 0; index < 40; index++) await mkdir(path.join(root, 'cli', 'profiles', `p${index}`, 'codex'), { recursive: true })
+  const long = await usageReport(root, {}, { readers: { ...readers, codex: async () => [{ label: '5h', usedPercent: 1, resetsAt: now / 1000 + 60 }, { label: '7d', usedPercent: 2, resetsAt: now / 1000 + 600 }] }, available: async () => true, now })
+  assert.ok(long.length <= 4096 && long.endsWith('\n…'), String(long.length))
 })

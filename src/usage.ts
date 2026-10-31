@@ -5,9 +5,10 @@ import { executorEnvironment, executorInvocation } from './executor.js'
 import { quotaBlockedUntil, quotaScope, type SetupHealth } from './setup-fallback.js'
 
 // Read-only owner view of each login's provider limits, asked of the native
-// client on demand. Nothing is stored and Ez never touches the credential: each
-// client runs with its own bound home. Only percentages, clocks and short status
-// words are projected, never tokens, account identifiers or raw native output.
+// client on demand. Nothing is stored and Ez never copies or prints the
+// credential: each client runs with its own bound home. Only percentages,
+// clocks, scope names and short status words are projected, never tokens,
+// account identifiers or raw native output.
 export type UsageWindow = { label: string; usedPercent: number; resetsAt?: number; resetsText?: string }
 export type UsageReaders = {
   codex: (home: string) => Promise<UsageWindow[]>
@@ -55,6 +56,7 @@ export const readCodexLimits = (home: string, timeoutMs = 10_000): Promise<Usage
       buffer = buffer.slice(at + 1)
       let message: any
       try { message = JSON.parse(line) } catch { continue }
+      if (!message || typeof message !== 'object' || message.method) continue
       if (message.id === 1) {
         send({ method: 'initialized', params: {} })
         send({ id: 2, method: 'account/rateLimits/read', params: {} })
@@ -64,17 +66,19 @@ export const readCodexLimits = (home: string, timeoutMs = 10_000): Promise<Usage
       }
     }
   })
-  send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ezenciel-agents', version: '1' }, capabilities: { experimentalApi: true } } })
+  send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ezenciel-agents', version: '1' } } })
 })
 
 // `claude -p /usage` is a local client command: no model turn, no tokens. It
 // prints lines like "Current session: 15% used · resets Oct 31 at 11:50am
-// (Asia/Dubai)"; the session window is the 5h one. Only those lines are read.
+// (Asia/Dubai)"; the session window is the 5h one. Only those lines are read,
+// and the free text in them is reduced to plain name and date characters.
+const plain = (text: string): string => text.replace(/[^\w ,.:/()+-]/g, '')
 const claudeWindows = (text: string): UsageWindow[] => text.split('\n').flatMap(line => {
   const match = line.match(/^Current (session|week)(?: \(([^)]{1,40})\))?: (\d{1,3}(?:\.\d+)?)% used(?: \S resets (.{1,60}))?$/)
   if (!match) return []
   const [, kind, scope, used, resets] = match
-  return [{ label: kind === 'session' ? '5h' : `7d${scope ? ` ${scope}` : ''}`, usedPercent: percent(Number(used))!, ...(resets ? { resetsText: resets } : {}) }]
+  return [{ label: kind === 'session' ? '5h' : `7d${scope ? ` ${plain(scope)}` : ''}`, usedPercent: percent(Number(used))!, ...(resets ? { resetsText: plain(resets) } : {}) }]
 })
 
 export const readClaudeLimits = async (home: string, authProfile?: string, timeoutMs = 20_000): Promise<UsageWindow[]> => {
@@ -127,5 +131,7 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
     }
     return lines.join('\n')
   }))
-  return ['Account usage', '', ...sections.flatMap((section, index) => index ? ['', section] : [section])].join('\n')
+  const report = ['Account usage', '', ...sections.flatMap((section, index) => index ? ['', section] : [section])].join('\n')
+  // Telegram rejects replies over 4096 characters; cut at a line break.
+  return report.length > 4000 ? `${report.slice(0, report.lastIndexOf('\n', 4000))}\n…` : report
 }

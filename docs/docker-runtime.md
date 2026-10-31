@@ -337,13 +337,19 @@ identifiers.
 
 Telegram `/usage` (owner only, no inference turn) shows each login's provider
 limits on demand: percent left and reset time per window, plus any saved quota
-block. Each client answers for its own bound home, so Ez never touches the
-credential. Codex limits come from that home's `codex app-server`
+block. Each client answers for its own bound home, and Ez never stores, copies
+or prints the credential. Codex limits come from that home's `codex app-server`
 (`account/rateLimits/read`); Claude limits from `claude -p /usage`, a local
 client command that spends no model tokens and prints the session (5h) and
 weekly percentages with their reset times. A login the client cannot report
-for (for example an API-key login) shows `no limit data returned`. The reply
-carries only percentages, clocks and short status words. Nothing is stored.
+for (for example an API-key login) shows `no limit data returned` or a short
+unavailable status. The default logins of a host-capable agent are the host's
+own login, which the relay container may not be able to read, so those lines can
+show an error; isolated agents and named profiles keep their login in their own
+home and are read normally. Logins are read at the same time, but the bot
+answers no other message until the reply is built, up to 20 seconds when a
+client hangs. The reply carries only percentages, clocks, scope names and short
+status words. Nothing is stored.
 
 Select a profile with `ezenciel-agents-ai select --cli claude --auth-profile work`,
 the profile entries in Choose AI, or `ezenciel-agents-schedule create ...
