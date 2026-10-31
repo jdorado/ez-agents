@@ -45,6 +45,7 @@ import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset, 
 import { discoverDefaults } from './client-defaults.js'
 import { runPromptSuffix } from './prompt-suffix.js'
 import { softwareStatus } from './software-status.js'
+import { usageReport } from './usage.js'
 
 export const createRelay = (config: Config, launch = startExecutorJob) => {
   const safeError = (error: unknown): string => {
@@ -1207,6 +1208,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
     if (text === '/status') {
       await ctx.reply(await statusText(), { reply_markup: statusKeyboard() })
+      return
+    }
+
+    if (text === '/usage') {
+      await ctx.reply(await usageReport(config.controlDir, (await control.status()).setupHealth))
       return
     }
 

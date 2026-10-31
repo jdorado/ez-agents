@@ -14,6 +14,7 @@ export const mainCommands = [
   { command: 'rename', description: 'Rename current conversation' },
   { command: 'ai', description: 'Choose AI' },
   { command: 'status', description: 'Work status' },
+  { command: 'usage', description: 'Account limits and reset times' },
   { command: 'tasks', description: 'Scheduled tasks' },
 ]
 
