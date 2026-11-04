@@ -325,6 +325,23 @@ test('application-backed channels keep AI and retired settings controls in the a
   } finally { await f.close() }
 })
 
+test('/usage answers only the owner and starts no work', async t => {
+  const prior = process.env.PATH
+  process.env.PATH = join(tmpdir(), 'ez-usage-no-clis')
+  t.after(() => { process.env.PATH = prior })
+  const f = await fixture()
+  try {
+    await f.relay.bot.handleUpdate(message(1, '/usage'))
+    assert.equal(f.replies.at(-1), 'No Codex or Claude login is installed.')
+    const stranger = message(2, '/usage')
+    stranger.message!.from!.id = 202; stranger.message!.chat.id = 202
+    const before = f.replies.length
+    await f.relay.bot.handleUpdate(stranger)
+    assert.ok(f.replies.slice(before).every(text => !/usage|login is installed/i.test(text)))
+    assert.equal(f.launched.length, 0)
+  } finally { await f.close() }
+})
+
 test('new conversation leaves already accepted messages pinned to the old conversation', async () => {
   const f = await fixture()
   try {
