@@ -55,9 +55,10 @@ jobs:
           npm pack --ignore-scripts --pack-destination "$release_dir"
           tar -xzf "$release_dir"/*.tgz -C "$release_dir"
           docker build --target test -t ezenciel-agents-tests "$release_dir/package"
-          # Runtime CI uses the reviewed native baseline, not a moving registry tag.
-          # Keep this in sync with TASK_CODEX_VERSION when native audit advances.
-          docker build --target runtime --build-arg CODEX_CLI_VERSION=0.164.0 -t ezenciel-agents:local "$release_dir/package"
+          # Keep a distinct interactive version to exercise restricted-run isolation.
+          docker build --target runtime --build-arg CODEX_CLI_VERSION=0.166.0 -t ezenciel-agents:local "$release_dir/package"
+      - name: Exercise the pinned restricted runner
+        run: docker run --rm --network none --workdir /app --entrypoint node -e EZ_TEST_NATIVE_TASKS=1 ezenciel-agents:local --import tsx --test test/task-native.test.ts
       - run: node docker/smoke.mjs
       - run: node docker/status-smoke.mjs
       - run: node docker/isolated-executor-smoke.mjs

@@ -19,6 +19,12 @@ FROM dependencies AS runtime
 # operator's ~/.codex. Managed builds resolve latest to a concrete cache key.
 ARG CODEX_CLI_VERSION=latest
 RUN pnpm add --global --ignore-scripts @openai/codex@${CODEX_CLI_VERSION} && command -v codex && codex --version
+# Restricted correspondence keeps its independently audited tool inventory.
+COPY docker/task-codex/package.json docker/task-codex/pnpm-lock.yaml /opt/ez-task-codex/
+RUN cp docker/engine-pnpm-workspace.yaml /opt/ez-task-codex/pnpm-workspace.yaml \
+    && pnpm --dir /opt/ez-task-codex install --frozen-lockfile --ignore-scripts \
+    && task_version="$(node -p 'require("/opt/ez-task-codex/package.json").dependencies["@openai/codex"]')" \
+    && test "$(/opt/ez-task-codex/node_modules/.bin/codex --version)" = "codex-cli ${task_version}"
 # Isolated agents run the selected CLI in the relay; host-capable agents reuse
 # the host installation instead. OpenCode carries no task-runner pin because
 # restricted messaging tasks stay on the audited Codex above.
