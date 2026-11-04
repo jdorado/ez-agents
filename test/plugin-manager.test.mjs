@@ -449,6 +449,39 @@ test('host-owned private networks survive registered-call Compose regeneration',
    'not-a-binding-map'
  ]) { host.agents[0].pluginNetworkBindings=bindings==='not-a-binding-map'?bindings:{sample:{revisions:[p.revision],bindings}};await fs.writeFile(f.hostConfig,JSON.stringify(host));await assert.rejects(compose(config,{source:p.source,project:'ezp-synthetic',revision:p.revision,manifest:p.manifest,deployment:p.deployment},{},f.home),/host network|Docker network/); }
 });
+test('host-approved workspace user survives registered-call Compose regeneration',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
+ await f.call('plugins','install','sample','--source',f.source,'--revision',p.revision);
+ const configFile=path.join(f.home,'config.json');
+ const config=JSON.parse(await fs.readFile(configFile,'utf8'));
+ const host={cli:'synthetic',agents:[{name:'sample',workspace:f.workspace,controlDir:f.control,binDir:path.join(f.home,'bin'),toolsHome:f.home}]};
+ const route={revisions:[p.revision],services:['sample']};
+ const file=path.join(f.home,'packages/sample/compose.json');
+ const rendered=async()=>JSON.parse(await fs.readFile(file,'utf8')).services.sample;
+ assert.equal((await rendered()).user,'1000:1000');
+ const {uid,gid}=await fs.stat(f.workspace);
+ const workspaceUid=uid||12001,workspaceGid=gid||process.getgid()||12002;
+ if(uid!==workspaceUid||gid!==workspaceGid)await fs.chown(f.workspace,workspaceUid,workspaceGid);
+ config.hostConfig=await fs.realpath(f.deploymentDir)+'/host-executor.json';
+ // A writable registry entry cannot grant the workspace identity.
+ config.pluginWorkspaceUsers={sample:route};
+ await fs.writeFile(configFile,JSON.stringify(config));
+ const saveHost=()=>fs.writeFile(f.hostConfig,JSON.stringify(host));
+ const invoke=()=>exec(path.join(f.home,'bin','ez'),['sample','read'],{cwd:f.workspace,env:f.env});
+ await saveHost();await invoke();
+ assert.equal((await rendered()).user,'1000:1000');
+ host.agents[0].pluginWorkspaceUsers={sample:route};
+ await saveHost();await invoke();
+ const service=await rendered();
+ assert.equal(service.user,`${workspaceUid}:${workspaceGid}`);
+ assert.equal(service.volumes.find(volume=>volume.target===config.workspace).read_only,true);
+ assert.deepEqual(service.volumes.find(volume=>volume.target==='/data').volume,{nocopy:true});
+ assert.deepEqual(service.cap_drop,['ALL']);
+ route.services=['missing'];await saveHost();
+ await assert.rejects(invoke(),/requires a unique workspace-mounted service/);
+ route.services=['sample'];route.revisions=['sha256:'+'0'.repeat(64)];await saveHost();
+ await assert.rejects(invoke(),/not pinned to the reviewed plugin revision/);
+});
 test('host onboarding binds local ez without replacing global commands',async t=>{
  const f=await fixture(t),native=path.join(f.root,'native'),config=path.join(f.root,'host.json');await fs.mkdir(native);await fs.writeFile(path.join(native,'native-tool'),'hello');
  await fs.writeFile(config,JSON.stringify({cli:'synthetic',agents:[{name:'demo',workspace:f.workspace,binDir:native}]}));
