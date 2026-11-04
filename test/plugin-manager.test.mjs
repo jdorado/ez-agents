@@ -460,7 +460,8 @@ test('host-approved workspace user survives registered-call Compose regeneration
  const rendered=async()=>JSON.parse(await fs.readFile(file,'utf8')).services.sample;
  assert.equal((await rendered()).user,'1000:1000');
  const {uid,gid}=await fs.stat(f.workspace);
- if(uid===0)await fs.chown(f.workspace,12001,12002);
+ const workspaceUid=uid||12001,workspaceGid=gid||process.getgid()||12002;
+ if(uid!==workspaceUid||gid!==workspaceGid)await fs.chown(f.workspace,workspaceUid,workspaceGid);
  config.hostConfig=await fs.realpath(f.deploymentDir)+'/host-executor.json';
  // A writable registry entry cannot grant the workspace identity.
  config.pluginWorkspaceUsers={sample:route};
@@ -472,7 +473,7 @@ test('host-approved workspace user survives registered-call Compose regeneration
  host.agents[0].pluginWorkspaceUsers={sample:route};
  await saveHost();await invoke();
  const service=await rendered();
- assert.equal(service.user,uid===0?'12001:12002':`${uid}:${gid}`);
+ assert.equal(service.user,`${workspaceUid}:${workspaceGid}`);
  assert.equal(service.volumes.find(volume=>volume.target===config.workspace).read_only,true);
  assert.deepEqual(service.cap_drop,['ALL']);
  route.services=['missing'];await saveHost();
