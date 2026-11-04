@@ -1,9 +1,11 @@
 # Docker runtime and shared host CLI
 
 Docker Compose owns each relay and executable plugin. Isolated agents run the
-native CLI from the relay image (pinned Codex). Host-capable agents reuse the
+native CLI from the relay image. Host-capable agents reuse the
 CLI the user installed Ez from, with its existing authentication. The relay
-image contains Node, relay dependencies, ffmpeg and that pinned Codex CLI.
+image contains Node, relay dependencies, ffmpeg and the native CLIs. Restricted
+messaging uses a separate audited Codex binary from the image. Host executors
+outside the image must provide the audited version for restricted messaging.
 The runtime image exposes Ez commands through the wrappers in `/app/bin`, including
 `ezenciel-agents-application`; application images do not need to link Ez themselves.
 The image also installs package-manifest commands in `/usr/local/bin`, so native

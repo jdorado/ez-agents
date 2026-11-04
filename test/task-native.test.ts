@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { taskArguments, taskModelCatalog, TASK_CODEX_VERSION } from '../src/task-executor.js'
+import { taskArguments, taskCodexCommand, taskModelCatalog, TASK_CODEX_VERSION } from '../src/task-executor.js'
 import { Tasks } from '../src/tasks.js'
 import { ownerRun } from './helpers/owner-run.js'
 import { EventSources } from '../src/event-sources.js'
@@ -21,7 +21,8 @@ import { taskRequests } from '../src/task-rpc.js'
 // Unknown fixture model names miss model-driven tool overrides.
 // Run explicitly with EZ_TEST_NATIVE_TASKS=1 after installing the audited CLI.
 test('native restricted task has only bounded MCP tools, ignores private guidance, and executes broker calls', { skip: !process.env.EZ_TEST_NATIVE_TASKS, timeout: 30000 }, async () => {
-  assert.equal((await promisify(execFile)('codex',['--version'])).stdout.trim(), `codex-cli ${TASK_CODEX_VERSION}`)
+  const command = taskCodexCommand()
+  assert.equal((await promisify(execFile)(command,['--version'])).stdout.trim(), `codex-cli ${TASK_CODEX_VERSION}`)
   const root = await mkdtemp('/tmp/ez-native-task-'), directory = `${root}/task`, home = `${root}/home`
   await mkdir(directory); await mkdir(home)
   await writeFile(`${root}/AGENTS.md`, 'PRIVATE_CANARY_DO_NOT_LOAD')
@@ -92,11 +93,11 @@ test('native restricted task has only bounded MCP tools, ignores private guidanc
     const entry = new URL('../src/task-mcp.ts', import.meta.url).href
     await writeFile(`${root}/broker.mjs`, `if(process.env.HOME !== ${JSON.stringify(homedir())}) throw Error('Broker lost host CLI configuration'); await import(${JSON.stringify(entry)});`)
     const broker = [process.execPath, '--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), `${root}/broker.mjs`, root, run.id,'','[]','["browser"]']
-    const catalog = await promisify(execFile)('codex', ['debug', 'models', '--bundled'], { maxBuffer: 4 * 1024 * 1024 });
+    const catalog = await promisify(execFile)(command, ['debug', 'models', '--bundled'], { maxBuffer: 4 * 1024 * 1024 });
     await writeFile(`${root}/models.json`, JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))));
     const args = taskArguments(directory, broker, JSON.stringify({event:'task_activated',taskId:proposal.id}), ['context','browser_link','read_attachment','send','note','report','complete'], {model:'gpt-6-astra'}, {EZ_PLUGIN_BROKER_SOCKET:launchSocket,EZ_DELIVERY_SOCKET:`${root}/delivery.sock`})
     args.splice(-1, 0, '--disable', 'enable_request_compression', '-c', 'model_provider="fixture"', '-c', `model_providers.fixture={name="fixture",base_url="http://127.0.0.1:${(server.address() as any).port}/v1",wire_api="responses",requires_openai_auth=false}`)
-    child = spawn('codex', args, { cwd: directory, env: { PATH: process.env.PATH, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] })
+    child = spawn(command, args, { cwd: directory, env: { PATH: process.env.PATH, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] })
     child.stdin!.end(JSON.stringify({event:'task_activated',taskId:proposal.id}));
     let stderr = ''; child.stderr!.on('data', c => { stderr += c }); child.stdout!.resume()
     const code = await new Promise(r => child!.on('close', r))

@@ -1,4 +1,5 @@
 import { executionDefaults } from './model-policy.js'
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
@@ -11,10 +12,13 @@ import { Tasks } from './tasks.js'
 import { invokeTaskCapability } from './task-capability.js'
 import { provisionedHome } from './auth-profile.js'
 import { executorEnvironment, executorInvocation, terminateJob, type ExecutorOptions } from './executor.js'
+import taskCodexPackage from '../docker/task-codex/package.json' with { type: 'json' }
 
 // This adapter is deliberately version-pinned: a new native tool default needs
 // a fresh tool-inventory audit before external correspondence can use it.
-export const TASK_CODEX_VERSION = '0.164.0'
+export const TASK_CODEX_VERSION = taskCodexPackage.dependencies['@openai/codex']
+const packagedTaskCodex = '/opt/ez-task-codex/node_modules/.bin/codex'
+export const taskCodexCommand = () => existsSync(packagedTaskCodex) ? packagedTaskCodex : 'codex'
 export const taskDisabledFeatures = ['apps', 'browser_use', 'computer_use', 'in_app_browser', 'image_generation',
   'memories', 'goals', 'multi_agent', 'multi_agent_v2', 'hooks', 'shell_tool', 'unified_exec', 'code_mode', 'code_mode_host',
   'skill_search', 'skill_mcp_dependency_install', 'tool_suggest', 'workspace_dependencies', 'view_image']
@@ -52,14 +56,15 @@ export async function startTaskExecutor(options: ExecutorOptions) {
   // A scoped grant's context source is fetched fresh before every run; failure fails the run.
   const appContext = task.contextCapability ? (await invokeTaskCapability(options.controlDir, options.runId, options.toolsHome, task.contextCapability, undefined)).output : undefined
   const environment = executorEnvironment()
-  const versionInvocation = executorInvocation('codex', ['--version'])
+  const command = taskCodexCommand()
+  const versionInvocation = executorInvocation(command, ['--version'])
   const version = await promisify(execFile)(versionInvocation.command, versionInvocation.args, { env: environment })
   if (version.stdout.trim() !== `codex-cli ${TASK_CODEX_VERSION}`) throw new Error(`Restricted tasks require audited Codex ${TASK_CODEX_VERSION}`)
   const temporary = await mkdtemp(join(tmpdir(), 'ez-task-'))
   try {
     const directory = join(temporary, 'workspace'), home = join(temporary, 'home')
     await mkdir(directory, { mode: 0o700 }); await mkdir(home, { mode: 0o700 })
-    const catalogInvocation = executorInvocation('codex', ['debug', 'models', '--bundled'])
+    const catalogInvocation = executorInvocation(command, ['debug', 'models', '--bundled'])
     const catalog = await promisify(execFile)(catalogInvocation.command, catalogInvocation.args, { env: environment, maxBuffer: 4 * 1024 * 1024 })
     await writeFile(join(temporary, 'models.json'), JSON.stringify(taskModelCatalog(JSON.parse(catalog.stdout))), { mode: 0o600 })
     const auth = process.env.EZ_ISOLATION === 'isolated' || options.authProfile !== undefined
@@ -71,7 +76,7 @@ export async function startTaskExecutor(options: ExecutorOptions) {
     const prompt = JSON.stringify(task.version === 5
       ? {event: 'application_event', taskId: run.taskId, scope: run.application!.scope, ...(appContext === undefined ? {} : {context: appContext})}
       : {event: run.external ? 'correspondence_received' : 'task_activated', taskId: run.taskId})
-    const invocation = executorInvocation('codex', taskArguments(directory, broker, prompt, toolNames, options, Object.fromEntries(['EZ_PLUGIN_BROKER_SOCKET','EZ_DELIVERY_SOCKET'].flatMap(key=>environment[key] ? [[key,environment[key]]] : []))))
+    const invocation = executorInvocation(command, taskArguments(directory, broker, prompt, toolNames, options, Object.fromEntries(['EZ_PLUGIN_BROKER_SOCKET','EZ_DELIVERY_SOCKET'].flatMap(key=>environment[key] ? [[key,environment[key]]] : []))))
     const child = spawn(invocation.command, invocation.args, {
       cwd: directory, env: { ...environment, HOME: home, CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     })
