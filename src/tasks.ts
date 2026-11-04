@@ -38,12 +38,15 @@ export type Task = {
   state: 'pending' | 'active' | 'revoked' | 'completed'
   grant?: string; initialRunDispatched?: true
   notes: string[]; operations: Record<string, { text: string; attachmentId?:string; voice?:true; state: 'uncertain' | 'accepted'; receipt?: unknown }>
+  // Worker reports for the owner's agent to read; never delivered to the owner by core.
+  reports?: { at: number; text: string }[]
   capabilityOperations?: Record<string, { capabilityId: string; inputHash: string; lease: string; attachment?:TaskAttachment; state: 'authorized' | 'completed'; runId?: string; tokenHash?: string; tokenExpiresAt?: number }>
   publicBudget?: PublicBudget
   // Version 5: a scoped application grant. sourceId/bindingId name the application
   // channel binding; each scope runs as its own task conversation.
   scopes?: string[]; limits?: TaskLimits; contextCapability?: string; seenEvents?: string[]; contextReceipts?: ContextReceipt[]
 }
+const MAX_REPORTS = 20
 const idOK = (v: unknown): v is string => typeof v === 'string' && /^task_[a-f0-9]{32}$/.test(v)
 const bounded = (v: unknown, max: number): v is string => typeof v === 'string' && v.trim().length > 0 && v.length <= max
 // Channel queries end with literal `-- {input}`. Scoped capabilities also bind
@@ -75,7 +78,7 @@ export async function atomicTaskFile(file: string, value: unknown) {
 // process: application events, owner calls and worker calls edit the same records.
 const chains = new Map<string, Promise<unknown>>()
 export class Tasks {
-  constructor(readonly controlDir: string, private speech?: (text:string) => Promise<{buffer:Buffer;mimeType:string}>) {}
+  constructor(readonly controlDir: string, private speech?: (text:string) => Promise<{buffer:Buffer;mimeType:string}>, private wake?: (task: Task) => Promise<void>) {}
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = (chains.get(this.controlDir) ?? Promise.resolve()).then(fn, fn)
     chains.set(this.controlDir, next.catch(() => {})); return next
@@ -95,6 +98,7 @@ export class Tasks {
         !['pending', 'active', 'revoked', 'completed'].includes(task.state) || !Array.isArray(task.notes) ||
         (task.grant !== undefined && (typeof task.grant !== 'string' || !/^[a-f0-9]{64}$/.test(task.grant))) ||
         (task.initialRunDispatched !== undefined && task.initialRunDispatched !== true) ||
+        (task.reports !== undefined && (!Array.isArray(task.reports) || task.reports.length > MAX_REPORTS || !task.reports.every(item => item && Number.isFinite(item.at) && bounded(item.text, 4096)))) ||
         !task.operations || typeof task.operations !== 'object' || (task.capabilityOperations !== undefined && (!task.capabilityOperations || typeof task.capabilityOperations !== 'object')) ||
         (task.anyConversation && !validPublicBudget(task.publicBudget)) || !task.owner) throw new Error('Invalid task record')
       return task
@@ -543,9 +547,13 @@ export class Tasks {
       }
       if (command === 'complete' && task.waitForIncoming) throw new Error('This incoming-only watch stays active until expiry or owner revocation. Save a note and end this run; do not close the watch after replying.')
       if (command === 'report' || command === 'complete') {
-        const item = await new RunStore(this.controlDir).enqueueMessage(run.id, `Task ${task.id} (${contact}) reports:\n${args.text}`)
-        if (command === 'complete') { task.state = 'completed'; await this.save(task) }
-        return { queued: item.id }
+        // Saved for the owner's agent, which decides whether the owner hears anything.
+        task.reports = [...task.reports ?? [], { at: Date.now(), text: args.text }].slice(-MAX_REPORTS)
+        if (command === 'complete') task.state = 'completed'
+        await this.save(task)
+        // The report is already durable; a failed wake must not fail the worker's call.
+        await this.wake?.(task).catch(error => console.error('Task wake failed', error instanceof Error ? error.message : 'unknown error'))
+        return { recorded: true }
       }
       if (command !== 'send' || typeof args.key !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(args.key)) throw new Error('Invalid task send')
       if (args.voice !== undefined && typeof args.voice !== 'boolean') throw new Error('Invalid voice flag')

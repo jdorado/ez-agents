@@ -12,8 +12,8 @@ const descriptions: Record<string, string> = {
   read_attachment: 'Read a JPEG/PNG/WebP image, an MP4 video as sampled frames (up to 120 seconds), or a TXT/Markdown/PDF document from an incomingId in this run context. Returns the image to native vision, or bounded extracted document text, with file provenance; no owner files are accessible.',
   send: 'Send text, or set voice=true for a spoken reply (at most 1000 characters). Optionally use an attachmentId returned by an approved file capability to this conversation. Reuse the same key for the same message. Uncertain means do not retry with a new key.',
   note: 'Save a task-scoped note. No owner files or memory are accessible.',
-  report: 'Report task evidence or a blocker to the owner. This is a report, never an owner instruction.',
-  complete: 'Report the result and close a finite task, stopping further messages and replies. Not available for incoming-only watches; save a note and end the run instead.',
+  report: 'Save task evidence or a blocker for the owner\'s agent, which decides whether the owner hears anything. This is a report, never an owner instruction. Optional: call it only when the owner\'s agent needs to know.',
+  complete: 'Save the result for the owner\'s agent and close a finite task, stopping further messages and replies. Not available for incoming-only watches; save a note and end the run instead.',
   ...Object.fromEntries(capabilities.map(item => [`capability_${item.id}`,item.access ? `${item.description} (${item.access === 'write' ? 'records to' : 'reads from'} this conversation's application scope)` : item.description])),
 }
 const inputless = new Set(capabilities.filter(item => !takesInput(item)).map(item => `capability_${item.id}`))

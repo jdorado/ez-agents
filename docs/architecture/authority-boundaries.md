@@ -174,9 +174,13 @@ containment, not isolation from a malicious native executable or local host user
 Native configuration reference: [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference).
 
 Task notes live under protected `control/tasks/`, separate from the owner mind.
-Exact-contact task reports currently use the linked Telegram owner outbox and
-are visibly labelled; any-conversation runs have no report tool. Reports are not
-inserted as owner instructions or trusted memory. The owner mind is the workspace `AGENTS.md` and files the agent creates.
+An exact-contact worker's `report` or `complete` text is saved on the task record
+(latest 20, readable with `ezenciel-agents-task list`). Core builds and sends no
+owner message: it queues one literal trigger line in the owner's active chat
+session, a single queued wake per task, and that agent decides whether the owner
+hears anything. Without a linked Telegram owner the report is only saved.
+Any-conversation runs have no report tool. Reports are not inserted as owner
+instructions or trusted memory. The owner mind is the workspace `AGENTS.md` and files the agent creates.
 No prescribed `inbox/` or `work/` layout is required. No database or general memory
 index is introduced.
 

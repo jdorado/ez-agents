@@ -40,6 +40,7 @@ import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
 import { createConversationMenu } from './conversation-menu.js'
 import { queueSessionClose } from './session-close.js'
+import { queueTaskWake } from './task-wake.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
 import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset, type AiPreset } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
@@ -68,7 +69,13 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const completions = new Set<Promise<void>>()
   const speechOptions = { geminiApiKey: config.geminiApiKey, openrouterApiKey: config.openrouterApiKey, speechProvider: config.speechProvider, speechModel: config.speechModel }
   const speechConfigured = config.speechProvider === 'openrouter' ? Boolean(config.openrouterApiKey) : Boolean(config.geminiApiKey)
-  const tasks = new Tasks(config.controlDir, speechConfigured ? (text) => synthesizeSpeech(text, { ...speechOptions, voice: config.speechVoiceEn, signal: AbortSignal.timeout(20000) }) : undefined)
+  const tasks = new Tasks(config.controlDir, speechConfigured ? (text) => synthesizeSpeech(text, { ...speechOptions, voice: config.speechVoiceEn, signal: AbortSignal.timeout(20000) }) : undefined,
+    // A worker report wakes the owner's chat session; the agent decides whether to message the owner.
+    async (task) => {
+      if (config.channelBackendUrl) return
+      const run = await queueTaskWake(runs, (await control.status()).owner, task.id, await control.captureChoice(aiMenu.initial))
+      if (run) void startJob(run).catch((error) => console.error('Task wake failed to start', safeError(error)))
+    })
   const processTaskRequests = taskRequests(tasks)
   let taskWork: Promise<void> | undefined
   const drainTaskRequests = (): Promise<void> => {

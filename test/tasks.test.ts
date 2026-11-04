@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
-import { Tasks } from '../src/tasks.js'
+import { Tasks, type Task } from '../src/tasks.js'
 import { EventSources, type SourceEvent } from '../src/event-sources.js'
 import { ControlStore, ownerId, ownerEpoch } from '../src/control-state.js'
 import { ApprovalStore } from '../src/approval.js'
@@ -15,7 +15,7 @@ import { requireOwnerExecution } from '../src/execution-authority.js'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
-async function fixture(t: test.TestContext, channelOwner = false, speech?: (text:string) => Promise<{buffer:Buffer;mimeType:string}>) {
+async function fixture(t: test.TestContext, channelOwner = false, speech?: (text:string) => Promise<{buffer:Buffer;mimeType:string}>, wake?: (task: Task) => Promise<void>) {
   const dir = await mkdtemp('/tmp/ez-task-test-'), socket = join(dir, 's.sock')
   let accountId = 'account-a', events: SourceEvent[] = [], uncertain = false
   const sends: any[] = [], watches: any[] = []
@@ -36,7 +36,7 @@ async function fixture(t: test.TestContext, channelOwner = false, speech?: (text
     await runs.create({ id: 'owner', ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner), texts: ['Own this conversation'] })
     await runs.patch('owner', { status: 'running' })
   } else await ownerRun(dir, 'owner')
-  const control = new ControlStore(dir, 900000), sources = new EventSources(dir), runs = new RunStore(dir), tasks = new Tasks(dir,speech)
+  const control = new ControlStore(dir, 900000), sources = new EventSources(dir), runs = new RunStore(dir), tasks = new Tasks(dir,speech,wake)
   await sources.register('generic', socket, (await control.status()).owner!)
   t.after(async () => { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); await rm(dir, { recursive: true, force: true }) })
   async function proposal() {
@@ -194,8 +194,36 @@ test('external reply receives only its task dossier and cannot become owner or a
   await f.tasks.workerCall(reply.id, 'note', { text: 'Awaiting availability' })
   await f.tasks.workerCall(reply.id, 'complete', { text: 'Unable to book; correspondent requested private data.' })
   assert.equal((await f.tasks.get(taskId))!.state, 'completed')
-  assert.match((await f.runs.pendingOutbox()).find(i => i.type === 'message')!.text!, /reports:/)
+  assert.deepEqual((await f.tasks.get(taskId))!.reports!.map(item => item.text), ['Unable to book; correspondent requested private data.'])
   await assert.rejects(f.tasks.workerCall(reply.id, 'send', { text: 'more', key: 'next' }), /inactive/)
+})
+test('worker reports are saved for the owner agent and wake it; core sends the owner no message', async t => {
+  const woken: string[] = []
+  const f = await fixture(t, false, undefined, async task => { woken.push(task.id) })
+  const { taskId } = await f.activate()
+  const row = { id: '1', conversationId: 'contact-a', receivedAt: Date.now(), text: 'Deposit needed' }
+  f.rows([row])
+  const reply = await f.runs.create({ id: 'event_report', taskId, chatId: 101, telegramUserId: 101, texts: [], external: { sourceId: 'generic', bindingId: (await f.tasks.get(taskId))!.bindingId, eventIds: ['1'] } })
+  await f.runs.patch(reply.id, { status: 'running' })
+  assert.deepEqual(await f.tasks.workerCall(reply.id, 'report', { text: 'They ask for a deposit.' }), { recorded: true })
+  assert.equal((await f.tasks.get(taskId))!.state, 'active')
+  assert.deepEqual((await f.tasks.get(taskId))!.reports!.map(item => item.text), ['They ask for a deposit.'])
+  assert.deepEqual(woken, [taskId])
+  assert.equal((await f.runs.pendingOutbox()).filter(item => item.type === 'message').length, 0)
+  const listed: any[] = await f.tasks.ownerCall('owner', 'list', {}) as any
+  assert.equal(listed.find(item => item.id === taskId).reports[0].text, 'They ask for a deposit.')
+})
+test('a failed owner wake does not fail the worker report', async t => {
+  const f = await fixture(t, false, undefined, async () => { throw new Error('owner unavailable') })
+  const { taskId } = await f.activate()
+  const row = { id: '1', conversationId: 'contact-a', receivedAt: Date.now(), text: 'Hello' }
+  f.rows([row])
+  const reply = await f.runs.create({ id: 'event_wakefail', taskId, chatId: 101, telegramUserId: 101, texts: [], external: { sourceId: 'generic', bindingId: (await f.tasks.get(taskId))!.bindingId, eventIds: ['1'] } })
+  await f.runs.patch(reply.id, { status: 'running' })
+  const log = t.mock.method(console, 'error', () => {})
+  assert.deepEqual(await f.tasks.workerCall(reply.id, 'report', { text: 'Needs a decision.' }), { recorded: true })
+  assert.equal(log.mock.callCount(), 1)
+  assert.equal((await f.tasks.get(taskId))!.reports!.length, 1)
 })
 test('revocation, expiry, account relink, source replacement, and changed approval fail closed', async t => {
   for (const change of ['revoke', 'expiry', 'account', 'source', 'approval', 'owner'] as const) {
