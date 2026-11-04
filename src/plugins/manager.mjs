@@ -382,12 +382,17 @@ export async function compose(config, record, secrets={}, home) {
     serviceNetworks.set(binding.service, attached);
   }
   for(const [name,s] of Object.entries(record.deployment.services)) {
+    const workspaceUser=workspaceUsers.get(name);
     const mounts=[];
-    for(const [volume,target] of Object.entries(s.volumes||{})) { volumes[volume]={};mounts.push({type:'volume',source:volume,target}); }
+    for(const [volume,target] of Object.entries(s.volumes||{})) {
+      volumes[volume]={};
+      // Docker copy-up can reset even an empty volume's root to the image UID.
+      mounts.push({type:'volume',source:volume,target,...(workspaceUser?{volume:{nocopy:true}}:{})});
+    }
     for (const folder of folders.filter(f => f.service === name)) mounts.push({type:'bind',source:folder.source,target:folder.target,read_only:folder.writable !== true,bind:{create_host_path:false}});
     if(s.workspace) mounts.push({type:'bind',source:config.workspace,target:config.workspace,read_only:true});
     services[name]={...(s.image?{image:s.image}:{image:`${record.project}-${name}:${record.revision.slice(7,23)}`,build:{context:record.source,target:s.buildTarget}}),
-      init:true,user:workspaceUsers.get(name)??s.user??'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
+      init:true,user:workspaceUser??s.user??'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
       healthcheck:{test:['CMD',...s.healthcheck],interval:'2s',timeout:'5s',retries:30,...(record.deployment.schemaVersion>=2?{start_period:'60s'}:{})},
       ...(s.dependsOn?{depends_on:Object.fromEntries(s.dependsOn.map(dep=>[dep,{condition:'service_healthy'}]))}:{}),
       ...(s.memoryMiB?{mem_limit:`${s.memoryMiB}m`}:{}),

@@ -322,8 +322,10 @@ declared service names. Only services using the default UID can opt in. The
 read-only workspace mount and capability restrictions apply to both the
 service and its one-shot client containers.
 
-For an existing service, stop it and back up its private volumes before moving
-their ownership to the workspace UID and GID. Check the image supports that
+Initialize the service's private volumes under its default identity. Stop the
+service and back up its volumes before moving their ownership to the workspace
+UID and GID. The binding disables image copy-up so Docker preserves ownership
+even on an empty IPC volume. Check that the image supports the workspace
 identity. Save the host binding, refresh an isolated broker's file mount as
 described above, and start the service through the bound registry. Verify the
 client can read an owner-only workspace file and, where applicable, the relay

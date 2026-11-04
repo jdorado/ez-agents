@@ -475,6 +475,7 @@ test('host-approved workspace user survives registered-call Compose regeneration
  const service=await rendered();
  assert.equal(service.user,`${workspaceUid}:${workspaceGid}`);
  assert.equal(service.volumes.find(volume=>volume.target===config.workspace).read_only,true);
+ assert.deepEqual(service.volumes.find(volume=>volume.target==='/data').volume,{nocopy:true});
  assert.deepEqual(service.cap_drop,['ALL']);
  route.services=['missing'];await saveHost();
  await assert.rejects(invoke(),/requires a unique workspace-mounted service/);
