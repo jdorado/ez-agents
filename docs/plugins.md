@@ -311,6 +311,26 @@ installer owns the binding and must ensure the selected service is stopped
 before changing its network topology. The executor's writable tool registry is
 never a source of network attachment authority.
 
+### Host-owned workspace identity
+
+When a reviewed service with `workspace: true` needs to read private workspace
+files or share a private socket with the relay, the host can select the
+workspace owner's non-root UID and GID for that service. Set
+`pluginWorkspaceUsers.<plugin-id>` on the owning agent's host binding with
+`revisions` listing the approved package hashes and `services` listing the
+declared service names. Only services using the default UID can opt in. The
+read-only workspace mount and capability restrictions apply to both the
+service and its one-shot client containers.
+
+For an existing service, stop it and back up its private volumes before moving
+their ownership to the workspace UID and GID. Check the image supports that
+identity. Save the host binding, refresh an isolated broker's file mount as
+described above, and start the service through the bound registry. Verify the
+client can read an owner-only workspace file and, where applicable, the relay
+can reach the socket. Review and pin new package revisions before upgrading.
+
+### Command execution
+
 Commands run in one-shot client containers against their own service's volumes;
 stdin, stdout, stderr, literal arguments and exit codes are preserved. SIGINT/
 SIGTERM cancel the Docker call and remove its unique client container; a Compose

@@ -14,6 +14,7 @@ const reserved = new Set(['status','updates','plugins','tools','message','owner'
 const id = value => { if(typeof value !== 'string' || !/^[a-z][a-z0-9-]{0,39}$/.test(value)) throw Error('Invalid identifier'); return value; };
 const dockerNetwork = value => { if(typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value)) throw Error('Invalid Docker network'); return value; };
 const hash = data => createHash('sha256').update(data).digest('hex');
+const nonRootUser = /^[1-9][0-9]{0,5}:[1-9][0-9]{0,5}$/;
 const json = async file => JSON.parse(await fs.readFile(file,'utf8'));
 const emit = value => console.log(JSON.stringify(value));
 const keys = (object, allowed) => { if(!object || typeof object !== 'object' || Array.isArray(object) || Object.keys(object).some(k=>!allowed.includes(k))) throw Error('Invalid or unknown descriptor fields'); };
@@ -165,7 +166,7 @@ export function validate(m,d,files) {
   if(![1,2,3].includes(d.schemaVersion) || !d.services || !d.commands) throw Error('Unsupported deployment descriptor');
   for(const [name,s] of Object.entries(d.services)) {
     id(name); keys(s,['buildTarget','image','volumes','workspace','healthcheck','command',...(d.schemaVersion>=2?['environment','dependsOn','user','memoryMiB','cpus']:[])]);
-    if(s.user!==undefined && !/^[1-9][0-9]{0,5}:[1-9][0-9]{0,5}$/.test(s.user)) throw Error('Only explicit non-root UID:GID is supported');
+    if(s.user!==undefined && !nonRootUser.test(s.user)) throw Error('Only explicit non-root UID:GID is supported');
     if(s.memoryMiB!==undefined && (!Number.isInteger(s.memoryMiB)||s.memoryMiB<32||s.memoryMiB>8192)) throw Error('Invalid memory bound');
     if(s.cpus!==undefined && (typeof s.cpus!=='number'||!Number.isFinite(s.cpus)||s.cpus<0.1||s.cpus>8)) throw Error('CPU limit must be between 0.1 and 8 cores');
     if(s.dependsOn) for(const dependency of strings(s.dependsOn)) if(!d.services[dependency]||dependency===name) throw Error('Invalid service dependency');
@@ -296,33 +297,34 @@ export async function checkFolders(config, record, home) {
   }
 }
 const childOf = (candidate, parent) => candidate === parent || candidate.startsWith(parent + path.sep);
-// Host-owned private network bindings remain separate from portable package descriptors.
-// The executor may write toolsHome, so the binding source must stay in its host config.
-export async function hostNetworkBindings(config, record, home) {
+// Host-owned bindings stay outside the executor's writable registry.
+function hostPluginOwner(config, home) {
   const configuredHost = config.hostConfig ?? (typeof config.deploymentDir === 'string' && path.isAbsolute(config.deploymentDir) ? path.join(config.deploymentDir, 'host-executor.json') : undefined);
-  if (configuredHost === undefined) return [];
-  if (!home || typeof configuredHost !== 'string' || !path.isAbsolute(configuredHost)) throw Error('Invalid host network binding');
+  if (configuredHost === undefined) return null;
+  if (!home || typeof configuredHost !== 'string' || !path.isAbsolute(configuredHost)) throw Error('Invalid host plugin binding');
   home = realpathSync(home);
   const hostConfig = realpathSync(configuredHost);
   if (hostConfig !== configuredHost || path.basename(hostConfig) !== 'host-executor.json' || childOf(hostConfig, home))
-    throw Error('Host network bindings require an external host config');
+    throw Error('Host plugin bindings require an external host config');
   const host = JSON.parse(readFileSync(hostConfig, 'utf8'));
-  if (!host || typeof host !== 'object' || !Array.isArray(host.agents)) throw Error('Invalid host network bindings');
+  if (!host || typeof host !== 'object' || !Array.isArray(host.agents)) throw Error('Invalid host plugin bindings');
   const candidates = host.agents.filter(agent => agent && typeof agent === 'object' && typeof agent.toolsHome === 'string' && realpathSync(agent.toolsHome) === home);
-  if (candidates.length !== 1) throw Error('Host network binding does not belong to this registry');
+  if (candidates.length !== 1) throw Error('Host plugin binding does not belong to this registry');
   const agent = candidates[0];
   if (typeof agent.workspace !== 'string' || typeof agent.controlDir !== 'string' ||
       realpathSync(agent.workspace) !== config.workspace ||
       childOf(hostConfig, config.workspace) || childOf(hostConfig, realpathSync(agent.controlDir)))
-    throw Error('Invalid host network binding deployment');
-  const configured = agent.pluginNetworkBindings;
+    throw Error('Invalid host plugin binding deployment');
+  return {agent, isolation:host.isolation};
+}
+async function reviewedHostRoute(owner, record, field, setting, kind) {
+  const configured = owner?.agent[field];
   if (configured !== undefined && (!configured || typeof configured !== 'object' || Array.isArray(configured)))
-    throw Error('Invalid host network bindings');
+    throw Error(`Invalid host ${kind} bindings`);
   const route = configured?.[record.manifest?.id];
-  if (route === undefined) return [];
-  const isolated = process.env.EZ_DOCKER_COMPOSE === 'standalone';
-  if (isolated && host.isolation !== 'isolated') throw Error('Isolated broker requires an isolated host binding');
-  keys(route, ['revisions', 'bindings']);
+  if (route === undefined) return undefined;
+  if (process.env.EZ_DOCKER_COMPOSE === 'standalone' && owner.isolation !== 'isolated') throw Error('Isolated broker requires an isolated host binding');
+  keys(route, ['revisions', setting]);
   const trusted = await snapshot(record.source);
   if (record.revision !== trusted.revision || record.source !== trusted.source ||
       JSON.stringify(record.manifest) !== JSON.stringify(trusted.manifest) ||
@@ -330,7 +332,12 @@ export async function hostNetworkBindings(config, record, home) {
     throw Error('Registry plugin identity is not the reviewed source');
   if (record.manifest.id !== trusted.manifest.id) throw Error('Registry plugin identity is not the reviewed source');
   if (!Array.isArray(route.revisions) || route.revisions.some(revision => typeof revision !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(revision)) ||
-      !route.revisions.includes(trusted.revision)) throw Error('Host network binding is not pinned to the reviewed plugin revision');
+      !route.revisions.includes(trusted.revision)) throw Error(`Host ${kind} binding is not pinned to the reviewed plugin revision`);
+  return route;
+}
+export async function hostNetworkBindings(config, record, home, owner = hostPluginOwner(config, home)) {
+  const route = await reviewedHostRoute(owner, record, 'pluginNetworkBindings', 'bindings', 'network');
+  if (!route) return [];
   const bindings = route.bindings;
   if (!Array.isArray(bindings)) throw Error('Invalid host network bindings');
   const seen = new Set();
@@ -344,10 +351,27 @@ export async function hostNetworkBindings(config, record, home) {
   }
   return bindings;
 }
+async function hostWorkspaceUsers(owner, config, record) {
+  const route = await reviewedHostRoute(owner, record, 'pluginWorkspaceUsers', 'services', 'workspace user');
+  if (!route) return new Map();
+  const {uid,gid} = await fs.stat(config.workspace);
+  const user = `${uid}:${gid}`;
+  if (!nonRootUser.test(user)) throw Error('Host workspace user binding requires a non-root workspace UID:GID');
+  const users = new Map();
+  for (const service of strings(route.services)) {
+    id(service);
+    const spec = record.deployment.services[service];
+    if (!spec?.workspace || spec.user !== undefined || users.has(service)) throw Error('Host workspace user binding requires a unique workspace-mounted service with the default user');
+    users.set(service, user);
+  }
+  return users;
+}
 export async function compose(config, record, secrets={}, home) {
   const services={}, volumes={}, networks={}, serviceNetworks=new Map();
   const folders = folderMounts(config, record);
-  for (const binding of await hostNetworkBindings(config, record, home)) {
+  const owner = hostPluginOwner(config, home);
+  const workspaceUsers = await hostWorkspaceUsers(owner, config, record);
+  for (const binding of await hostNetworkBindings(config, record, home, owner)) {
     // A service with an explicit network list loses Compose's implicit default.
     // Keep the plugin's own network so bound services retain sibling access.
     networks.default = {};
@@ -363,7 +387,7 @@ export async function compose(config, record, secrets={}, home) {
     for (const folder of folders.filter(f => f.service === name)) mounts.push({type:'bind',source:folder.source,target:folder.target,read_only:folder.writable !== true,bind:{create_host_path:false}});
     if(s.workspace) mounts.push({type:'bind',source:config.workspace,target:config.workspace,read_only:true});
     services[name]={...(s.image?{image:s.image}:{image:`${record.project}-${name}:${record.revision.slice(7,23)}`,build:{context:record.source,target:s.buildTarget}}),
-      init:true,user:s.user||'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
+      init:true,user:workspaceUsers.get(name)??s.user??'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
       healthcheck:{test:['CMD',...s.healthcheck],interval:'2s',timeout:'5s',retries:30,...(record.deployment.schemaVersion>=2?{start_period:'60s'}:{})},
       ...(s.dependsOn?{depends_on:Object.fromEntries(s.dependsOn.map(dep=>[dep,{condition:'service_healthy'}]))}:{}),
       ...(s.memoryMiB?{mem_limit:`${s.memoryMiB}m`}:{}),
