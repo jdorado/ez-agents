@@ -316,15 +316,22 @@ const nativeStatus: StatusRunner = (command, args, env, cwd) => new Promise((res
 })
 const credentialNames: Record<string, string[]> = { codex: ['auth.json'], claude: ['oauth-token', '.credentials.json'] }
 
+// Credential homes Ez can bind: each installed default login plus every
+// provisioned named profile.
+export const authHomes = async (controlDir: string, available = installed): Promise<{ cli: string; authProfile?: string }[]> => {
+  const homes: { cli: string; authProfile?: string }[] = [...AUTH_PROFILE_CLIS.map((cli) => ({ cli })), ...await listAuthProfiles(controlDir)]
+  const found: typeof homes = []
+  for (const home of homes) if (home.authProfile || await available(home.cli)) found.push(home)
+  return found
+}
+
 // Read-only auth diagnostics per credential home. Native status runs with the
 // same home and credential environment as execution; only whitelisted fields
 // are projected, never tokens, account identifiers or raw native output.
 export const authProfileStatus = async (controlDir: string, available = installed, run = nativeStatus,
   isolated = process.env.EZ_ISOLATION === 'isolated'): Promise<AuthProfileStatus[]> => {
-  const homes: { cli: string; authProfile?: string }[] = [...AUTH_PROFILE_CLIS.map((cli) => ({ cli })), ...await listAuthProfiles(controlDir)]
   const statuses: AuthProfileStatus[] = []
-  for (const { cli, authProfile } of homes) {
-    if (!authProfile && !(await available(cli))) continue
+  for (const { cli, authProfile } of await authHomes(controlDir, available)) {
     const home = cliHome(controlDir, cli, authProfile)
     const provisioned = await access(home).then(() => true, () => false)
     const credentialFiles: string[] = []
