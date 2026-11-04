@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0-beta.66
+
+- Keep restricted messaging on a separately audited Codex binary in managed Docker images. Interactive Codex updates can proceed while restricted tasks continue to use the pinned 0.164.0 binary for version checks, model discovery and execution. Host executions still require the audited version on PATH. ([#323](https://github.com/jdorado/ez-agents/pull/323))
+
 ## 0.1.0-beta.65
 
 - Add an owner-only `/usage` Telegram command that shows each saved Codex and Claude login's provider limits: percent left and reset time per window, plus quota-block state from setup health. It lists the default logins and every named profile in one reply and starts no agent turn. Codex is read through `codex app-server` (`account/rateLimits/read`) and Claude through the local `claude -p /usage` command, which spends no model tokens. Each client runs with its own bound home and nothing is stored; the reply carries only percentages, clocks, scope names and short status words, never tokens, account identifiers or raw native output.
