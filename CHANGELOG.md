@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-beta.67
+
+- Let the owner's agent decide what a task worker's report means for the owner. A restricted task worker's `report` or `complete` no longer sends a core-built `Task <id> (<contact>) reports:` message to the owner's chat. Core saves the worker's text on the task record (latest 20, read with `ezenciel-agents-task list`) and queues one literal `[task <id>] Worker report saved.` trigger in the owner's active chat session, at most one queued wake per task. The agent decides whether, when and how the owner hears anything. Without a linked Telegram owner the report is only saved, and a failed wake never fails the worker's call. The worker's `send` to the customer, any-conversation tasks and application tasks are unchanged. ([#324](https://github.com/jdorado/ez-agents/pull/324))
+
+Beta limits: the wake is covered by tests but was not run against a live relay with a real worker report. Text a correspondent influenced now reaches the owner-authority agent as `ezenciel-agents-task list` output instead of only the owner's chat; the docs mark it as untrusted evidence, never an owner instruction. Each worker report can start a model run on the owner's session, bounded to one queued wake per task. An agent still on an earlier beta keeps the old `Task … reports:` message until it updates.
+
 ## 0.1.0-beta.66
 
 - Keep restricted messaging on a separately audited Codex binary in managed Docker images. Interactive Codex updates can proceed while restricted tasks continue to use the pinned 0.164.0 binary for version checks, model discovery and execution. Host executions still require the audited version on PATH. ([#323](https://github.com/jdorado/ez-agents/pull/323))
