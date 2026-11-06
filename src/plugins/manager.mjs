@@ -82,7 +82,8 @@ async function activeInvocations(home) {
     if(state.code===0&&foreign&&state.stdout.trim()==='true')return true;
     if(state.code===0)throw Object.assign(Error(`Stale command invocation lease; inspect container ${lease.container} before recovery`),{stale:true});
     if(!/No such (?:object|container)/i.test(state.stderr+state.stdout))throw Error('Unable to verify a stale command invocation lease; inspect Docker before recovery');
-    await fs.rm(path.join(directory,file));
+    // The call's own release removes the same lease, so the cleanup must tolerate it already being gone.
+    await fs.rm(path.join(directory,file),{force:true});
   }
   return false;
 }
