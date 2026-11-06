@@ -65,7 +65,7 @@ async function fixture(t,kind='main') {
  for(const d of [home,old,source,path.join(home,'bin'),path.join(home,'updates'),path.join(deployment,'mind'),path.join(deployment,'control')])await fs.mkdir(d,{recursive:true});
  const pkg={name:'@ez-test/example',version:'0.1.0',packageManager:'pnpm@10.30.3',type:'module',files:['bin','src','docker','compose.yaml','compose.whatsapp.yaml','.dockerignore','Dockerfile'],bin:{example:'bin/example.mjs'},ezRelease:contract(kind)};
  const guidance=text=>`export async function bindToolDiscovery(_home,workspace){const fs=await import('node:fs/promises');await fs.writeFile(workspace+'/AGENTS.md',${JSON.stringify(text+'\n')});}\n`;
- const files={'package.json':JSON.stringify(pkg),'compose.yaml':'services: {}\n','compose.whatsapp.yaml':'services: {}\n','.dockerignore':'','Dockerfile':'FROM scratch AS runtime','docker/pnpm-lock.yaml':'lockfileVersion: 9.0\n','src/host-executor.ts':'','src/plugins/manager.mjs':guidance('old guidance'),'bin/example.mjs':'#!/usr/bin/env node\nconsole.log("example")','bin/ezenciel-agents.mjs':'console.log("0.1.1")'};
+ const files={'package.json':JSON.stringify(pkg),'compose.yaml':'services: {}\n','compose.whatsapp.yaml':'services: {}\n','.dockerignore':'','Dockerfile':'FROM scratch AS runtime','docker/pnpm-lock.yaml':'lockfileVersion: 9.0\n','src/host-executor.ts':'','src/control-state.ts':'export class ControlStore{async validate(){}}\n','src/plugins/manager.mjs':guidance('old guidance'),'bin/example.mjs':'#!/usr/bin/env node\nconsole.log("example")','bin/ezenciel-agents.mjs':'console.log("0.1.1")'};
  let record,target='main';
  if(kind==='plugin') {
   target='sample';files['ez-plugin.json']=JSON.stringify({schemaVersion:1,id:'sample',version:pkg.version,commands:{sample:{executable:'bin/example.mjs',args:[]}},skills:[]});
@@ -113,11 +113,12 @@ test('root preparation leaves private plugin updates readable by the installer',
  const script=`const fs=require('fs');fs.readFileSync(${JSON.stringify(path.join(dir,'job.json'))});fs.readFileSync(${JSON.stringify(path.join(dir,'candidate.tgz'))});`;
  await exec('setpriv',['--reuid=20001','--regid=20002','--clear-groups','--no-new-privs',process.execPath,'-e',script]);
 });
-function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},latest='0.160.0'}={}) {
+function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},latest='0.160.0',controlState='OK'}={}) {
  const calls=[],lookups=[];let failed=false,brokerImage='sha256:'+'a'.repeat(64);
  const execute=async(command,args,opts)=>{
   calls.push([command,...args]);if(args.includes('view')){lookups.push(opts?.cwd);return JSON.stringify(latest);}if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
+  if(args.some(arg=>arg.includes('EZ_CONTROL_STATE_OK')))return `EZ_CONTROL_STATE_${controlState}\n`;
   if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
   if(args.includes('ps'))return stopped?'':'a'.repeat(64);
   if(args.some(arg=>arg.includes("const fs=require('fs'),crypto=require('crypto')")))return digest(await fs.readFile(path.join(f.config.deploymentDir,'host-executor.json')));
@@ -398,6 +399,17 @@ test('failed preparation never stops runtime; failed activation rolls back code 
   assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
   if(stage==='build')assert(!r.calls.some(c=>c[0]==='stopHost'));
   else assert((await fs.readFile(path.join(f.config.deploymentDir,'docker.env'),'utf8')).includes('sha256:'+'a'.repeat(64)));
+ }
+});
+test('a candidate that cannot read the control state fails before anything stops',async t=>{
+ for(const code of ['UNSUPPORTED','UNREADABLE']) {
+  const f=await fixture(t),job=await queued(f),r=runtime(f,{controlState:code});
+  const result=await perform(f.home,job,r);
+  assert.equal(result.status,'failed');
+  assert.match(result.error,new RegExp(`control-state=${code.toLowerCase()}`));
+  assert.equal(result.rollback,undefined);
+  assert(!r.calls.some(c=>c[0]==='stopHost'||c[0]==='startHost'||(c[0]==='docker'&&c[1]==='build')),'nothing is built or stopped');
+  assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
  }
 });
 test('main health-gate rollback retains only the recognized sanitized predicate',async t=>{
