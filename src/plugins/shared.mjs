@@ -47,7 +47,7 @@ export async function sharedService(record, key, action, run) {
       '--network', 'bridge', '--user', '1000:1000', '--init', '--restart', 'unless-stopped', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
       '--memory', `${spec.memoryMiB}m`, '--cpus', String(spec.cpus ?? 0.5), '--pids-limit', '256', '--tmpfs', '/tmp',
       '--mount', `type=volume,src=${name}-ipc,dst=/inference`, '--mount', `type=volume,src=${name}-models,dst=/models`,
-      '--health-cmd', spec.healthcheck.map(x => `'${x.replaceAll("'", "'\\''")}'`).join(' '), '--health-interval', '2s', '--health-timeout', '5s', '--health-retries', '30', '--health-start-period', '10m', image], { capture: true });
+      '--health-cmd', spec.healthcheck.map(x => `'${x.replaceAll("'", "'\\''")}'`).join(' '), '--health-interval', '10s', '--health-timeout', '5s', '--health-retries', '6', '--health-start-period', '10m', image], { capture: true });
     if (result.code === 130) throw Error('Shared service creation cancelled; inspect before retrying');
     // Docker's unique container name is the daemon-wide creation lock.
     container = await inspect('container', name);

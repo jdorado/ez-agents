@@ -565,6 +565,14 @@ test('v2 supports bounded dependency graphs and generated private secrets',async
  for(const change of [x=>x.services.database.user='0:0',x=>x.services.database.cpus=0.01,x=>x.services.database.cpus=9,x=>x.services.database.environment.PASSWORD={secret:'undeclared'},x=>x.services.database.environment.PASSWORD='${HOST_SECRET}',x=>x.services.database.dependsOn=['sample'],x=>x.services.sample.dependsOn=['missing'],x=>x.services.sample.ports=['9999:9999']]){const bad=structuredClone(d);change(bad);assert.throws(()=>validate(f.manifest,bad,p.files));}
  const old=structuredClone(d);old.schemaVersion=1;assert.throws(()=>validate(f.manifest,old,p.files));
 });
+test('plugin services are probed every 10 seconds and reported unhealthy after about 60 seconds',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);
+ const v1=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:f.deployment});
+ assert.deepEqual(v1.services.sample.healthcheck,{test:['CMD','node','--version'],interval:'10s',timeout:'5s',retries:6});
+ const d=structuredClone(f.deployment);d.schemaVersion=2;
+ const v2=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:d});
+ assert.deepEqual(v2.services.sample.healthcheck,{test:['CMD','node','--version'],interval:'10s',timeout:'5s',retries:6,start_period:'60s'});
+});
 test('catalog publication pins reviewed source without install or Docker calls',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);await init(f.home,f.workspace);
  await f.call('plugins','catalog-add','sample','--source',f.source,'--revision',p.revision);

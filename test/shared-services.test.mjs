@@ -75,6 +75,13 @@ test('cancelled creation never starts a possibly created container', async () =>
   assert(!d.calls.some(a => a[0] === 'start'));
 });
 
+test('shared worker is probed every 10 seconds with a 10-minute start period', async () => {
+  const d = daemon();
+  await sharedService(record(), 'embeddings', 'enable', d.run);
+  const create = d.calls.find(a => a[0] === 'create'), flag = name => create[create.indexOf(name)+1];
+  assert.deepEqual(['--health-interval', '--health-timeout', '--health-retries', '--health-start-period'].map(flag), ['10s', '5s', '6', '10m']);
+});
+
 test('default worker quota is half a core; explicit reviewed quotas are honored and drift rejected', async () => {
   for (const cpus of [undefined, 0.25, 1]) {
     const d = daemon(), r = record();

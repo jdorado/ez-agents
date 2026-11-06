@@ -253,7 +253,8 @@ and monitoring subscriptions alone never grant task execution. See
 
 - `schemaVersion: 1`.
 - `services`: named services, each with exactly one `buildTarget` (from the
-  snapshotted Dockerfile) or digest-pinned `image`; a nonempty `healthcheck` argv;
+  snapshotted Dockerfile) or digest-pinned `image`; a nonempty `healthcheck` argv
+  (Docker runs it every 10 seconds and starts a process each time, so keep it cheap);
   optional literal `command`, `volumes` mapping named private volumes to container
   paths, and `workspace: true` for the owning mind mounted read-only.
 - `commands`: the same aliases as the plugin manifest; each names its `service`,
