@@ -118,7 +118,10 @@ function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},l
  const execute=async(command,args,opts)=>{
   calls.push([command,...args]);if(args.includes('view')){lookups.push(opts?.cwd);return JSON.stringify(latest);}if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
-  if(args.some(arg=>arg.includes('EZ_CONTROL_STATE_OK')))return `EZ_CONTROL_STATE_${controlState}\n`;
+  if(args.some(arg=>arg.includes('EZ_CONTROL_STATE_OK'))) {
+   if(!args.at(-1).includes(JSON.stringify(f.agent.controlDir)))throw Error('Control-state probe targeted the wrong directory');
+   return `EZ_CONTROL_STATE_${controlState}\n`;
+  }
   if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
   if(args.includes('ps'))return stopped?'':'a'.repeat(64);
   if(args.some(arg=>arg.includes("const fs=require('fs'),crypto=require('crypto')")))return digest(await fs.readFile(path.join(f.config.deploymentDir,'host-executor.json')));
