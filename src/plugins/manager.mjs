@@ -394,7 +394,7 @@ export async function compose(config, record, secrets={}, home) {
     if(s.workspace) mounts.push({type:'bind',source:config.workspace,target:config.workspace,read_only:true});
     services[name]={...(s.image?{image:s.image}:{image:`${record.project}-${name}:${record.revision.slice(7,23)}`,build:{context:record.source,target:s.buildTarget}}),
       init:true,user:workspaceUser??s.user??'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
-      healthcheck:{test:['CMD',...s.healthcheck],interval:'2s',timeout:'5s',retries:30,...(record.deployment.schemaVersion>=2?{start_period:'60s'}:{})},
+      healthcheck:{test:['CMD',...s.healthcheck],interval:'10s',timeout:'5s',retries:6,...(record.deployment.schemaVersion>=2?{start_period:'60s'}:{})},
       ...(s.dependsOn?{depends_on:Object.fromEntries(s.dependsOn.map(dep=>[dep,{condition:'service_healthy'}]))}:{}),
       ...(s.memoryMiB?{mem_limit:`${s.memoryMiB}m`}:{}),
       ...(s.cpus?{cpus:s.cpus}:{}),
