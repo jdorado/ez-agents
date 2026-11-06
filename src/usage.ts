@@ -1,4 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
+import { lstat, readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { authHomes, installed } from './ai.js'
 import { claudeAuthEnvironment, cliHome } from './auth-profile.js'
 import { executorEnvironment, executorInvocation } from './executor.js'
@@ -7,8 +9,8 @@ import { quotaBlockedUntil, quotaScope, type SetupHealth } from './setup-fallbac
 // Read-only owner view of each login's provider limits, asked of the native
 // client on demand. Nothing is stored and Ez never copies or prints the
 // credential: each client runs with its own bound home. Only percentages,
-// clocks, scope names and short status words are projected, never tokens,
-// account identifiers or raw native output.
+// clocks, scope names and short status words are projected, with an optional
+// saved Claude email for a private owner chat.
 export type UsageWindow = { label: string; usedPercent: number; resetsAt?: number; resetsText?: string }
 export type UsageReaders = {
   codex: (home: string) => Promise<UsageWindow[]>
@@ -98,6 +100,17 @@ export const readClaudeLimits = async (home: string, authProfile?: string, timeo
 
 const defaultReaders: UsageReaders = { codex: readCodexLimits, claude: readClaudeLimits }
 
+const savedClaudeEmail = async (home: string): Promise<string | undefined> => {
+  // A setup token overrides the saved browser login and has no saved identity.
+  const hasSetupToken = await lstat(join(home, 'oauth-token')).then(() => true, error => error.code !== 'ENOENT')
+  if (hasSetupToken) return
+  try {
+    const email: unknown = JSON.parse(await readFile(join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress
+    if (typeof email === 'string' && email.length <= 254 && email === email.trim() &&
+        /^[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email)) return email
+  } catch {}
+}
+
 const remaining = (ms: number): string => {
   const minutes = Math.max(0, Math.round(ms / 60_000)), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60)
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`
@@ -112,14 +125,15 @@ const windowLine = (window: UsageWindow, width: number, now: number): string => 
 }
 
 export const usageReport = async (controlDir: string, health: SetupHealth = {},
-  deps: { readers?: UsageReaders; available?: (cli: string) => Promise<boolean>; now?: number } = {}): Promise<string> => {
+  deps: { readers?: UsageReaders; available?: (cli: string) => Promise<boolean>; now?: number; showAccountEmails?: boolean } = {}): Promise<string> => {
   const readers = deps.readers ?? defaultReaders, now = deps.now ?? Date.now()
   const homes = await authHomes(controlDir, deps.available ?? installed)
   if (!homes.length) return 'No Codex or Claude login is installed.'
   const sections = await Promise.all(homes.map(async ({ cli, authProfile }) => {
     const scope = quotaScope({ id: 'usage', name: 'usage', cli, ...(authProfile ? { authProfile } : {}) })
     const home = cliHome(controlDir, cli, authProfile)
-    const lines = [scope]
+    const email = deps.showAccountEmails && cli === 'claude' ? await savedClaudeEmail(home) : undefined
+    const lines = [email ? `${scope} · ${email}` : scope]
     const blockedUntil = quotaBlockedUntil(health[scope])
     if (blockedUntil > now) lines.push(Number.isFinite(blockedUntil) ? `  ⛔ quota-blocked · ${resetNote(blockedUntil, now)}` : '  ⛔ quota-blocked · awaiting /retry_quota')
     try {
