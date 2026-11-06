@@ -94,6 +94,15 @@ export function executorVolumes(deployment,worker) {
     return [name,{name:actual,external:true}];
   }));
 }
+// A PID outlives its owner: after a reboot the number can belong to an unrelated process, and the lock then blocks
+// every start. The supervisor beats supervisor.json under its own PID every second, so the owner is gone when that
+// PID does not exist, or when its own beat is older than the 10 s that `requireSupervisor` treats as offline. With no
+// beat for that PID (an older supervisor, or a different writer) a live PID still counts as the owner.
+export async function lockOwnerAlive(directory,pid) {
+  try { process.kill(pid,0); } catch(e) { if(e.code==='ESRCH')return false; if(e.code!=='EPERM')throw e; /* EPERM: it exists, owned by another user */ }
+  const beat=await read(path.join(directory,'supervisor.json')).catch(()=>null);
+  return !(beat?.pid===pid&&Number.isFinite(beat.at)&&Date.now()-beat.at>10000);
+}
 export async function supervise(deployment,signal,{discover=check}={}) {
   const host=await read(path.join(deployment,'host-executor.json'));
   if(host.agents.length!==1||!host.agents[0].toolsHome)throw Error('Initialize a single deployment plugin registry before starting the supervisor');
@@ -103,7 +112,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   const lock=path.join(directory,'supervisor.lock');
   const prior=await read(lock).catch(missing);
   if(prior&&(!Number.isSafeInteger(prior.pid)||prior.pid<1))throw Error('Corrupt supervisor lock');
-  if(prior){try{process.kill(prior.pid,0);throw Error('Supervisor already running');}catch(e){if(e.code!=='ESRCH')throw e;}await fs.rm(lock);}
+  if(prior){if(await lockOwnerAlive(directory,prior.pid))throw Error('Supervisor already running');await fs.rm(lock);}
   await fs.writeFile(lock,JSON.stringify({pid:process.pid}),{flag:'wx',mode:0o600});
   let child,container;
   let retirements=[];

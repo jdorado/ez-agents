@@ -32,6 +32,14 @@ transport. It checks npm every six hours while running and queues one eligible
 release at a time when the policy is automatic. Discovery and replacement never
 wake the agent or inject wrapper state into a session. Manual policies retain
 owner-invoked updates through `ez updates`.
+
+Only one supervisor runs: it holds `updates/supervisor.lock`. A lock left by a dead
+supervisor is reclaimed at the next start, also after a reboot when its PID now
+belongs to another process. The owner counts as gone when that PID does not exist
+or when `updates/supervisor.json`, which the supervisor refreshes every second,
+shows a beat for that PID older than 10 seconds. A live PID with no such beat is
+still treated as the owner.
+
 Checks use the installed scoped npm identity; failures are
 visible in `updates check` and private `tools/updates/available.json`. Plugins marked
 `private: true` in their package metadata are reported as local-source updates

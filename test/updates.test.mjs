@@ -14,7 +14,7 @@ import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manage
 import { bindUpdates } from '../src/updates/binding.mjs';
 import { TOOLS_LINE } from '../src/tools-line.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
-import { idle, executorBindingArchive, executorVolumes, providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade, withUpgrade } from '../src/updates/supervisor.mjs';
+import { idle, executorBindingArchive, executorVolumes, lockOwnerAlive, providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade, withUpgrade } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
 
 test('structured runtime output excludes warnings but failures retain diagnostics',async()=>{
@@ -29,6 +29,18 @@ test('supervisor forwards only provider keys declared by the agent installation'
  assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey:'bad-key'}]}]},{}),/environment key/);
  for(const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN'])
   assert.throws(()=>providerEnvironment({agents:[{codexProviders:[{envKey}]}]},{}),/Reserved Codex provider environment key/);
+});
+test('a supervisor lock belongs to its live owner, not to an unrelated process that reuses its PID after a reboot',async t=>{
+ const dir=await fs.mkdtemp(path.join(tmpdir(),'ez-lock-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));
+ const beat=(pid,age)=>atomic(path.join(dir,'supervisor.json'),{pid,at:Date.now()-age});
+ const gone=await new Promise(resolve=>{const child=spawn(process.execPath,['-e','']);child.on('exit',()=>resolve(child.pid));});
+ assert.equal(await lockOwnerAlive(dir,gone),false,'no such process');
+ assert.equal(await lockOwnerAlive(dir,process.pid),true,'a live PID with no beat to contradict it stays the owner');
+ await beat(process.pid,0);assert.equal(await lockOwnerAlive(dir,process.pid),true,'fresh beat under its own PID');
+ await beat(process.pid,60000);assert.equal(await lockOwnerAlive(dir,process.pid),false,'stale beat under the same PID: the owner died and the PID was reused');
+ await beat(process.pid+1,60000);assert.equal(await lockOwnerAlive(dir,process.pid),true,'a stale beat from another PID says nothing about this one');
+ await fs.writeFile(path.join(dir,'supervisor.json'),'not json');assert.equal(await lockOwnerAlive(dir,process.pid),true,'an unreadable beat keeps the lock');
+ await beat(1,60000);assert.equal(await lockOwnerAlive(dir,1),false,'a reused PID owned by another user (EPERM) is reclaimed too');
 });
 test('host startup gate tolerates initialization beyond the former ten-second window',async()=>{
  let reads=0;
