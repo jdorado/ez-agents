@@ -320,6 +320,17 @@ test('a draining lifecycle change waits for an exited call to finish releasing i
  await fs.writeFile(file+'.next',`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){console.error('Error: No such object: exiting-call');process.exit(1)}\n`,{mode:0o700});await fs.rename(file+'.next',file);
  await drain;assert.equal(activated,true);await assert.rejects(fs.access(lease),{code:'ENOENT'});
 });
+test('a lease its own call releases while the lock clears it does not fail the lifecycle change',async t=>{
+ const f=await fixture(t);
+ const directory=path.join(f.home,'command-invocations');await fs.mkdir(directory,{recursive:true});
+ const lease=path.join(directory,'00000000-0000-4000-8000-000000000005.json');
+ await fs.writeFile(lease,JSON.stringify({pid:1,container:'released-call',pidNamespace:'pid:[4026531999]'}),{mode:0o600});
+ const path0=process.env.PATH;process.env.PATH=f.fake+path.delimiter+path0;t.after(()=>{process.env.PATH=path0;});
+ // The call's release removes its lease after the container check and before the lock's own cleanup.
+ await fs.writeFile(path.join(f.fake,'docker'),`#!${process.execPath}\nconst a=process.argv.slice(2);if(a[0]==='container'&&a[1]==='inspect'){require('fs').rmSync(${JSON.stringify(lease)});console.error('Error: No such object: released-call');process.exit(1)}\n`,{mode:0o700});
+ assert.equal(await locked(f.home,async()=>'ok',{drainInvocations:true}),'ok');
+ await assert.rejects(fs.access(lease),{code:'ENOENT'});
+});
 test('a draining lifecycle change still reports a stop that outlasts the grace as stale',async t=>{
  const f=await fixture(t);
  const directory=path.join(f.home,'command-invocations');await fs.mkdir(directory,{recursive:true});

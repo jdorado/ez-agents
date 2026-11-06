@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-beta.67
+
+- Let the owner's agent decide what a restricted task worker's report reaches the owner (#324, merged after beta.66 and first released here). A worker `report` or `complete` no longer makes core send a message into the owner's chat. It saves the text on the task record (the latest 20, readable with `ezenciel-agents-task list`), returns `{recorded: true}` instead of `{queued: <outbox id>}`, and queues one wake run in the owner's active chat session, at most one queued wake per task. Customer-facing `send`, any-conversation tasks and application tasks are unchanged. Beta limit: no live relay run with a real worker report was done for this change.
+- Fix main and plugin updates failing with `ENOENT ... lstat .../command-invocations/<id>.json` while plugin calls run. When the update drain cleared the lease of a call that had just exited, it removed the file without tolerating that the call's own release had already removed it, so the job failed and the old version kept running. The cleanup now ignores a lease that is already gone. Other lease checks, including a stop that outlasts the drain grace, are unchanged.
+
 ## 0.1.0-beta.66
 
 - Keep restricted messaging on a separately audited Codex binary in managed Docker images. Interactive Codex updates can proceed while restricted tasks continue to use the pinned 0.164.0 binary for version checks, model discovery and execution. Host executions still require the audited version on PATH. ([#323](https://github.com/jdorado/ez-agents/pull/323))
