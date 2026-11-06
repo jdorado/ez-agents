@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-beta.69
 
-- Probe plugin and shared-worker containers every 10 seconds instead of every 2. Each probe starts a process inside the container, and on a VM with 27 containers probing every 2 seconds those starts cost roughly 1.4 CPU cores (about 0.12 CPU-seconds per Node probe, so an idle Library container spent about 6% of a core on its health check alone). Retries drop from 30 to 6, so a failing service is still reported unhealthy after about 60 seconds. A started or updated plugin is reported healthy up to 10 seconds later than before; the updater's 90-second `--wait-timeout` is unchanged. The relay's own 10-second check is unchanged, and the plugin broker keeps its 2-second check.
+- Probe plugin and shared-worker containers every 10 seconds instead of every 2. Each probe starts a process inside the container, and on a VM with 27 containers probing every 2 seconds those starts cost roughly 1.4 CPU cores (about 0.12 CPU-seconds per Node probe, so an idle Library container spent about 6% of a core on its health check alone). Retries drop from 30 to 6, so a failing service is still reported unhealthy after about 60 seconds. A started or updated plugin is reported healthy up to 10 seconds later than before; the updater's 90-second `--wait-timeout` is unchanged. The relay's own 10-second check is unchanged, and the plugin broker keeps its 2-second check. An installed plugin keeps its old probe until it is next started or updated (its Compose file is regenerated then), and an existing shared embeddings worker keeps it until that worker is recreated.
 
 ## 0.1.0-beta.68
 
