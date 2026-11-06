@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
-import { createConnection } from 'node:net';
+import { createConnection, createServer } from 'node:net';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -18,6 +19,34 @@ test('relay compose surface has no broker Docker socket or tools-home mount', as
   assert.equal(relay.includes('/var/run/docker.sock'), false);
   assert.equal(relay.includes('EZ_TOOLS_HOME'), false);
   assert.equal(compose.slice(compose.indexOf('  plugin-broker:')).includes('/var/run/docker.sock'), true);
+});
+
+test('broker health probe is a 2s shell socket test that fails for a missing or non-socket path', async t => {
+  const compose = await fs.readFile(new URL('../compose.yaml', import.meta.url), 'utf8');
+  const healthcheck = compose.slice(compose.indexOf('  plugin-broker:')).match(/\n    healthcheck:\n((?:      .*\n)+)/)[1];
+  const command = healthcheck.match(/^      test: \[CMD, sh, -c, '(.*)'\]$/m)?.[1];
+  assert.ok(command, 'the broker probe must run through sh -c, not boot Node');
+  // Compose turns $$ into $ and the shell expands it from the container environment.
+  assert.equal(command.includes('$$EZ_PLUGIN_BROKER_SOCKET'), true);
+  assert.match(healthcheck, /interval: 2s\n/);
+  assert.match(healthcheck, /retries: 30\n/);
+  assert.match(healthcheck, /start_period: 5s\n/);
+
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'hc-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const socket = path.join(root, 's.sock');
+  const regular = path.join(root, 'file');
+  await fs.writeFile(regular, '');
+  const probe = value => spawnSync('sh', ['-c', command.replaceAll('$$', '$')], { env: { PATH: process.env.PATH, ...(value === undefined ? {} : { EZ_PLUGIN_BROKER_SOCKET: value }) } }).status;
+  assert.equal(probe(path.join(root, 'absent.sock')), 1);
+  assert.equal(probe(regular), 1);
+  assert.equal(probe(root), 1);
+  assert.equal(probe(''), 1);
+  assert.equal(probe(undefined), 1);
+  const server = createServer();
+  await new Promise(resolve => server.listen(socket, resolve));
+  t.after(() => server.close());
+  assert.equal(probe(socket), 0);
 });
 
 async function fixture(t) {

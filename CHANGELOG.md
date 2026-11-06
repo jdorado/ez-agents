@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Make the isolated plugin broker's Docker health probe nearly free. Compose ran a fresh Node process in the `plugin-broker` container every 2 seconds just to check that the broker socket exists, which cost about 0.1 CPU-seconds per probe, roughly 5-8% of a core per isolated agent, so a host with several agents spent a visible share of its CPU on health checks. The probe is now the shell test `test -S "$EZ_PLUGIN_BROKER_SOCKET"`. It still reports unhealthy when the socket is missing or the path is not a socket. The 2 second interval, 30 retries and 5 second start period are unchanged, so broker readiness during updates is as fast as before and no newer Docker or Compose is needed. Only the `plugin-broker` probe in `compose.yaml` changes; the relay probe, plugin service probes and shared worker probes are untouched.
+
 ## 0.1.0-beta.68
 
 `0.1.0-beta.67` was prepared and run on one deployed agent. Its CI publish run was cancelled, but npm accepted the package a few minutes later (published 2026-11-06 09:30 UTC, with no git tag or GitHub release); its changes are released here, again, as beta.68 with the fix below.
