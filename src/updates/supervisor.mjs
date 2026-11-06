@@ -99,7 +99,7 @@ export function executorVolumes(deployment,worker) {
 // PID does not exist, or when its own beat is older than the 10 s that `requireSupervisor` treats as offline. With no
 // beat for that PID (an older supervisor, or a different writer) a live PID still counts as the owner.
 export async function lockOwnerAlive(directory,pid) {
-  try { process.kill(pid,0); } catch(e) { if(e.code==='ESRCH')return false; /* EPERM: it exists, owned by another user */ }
+  try { process.kill(pid,0); } catch(e) { if(e.code==='ESRCH')return false; if(e.code!=='EPERM')throw e; /* EPERM: it exists, owned by another user */ }
   const beat=await read(path.join(directory,'supervisor.json')).catch(()=>null);
   return !(beat?.pid===pid&&Number.isFinite(beat.at)&&Date.now()-beat.at>10000);
 }
