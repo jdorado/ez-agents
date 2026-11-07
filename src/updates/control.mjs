@@ -81,17 +81,20 @@ export function reviewedPluginDeploymentMigration(target,old,next) {
 // retain their effective runtime, while service/volume/privilege changes
 // remain a separately reviewed migration.
 const compatibleRuntimeMigration='legacy-runtime-v1';
-// Comments, blank lines and healthchecks grant nothing: a probe runs inside its
-// container with that container's privileges, and a broken one fails the health
-// gate and rolls back. Ignore them so probe tuning needs no migration.
+// Comments, blank lines and a service's healthcheck change no mounts, privileges
+// or services: a probe runs inside its container with that container's privileges.
+// Ignore them so probe tuning needs no migration. Only `services.<name>.healthcheck`
+// (two-space Compose indentation) counts; a service named healthcheck is compared.
+// Split on every YAML line break so a lone CR cannot hide a key inside a probe.
 function withoutProbes(text) {
-  let probe=-1;
-  return text.split(/\r?\n/).filter(line=>{
+  let probe=false,section='';
+  return text.split(/\r\n|[\n\r\u0085\u2028\u2029]/).filter(line=>{
     const indent=line.search(/\S/);
     if(indent<0||line[indent]==='#')return false;
-    if(probe>=0&&indent>probe)return false;
-    probe=/^\s+healthcheck:/.test(line)?indent:-1;
-    return probe<0;
+    if(probe&&indent>4)return false;
+    if(indent===0)section=line;
+    probe=section.startsWith('services:')&&/^ {4}healthcheck:/.test(line);
+    return !probe;
   }).join('\n');
 }
 function effectiveCompose(text,env) {

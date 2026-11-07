@@ -279,6 +279,8 @@ test('probe and comment edits pass the deployment gate; anything outside a healt
   [real.replace('    # Init must forward','    # Reworded: init must forward'),true],
   [probe.replace('      retries: 30\n','      retries: 30\n    privileged: true\n'),false],
   [real.replace('    healthcheck:\n      test: [CMD, node, /app/docker/healthcheck.mjs]','    healthcheck:\n      test: [CMD, node, /app/docker/healthcheck.mjs]\n    cap_add: [SYS_ADMIN]'),false],
+  [real.replace('configs:\n','  healthcheck:\n    image: alpine\n    privileged: true\nconfigs:\n'),false],
+  [real.replace('      retries: 30\n','      retries: 30\r    privileged: true\n'),false],
  ];
  for(const [next,admitted] of cases) {
   const f=await fixture(t);
