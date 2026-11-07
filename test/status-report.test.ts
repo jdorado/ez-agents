@@ -78,6 +78,6 @@ test('a long reply drops whole sections from the end and never cuts a tag, and r
 test('a preview cut next to an emoji keeps the whole character', () => {
   // 26 characters, then an astral emoji where the 28-character cut lands.
   const view = statusReport(input({ runs: [run('a', { status: 'queued', texts: ['Please check the portfolio😀 and report'] })] }))
-  assert.equal(view.html.isWellFormed(), true)
+  assert.doesNotMatch(view.html, /\p{Cs}/u, "no lone surrogate")
   assert.ok(view.html.includes('chat "Please check the portfolio😀…"'), view.html)
 })
