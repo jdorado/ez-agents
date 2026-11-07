@@ -66,5 +66,7 @@ export const age = (ms: number): string => {
 // One plain line: control characters and runs of whitespace collapse, long text ends in an ellipsis.
 export const clip = (text: string, max: number): string => {
   const plain = text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim()
-  return plain.length > max ? `${plain.slice(0, max - 1).trimEnd()}…` : plain
+  // Cut by code point: a UTF-16 slice can split an emoji, which Telegram rejects.
+  const chars = Array.from(plain)
+  return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : plain
 }
