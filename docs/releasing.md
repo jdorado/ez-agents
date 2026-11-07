@@ -50,7 +50,9 @@ separate release bot is not required.
    for approved beta releases as well: `latest` is the default distribution tag,
    not a claim that a SemVer prerelease is stable.
    For unattended beta publication use the [shared trusted publisher](trusted-publishing.md)
-   and its exact-artifact staging/readback contract. Initial package publication
+   and its exact-artifact staging/readback contract. One dispatch validates, creates
+   a missing `v<version>` tag at the verified source, publishes once and waits for
+   npm to list the version; you only finish the GitHub prerelease afterwards. Initial package publication
    requires authenticated npm with 2FA before trust can be enrolled; never paste
    tokens into CI or docs.
 8. Create the GitHub release from CHANGELOG.md, attach artifact/checksum, and
@@ -105,3 +107,21 @@ preparation step up to the image build. When it fails, installed agents would
 refuse or break on that change; ship the migration in a release they already
 run first, or bootstrap the agents. It covers only the `latest` updater: before
 publishing, still check that agents on older releases can take the change.
+
+## Shared publisher updates
+
+A plugin's `publish-beta.yml` calls the shared workflow pinned by commit SHA, in
+both `uses: ...@SHA` and `publisher-sha`. A change merged here (for example tag
+creation or the longer registry readback) therefore reaches a plugin only when it
+bumps that pin; an old pin keeps the old behavior. Bump it in the plugin's own
+PR before its next release, never as an edit during the release:
+
+1. Take the full SHA of the merged core commit that contains the change.
+2. In a core checkout at that SHA, print the caller with the plugin's current
+   required checks and copy the output over the plugin's
+   `.github/workflows/publish-beta.yml`:
+   `node scripts/generate-publish-caller.mjs OWNER/REPO @jc_stack/PACKAGE FULL_SHA '["check name", ...]'`.
+3. Review the diff: the two pins change; the check list, inputs and permissions
+   (`contents: write` is already granted) must not.
+4. Merge it with the plugin's normal review and CI. The npm trusted-publisher
+   enrollment names `publish-beta.yml` and is unaffected.

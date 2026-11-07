@@ -46,7 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      # GitHub requires push capability to read draft release assets. GET only.
+      # GitHub requires push capability to read draft release assets. GET requests, plus one
+      # POST creating the missing v<version> tag ref at the verified source after all checks pass.
       contents: write
       checks: read
       actions: read
@@ -78,7 +79,8 @@ jobs:
   publish:
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # npm publish (up to 3 minutes) plus a registry readback window of just under 10 minutes.
+    timeout-minutes: 20
     permissions:
       contents: read
       actions: read

@@ -88,12 +88,14 @@ export function tarManifest(path) {
 }
 
 async function responseBytes(response, max = MAX_ARTIFACT, context = 'release evidence') {
-  assert(response.ok, `HTTP ${response.status} while reading ${context}`);
+  if (!response.ok) throw Object.assign(new Error(`HTTP ${response.status} while reading ${context}`), { status: response.status });
   assert(Number(response.headers.get('content-length') || 0) <= max, 'Response too large');
   let size = 0; const chunks = [];
   for await (const chunk of response.body) { size += chunk.length; assert(size <= max, 'Response too large'); chunks.push(chunk); }
   return Buffer.concat(chunks);
 }
+
+const githubHeaders = (token, accept = 'application/vnd.github+json') => ({ Accept: accept, ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-GitHub-Api-Version': '2022-11-28' });
 
 export function githubClient(token, fetcher = fetch) {
   return async (path, binary = false) => {
@@ -101,7 +103,7 @@ export function githubClient(token, fetcher = fetch) {
     // Identify the failed read without logging tokens, response bodies or signed URLs.
     const context = `GitHub GET ${path.split('?')[0]}`;
     const response = await fetcher(`https://api.github.com${path}`, {
-      headers: { Accept: binary ? 'application/octet-stream' : 'application/vnd.github+json', ...(token ? { Authorization: `Bearer ${token}` } : {}), 'X-GitHub-Api-Version': '2022-11-28' },
+      headers: githubHeaders(token, binary ? 'application/octet-stream' : undefined),
       redirect: 'manual', signal: AbortSignal.timeout(30_000),
     });
     if (binary && [301, 302, 303, 307, 308].includes(response.status)) {
@@ -109,15 +111,48 @@ export function githubClient(token, fetcher = fetch) {
       assert(location.protocol === 'https:' && (location.hostname === 'release-assets.githubusercontent.com' || location.hostname === 'objects.githubusercontent.com'), 'Unexpected asset redirect');
       return responseBytes(await fetcher(location, { signal: AbortSignal.timeout(60_000), redirect: 'error' }), MAX_ARTIFACT, `${context} asset download`);
     }
-    if (response.status === 404 && path.includes('/git/ref/tags/')) {
-      throw new Error(`HTTP 404 while reading ${context}: release tag is missing or inaccessible; a draft release does not create its Git tag. Verify the remote tag at the reviewed source before dispatch.`);
-    }
     const bytes = await responseBytes(response, binary ? MAX_ARTIFACT : 8 * 1024 * 1024, context);
     return binary ? bytes : JSON.parse(bytes.toString());
   };
 }
 
-export async function validateSource(expected, api) {
+// The only GitHub write: create the missing lightweight tag ref. It never updates or deletes a ref.
+export function githubTagCreator(token, fetcher = fetch) {
+  return async expected => {
+    const response = await fetcher(`https://api.github.com/repos/${expected.repository}/git/refs`, {
+      method: 'POST', headers: { ...githubHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: `refs/tags/v${expected.version}`, sha: expected.sourceSha }),
+      redirect: 'manual', signal: AbortSignal.timeout(30_000),
+    });
+    await response.arrayBuffer();
+    // 422 means the ref appeared meanwhile: the caller reads it back and accepts only the exact source commit.
+    assert(response.status === 201 || response.status === 422, `HTTP ${response.status} while creating release tag v${expected.version}`);
+  };
+}
+
+// A missing tag ref is a state to resolve, not a failure; any other read error still fails.
+async function tagCommit(expected, api) {
+  let tag;
+  try { tag = (await api(`/repos/${expected.repository}/git/ref/tags/v${expected.version}`)).object; }
+  catch (error) { if (error.status === 404) return null; throw error; }
+  for (let depth = 0; tag?.type === 'tag' && depth < 5; depth++) tag = (await api(`/repos/${expected.repository}/git/tags/${tag.sha}`)).object;
+  return tag?.type === 'commit' ? tag.sha : undefined;
+}
+
+// A draft release creates no Git tag. Create it at the verified source when absent; never move an existing one.
+export async function ensureTag(expected, api, createTag) {
+  let sha = await tagCommit(expected, api);
+  if (sha === null) {
+    assert(createTag, `Release tag v${expected.version} is missing; validation creates it before publication`);
+    await createTag(expected);
+    sha = await tagCommit(expected, api);
+    assert(sha !== null, `Release tag v${expected.version} was not created`);
+  }
+  assert(sha === expected.sourceSha, 'Release tag does not identify approved source');
+}
+
+// Read-only source checks shared by validation and the fresh publish job; neither tags nor writes.
+async function verifySource(expected, api) {
   const repo = await api(`/repos/${expected.repository}`);
   assert(repo.full_name === expected.repository && repo.private === false && repo.visibility === 'public' && repo.default_branch === 'main' && !repo.archived, 'Repository must be public and active on main');
   const catalog = await api(`/repos/${CORE}/contents/docs/plugin-catalog.md?ref=main`);
@@ -129,9 +164,6 @@ export async function validateSource(expected, api) {
   const manifest = await api(`/repos/${expected.repository}/contents/package.json?ref=${expected.sourceSha}`);
   const sourceManifest = JSON.parse(Buffer.from(manifest.content, 'base64').toString('utf8'));
   validateManifest(sourceManifest, expected);
-  let tag = (await api(`/repos/${expected.repository}/git/ref/tags/v${expected.version}`)).object;
-  for (let depth = 0; tag?.type === 'tag' && depth < 5; depth++) tag = (await api(`/repos/${expected.repository}/git/tags/${tag.sha}`)).object;
-  assert(tag?.type === 'commit' && tag.sha === expected.sourceSha, 'Release tag does not identify approved source');
   // Select CI identity before considering outcomes: tag/PR runs at the same SHA
   // must neither shadow main CI nor let a failed latest main run fall back.
   const runs = [];
@@ -168,6 +200,13 @@ export async function validateSource(expected, api) {
   return sourceManifest;
 }
 
+// Publish-time revalidation: the tag must already exist at the approved source.
+export async function validateSource(expected, api) {
+  const sourceManifest = await verifySource(expected, api);
+  await ensureTag(expected, api);
+  return sourceManifest;
+}
+
 export async function registryState(expected, fetcher = fetch) {
   const response = await fetcher(`${REGISTRY}${encodeURIComponent(expected.package)}`, { signal: AbortSignal.timeout(30_000), redirect: 'error', headers: { Accept: 'application/json' } });
   assert(response.status !== 404, 'Package does not exist: first reviewed beta needs interactive registry-owner publication before trust enrollment');
@@ -179,13 +218,13 @@ export async function registryState(expected, fetcher = fetch) {
   const url = new URL(published.dist?.tarball);
   assert(url.origin === REGISTRY.slice(0, -1), 'Unexpected registry tarball host');
   const bytes = await responseBytes(await fetcher(url, { signal: AbortSignal.timeout(60_000), redirect: 'error' }));
-  assert(sha256(bytes) === expected.sha256, 'Existing registry artifact differs; never overwrite');
+  if (sha256(bytes) !== expected.sha256) throw Object.assign(new Error('Existing registry artifact differs; never overwrite'), { definitive: true });
   return { exists: true, latest: data['dist-tags'].latest ?? null, beta: data['dist-tags'].beta ?? null };
 }
 
-export async function validate(output, env = process.env, api = githubClient(env.GH_TOKEN)) {
+export async function validate(output, env = process.env, api = githubClient(env.GH_TOKEN), createTag = githubTagCreator(env.GH_TOKEN)) {
   const expected = identity(env);
-  const sourceManifest = await validateSource(expected, api);
+  const sourceManifest = await verifySource(expected, api);
   const release = await api(`/repos/${expected.repository}/releases/${expected.releaseId}`);
   assert(release.id === expected.releaseId && release.draft === true && release.prerelease === true && release.tag_name === `v${expected.version}`, 'Candidate must be a draft prerelease');
   const asset = name => {
@@ -210,11 +249,20 @@ export async function validate(output, env = process.env, api = githubClient(env
   const packedManifest = tarManifest(tarball);
   validateManifest(packedManifest, expected);
   assert(isDeepStrictEqual(packedManifest, sourceManifest), 'Packed manifest differs from approved source manifest');
+  // Everything is verified: only now may the missing tag be created, so a failed validation leaves no tag behind.
+  await ensureTag(expected, api, createTag);
   await writeFile(resolve(output, 'validated.json'), JSON.stringify({ schema: 1, expected, receipt, releaseId: release.id, candidateAssetId: candidateAsset.id }, null, 2) + '\n', { flag: 'wx' });
   return { sourceSha: expected.sourceSha, sha256: expected.sha256, version: expected.version };
 }
 
-export async function publishOnce(expected, { readState, publishTarball, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), report = console.log, record = async () => {}, allowWrite = true }) {
+// npm can take minutes to list a version it just accepted. Readback polls with growing waits within a bounded window.
+export function readbackDelays(budgetMs = 10 * 60_000, first = 5_000, cap = 30_000) {
+  const delays = [];
+  for (let delay = first, total = 0; total + delay <= budgetMs; delay = Math.min(delay * 2, cap)) { delays.push(delay); total += delay; }
+  return delays;
+}
+
+export async function publishOnce(expected, { readState, publishTarball, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), report = console.log, record = async () => {}, allowWrite = true, delays = readbackDelays() }) {
   const before = await readState();
   await record({ phase: 'preflight', before });
   if (before.exists) {
@@ -225,9 +273,10 @@ export async function publishOnce(expected, { readState, publishTarball, sleep =
   await record({ phase: 'write-started', before });
   let writeError;
   try { await publishTarball(); } catch (error) { writeError = error; }
+  // From here on only reads happen: the single write above is never repeated.
   let lastError;
-  for (let attempt = 0; attempt < 4; attempt++) {
-    if (attempt) await sleep(5000);
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt) await sleep(delays[attempt - 1]);
     try {
       const after = await readState();
       await record({ phase: 'readback', before, after, publishCommandFailed: Boolean(writeError), attempt });
@@ -236,7 +285,12 @@ export async function publishOnce(expected, { readState, publishTarball, sleep =
         return { status: 'published', version: expected.version, sha256: expected.sha256 };
       }
       lastError = new Error('Exact artifact and latest tag not yet verified');
-    } catch (error) { lastError = error; await record({ phase: 'readback-error', before, error: error.message, attempt }); }
+      report(`Registry readback ${attempt + 1} of ${delays.length + 1}: exact artifact and latest tag not yet verified.`);
+    } catch (error) {
+      lastError = error; await record({ phase: 'readback-error', before, error: error.message, attempt });
+      // Different bytes under this version never become right by waiting.
+      if (error.definitive) break;
+    }
   }
   throw new Error(`Publication unresolved; do not repeat the write before registry reconciliation: ${lastError?.message || writeError?.message}`);
 }
