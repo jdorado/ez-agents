@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { parseEnv } from 'node:util';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { atomic, compose, snapshot, checkFolders, locked, publishBrokerPlugins } from '../plugins/manager.mjs';
 import { read, state, eligibility, jobPath, cleanupStaleBackups, cleanupStaleImages } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
@@ -49,6 +50,16 @@ export async function packageManager(root,run=execute) {
   throw Error(`Upgrade prerequisite unavailable: ${required}. ${failures.join('; ')}. Check the host supervisor service PATH (shell aliases do not count). Reuse its installed pnpm or Corepack; expose the launcher directory to that service and restart it after the current turn. If neither exists, provision the pinned manager first. Do not substitute npm install or reinstall the agent. After repair, prepare/apply a new job when status is failed; recover is only for recovery-required.`);
 }
 export const relayArgs = config => ['compose','--env-file',path.join(config.deploymentDir,'docker.env')];
+// A candidate that cannot read the state it inherits fails at host start, after
+// services stopped. Probe it first; report a code, never state text.
+async function checkControlState(root, controlDir, run) {
+  const entry = path.join(root, 'src', 'control-state.ts');
+  const script = `const m = await import(${JSON.stringify(pathToFileURL(entry).href)}); try { await new m.ControlStore(${JSON.stringify(controlDir)}, 1).validate(); console.log('EZ_CONTROL_STATE_OK'); } catch (e) { console.log(e?.message === 'Control state has an unsupported shape' ? 'EZ_CONTROL_STATE_UNSUPPORTED' : 'EZ_CONTROL_STATE_UNREADABLE'); }`;
+  const output = await run(process.execPath, ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', script], { cwd: root, timeout: 60000, stdoutOnly: true });
+  const code = output.match(/^EZ_CONTROL_STATE_(OK|UNSUPPORTED|UNREADABLE)\s*$/m)?.[1];
+  if (code === 'OK') return;
+  throw Error(`Candidate cannot read the existing control state (control-state=${(code || 'unreadable').toLowerCase()}); nothing was stopped`);
+}
 export async function relayServices(config) {
   const env = await fs.readFile(path.join(config.deploymentDir,'docker.env'),'utf8').catch(() => '');
   return parseEnv(env).EZ_EXECUTOR_TRANSPORT === 'local' ? ['relay','plugin-broker'] : ['relay'];
@@ -171,6 +182,7 @@ export async function perform(home,job,hooks) {
       await fs.copyFile(path.join(root,'docker/pnpm-lock.yaml'),path.join(root,'pnpm-lock.yaml'));
       await run(job.packageManager.command,[...job.packageManager.args,'install','--frozen-lockfile','--ignore-scripts'],{cwd:root});
       await run(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'bin/ezenciel-agents.mjs'),'--version'],{cwd:root});
+      await checkControlState(root,agent.controlDir,run);
       // Resolve managed Codex at activation; old deployment pins cannot override latest.
       // Preserve unrelated operator build arguments.
       const deployment=JSON.parse(await run('docker',[...relayArgs(config),'config','--format','json'],{stdoutOnly:true}));

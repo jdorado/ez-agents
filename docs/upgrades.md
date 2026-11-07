@@ -73,6 +73,18 @@ restart and verify. Do not recreate the agent or its registry. Subsequent
 compatible upgrades are agent-owned. Noncanonical/multi-agent host configuration
 files require migration to one canonical deployment per service first.
 
+## Control-state compatibility check
+
+Before the image build and before any service stops, the supervisor runs the
+candidate's own control-state reader against the agent's `control-state.json`,
+read-only (no lock, no write). A candidate that cannot read it fails the job as
+`failed`, not `rolled-back`, with `control-state=unsupported` (shape rejected,
+for example an engine the candidate has retired) or `control-state=unreadable`
+(missing permission or invalid JSON); the receipt never contains state text.
+Nothing was stopped, so no recovery is needed. Repair the state, then prepare
+and apply a new job. Core never rewrites control state. The check runs in the
+installed supervisor, so it protects upgrades from the release that ships it.
+
 ## Recovering an isolated-executor or supervisor admission defect
 
 The post-update reload requires a live relay status response taken after

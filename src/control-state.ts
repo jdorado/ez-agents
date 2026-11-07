@@ -284,6 +284,11 @@ export class ControlStore {
     throw new Error('Timed out waiting for the authority control lock')
   }
 
+  /** Throws when the saved state is unreadable by this release. Read-only: no lock, no write. */
+  async validate(): Promise<void> {
+    await this.readState()
+  }
+
   async status(): Promise<ControlState> {
     // Hot path (owner checks every message and every source tick): when no
     // pairing expired, the pruned state is returned with zero control/ writes
