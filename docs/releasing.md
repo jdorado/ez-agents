@@ -53,11 +53,13 @@ separate release bot is not required.
    For unattended beta publication use the [shared trusted publisher](trusted-publishing.md)
    and its exact-artifact staging/readback contract. One dispatch validates, creates
    a missing `v<version>` tag at the verified source, publishes once and waits for
-   npm to list the version; you only finish the GitHub prerelease afterwards. Initial package publication
+   npm to list the version, then adds `SHA256SUMS` and the publication receipt to the
+   staged draft and publishes it as a prerelease that is not marked latest. Initial package publication
    requires authenticated npm with 2FA before trust can be enrolled; never paste
    tokens into CI or docs.
-8. Create the GitHub release from CHANGELOG.md, attach artifact/checksum, and
-   install the registry version on a clean host. Verify metadata and the same
+8. Create the GitHub release from CHANGELOG.md with the artifact attached (for a
+   shared-publisher beta, the draft it publishes, which also gains the checksum and
+   publication receipt), and install the registry version on a clean host. Verify metadata and the same
    onboarding path before posting launch copy. Stop rollout on failure; publish
    a new patch or deprecate the bad version, never silently replace an artifact.
 
@@ -158,7 +160,7 @@ publishing, still check that agents on older releases can take the change.
 
 A plugin's `publish-beta.yml` calls the shared workflow pinned by commit SHA, in
 both `uses: ...@SHA` and `publisher-sha`. A change merged here (for example tag
-creation or the longer registry readback) therefore reaches a plugin only when it
+creation, the longer registry readback or finishing the GitHub release) therefore reaches a plugin only when it
 bumps that pin; an old pin keeps the old behavior. Bump it in the plugin's own
 PR before its next release, never as an edit during the release:
 
@@ -168,6 +170,12 @@ PR before its next release, never as an edit during the release:
    `.github/workflows/publish-beta.yml`:
    `node scripts/generate-publish-caller.mjs OWNER/REPO @jc_stack/PACKAGE FULL_SHA '["check name", ...]'`.
 3. Review the diff: the two pins change; the check list, inputs and permissions
-   (`contents: write` is already granted) must not.
+   (`contents: write` and `actions: read`, which the release-finishing job needs,
+   are already granted) must not.
 4. Merge it with the plugin's normal review and CI. The npm trusted-publisher
    enrollment names `publish-beta.yml` and is unaffected.
+
+A plugin still on an older pin ends the old way: after readback, upload
+`SHA256SUMS` and the run's `publication-receipt.json` with `gh release upload`,
+then publish the draft with
+`gh release edit vVERSION --draft=false --prerelease --latest=false`.

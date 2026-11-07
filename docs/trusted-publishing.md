@@ -35,10 +35,15 @@ release authority or establish npm trust automatically.
 4. Verify enrollment through npm settings or `npm trust list PACKAGE`. npm
    validates the **calling** workflow for reusable workflows. Both caller and
    publishing job need `id-token: write`; test/validation jobs do not receive it. GitHub requires `contents: write`
-   to read unpublished draft assets: only the validation job receives that
-   capability. It makes GET requests and, once every check has passed, one POST
-   that creates a missing `vVERSION` tag; it never updates or deletes a ref. The
-   separate OIDC job has `contents: read`. No package code or lifecycle scripts run in validation.
+   to read unpublished draft assets: only the validation job and the final
+   `finish` job receive that capability. Validation makes GET requests and, once
+   every check has passed, one POST that creates a missing `vVERSION` tag; it
+   never updates or deletes a ref. `finish` runs only after the publish job
+   succeeded, with `contents: write` and `actions: read` (to fetch the readback
+   receipt) and nothing else: no OIDC and no npm. Its only writes add a missing
+   release asset and publish the draft (see
+   [Readback, failure and release completion](#readback-failure-and-release-completion)).
+   The separate OIDC job has `contents: read`. No package code or lifecycle scripts run in validation or `finish`.
    Do not add `NODE_AUTH_TOKEN`, npm tokens, or private profiles to these jobs.
 
 An npm package must already exist before trust enrollment. If a registered
@@ -89,7 +94,10 @@ Read back the draft by numeric ID and check
 asset names and downloaded SHA-256 before dispatch. `npm pack`'s default filename
 is not the publisher's asset name; GitHub asset labels do not rename the asset.
 Use `gh release upload` only to add a missing asset, never `--clobber` to replace
-candidate bytes or receipts. The required assets are:
+candidate bytes or receipts. Write the final release notes into the draft now: the
+workflow publishes the draft as it is and never edits its title or notes. Do not
+upload `SHA256SUMS` or `publication-receipt.json`; the workflow adds both, and an
+existing one with different content fails the release step instead of being replaced. The required assets are:
 
 - `candidate.tgz`: the exact Mac-tested bytes from `npm pack --ignore-scripts`.
   Do not rebuild it on Actions.
@@ -166,12 +174,26 @@ follow [upgrades](upgrades.md) under the installation's saved policy.
 Missing trust or registry access is an external dependency, not a reason to use
 a token workaround.
 
-After successful registry readback, finish the GitHub prerelease by hand: publish
-the draft with the tested artifact/checksum (the workflow does not) and verify its
-public availability. Perform the clean-host
+After successful registry readback the `finish` job completes the GitHub release
+in the same run, with no manual release step. It runs only when the publish job
+succeeded and, before its first write, reads the draft by its numeric ID and
+checks that it is still the dispatched prerelease, that `vVERSION` still
+identifies `source-sha`, that its `candidate.tgz` still has the published digest,
+and that the readback receipt is the complete record of this exact dispatch. It
+then uploads `SHA256SUMS` (`DIGEST  candidate.tgz`, checkable with
+`sha256sum -c`) and `publication-receipt.json` (the publish job's readback
+receipt), and publishes the draft as a prerelease that is not marked latest. It
+reads the release back and fails unless the release is public, still a
+prerelease, has the same `candidate.tgz` and carries both assets with the
+expected content. An existing asset is verified and never replaced; an asset
+left partly uploaded fails closed, so delete that one asset and rerun. If the
+job fails, use **Re-run failed jobs**: it continues from the release's current
+state without validating again or repeating the npm publish, and on a finished
+release it changes nothing. A full re-run of a public release stops in validation,
+which requires a draft. Perform the clean-host
 installation and runtime/provider checks required by the package's release
-rules. Actions success proves registry delivery only; it does not prove a
-running agent was upgraded. Respect each installation's saved update policy.
+rules. Actions success proves registry and GitHub release delivery only; it does
+not prove a running agent was upgraded. Respect each installation's saved update policy.
 
 ## Migration from the legacy beta tag
 

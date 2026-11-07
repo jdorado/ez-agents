@@ -116,7 +116,7 @@ export function githubClient(token, fetcher = fetch) {
   };
 }
 
-// The only GitHub write: create the missing lightweight tag ref. It never updates or deletes a ref.
+// The validation job's only GitHub write: create the missing lightweight tag ref. It never updates or deletes a ref.
 export function githubTagCreator(token, fetcher = fetch) {
   return async expected => {
     const response = await fetcher(`https://api.github.com/repos/${expected.repository}/git/refs`, {
@@ -127,6 +127,28 @@ export function githubTagCreator(token, fetcher = fetch) {
     await response.arrayBuffer();
     // 422 means the ref appeared meanwhile: the caller reads it back and accepts only the exact source commit.
     assert(response.status === 201 || response.status === 422, `HTTP ${response.status} while creating release tag v${expected.version}`);
+  };
+}
+
+// The finish job's only GitHub writes: add a missing asset to the staged draft, then publish it as a non-latest
+// prerelease. It never replaces or deletes an asset and never touches a tag, title, notes or target.
+export function githubReleaseWriter(token, fetcher = fetch) {
+  const send = async (url, init) => {
+    const response = await fetcher(url, { ...init, redirect: 'manual', signal: AbortSignal.timeout(60_000) });
+    await response.arrayBuffer();
+    return response.status;
+  };
+  return {
+    upload: async (expected, name, { type, bytes }) => {
+      const status = await send(`https://uploads.github.com/repos/${expected.repository}/releases/${expected.releaseId}/assets?name=${encodeURIComponent(name)}`,
+        { method: 'POST', headers: { ...githubHeaders(token), 'Content-Type': type }, body: bytes });
+      assert(status === 201, `HTTP ${status} while uploading release asset ${name}`);
+    },
+    publish: async expected => {
+      const status = await send(`https://api.github.com/repos/${expected.repository}/releases/${expected.releaseId}`,
+        { method: 'PATCH', headers: { ...githubHeaders(token), 'Content-Type': 'application/json' }, body: JSON.stringify({ draft: false, prerelease: true, make_latest: 'false' }) });
+      assert(status === 200, `HTTP ${status} while publishing release v${expected.version}`);
+    },
   };
 }
 
@@ -340,10 +362,76 @@ export async function publish(output, env = process.env) {
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }
 
+// The publish job's readback record. A complete one for this exact dispatch is what the finish job relies on:
+// npm accepted the version and readback verified its bytes and the latest tag.
+export function publicationReceipt(bytes, expected) {
+  assert(bytes.length <= 1024 * 1024, 'Publication receipt too large');
+  let receipt;
+  try { receipt = JSON.parse(bytes.toString()); } catch { throw new Error('Publication receipt is not valid JSON'); }
+  assert(receipt?.schema === 1 && isDeepStrictEqual(receipt.expected, expected), 'Publication receipt does not match dispatched identity');
+  const last = Array.isArray(receipt.events) ? receipt.events.at(-1) : undefined;
+  assert(last?.phase === 'complete' && ['published', 'already-published'].includes(last.result?.status) && last.result.version === expected.version && last.result.sha256 === expected.sha256, 'Publication receipt does not record a verified registry publication');
+}
+
+// After verified publication: add SHA256SUMS and the publication receipt to the staged draft, then publish it as a
+// non-latest prerelease. Every read and check precedes the first write, existing assets are verified and never
+// replaced, and a rerun at any point continues from what is there; a finished release is read-only.
+export async function finishRelease(expected, receiptBytes, { api, writer }) {
+  publicationReceipt(receiptBytes, expected);
+  const sums = Buffer.from(`${expected.sha256}  candidate.tgz\n`);
+  const wanted = {
+    'SHA256SUMS': { type: 'application/octet-stream', bytes: sums, check: bytes => assert(bytes.equals(sums), 'Existing SHA256SUMS differs; never overwrite') },
+    'publication-receipt.json': { type: 'application/json', bytes: receiptBytes, check: bytes => publicationReceipt(bytes, expected) },
+  };
+  const readRelease = async () => {
+    const release = await api(`/repos/${expected.repository}/releases/${expected.releaseId}`);
+    assert(release.id === expected.releaseId && release.tag_name === `v${expected.version}` && release.prerelease === true && typeof release.draft === 'boolean', 'Release is not the dispatched prerelease');
+    return release;
+  };
+  const find = (release, name) => {
+    const matches = (release.assets || []).filter(item => item.name === name);
+    assert(matches.length <= 1, `Ambiguous asset: ${name}`);
+    if (matches.length) assert(matches[0].state === 'uploaded' && Number.isSafeInteger(matches[0].id), `Asset is not fully uploaded: ${name}`);
+    return matches[0];
+  };
+  const download = asset => api(`/repos/${expected.repository}/releases/assets/${asset.id}`, true);
+  // Verify each wanted asset that exists and name the ones still missing.
+  const missing = async release => {
+    const absent = [];
+    for (const [name, item] of Object.entries(wanted)) {
+      const asset = find(release, name);
+      if (asset) item.check(await download(asset)); else absent.push(name);
+    }
+    return absent;
+  };
+
+  const release = await readRelease();
+  // Publishing a draft whose tag is missing would create it at the draft's target, which may have moved: require the source tag first.
+  await ensureTag(expected, api);
+  const candidate = find(release, 'candidate.tgz');
+  assert(candidate, 'Missing asset: candidate.tgz');
+  assert(sha256(await download(candidate)) === expected.sha256, 'Release candidate.tgz differs from the published artifact');
+  const absent = await missing(release);
+  const result = { status: 'finished', version: expected.version, sha256: expected.sha256 };
+  if (!absent.length && !release.draft) return { ...result, status: 'already-finished' };
+  for (const name of absent) await writer.upload(expected, name, wanted[name]);
+  if (release.draft) await writer.publish(expected);
+  const final = await readRelease();
+  assert(final.draft === false, 'Release is still a draft after publication');
+  assert(find(final, 'candidate.tgz')?.id === candidate.id, 'candidate.tgz changed during publication');
+  assert((await missing(final)).length === 0, 'Release assets are incomplete after upload');
+  return result;
+}
+
+export async function finish(output, env = process.env, api = githubClient(env.GH_TOKEN), writer = githubReleaseWriter(env.GH_TOKEN)) {
+  return finishRelease(identity(env), await readFile(resolve(output, 'publication-receipt.json')), { api, writer });
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const [mode, output] = process.argv.slice(2);
-    assert(['validate', 'publish'].includes(mode) && output && process.argv.length === 4, 'Usage: trusted-beta.mjs validate|publish OUTPUT_DIR');
-    console.log(JSON.stringify(await (mode === 'validate' ? validate(output) : publish(output))));
+    const modes = { validate, publish, finish };
+    assert(Object.hasOwn(modes, mode) && output && process.argv.length === 4, 'Usage: trusted-beta.mjs validate|publish|finish OUTPUT_DIR');
+    console.log(JSON.stringify(await modes[mode](output)));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
