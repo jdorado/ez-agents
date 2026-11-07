@@ -286,9 +286,10 @@ configs:
 });
 test('probe and comment edits pass the deployment gate; anything outside a healthcheck still needs a migration',async t=>{
  const real=await fs.readFile(new URL('../compose.yaml',import.meta.url),'utf8');
- const nodeProbe=/      test: \[CMD, node, -e, "const fs=require\('node:fs'\);.*EZ_PLUGIN_BROKER_SOCKET.*\n/;
- assert.match(real,nodeProbe);
- const probe=real.replace(nodeProbe,`      # A shell builtin, not a Node boot.\n      test: [CMD, sh, -c, 'test -S "$$EZ_PLUGIN_BROKER_SOCKET"']\n`).replace('      interval: 2s\n','      interval: 2s\n      start_interval: 1s\n\n');
+ // Swap whatever probe the broker has today for a different one.
+ const brokerProbe=/(  plugin-broker:\n[\s\S]*?\n    healthcheck:\n(?:      #.*\n)*)      test: .*\n/;
+ assert.match(real,brokerProbe);
+ const probe=real.replace(brokerProbe,`$1      # A different probe.\n      test: [CMD, node, -e, "process.exit(0)"]\n`).replace('      interval: 2s\n','      interval: 2s\n      start_interval: 1s\n\n');
  const cases=[
   [probe,true],
   [real.replace('    # Init must forward','    # Reworded: init must forward'),true],

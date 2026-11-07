@@ -83,7 +83,9 @@ services:
     tmpfs: [/tmp]
     entrypoint: [node, --import, /app/node_modules/tsx/dist/loader.mjs, /app/src/plugin-broker.mjs]
     healthcheck:
-      test: [CMD, node, -e, "const fs=require('node:fs'); try { process.exit(fs.statSync(process.env.EZ_PLUGIN_BROKER_SOCKET).isSocket() ? 0 : 1) } catch { process.exit(1) }"]
+      # A shell builtin, not a Node boot, because this runs every 2s per agent.
+      # $$ keeps Compose from interpolating the variable on the host.
+      test: [CMD, sh, -c, 'test -S "$$EZ_PLUGIN_BROKER_SOCKET"']
       interval: 2s
       timeout: 5s
       start_period: 5s

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Make the isolated plugin broker's Docker health probe nearly free. Compose ran a fresh Node process in the `plugin-broker` container every 2 seconds just to check that the broker socket exists, which cost about 0.1 CPU-seconds per probe, roughly 5-8% of a core per isolated agent, so a host with several agents spent a visible share of its CPU on health checks. The probe is now the shell test `test -S "$EZ_PLUGIN_BROKER_SOCKET"`. It still reports unhealthy when the socket is missing or the path is not a socket. The 2 second interval, 30 retries and 5 second start period are unchanged, so broker readiness during updates is as fast as before and no newer Docker or Compose is needed. Only the `plugin-broker` probe in `compose.yaml` changes; the relay probe, plugin service probes and shared worker probes are untouched. This is a `compose.yaml` change, so agents need core 0.1.0-beta.70 or newer to take it automatically: earlier updaters refuse any compose difference, and beta.70's gate ignores healthchecks (#336).
+
 ## 0.1.0-beta.70
 
 - Make Choose AI one card that edits itself instead of a chain of messages. It shows the current choice, up to three other recent choices (one tap applies), then engine, account (when a client has several logins), model and reasoning-level rows. The rows only move a draft, and a line says whether Apply keeps the conversation's history or starts a new conversation (the existing rule for a changed client, provider or auth profile). Apply saves through the same validation and the card becomes a receipt; Refresh reloads the catalog. The account and engine prefixes in catalog model names (`claude3 · claude · opus`) now show as their own rows, so switching account is two taps instead of about five. Model lists over nine page in place, and the saved choices, validation and `ezenciel-agents-ai` are unchanged.
