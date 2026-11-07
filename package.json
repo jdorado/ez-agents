@@ -53,6 +53,7 @@
     ".dockerignore",
     "scripts/trusted-beta.mjs",
     "scripts/generate-publish-caller.mjs",
+    ".github/workflows/npm-beta-shared.yml",
     "pnpm-workspace.yaml"
   ],
   "publishConfig": {
