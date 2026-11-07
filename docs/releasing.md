@@ -95,6 +95,10 @@ main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). E
 Automatic main upgrades are gated on deployment compatibility: the candidate's
 `compose.yaml` and `compose.whatsapp.yaml` must match the release the agent
 already runs, or that installed release must carry the reviewed migration.
+The gate runs in the installed updater. Updaters released after 0.1.0-beta.69
+ignore comments, blank lines and `healthcheck:` blocks in `compose.yaml`, so a
+probe-only change installs on agents already running such a release; beta.69
+and older still refuse it.
 Before publishing a release, confirm no compose change slipped in since the
 previous tag; otherwise bootstrap the agents or ship the migration in the
 release they already run.
