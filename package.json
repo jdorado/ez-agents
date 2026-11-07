@@ -69,6 +69,7 @@
     "build": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts test/*.test.mjs",
     "verify": "pnpm test && pnpm build",
+    "upgrade:check": "tsx scripts/upgrade-from-release.mjs",
     "smoke:scheduler": "tsx scripts/smoke-scheduler.ts",
     "smoke": "./bin/ezenciel-agents-docker run --rm --no-deps relay smoke",
     "prepublishOnly": "pnpm run verify",
