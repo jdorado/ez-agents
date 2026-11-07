@@ -92,6 +92,22 @@ test('titles are bounded and rename is durable; malformed IDs and unsupported me
   await assert.rejects(store.listSessions(), /unsupported shape/)
 }))
 
+test('validate reads without writing and rejects state this release cannot run', async () => fixture(async (store, dir) => {
+  const file = join(dir, 'control-state.json')
+  await store.validate()
+  await assert.rejects(readFile(file), /ENOENT/, 'absent state stays absent')
+  await store.captureChoice(initialPreset('grok'))
+  const before = await readFile(file, 'utf8')
+  await store.validate()
+  assert.equal(await readFile(file, 'utf8'), before)
+  const state = JSON.parse(before)
+  state.ai.presets[0].cli = 'agy'
+  const retired = JSON.stringify(state)
+  await writeFile(file, retired)
+  await assert.rejects(store.validate(), /unsupported shape/)
+  assert.equal(await readFile(file, 'utf8'), retired)
+}))
+
 test('legacy sessions retain IDs; unbound sessions cannot resume a different context', async () => fixture(async (store, dir) => {
   const legacy = await store.ensureActiveSession()
   await store.markSessionStarted(legacy.sessionId)
