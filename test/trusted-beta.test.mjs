@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { identity, sha256, validateManifest, validateReceipt, validateChecks, tarManifest, validateSource, registryState, publishOnce, githubClient, githubTagCreator, githubReleaseWriter, ensureTag, readbackDelays, publicationReceipt, finishRelease, finish } from '../scripts/trusted-beta.mjs';
 
 const env = { RELEASE_ID: '123', RELEASE_REPOSITORY: 'jdorado/ez-agents', RELEASE_PACKAGE: '@jc_stack/ez-agents', RELEASE_VERSION: '1.2.3-beta.1', RELEASE_SOURCE_SHA: 'a'.repeat(40), RELEASE_SHA256: sha256(Buffer.from('candidate')), RELEASE_REQUIRED_CHECKS: '["verify (22)"]', GITHUB_REPOSITORY: 'jdorado/ez-agents', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: 'a'.repeat(40) };
@@ -599,7 +600,23 @@ test('only the finish job after publish can write the release, with no OIDC and 
   assert.match(jobs.finish, /trusted-beta\.mjs finish "\$RUNNER_TEMP\/readback"/);
   assert.doesNotMatch(jobs.validate + jobs.publish, /trusted-beta\.mjs finish/);
   assert.match(jobs.finish, /persist-credentials: false/);
+  assert.doesNotMatch(jobs.finish, /^ {4}if:/m);
+  assert.match(jobs.finish, /merge-multiple: true/);
+  assert.match(jobs.finish, /GH_TOKEN: \$\{\{ github\.token \}\}/);
   // The finish job reads the receipt the publish job preserved, by immutable artifact ID.
   assert.match(jobs.publish, /readback-artifact-id: \$\{\{ steps\.readback\.outputs\.artifact-id \}\}/);
   assert.match(jobs.finish, /artifact-ids: \$\{\{ needs\.publish\.outputs\.readback-artifact-id \}\}/);
+});
+
+test('command line runs finish against the preserved receipt and rejects other modes', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'beta-finish-cli-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/trusted-beta.mjs', import.meta.url)), ...args], { encoding: 'utf8', env });
+  // With a valid dispatch identity and no receipt, finish fails on the missing file before any network access.
+  const missing = run('finish', dir);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /publication-receipt\.json/);
+  const unknown = run('release', dir);
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /Usage: trusted-beta\.mjs validate\|publish\|finish OUTPUT_DIR/);
 });

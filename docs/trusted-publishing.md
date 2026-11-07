@@ -96,8 +96,10 @@ is not the publisher's asset name; GitHub asset labels do not rename the asset.
 Use `gh release upload` only to add a missing asset, never `--clobber` to replace
 candidate bytes or receipts. Write the final release notes into the draft now: the
 workflow publishes the draft as it is and never edits its title or notes. Do not
-upload `SHA256SUMS` or `publication-receipt.json`; the workflow adds both, and an
-existing one with different content fails the release step instead of being replaced. The required assets are:
+upload `SHA256SUMS` or `publication-receipt.json`; the workflow adds both. An
+existing `SHA256SUMS` must be byte-identical to the one it would write, and an
+existing receipt must be a complete record of this dispatch; otherwise the release
+step fails instead of replacing it. The required assets are:
 
 - `candidate.tgz`: the exact Mac-tested bytes from `npm pack --ignore-scripts`.
   Do not rebuild it on Actions.

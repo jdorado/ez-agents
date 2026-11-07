@@ -25,6 +25,7 @@
 !default-plugins.json
 !compose.yaml
 !scripts/trusted-beta.mjs
+!.github/workflows/npm-beta-shared.yml
 !scripts/generate-publish-caller.mjs
 !scripts/smoke-busy-reply.ts
 
