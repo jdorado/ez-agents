@@ -10,10 +10,11 @@ import { quotaBlockedUntil, quotaScope, type SetupHealth } from './setup-fallbac
 // client on demand. Nothing is stored and Ez never copies or prints the
 // credential: each client runs with its own bound home. Only percentages,
 // clocks, scope names and short status words are projected, with an optional
-// saved Claude email for a private owner chat.
+// saved Claude or Codex email for a private owner chat.
 export type UsageWindow = { label: string; usedPercent: number; resetsAt?: number; resetsText?: string }
 export type UsageReaders = {
   codex: (home: string) => Promise<UsageWindow[]>
+  codexEmail?: (home: string) => Promise<string | undefined>
   claude: (home: string, authProfile?: string) => Promise<UsageWindow[]>
 }
 
@@ -36,14 +37,16 @@ const codexWindows = (limits: any): UsageWindow[] => (['primary', 'secondary'] a
   return [{ label: durationLabel(limits[name].windowDurationMins, name), usedPercent, ...(typeof resetsAt === 'number' ? { resetsAt } : {}) }]
 })
 
-export const readCodexLimits = (home: string, timeoutMs = 10_000): Promise<UsageWindow[]> => new Promise((resolve, reject) => {
+// One request to the home's `codex app-server`; the native client answers for
+// its own login, so Ez never opens the credential file.
+const codexRequest = (home: string, method: string, params: object, rejected: string, timeoutMs: number): Promise<any> => new Promise((resolve, reject) => {
   const { command, args } = executorInvocation('codex', ['app-server', '--stdio'])
   const child = spawn(command, args, { cwd: home, env: { ...executorEnvironment(), CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'ignore'] })
   let buffer = '', settled = false
-  const finish = (error?: UsageError, windows?: UsageWindow[]) => {
+  const finish = (error?: UsageError, result?: unknown) => {
     if (settled) return
     settled = true; clearTimeout(timer); child.kill()
-    error ? reject(error) : resolve(windows!)
+    error ? reject(error) : resolve(result)
   }
   const timer = setTimeout(() => finish(new UsageError('timed out')), timeoutMs)
   const send = (message: object) => child.stdin!.write(JSON.stringify(message) + '\n')
@@ -61,15 +64,24 @@ export const readCodexLimits = (home: string, timeoutMs = 10_000): Promise<Usage
       if (!message || typeof message !== 'object' || message.method) continue
       if (message.id === 1) {
         send({ method: 'initialized', params: {} })
-        send({ id: 2, method: 'account/rateLimits/read', params: {} })
+        send({ id: 2, method, params })
       } else if (message.id === 2) {
-        if (message.error) finish(new UsageError('limits unavailable (not logged in?)'))
-        else finish(undefined, codexWindows(message.result?.rateLimits))
+        if (message.error) finish(new UsageError(rejected))
+        else finish(undefined, message.result)
       }
     }
   })
   send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ezenciel-agents', version: '1' } } })
 })
+
+export const readCodexLimits = async (home: string, timeoutMs = 10_000): Promise<UsageWindow[]> =>
+  codexWindows((await codexRequest(home, 'account/rateLimits/read', {}, 'limits unavailable (not logged in?)', timeoutMs))?.rateLimits)
+
+// `account/read` returns the email of a ChatGPT login; an API-key login has none.
+export const readCodexEmail = async (home: string, timeoutMs = 10_000): Promise<string | undefined> => {
+  const account = (await codexRequest(home, 'account/read', { refreshToken: false }, 'account unavailable', timeoutMs).catch(() => undefined))?.account
+  return account?.type === 'chatgpt' ? cleanEmail(account.email) : undefined
+}
 
 // `claude -p /usage` is a local client command: no model turn, no tokens. It
 // prints lines like "Current session: 15% used · resets Oct 31 at 11:50am
@@ -98,16 +110,18 @@ export const readClaudeLimits = async (home: string, authProfile?: string, timeo
   })
 }
 
-const defaultReaders: UsageReaders = { codex: readCodexLimits, claude: readClaudeLimits }
+const defaultReaders: UsageReaders = { codex: readCodexLimits, codexEmail: readCodexEmail, claude: readClaudeLimits }
+
+const cleanEmail = (email: unknown): string | undefined =>
+  typeof email === 'string' && email.length <= 254 && email === email.trim() &&
+    /^[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email) ? email : undefined
 
 const savedClaudeEmail = async (home: string): Promise<string | undefined> => {
   // A setup token overrides the saved browser login and has no saved identity.
   const hasSetupToken = await lstat(join(home, 'oauth-token')).then(() => true, error => error.code !== 'ENOENT')
   if (hasSetupToken) return
   try {
-    const email: unknown = JSON.parse(await readFile(join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress
-    if (typeof email === 'string' && email.length <= 254 && email === email.trim() &&
-        /^[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email)) return email
+    return cleanEmail(JSON.parse(await readFile(join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress)
   } catch {}
 }
 
@@ -132,7 +146,7 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
   const sections = await Promise.all(homes.map(async ({ cli, authProfile }) => {
     const scope = quotaScope({ id: 'usage', name: 'usage', cli, ...(authProfile ? { authProfile } : {}) })
     const home = cliHome(controlDir, cli, authProfile)
-    const email = deps.showAccountEmails && cli === 'claude' ? await savedClaudeEmail(home) : undefined
+    const email = !deps.showAccountEmails ? undefined : cli === 'claude' ? await savedClaudeEmail(home) : await readers.codexEmail?.(home)
     const lines = [email ? `${scope} · ${email}` : scope]
     const blockedUntil = quotaBlockedUntil(health[scope])
     if (blockedUntil > now) lines.push(Number.isFinite(blockedUntil) ? `  ⛔ quota-blocked · ${resetNote(blockedUntil, now)}` : '  ⛔ quota-blocked · awaiting /retry_quota')
