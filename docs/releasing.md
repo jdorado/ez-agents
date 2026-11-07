@@ -99,4 +99,5 @@ CI's `upgrade-from-release` job (`pnpm upgrade:check`) runs the published
 release's updater against every PR: eligibility, including this gate, and each
 preparation step up to the image build. When it fails, installed agents would
 refuse or break on that change; ship the migration in a release they already
-run first, or bootstrap the agents.
+run first, or bootstrap the agents. It covers only the `latest` updater: before
+publishing, still check that agents on older releases can take the change.
