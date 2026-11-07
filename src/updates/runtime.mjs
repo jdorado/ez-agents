@@ -3,10 +3,10 @@ import { sharedIdentity } from '../plugins/shared.mjs';
 import * as fs from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { parseEnv } from 'node:util';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { atomic, compose, snapshot, checkFolders, locked, publishBrokerPlugins } from '../plugins/manager.mjs';
 import { read, state, eligibility, jobPath, cleanupStaleBackups, cleanupStaleImages } from './control.mjs';
 import { bindUpdates } from './binding.mjs';
@@ -50,13 +50,6 @@ export async function packageManager(root,run=execute) {
   throw Error(`Upgrade prerequisite unavailable: ${required}. ${failures.join('; ')}. Check the host supervisor service PATH (shell aliases do not count). Reuse its installed pnpm or Corepack; expose the launcher directory to that service and restart it after the current turn. If neither exists, provision the pinned manager first. Do not substitute npm install or reinstall the agent. After repair, prepare/apply a new job when status is failed; recover is only for recovery-required.`);
 }
 export const relayArgs = config => ['compose','--env-file',path.join(config.deploymentDir,'docker.env')];
-// The managed guidance block is replaced only during an upgrade, never by
-// relay/host startup. Malformed personal text stays untouched and only logs.
-async function replaceGuidance(root, workspace, run) {
-  const entry = path.join(root, 'src', 'agent-guidance.ts');
-  const script = `const m = await import(${JSON.stringify(pathToFileURL(entry).href)}); await m.installAgentGuidance(${JSON.stringify(workspace)});`;
-  await run(process.execPath, ['--import', path.join(root, 'node_modules/tsx/dist/loader.mjs'), '--input-type=module', '-e', script], { cwd: root, timeout: 60000 });
-}
 // A candidate that cannot read the state it inherits fails at host start, after
 // services stopped. Probe it first; report a code, never state text.
 async function checkControlState(root, controlDir, run) {
@@ -190,8 +183,6 @@ export async function perform(home,job,hooks) {
       await run(job.packageManager.command,[...job.packageManager.args,'install','--frozen-lockfile','--ignore-scripts'],{cwd:root});
       await run(process.execPath,['--import',path.join(root,'node_modules/tsx/dist/loader.mjs'),path.join(root,'bin/ezenciel-agents.mjs'),'--version'],{cwd:root});
       await checkControlState(root,agent.controlDir,run);
-      try { await replaceGuidance(root, config.workspace, run); }
-      catch(error) { console.error(`Workspace guidance replacement failed; upgrade continues: ${error.message}`); }
       // Resolve managed Codex at activation; old deployment pins cannot override latest.
       // Preserve unrelated operator build arguments.
       const deployment=JSON.parse(await run('docker',[...relayArgs(config),'config','--format','json'],{stdoutOnly:true}));

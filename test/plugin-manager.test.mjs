@@ -6,8 +6,7 @@ import path from 'node:path';
 import {execFile,spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {promisify} from 'node:util';
-import {snapshot,init as initManager,validate,compose,locked,bindToolDiscovery,prepareCommand} from '../src/plugins/manager.mjs';
-import {TOOLS_LINE} from '../src/tools-line.mjs';
+import {snapshot,init as initManager,validate,compose,locked,prepareCommand} from '../src/plugins/manager.mjs';
 import { ControlStore, ownerId, ownerEpoch } from '../src/control-state.js';
 import { ApplicationBindings } from '../src/application-channel.js';
 import { RunStore } from '../src/runs.js';
@@ -94,26 +93,17 @@ test('catalog paths resolve relative to the catalog and pin each new agent indep
  assert.notEqual(first.sample.revision,next.catalog.sample.revision);
  assert.deepEqual(JSON.parse((await f.call('plugins','available')).stdout),first);
 });
-test('init never writes native instructions; the retired footer becomes the static tools line once',async t=>{
- const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md'),override=path.join(f.workspace,'AGENTS.override.md');
+test('init never writes or rewrites native instructions',async t=>{
+ const f=await fixture(t),instructions=path.join(f.workspace,'AGENTS.md');
  await init(f.home,f.workspace);
  await assert.rejects(fs.access(instructions),{code:'ENOENT'});
- const footer='<!-- ez tools: begin -->\nUse `/x/bin/ez`.\n<!-- ez tools: end -->';
- await fs.writeFile(instructions,`Owner mandate\n\n${footer}\n\nOwner tail\n`);await fs.writeFile(override,`Override mandate\n${footer}\n`);
- await bindToolDiscovery(f.home,f.workspace);
- const retired=await fs.readFile(instructions,'utf8');
- assert.equal(retired,`Owner mandate\n\n${TOOLS_LINE}\n\nOwner tail\n`);
- assert.equal(await fs.readFile(override,'utf8'),`Override mandate\n${TOOLS_LINE}\n`);
- await bindToolDiscovery(f.home,f.workspace);assert.equal(await fs.readFile(instructions,'utf8'),retired); // once: idempotent
- await fs.writeFile(instructions,`${TOOLS_LINE}\n${footer}\n`);await bindToolDiscovery(f.home,f.workspace);
- assert.equal(await fs.readFile(instructions,'utf8'),`${TOOLS_LINE}\n\n`); // never duplicates the line
- await fs.writeFile(instructions,'<!-- ez tools: begin -->broken');
- await assert.rejects(bindToolDiscovery(f.home,f.workspace),/Malformed/);
- assert.equal(await fs.readFile(instructions,'utf8'),'<!-- ez tools: begin -->broken');
- const notes=path.join(f.workspace,'TOOLS.md');await fs.writeFile(notes,footer);
- await fs.rm(instructions);await fs.symlink(notes,instructions);
- await assert.rejects(bindToolDiscovery(f.home,f.workspace),/regular file/);
- assert.equal(await fs.readFile(notes,'utf8'),footer);
+ const text='Owner mandate\n<!-- ez tools: begin -->\nUse `/x/bin/ez`.\n<!-- ez tools: end -->\nOwner tail\n';
+ await fs.writeFile(instructions,text);await fs.chmod(instructions,0o660);
+ const before=await fs.stat(instructions);
+ await init(path.join(f.root,'second'),f.workspace);
+ const after=await fs.stat(instructions);
+ assert.equal(await fs.readFile(instructions,'utf8'),text);
+ assert.equal(after.ino,before.ino);assert.equal(after.mode&0o777,0o660);
 });
 test('manifest example is one line starting with a declared command',async t=>{
  const f=await fixture(t),p=await snapshot(f.source);
