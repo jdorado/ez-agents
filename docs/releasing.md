@@ -2,7 +2,8 @@
 
 Use the same checks for maintainer and external changes. Each repository versions
 independently with SemVer: patch for compatible fixes, minor for new capabilities;
-before 1.0, breaking CLI/state changes require a minor bump and migration notes.
+before 1.0, breaking CLI/state changes require a minor bump and migration notes,
+except for packages numbered by release counter (see [Release numbering](#release-numbering)).
 No automatic dependency updates or credentials in pull-request CI. The agent
 operates this process under the authorization rules in CONTRIBUTING.md; a
 separate release bot is not required.
@@ -67,10 +68,13 @@ credential revocation; do not delete volumes as a routine rollback.
 
 ## Beta channel
 
-Use SemVer prereleases (`0.1.0-beta.1`), GitHub's prerelease flag and npm's
+Publish release versions (`0.N.0`, see [Release numbering](#release-numbering);
+legacy releases are `0.1.0-beta.N`), GitHub's prerelease flag and npm's
 `--tag latest` so default installs and the package page advance automatically.
-The version and GitHub release remain prereleases; stable-only update policies
-still exclude them. The legacy npm beta tag is no longer advanced. For this first beta the maintainer
+The GitHub release stays flagged prerelease while the package is below 1.0.
+A legacy `-beta.N` version is also a SemVer prerelease, so stable-only update
+policies exclude it; a `0.N.0` release carries no prerelease tag, so a stable-only
+policy follows it. The legacy npm beta tag is no longer advanced. For this first beta the maintainer
 explicitly deferred real account/reboot acceptance. Keep that limitation in the
 README and release notes. Source/tarball publication is permitted after the
 automated gates; deferred live checks remain required for stable release.
@@ -78,16 +82,49 @@ GitHub repositories use `jdorado`; npm packages use `jc_stack`. Verify
 `npm whoami --registry https://registry.npmjs.org/` returns `jc_stack` before
 interactive publication. OIDC publication instead requires package-owner trust
 enrollment for the exact caller workflow; `whoami` is not its publication gate. Never infer npm scope ownership from a GitHub login. After publishing,
-read back `npm view @jc_stack/ez-agents@0.1.0-beta.12 name version dist-tags --json`
+read back `npm view @jc_stack/ez-agents@0.71.0 name version dist-tags --json`
 (using the release being published), download it with `npm pack`, and verify its
 contents/checksum against the reviewed artifact. Keep the npm artifact and
 GitHub tag on the same reviewed commit. Do not create a new token to bypass 2FA.
 
 Source-checkout images for a deployment are RC builds of the unreleased commit:
-`ezenciel-agents-install build --label X.Y.Z-beta.N.rc.M` (increasing `.rc.N`)
-from the clean reviewed commit after the PR is open. The label and commit SHA are
+`ezenciel-agents-install build --label 0.N.0-rc.M` (increasing `.rc.M`; legacy
+`X.Y.Z-beta.N.rc.M` is still accepted) from the clean reviewed commit after the PR is open. The label and commit SHA are
 baked into the image; `/status` shows the RC tag first. Never install an
 unlabeled source build or reuse an RC label for different contents.
+
+## Release numbering
+
+A release is `0.N.0`, where N is the next integer after the package's last
+published counter: each package counts its own releases (core after
+`0.1.0-beta.70` publishes `0.71.0`; a plugin after `0.1.0-beta.19` publishes
+`0.20.0`). A QA candidate is `0.N.0-rc.M` from the exact PR commit, local/private
+only, never published or tagged; the next RC is the last RC plus one. Under
+standard SemVer `0.N.0-rc.M` sorts below `0.N.0`, so the updater needs no special
+rule for it, and a candidate can be staged from a source already numbered `0.N.0`.
+
+The legacy `0.1.0-beta.N`, `.rc.M`, `.qa.M` and `.compat.M` versions stay valid:
+every installed or published one keeps working, and the updater, publisher, QA
+staging and RC image labels accept the new scheme in addition to them. Any
+`0.N.0` is above every `0.1.0-beta.*`, and the legacy rule (a private RC or QA
+build may graduate to its matching `beta.N` or newer) is unchanged for legacy
+versions. Because every release now bumps the minor version, the automatic update
+policy treats a move between `0.N.0` releases, or between one and a legacy
+`0.1.0-beta.*`, as compatible; other pre-1.0 packages keep the same-minor rule.
+A state-breaking release is still refused by the `ezRelease.stateSchema` contract
+rather than signalled by the version.
+
+Before choosing N, read the installed and staged versions: a release below an
+installed RC's N is refused by that agent's updater.
+
+**Bootstrap.** Updaters in `0.1.0-beta.69` and older do not accept the scheme
+automatically: their compatibility rule requires the same minor version before 1.0,
+so an automatic update to `0.N.0` fails (the supervisor logs `Automatic update of
+main failed`), while an explicit `updates prepare` and `apply` works. The first
+release containing the counter scheme is therefore published as `0.1.0-beta.70`,
+and `0.71.0` is the first `0.N.0`. Plugins should adopt `0.N.0` only after their
+agents run core `0.1.0-beta.70` or newer; an agent still on an older core needs an
+explicit update for each.
 
 ## Agent-owned upgrades
 
