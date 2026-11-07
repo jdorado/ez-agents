@@ -288,6 +288,7 @@ export async function publishOnce(expected, { readState, publishTarball, sleep =
       report(`Registry readback ${attempt + 1} of ${delays.length + 1}: exact artifact and latest tag not yet verified.`);
     } catch (error) {
       lastError = error; await record({ phase: 'readback-error', before, error: error.message, attempt });
+      report(`Registry readback ${attempt + 1} of ${delays.length + 1} failed: ${error.message}`);
       // Different bytes under this version never become right by waiting.
       if (error.definitive) break;
     }

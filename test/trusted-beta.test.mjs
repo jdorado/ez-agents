@@ -105,7 +105,7 @@ test('existing matching publication is read-only; partial or changed tag never r
   assert.equal(writes, 0);
   for (const after of [{ exists: true, latest: 'changed', beta: expected.version }, { exists: true, latest: '1.0.0', beta: 'other' }, { exists: false, latest: '1.0.0' }]) {
     let reads = 0;
-    await assert.rejects(publishOnce(expected, { readState: async () => reads++ === 0 ? { exists: false, latest: '1.0.0' } : after, publishTarball: async () => { writes++; }, sleep: async () => {} }), /do not repeat/);
+    await assert.rejects(publishOnce(expected, { readState: async () => reads++ === 0 ? { exists: false, latest: '1.0.0' } : after, publishTarball: async () => { writes++; }, sleep: async () => {}, report: () => {} }), /do not repeat/);
   }
   assert.equal(writes, 3);
 });
@@ -130,7 +130,7 @@ test('workflow reruns can verify success but cannot repeat an absent-version wri
 
 test('write-started receipt precedes publication and readback records partial failures', async () => {
   const events = []; let read = 0;
-  await assert.rejects(publishOnce(expected, { readState: async () => read++ === 0 ? { exists: false, latest: '1' } : { exists: false, latest: '1' }, record: async event => events.push(event), publishTarball: async () => { assert.equal(events.at(-1).phase, 'write-started'); throw new Error('timeout'); }, sleep: async () => {} }), /unresolved/);
+  await assert.rejects(publishOnce(expected, { readState: async () => read++ === 0 ? { exists: false, latest: '1' } : { exists: false, latest: '1' }, record: async event => events.push(event), publishTarball: async () => { assert.equal(events.at(-1).phase, 'write-started'); throw new Error('timeout'); }, sleep: async () => {}, report: () => {} }), /unresolved/);
   assert.equal(events[0].phase, 'preflight');
   assert.ok(events.some(event => event.phase === 'readback' && event.publishCommandFailed));
 });
@@ -374,7 +374,7 @@ test('readback that never verifies fails closed after the bounded window without
     await assert.rejects(publishOnce(expected, {
       readState: async () => { if (reads++ === 0) return { exists: false, latest: '1.0.0' }; if (after === 'error') throw new Error('registry unavailable'); return after; },
       publishTarball: async () => { writes++; },
-      sleep: async ms => { waits.push(ms); }, record: async () => {},
+      sleep: async ms => { waits.push(ms); }, record: async () => {}, report: () => {},
     }), /Publication unresolved; do not repeat the write/);
     assert.equal(writes, 1);
     assert.deepEqual(waits, delays);
@@ -386,7 +386,7 @@ test('transient readback errors are retried but different registry bytes fail at
   let reads = 0, writes = 0; const waits = [];
   const flaky = await publishOnce(expected, {
     readState: async () => { reads++; if (reads === 1) return { exists: false, latest: '1.0.0' }; if (reads < 4) throw new Error('HTTP 503 while reading registry'); return { exists: true, latest: expected.version }; },
-    publishTarball: async () => { writes++; }, sleep: async ms => { waits.push(ms); }, record: async () => {},
+    publishTarball: async () => { writes++; }, sleep: async ms => { waits.push(ms); }, record: async () => {}, report: () => {},
   });
   assert.equal(flaky.status, 'published'); assert.equal(writes, 1); assert.equal(waits.length, 2);
   // A registry whose tarball digest differs is final: no waiting, no second write.
@@ -399,7 +399,7 @@ test('transient readback errors are retried but different registry bytes fail at
     let n = 0;
     return registryState(expected, async () => n++ === 0 ? new Response(JSON.stringify({ ...document, versions: { [expected.version]: published } })) : new Response('changed'));
   };
-  await assert.rejects(publishOnce(expected, { readState, publishTarball: async () => { writes++; }, sleep: async ms => { waits.push(ms); }, record: async event => events.push(event.phase) }), /Publication unresolved.*differs/);
+  await assert.rejects(publishOnce(expected, { readState, publishTarball: async () => { writes++; }, sleep: async ms => { waits.push(ms); }, record: async event => events.push(event.phase), report: () => {} }), /Publication unresolved.*differs/);
   assert.equal(writes, 1); assert.deepEqual(waits, []);
   assert.ok(events.includes('readback-error'));
 });
