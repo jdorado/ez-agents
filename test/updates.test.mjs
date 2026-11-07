@@ -269,6 +269,26 @@ configs:
  await fs.rm(path.join(f.config.deploymentDir,'docker.env'));
  const job=await prepare(f.home,'main',{file:await f.pack()});assert.equal(job.deploymentMigration.id,'legacy-runtime-v1');
 });
+test('probe and comment edits pass the deployment gate; anything outside a healthcheck still needs a migration',async t=>{
+ const real=await fs.readFile(new URL('../compose.yaml',import.meta.url),'utf8');
+ const nodeProbe=/      test: \[CMD, node, -e, "const fs=require\('node:fs'\);.*EZ_PLUGIN_BROKER_SOCKET.*\n/;
+ assert.match(real,nodeProbe);
+ const probe=real.replace(nodeProbe,`      # A shell builtin, not a Node boot.\n      test: [CMD, sh, -c, 'test -S "$$EZ_PLUGIN_BROKER_SOCKET"']\n`).replace('      interval: 2s\n','      interval: 2s\n      start_interval: 1s\n\n');
+ const cases=[
+  [probe,true],
+  [real.replace('    # Init must forward','    # Reworded: init must forward'),true],
+  [probe.replace('      retries: 30\n','      retries: 30\n    privileged: true\n'),false],
+  [real.replace('    healthcheck:\n      test: [CMD, node, /app/docker/healthcheck.mjs]','    healthcheck:\n      test: [CMD, node, /app/docker/healthcheck.mjs]\n    cap_add: [SYS_ADMIN]'),false],
+  [real.replace('configs:\n','  healthcheck:\n    image: alpine\n    privileged: true\nconfigs:\n'),false],
+  [real.replace('      retries: 30\n','      retries: 30\r    privileged: true\n'),false],
+ ];
+ for(const [next,admitted] of cases) {
+  const f=await fixture(t);
+  await fs.writeFile(path.join(f.old,'compose.yaml'),real);await fs.writeFile(path.join(f.source,'compose.yaml'),next);
+  if(admitted)assert.equal((await prepare(f.home,'main',{file:await f.pack()})).deploymentMigration.id,'legacy-runtime-v1');
+  else await assert.rejects(eligibility(f.home,'main',f.source,false),/Runtime deployment changed/);
+ }
+});
 test('compatibility bridge hands off to the published beta.34 release',async t=>{
  const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),candidate=await read(path.join(f.source,'package.json'));
  await atomic(path.join(f.old,'package.json'),{...prior,version:'0.1.0-beta.34.compat.1'});
