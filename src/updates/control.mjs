@@ -9,6 +9,8 @@ export const read = async file => JSON.parse(await fs.readFile(file,'utf8'));
 export const missing = error => {if(error.code!=='ENOENT')throw error;return null;};
 export const targetId = value => {if(value!=='main'&&!/^[a-z][a-z0-9-]{0,39}$/.test(value))throw Error('Invalid update target');return value;};
 const jobId=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+// Legacy private builds `0.1.0-beta.N.rc|qa|compat.M` sort above their release in SemVer, so they get an explicit
+// rule. The counter scheme's `0.N.0-rc.M` sorts below `0.N.0` and needs none: plain ordering applies.
 const compatibilityBuild=/^(.+)\.compat\.\d+$/;
 const qaBuild=/^(\d+\.\d+\.\d+-beta\.\d+)\.(?:rc|qa)\.[1-9]\d*$/;
 const upgradeable=(candidate,installed)=>{

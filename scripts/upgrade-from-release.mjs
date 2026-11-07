@@ -8,7 +8,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { newer } from '../src/updates/artifact.mjs';
+import { newer, nextRelease } from '../src/updates/artifact.mjs';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
 const name = JSON.parse(await fs.readFile(path.join(repo, 'package.json'), 'utf8')).name;
@@ -34,14 +34,12 @@ try {
   const from = (await read(path.join(old, 'package.json'))).version;
 
   // Candidate: this checkout as npm packs it. Between releases it carries the
-  // published version, so number it one beta ahead, as its release will be.
+  // published version, so number it one release ahead, as its release will be.
   const candidate = path.join(work, 'candidate');
   let tarball = await pack(repo, candidate);
   const pkg = await read(path.join(candidate, 'package.json'));
   if (!newer(pkg.version, from)) {
-    const beta = /^(.*-beta\.)(\d+)$/.exec(from);
-    if (!beta) throw Error(`Cannot number a candidate after ${from}`);
-    pkg.version = `${beta[1]}${Number(beta[2]) + 1}`;
+    pkg.version = nextRelease(from);
     await write(path.join(candidate, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`, 0o644);
     tarball = await pack(candidate, path.join(work, 'renumbered'));
   }

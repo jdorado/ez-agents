@@ -21,6 +21,11 @@ test('identity rejects source, repository, trigger, channel and empty check subs
   for (const changed of [{ RELEASE_VERSION: '1.2.3' }, { RELEASE_VERSION: '1.2.3-alpha.1' }, { RELEASE_VERSION: '1.2.3-beta.01' }, { RELEASE_VERSION: '1.2.3-beta.1+build' }, { RELEASE_REPOSITORY: 'attacker/ez-agents' }, { GITHUB_REPOSITORY: 'jdorado/other' }, { GITHUB_REF: 'refs/heads/feature' }, { GITHUB_EVENT_NAME: 'push' }, { GITHUB_SHA: 'b'.repeat(40) }, { RELEASE_REQUIRED_CHECKS: '[]' }, { RELEASE_REQUIRED_CHECKS: '["a","a"]' }, { RELEASE_SHA256: 'oops' }]) assert.throws(() => identity({ ...env, ...changed }));
 });
 
+test('identity accepts release-counter 0.N.0 and legacy beta.N versions but no other shape', () => {
+  for (const version of ['0.70.0', '0.2.0', '1.2.3-beta.1', '0.1.0-beta.69']) assert.equal(identity({ ...env, RELEASE_VERSION: version }).version, version);
+  for (const version of ['0.70.1', '0.70.0-rc.1', '0.70.0+build', '0.0.0', '0.070.0', '1.70.0', '0.70', 'v0.70.0']) assert.throws(() => identity({ ...env, RELEASE_VERSION: version }), /Only immutable/, version);
+});
+
 test('manifest and receipt are bound to independent dispatch identity', () => {
   validateManifest(manifest, expected); validateReceipt(receipt, expected);
   for (const changed of [{ name: '@jc_stack/other' }, { version: '1.2.3' }, { private: true }, { repository: 'https://github.com/attacker/repo' }, { publishConfig: { tag: 'beta' } }, { publishConfig: { access: 'restricted' } }, { publishConfig: { registry: 'https://evil.example/' } }, { publishConfig: { provenance: false } }]) assert.throws(() => validateManifest({ ...manifest, ...changed }, expected));

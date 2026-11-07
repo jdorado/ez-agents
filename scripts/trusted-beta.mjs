@@ -35,7 +35,7 @@ export function identity(env) {
   assert(/^[1-9]\d*$/.test(env.RELEASE_ID || '') && Number.isSafeInteger(value.releaseId), 'Invalid draft release ID');
   assert(/^jdorado\/[A-Za-z0-9_.-]+$/.test(value.repository || ''), 'Invalid repository');
   assert(/^@jc_stack\/[a-z0-9-]+$/.test(value.package || ''), 'Invalid package');
-  assert(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/.test(value.version || ''), 'Only immutable beta.N versions are allowed');
+  assert(/^(?:(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-beta\.(?:0|[1-9]\d*)|0\.[1-9]\d*\.0)$/.test(value.version || ''), 'Only immutable 0.N.0 or legacy X.Y.Z-beta.N versions are allowed');
   assert(/^[a-f0-9]{40}$/.test(value.sourceSha || ''), 'Invalid source SHA');
   assert(/^[a-f0-9]{64}$/.test(value.sha256 || ''), 'Invalid artifact SHA256');
   assert(Array.isArray(value.requiredChecks) && value.requiredChecks.length > 0 && value.requiredChecks.every(x => typeof x === 'string' && x.length > 0) && new Set(value.requiredChecks).size === value.requiredChecks.length, 'Required checks must be a nonempty unique list');

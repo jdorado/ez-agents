@@ -40,3 +40,29 @@ test('local QA staging preserves source and rejects label replacement and dirty 
     assert.deepEqual(await fs.readdir(catalog),['beta-12']);
   } finally {await fs.rm(root,{recursive:true,force:true});}
 });
+
+test('local QA staging accepts counter-scheme candidates and rejects stale or malformed ones',async()=>{
+  const root=await fs.mkdtemp(path.join(tmpdir(),'ez-qa-counter-test-'));
+  const source=path.join(root,'repo'),catalog=path.join(root,'catalog'),flow=path.join(root,'QA.md');
+  await fs.mkdir(source);
+  const pkg={name:'@fixture/main',version:'0.70.0',files:['feature.txt'],ezRelease:{kind:'main',protocol:1,stateSchema:1,mainProtocol:1}};
+  await fs.writeFile(path.join(source,'package.json'),JSON.stringify(pkg));
+  await fs.writeFile(path.join(source,'feature.txt'),'feature source');
+  await fs.writeFile(flow,'Ask for the feature. Verify its result.');
+  const git=args=>execFileSync('git',args,{cwd:source,stdio:'pipe'}).toString().trim();
+  git(['init']);git(['add','package.json','feature.txt']);
+  git(['-c','user.name=QA','-c','user.email=qa@example.invalid','-c','core.hooksPath=/dev/null','-c','commit.gpgsign=false','commit','-m','fixture']);
+  const script=fileURLToPath(new URL('../scripts/stage-qa.mjs',import.meta.url));
+  const stage=(label,version)=>JSON.parse(execFileSync(process.execPath,[script,'--source',source,'--catalog',catalog,'--label',label,'--version',version,'--flow',flow],{stdio:'pipe'}).toString());
+  const refuses=(label,version,pattern)=>assert.throws(()=>stage(label,version),error=>pattern.test(error.stderr.toString()),version);
+  try {
+    // A source already numbered 0.70.0 can stage its own candidate, which sorts below the release.
+    assert.equal(stage('beta-70','0.70.0-rc.1').version,'0.70.0-rc.1');
+    assert.equal(stage('beta-71','0.71.0-rc.1').version,'0.71.0-rc.1');
+    refuses('beta-72','0.69.0-rc.1',/must be newer/);
+    refuses('beta-73','0.70.0',/distinct private version/);
+    refuses('beta-73','0.71.1-rc.1',/distinct private version/);
+    refuses('beta-73','0.71.0-rc.0',/distinct private version/);
+    assert.deepEqual((await fs.readdir(catalog)).sort(),['beta-70','beta-71']);
+  } finally {await fs.rm(root,{recursive:true,force:true});}
+});
