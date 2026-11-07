@@ -95,6 +95,10 @@ main/plugin replacement. See [upgrade setup, tools and recovery](upgrades.md). E
 Automatic main upgrades are gated on deployment compatibility: the candidate's
 `compose.yaml` and `compose.whatsapp.yaml` must match the release the agent
 already runs, or that installed release must carry the reviewed migration.
+The gate runs in the installed updater. Updaters released after 0.1.0-beta.69
+ignore comments, blank lines and `healthcheck:` blocks in `compose.yaml`, so a
+probe-only change installs on agents already running such a release; beta.69
+and older still refuse it.
 CI's `upgrade-from-release` job (`pnpm upgrade:check`) runs the published
 release's updater against every PR: eligibility, including this gate, and each
 preparation step up to the image build. When it fails, installed agents would
