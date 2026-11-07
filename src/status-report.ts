@@ -34,7 +34,9 @@ const since = (iso: string | undefined, now: number): string | undefined =>
   iso && Date.parse(iso) <= now ? age(now - Date.parse(iso)) : undefined
 const clip = (text: string, max: number): string => {
   const plain = text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim()
-  return plain.length > max ? `${plain.slice(0, max - 1)}…` : plain
+  // Cut by code point: a UTF-16 slice can split an emoji, which Telegram rejects.
+  const chars = Array.from(plain)
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : plain
 }
 const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`
 
