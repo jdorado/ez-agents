@@ -7,7 +7,7 @@ import { gzipSync } from 'node:zlib';
 import { spawn, execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
-import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
+import { extract, digest, version, newer, compatible, nextRelease, rcVersion } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, cleanupStaleImages, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
 import { perform, environment, packageManager, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
@@ -203,7 +203,22 @@ test('isolated plugin status uses bundled Compose v1 and inspect readback',async
 test('SemVer ordering and compatibility reject ranges, malformed values and downgrades',()=>{
  for(const s of ['latest','../1','1.0','01.0.0','1.0.0-01'])assert.throws(()=>version(s));
  assert(newer('0.1.0-beta.10','0.1.0-beta.2'));assert(newer('0.1.0','0.1.0-beta.10'));assert(!newer('0.1.0-beta.2','0.1.0'));assert(!newer('1.0.0','1.0.0'));
- assert(compatible('0.1.9','0.1.0'));assert(!compatible('0.2.0','0.1.0'));assert(compatible('1.9.0','1.0.0'));assert(!compatible('2.0.0','1.0.0'));
+ assert(compatible('0.1.9','0.1.0'));assert(!compatible('0.2.1','0.1.0'));assert(compatible('1.9.0','1.0.0'));assert(!compatible('2.0.0','1.0.0'));
+});
+test('release-counter 0.N.0 versions order above the legacy beta line and below their own release',()=>{
+ // Ascending SemVer order, legacy private builds included.
+ const order=['0.1.0-beta.1','0.1.0-beta.69','0.1.0-beta.69.compat.1','0.1.0-beta.69.qa.1','0.1.0-beta.69.rc.2','0.1.0-beta.70','0.1.0-beta.999.rc.9','0.70.0-rc.1','0.70.0-rc.2','0.70.0-rc.10','0.70.0','0.71.0-rc.1','0.71.0'];
+ for(const [i,a] of order.entries())for(const [j,b] of order.entries())assert.equal(newer(a,b),i>j,`${a} newer than ${b}`);
+ // Counter releases are compatible with each other and with the legacy line; other pre-1.0 packages keep the minor rule.
+ for(const [a,b] of [['0.71.0','0.1.0-beta.70'],['0.70.0','0.1.0-beta.69.rc.2'],['0.71.0','0.70.0'],['0.71.0','0.70.0-rc.2'],['0.70.0-rc.2','0.1.0-beta.69'],['0.1.0-beta.70','0.1.0-beta.69']])assert(compatible(a,b),`${a} compatible with ${b}`);
+ for(const [a,b] of [['0.2.0','0.1.1'],['0.2.1','0.1.0'],['0.71.1','0.70.0'],['1.0.0','0.70.0'],['2.0.0','1.9.0']])assert(!compatible(a,b),`${a} incompatible with ${b}`);
+ assert(compatible('0.1.2','0.1.1'));assert(compatible('1.2.0','1.1.0'));
+});
+test('release numbering and candidate labels accept the counter scheme and keep the legacy one',()=>{
+ assert.equal(nextRelease('0.1.0-beta.69'),'0.1.0-beta.70');assert.equal(nextRelease('0.70.0'),'0.71.0');
+ for(const s of ['0.1.0-beta.69.rc.2','0.70.0-rc.1','0.70.1','1.2.3','latest'])assert.throws(()=>nextRelease(s),/Cannot number/);
+ for(const s of ['0.1.0-beta.36.rc.2','0.71.0-rc.1','0.71.0-rc.12'])assert(rcVersion.test(s),s);
+ for(const s of ['0.71.0','0.1.0-beta.36','0.71.0-rc.0','0.71.0-rc.01','0.71.1-rc.1','1.2.0-rc.1','0.0.0-rc.1','0.071.0-rc.1','0.71.0-beta.1','0.71.0-rc.1.compat.1','0.71.0-qa.1'])assert(!rcVersion.test(s),s);
 });
 test('archive admission rejects traversal, links, special files, duplicates and corrupt bytes before writes',async t=>{
  const f=await fixture(t);
@@ -312,6 +327,44 @@ test('private RC and QA builds graduate only to their matching beta release',asy
   await atomic(path.join(f.source,'package.json'),{...candidate,version:'0.1.0-beta.45'});
   await assert.rejects(eligibility(f.home,'main',f.source,false),/newer/);
  }
+});
+test('old and new version families interoperate in upgrade eligibility, never moving backwards',async t=>{
+ const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),candidate=await read(path.join(f.source,'package.json'));
+ const attempt=async(installed,available,automatic)=>{
+  await atomic(path.join(f.old,'package.json'),{...prior,version:installed});
+  await atomic(path.join(f.source,'package.json'),{...candidate,version:available});
+  return eligibility(f.home,'main',f.source,automatic);
+ };
+ for(const automatic of [true,false]) {
+  for(const [installed,available] of [
+   ['0.1.0-beta.69','0.71.0'],['0.1.0-beta.69.rc.2','0.71.0'],['0.1.0-beta.99.compat.1','0.70.0'],
+   ['0.1.0-beta.69.rc.2','0.1.0-beta.69'],['0.1.0-beta.70.qa.1','0.1.0-beta.70'],['0.1.0-beta.69','0.1.0-beta.70'],
+   ['0.70.0-rc.2','0.70.0'],['0.70.0-rc.2','0.70.0-rc.3'],['0.70.0-rc.2','0.71.0'],['0.70.0','0.71.0']])
+   assert.equal((await attempt(installed,available,automatic)).pkg.version,available,`${installed} -> ${available} (automatic ${automatic})`);
+  for(const [installed,available] of [
+   ['0.70.0','0.1.0-beta.999'],['0.70.0','0.70.0-rc.9'],['0.70.0','0.70.0'],['0.70.0-rc.3','0.69.0'],['0.70.0-rc.3','0.1.0-beta.70'],
+   ['0.70.0-rc.3','0.70.0-rc.2'],['0.1.0-beta.70.rc.1','0.1.0-beta.69'],['0.1.0-beta.70.rc.1','0.1.0-beta.70.rc.1']])
+   await assert.rejects(attempt(installed,available,automatic),/newer/,`${installed} -> ${available} (automatic ${automatic})`);
+ }
+});
+test('update checks and policies discover counter releases next to legacy versions',async t=>{
+ const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),name=prior.name;
+ const original=globalThis.fetch;t.after(()=>globalThis.fetch=original);
+ const registry={};
+ globalThis.fetch=async()=>new Response(JSON.stringify({name,'dist-tags':registry.tags,versions:Object.fromEntries(Object.keys(registry.versions).map(v=>[v,{name,version:v}]))}));
+ for(const [installed,latest,expected] of [['0.1.0-beta.69','0.71.0',true],['0.1.0-beta.69.rc.2','0.71.0',true],['0.1.0-beta.69.rc.2','0.1.0-beta.69',true],['0.70.0-rc.2','0.70.0',true],['0.70.0-rc.2','0.69.0',false],['0.70.0','0.1.0-beta.99',false]]) {
+  await atomic(path.join(f.old,'package.json'),{...prior,version:installed});
+  registry.tags={latest};registry.versions={[latest]:1};
+  const [main]=await command(f.home,['check']);
+  assert.equal(main.available,latest);assert.equal(main.newer,expected,`${installed} with latest ${latest}`);
+ }
+ const {registryCandidate}=await import('../src/updates/artifact.mjs');
+ registry.tags={latest:'0.71.0',beta:'0.1.0-beta.13'};registry.versions={'0.1.0-beta.13':1,'0.1.0-beta.69':1,'0.71.0-rc.1':1,'0.71.0':1};
+ assert.equal((await registryCandidate(name,'beta')).version,'0.71.0');
+ // A stable-only policy excludes every prerelease, so legacy betas and counter candidates, but follows 0.N.0 releases.
+ assert.equal((await registryCandidate(name,'stable')).version,'0.71.0');
+ delete registry.versions['0.71.0'];registry.tags={latest:'0.71.0-rc.1'};
+ assert.equal(await registryCandidate(name,'stable'),null);
 });
 test('reviewed Library beta14 command migration is exact and fail-closed',()=>{
  const manifest=(version,document)=>({schemaVersion:1,id:'library',version,description:'library',commands:{library:{executable:'bin/ez-library.mjs',args:[]},'library-query':{executable:'bin/ez-library.mjs',args:[],channelQuery:true},...(document?{'library-document':{executable:'bin/ez-library.mjs',args:[],channelQuery:true}}:{})},skills:['skills/library/SKILL.md']});
