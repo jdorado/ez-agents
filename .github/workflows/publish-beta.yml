@@ -33,7 +33,7 @@ jobs:
     with:
       package: '@jc_stack/ez-agents'
       publisher-sha: ${{ github.sha }}
-      required-checks: '["verify (22)","verify (24)","docker"]'
+      required-checks: '["verify (22)","verify (24)","docker","upgrade-from-release"]'
       release-id: ${{ inputs.release-id }}
       version: ${{ inputs.version }}
       source-sha: ${{ inputs.source-sha }}
