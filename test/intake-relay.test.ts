@@ -276,7 +276,7 @@ test('conversation menu is owner-only and removes the retired settings control',
     await f.relay.bot.handleUpdate(message(2, '/settings'))
     assert.match(f.replies.at(-1)!, /Settings was removed.*Use \/ai/)
     await f.relay.bot.handleUpdate(message(3, '/ai'))
-    const pick = f.keyboards.at(-1)!.flat().find((button) => button.text === 'Refresh available AIs')!.callback_data
+    const pick = f.keyboards.at(-1)!.flat().find((button) => button.text === '↻ Refresh')!.callback_data
     const store = new ControlStore(f.dir, 1000)
     const before = await store.status()
     const keyboardCount = f.keyboards.length
