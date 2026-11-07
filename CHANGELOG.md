@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Stop rewriting an agent's `AGENTS.md` during setup and upgrades. Two one-time migrations (the `ez tools` footer retirement run by update binding, and the `ez shared guidance` block strip) wrote the file through a mode-0600 temporary file and a rename. That replaced the file's inode, so its earlier mode and any ACL were lost: after one upgrade the Library container's user could no longer read `AGENTS.md` and Library sync failed on three agents until a read ACL was restored by hand. Both blocks were retired from every deployed agent long ago, so the migrations now do nothing and are removed; `AGENTS.md` is written only as the initial seed. A test pins that activation, rollback and workspace initialization leave an existing `AGENTS.md` byte-identical with the same mode and inode.
+- Upgrade note: an agent still running an earlier release runs that release's updater against this package, which no longer contains `src/agent-guidance.ts`. Its guidance step fails once, logs `Workspace guidance replacement failed; upgrade continues`, and the upgrade proceeds.
+
 ## 0.1.0-beta.69
 
 - Probe plugin and shared-worker containers every 10 seconds instead of every 2. Each probe starts a process inside the container, and on a VM with 27 containers probing every 2 seconds those starts cost roughly 1.4 CPU cores (about 0.12 CPU-seconds per Node probe, so an idle Library container spent about 6% of a core on its health check alone). Retries drop from 30 to 6, so a failing service is still reported unhealthy after about 60 seconds. A started or updated plugin is reported healthy up to 10 seconds later than before; the updater's 90-second `--wait-timeout` is unchanged. The relay's own 10-second check is unchanged, and the plugin broker keeps its 2-second check. An installed plugin keeps its old probe until it is next started or updated (its Compose file is regenerated then), and an existing shared embeddings worker keeps it until that worker is recreated.

@@ -1,4 +1,3 @@
-import { installAgentGuidance } from './agent-guidance.js'
 import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
@@ -23,7 +22,6 @@ export const initializeWorkspace = async (workspace: string, purposeFile: string
   const target = path.join(workspace, name)
   try {
     if (!(await lstat(target)).isFile()) throw new Error(`Workspace seed must be a regular file: ${target}`)
-    await installAgentGuidance(workspace)
     return created
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -44,6 +42,5 @@ export const initializeWorkspace = async (workspace: string, purposeFile: string
   } finally {
     await rm(temporary, { force: true })
   }
-  await installAgentGuidance(workspace)
   return created
 }

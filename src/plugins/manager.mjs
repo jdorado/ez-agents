@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
-import { TOOLS_LINE } from '../tools-line.mjs';
 import { readFileSync, readlinkSync, realpathSync } from 'node:fs';
 
 const reserved = new Set(['status','updates','plugins','tools','message','owner','approval','react','setup','help','version']);
@@ -42,27 +41,6 @@ export async function stewardOwned(file) {
   if (process.geteuid?.() !== 0) return;
   const parent = await fs.stat(path.dirname(file));
   await fs.chown(file, parent.uid, parent.gid);
-}
-// Retire the former `ez tools` footer once: replace the marked block with
-// TOOLS_LINE and leave every other byte untouched. The name is kept because
-// upgraders released before this change call it on the target package;
-// remove it when no installed core predates the change.
-export async function bindToolDiscovery(_home,workspace) {
-  workspace=await fs.realpath(workspace);
-  const start='<!-- ez tools: begin -->',end='<!-- ez tools: end -->';
-  for(const name of ['AGENTS.md','AGENTS.override.md']) {
-    const file=path.join(workspace,name);
-    const stat=await fs.lstat(file).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
-    if(!stat)continue;
-    if(!stat.isFile())throw Error('Tool instructions must be a regular file');
-    const prior=await fs.readFile(file,'utf8');
-    const from=prior.indexOf(start),to=prior.indexOf(end);
-    if(from<0&&to<0)continue;
-    if((from<0)!==(to<0)||to<from||prior.indexOf(start,from+start.length)>=0||prior.indexOf(end,to+end.length)>=0)throw Error('Malformed tool discovery block');
-    const next=prior.slice(0,from)+(prior.includes(TOOLS_LINE)?'':TOOLS_LINE)+prior.slice(to+end.length);
-    const tmp=file+'.'+randomUUID()+'.tmp';
-    try {await fs.writeFile(tmp,next,{mode:0o600,flag:'wx'});await fs.rename(tmp,file);}finally{await fs.rm(tmp,{force:true});}
-  }
 }
 const invocationDirectory = home => path.join(home,'command-invocations');
 // A lease pid is only meaningful inside the PID namespace that wrote it. The

@@ -12,7 +12,6 @@ import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStal
 import { perform, environment, packageManager, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
-import { TOOLS_LINE } from '../src/tools-line.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
 import { idle, executorBindingArchive, executorVolumes, lockOwnerAlive, providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade, withUpgrade } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
@@ -64,8 +63,8 @@ async function fixture(t,kind='main') {
  const deployment=path.join(root,'agent'),home=path.join(deployment,'tools'),old=path.join(root,'old'),source=path.join(root,'candidate');
  for(const d of [home,old,source,path.join(home,'bin'),path.join(home,'updates'),path.join(deployment,'mind'),path.join(deployment,'control')])await fs.mkdir(d,{recursive:true});
  const pkg={name:'@ez-test/example',version:'0.1.0',packageManager:'pnpm@10.30.3',type:'module',files:['bin','src','docker','compose.yaml','compose.whatsapp.yaml','.dockerignore','Dockerfile'],bin:{example:'bin/example.mjs'},ezRelease:contract(kind)};
- const guidance=text=>`export async function bindToolDiscovery(_home,workspace){const fs=await import('node:fs/promises');await fs.writeFile(workspace+'/AGENTS.md',${JSON.stringify(text+'\n')});}\n`;
- const files={'package.json':JSON.stringify(pkg),'compose.yaml':'services: {}\n','compose.whatsapp.yaml':'services: {}\n','.dockerignore':'','Dockerfile':'FROM scratch AS runtime','docker/pnpm-lock.yaml':'lockfileVersion: 9.0\n','src/host-executor.ts':'','src/plugins/manager.mjs':guidance('old guidance'),'bin/example.mjs':'#!/usr/bin/env node\nconsole.log("example")','bin/ezenciel-agents.mjs':'console.log("0.1.1")'};
+ const stub=text=>`export const revision=${JSON.stringify(text)};\n`;
+ const files={'package.json':JSON.stringify(pkg),'compose.yaml':'services: {}\n','compose.whatsapp.yaml':'services: {}\n','.dockerignore':'','Dockerfile':'FROM scratch AS runtime','docker/pnpm-lock.yaml':'lockfileVersion: 9.0\n','src/host-executor.ts':'','src/plugins/manager.mjs':stub('old'),'bin/example.mjs':'#!/usr/bin/env node\nconsole.log("example")','bin/ezenciel-agents.mjs':'console.log("0.1.1")'};
  let record,target='main';
  if(kind==='plugin') {
   target='sample';files['ez-plugin.json']=JSON.stringify({schemaVersion:1,id:'sample',version:pkg.version,commands:{sample:{executable:'bin/example.mjs',args:[]}},skills:[]});
@@ -85,7 +84,7 @@ async function fixture(t,kind='main') {
   await atomic(record.compose,await compose(config,record,{},home));
  }
  await atomic(path.join(home,'registry.json'),{schemaVersion:1,owner:home,plugins:record?{sample:record}:{},commands:record?{sample:'sample'}:{}});
- await fs.cp(old,source,{recursive:true});pkg.version='0.1.1';await atomic(path.join(source,'package.json'),pkg);await fs.writeFile(path.join(source,'src/plugins/manager.mjs'),guidance('candidate guidance'));
+ await fs.cp(old,source,{recursive:true});pkg.version='0.1.1';await atomic(path.join(source,'package.json'),pkg);await fs.writeFile(path.join(source,'src/plugins/manager.mjs'),stub('candidate'));
  if(kind==='plugin'){const m=await read(path.join(source,'ez-plugin.json'));m.version=pkg.version;await atomic(path.join(source,'ez-plugin.json'),m);}
  const pack=async()=>{const entries=[];async function walk(dir,prefix=''){for(const e of await fs.readdir(dir,{withFileTypes:true})){const rel=prefix+e.name;if(e.isDirectory())await walk(path.join(dir,e.name),rel+'/');else entries.push(['package/'+rel,await fs.readFile(path.join(dir,e.name))]);}}await walk(source);const file=path.join(root,'candidate.tgz');await fs.writeFile(file,tar(entries));return file;};
  return {root,home,old,source,agent,config,record,target,pack};
@@ -320,16 +319,17 @@ test('apply queues while a plugin call holds its lease; activation drains it fir
  assert.equal((await queued(f)).status,'queued');
  await fs.rm(path.join(directory,'00000000-0000-4000-8000-000000000002.json'));
 });
-test('main activation and rollback retire the tools footer and never write guidance',async t=>{
- const footer='Owner mandate\n\n<!-- ez tools: begin -->\nUse `ez`.\n<!-- ez tools: end -->\n';
+test('main activation and rollback never rewrite the agent AGENTS.md: old marked blocks, mode and inode stay',async t=>{
+ const text='Owner mandate\n\n<!-- ez tools: begin -->\nUse `ez`.\n<!-- ez tools: end -->\n<!-- ez shared guidance: begin -->\nold\n<!-- ez shared guidance: end -->\n';
  for(const outcome of ['completed','rolled-back']) {
-  const f=await fixture(t),instructions=path.join(f.agent.workspace,'AGENTS.md');await fs.writeFile(instructions,footer);
+  const f=await fixture(t),instructions=path.join(f.agent.workspace,'AGENTS.md');await fs.writeFile(instructions,text);await fs.chmod(instructions,0o660);
+  const before=await fs.stat(instructions);
   await bindUpdates(f.home,path.join(f.config.deploymentDir,'host-executor.json'),f.old);
-  const retired=await fs.readFile(instructions,'utf8');
-  assert.equal(retired,'Owner mandate\n\n'+TOOLS_LINE+'\n');
   const options=outcome==='rolled-back'?{fail:(_command,args)=>args.includes('up')}:undefined;
   assert.equal((await perform(f.home,await queued(f),runtime(f,options))).status,outcome);
-  assert.equal(await fs.readFile(instructions,'utf8'),retired);
+  const after=await fs.stat(instructions);
+  assert.equal(await fs.readFile(instructions,'utf8'),text);
+  assert.equal(after.ino,before.ino);assert.equal(after.mode&0o777,0o660);
  }
 });
 test('latest overrides stale deployment pins and changing latest changes image bindings',async t=>{

@@ -305,17 +305,11 @@ updaters need an exact-version core update to adopt this discovery behavior.
 
 ## Operating-agent instructions
 
-Setup and the main upgrade step strip any obsolete `<!-- ez shared guidance -->`
-handbook from workspace `AGENTS.md` (and existing `AGENTS.override.md`).
-Personal text outside that block is preserved byte-for-byte. Do not reinsert
-coding, KISS, contribution or repair loops into operating minds.
-
-Ez writes no managed guidance after the initial workspace seed. Update binding
-(init with a host config, `enable-updates`, upgrade and rollback) replaces a former
-`<!-- ez tools -->` footer once with the seeded static line
-"Tools: run `ez tools list --details`; each plugin's `--help` gives usage." and
-otherwise leaves `AGENTS.md` untouched. Malformed markers and symlinks fail visibly
-rather than overwriting personal work. Inventory and usage are generated on read.
+Ez writes workspace `AGENTS.md` only as the initial seed. Setup, update binding
+(init with a host config, `enable-updates`, upgrade and rollback) and upgrades never
+rewrite it afterwards, so its content, mode and ACL stay as the owner and agent left
+them. Do not reinsert coding, KISS, contribution or repair loops into operating
+minds. Inventory and usage are generated on read.
 
 Codex, Grok, OpenCode and Claude Code discover workspace `AGENTS.md` natively
 (Claude Code loads it when the workspace has no `CLAUDE.md`). Fresh and resumed owner input is literal; ez does

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { atomic, bindToolDiscovery } from '../plugins/manager.mjs';
+import { atomic } from '../plugins/manager.mjs';
 import { read } from './control.mjs';
 
 export async function bindUpdates(home,hostConfig,packageRoot=fileURLToPath(new URL('../../',import.meta.url))) {
@@ -21,7 +21,5 @@ export async function bindUpdates(home,hostConfig,packageRoot=fileURLToPath(new 
     const dest=path.join(bin,name);await fs.rm(dest,{force:true});
     await fs.writeFile(dest,`#!${process.execPath}\nimport fs from 'node:fs';import {spawn} from 'node:child_process';const c=JSON.parse(fs.readFileSync(${configFile}));const child=spawn(c.packageRoot+'/'+${JSON.stringify(entry)},process.argv.slice(2),{stdio:'inherit',env:{...process.env,EZ_DEPLOYMENT_DIR:c.deploymentDir,EZ_CONTROL_DIR:${JSON.stringify(agent.controlDir)}}});for(const s of ['SIGTERM','SIGINT'])process.on(s,()=>child.kill(s));child.on('error',e=>{console.error(e.message);process.exitCode=1});child.on('close',c=>process.exitCode=c??1);\n`,{mode:0o700});
   }
-  // Idempotent: retires a former `ez tools` footer, never writes guidance.
-  await bindToolDiscovery(home,config.workspace);
   return {ok:true,home,deploymentDir,packageRoot,policy:'Automatic compatible beta-channel updates by default; saved stable-only or manual policies take precedence. Local candidates require an explicit owner request.'};
 }
