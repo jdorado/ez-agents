@@ -49,7 +49,7 @@ separate release bot is not required.
    publishing that tarball:
    `npm publish /absolute/candidate.tgz --access public --tag latest --registry https://registry.npmjs.org/`
    for approved beta releases as well: `latest` is the default distribution tag,
-   not a claim that a SemVer prerelease is stable.
+   not a claim of stability for a pre-1.0 release.
    For unattended beta publication use the [shared trusted publisher](trusted-publishing.md)
    and its exact-artifact staging/readback contract. One dispatch validates, creates
    a missing `v<version>` tag at the verified source, publishes once and waits for
@@ -122,9 +122,18 @@ automatically: their compatibility rule requires the same minor version before 1
 so an automatic update to `0.N.0` fails (the supervisor logs `Automatic update of
 main failed`), while an explicit `updates prepare` and `apply` works. The first
 release containing the counter scheme is therefore published as `0.1.0-beta.70`,
-and `0.71.0` is the first `0.N.0`. Plugins should adopt `0.N.0` only after their
-agents run core `0.1.0-beta.70` or newer; an agent still on an older core needs an
-explicit update for each.
+and `0.71.0` is the first `0.N.0`. Candidates for that bootstrap release use the
+legacy form `0.1.0-beta.70.rc.M` (`0.70.0-rc.M` would sort above `0.1.0-beta.70`
+and be refused by an agent that installed it); `0.N.0-rc.M` starts with the
+`0.71.0` cycle. Publish `0.71.0` only after the agents have had time to take
+beta.70: an agent still on beta.69 retries the failed automatic update every few
+hours and leaves a prepared job directory per attempt.
+
+Plugins should adopt `0.N.0` only after their agents run core `0.1.0-beta.70` or
+newer; an agent still on an older core needs an explicit update for each. A
+plugin's `publish-beta.yml` must also pin a core commit containing this change
+(see [Shared publisher updates](#shared-publisher-updates)); an older shared
+publisher rejects `0.N.0` before publishing anything.
 
 ## Agent-owned upgrades
 

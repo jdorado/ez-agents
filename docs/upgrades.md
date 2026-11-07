@@ -203,7 +203,7 @@ Examples are candidate version placeholders, not a claim of published versions.
 unsafe archive entries, and records identity/version/hash. It does not stop a
 service. Local candidates never qualify for `--automatic`; an explicit request
 is required. Stable automation excludes prereleases, major changes and 0.x minor
-changes. Beta policy permits compatible prereleases. Downgrades are rejected;
+changes, except moves between release-counter `0.N.0` versions. Beta policy permits compatible prereleases. Downgrades are rejected;
 rollback is a recovery operation for the previous installation only.
 
 `apply` records one durable queued job. **For a core upgrade from a runtime without the handoff contract, the agent must finish its turn after queuing it** so the supervisor can drain native work. New compatible runtimes can swap while native work continues. A plugin upgrade can complete while that turn continues; only plugin-call admission is held during activation. Calls already executing finish first.

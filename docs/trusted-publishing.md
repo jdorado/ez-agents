@@ -127,8 +127,9 @@ Only `0.N.0` release versions and legacy `X.Y.Z-beta.N` versions are supported
 package page and default installs show the newest approved release. Manifests
 must use `publishConfig.tag: "latest"` (or omit the tag). The GitHub release
 remains a prerelease. Private
-packages, wrong package/repository identities, `1.x` and later versions, `0.N.0-rc.M`
-candidates and other shapes fail before publication. No npm login smoke publication or stable-version release occurs.
+packages, wrong package/repository identities, stable `1.x` and later versions, `0.N.0-rc.M`
+candidates and other shapes fail before publication. A caller pinned to a shared
+publisher older than this scheme rejects `0.N.0`; bump its pin first. No npm login smoke publication or stable-version release occurs.
 
 ## Readback, failure and release completion
 
