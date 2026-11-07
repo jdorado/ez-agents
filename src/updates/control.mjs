@@ -78,11 +78,24 @@ export function reviewedPluginDeploymentMigration(target,old,next) {
 }
 // Beta.34 added an optional isolation variable and moved a Compose fallback
 // behind the already-bound purpose-file variable. Existing deployments must
-// retain their effective runtime, while future service/volume/privilege changes
+// retain their effective runtime, while service/volume/privilege changes
 // remain a separately reviewed migration.
 const compatibleRuntimeMigration='legacy-runtime-v1';
+// Comments, blank lines and healthchecks grant nothing: a probe runs inside its
+// container with that container's privileges, and a broken one fails the health
+// gate and rolls back. Ignore them so probe tuning needs no migration.
+function withoutProbes(text) {
+  let probe=-1;
+  return text.split(/\r?\n/).filter(line=>{
+    const indent=line.search(/\S/);
+    if(indent<0||line[indent]==='#')return false;
+    if(probe>=0&&indent>probe)return false;
+    probe=/^\s+healthcheck:/.test(line)?indent:-1;
+    return probe<0;
+  }).join('\n');
+}
 function effectiveCompose(text,env) {
-  const lines=text.split(/\r?\n/);
+  const lines=withoutProbes(text).split('\n');
   return lines.filter((line,index)=>{
     const match=/^(\s+)EZ_ISOLATION: \$\{EZ_ISOLATION:-\}\s*$/.exec(line);
     return !(match&&!env.EZ_ISOLATION?.trim()&&lines[index-1]?.trim()==='EZ_AGENT_PURPOSE_FILE: /run/agent-purpose.md');
