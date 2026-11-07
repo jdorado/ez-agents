@@ -344,16 +344,21 @@ export class RunStore {
     return queued.find(run => !run.taskId && !run.scheduled) ?? queued.find(run => !run.taskId) ?? queued[0]
   }
 
-  async deliveryStatus(): Promise<{ failed: number; unknown: number }> {
-    let failed = 0, unknown = 0
+  // createdAt of each failed (outcome known) and unconfirmed (outcome unknown)
+  // send, oldest first. A claimed but unsettled send is awaiting confirmation,
+  // exactly like a failed send with an unknown outcome.
+  deliveryProblems(): { failed: string[]; unknown: string[] } {
+    const failed: string[] = [], unknown: string[] = []
     for (const item of outboxFor(this.controlDir).values()) {
-      // A claimed but unsettled send is awaiting confirmation, exactly like a
-      // failed send with an unknown outcome.
-      if (item.state === 'sending') unknown++
-      else if (item.state === 'failed' && item.deliveryUnknown) unknown++
-      else if (item.state === 'failed') failed++
+      if (item.state === 'sending' || (item.state === 'failed' && item.deliveryUnknown)) unknown.push(item.createdAt)
+      else if (item.state === 'failed') failed.push(item.createdAt)
     }
-    return { failed, unknown }
+    return { failed: failed.sort(), unknown: unknown.sort() }
+  }
+
+  async deliveryStatus(): Promise<{ failed: number; unknown: number }> {
+    const { failed, unknown } = this.deliveryProblems()
+    return { failed: failed.length, unknown: unknown.length }
   }
 
   private writeOutboxItem(item: OutboxItem): OutboxItem {
