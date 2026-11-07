@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { parseEnv } from 'node:util';
 import { callDeliverySocket } from './delivery-socket-client.mjs';
+import { rcVersion } from './updates/artifact.mjs';
 import { ledgerOverlayName, ledgerOverlayYaml } from './ledger-endpoint.mjs';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -131,7 +132,7 @@ async function fingerprintOf(source,invoke) {
 // Source-checkout builds are RCs. The reviewed commit is the only SHA that may
 // label an installable image, so a dirty tree can never become one and /status
 // never falls back to the bare package version on a deployment.
-export const rcLabel = /^\d+\.\d+\.\d+-beta\.\d+\.rc\.[1-9]\d*$/;
+export const rcLabel = rcVersion;
 async function buildIdentity(source,label,invoke) {
   const git=async args=>{try{return await invoke('git',['-C',source,...args]);}catch{return undefined;}};
   // The package root itself must be the checkout root; a tarball unpacked
@@ -142,8 +143,8 @@ async function buildIdentity(source,label,invoke) {
     if(label!==undefined)throw Error('--label requires a git checkout so the RC pins the reviewed commit');
     return {};
   }
-  if(label===undefined)throw Error('A source checkout requires --label X.Y.Z-beta.N.rc.M; commit, push and open the PR first');
-  if(!rcLabel.test(label))throw Error('RC label must look like X.Y.Z-beta.N.rc.M');
+  if(label===undefined)throw Error('A source checkout requires --label 0.N.0-rc.M (or legacy X.Y.Z-beta.N.rc.M); commit, push and open the PR first');
+  if(!rcLabel.test(label))throw Error('RC label must look like 0.N.0-rc.M (or legacy X.Y.Z-beta.N.rc.M)');
   if((await git(['status','--porcelain']))!=='')throw Error('Commit the reviewed source before an RC build; uncommitted work cannot be installed as an RC');
   const sha=await git(['rev-parse','HEAD']);
   if(!/^[a-f0-9]{40}$/.test(sha||''))throw Error('RC builds require the reviewed commit SHA');
@@ -177,7 +178,7 @@ export async function build({home=defaultHome(),source=root,label},invoke=run) {
 }
 export async function main(args) {
   const [action,...rest]=args;const options={};
-  if(!action||action==='--help'){console.log(JSON.stringify({commands:['preflight --executor <name-or-absolute-path> [--home PATH]','build [--home PATH] [--label X.Y.Z-beta.N.rc.M]','migrate-ledger --deployment PATH','status --deployment PATH'],note:'Source checkouts build RCs only: commit and open the PR first, then pass the next --label. migrate-ledger adds the loopback host endpoint to an existing host-capable deployment. Host prerequisites and main-agent diagnostics only; initialize an empty registry and verify Telegram before asking the installed agent to add plugins.'}));return;}
+  if(!action||action==='--help'){console.log(JSON.stringify({commands:['preflight --executor <name-or-absolute-path> [--home PATH]','build [--home PATH] [--label 0.N.0-rc.M]','migrate-ledger --deployment PATH','status --deployment PATH'],note:'Source checkouts build RCs only: commit and open the PR first, then pass the next --label. migrate-ledger adds the loopback host endpoint to an existing host-capable deployment. Host prerequisites and main-agent diagnostics only; initialize an empty registry and verify Telegram before asking the installed agent to add plugins.'}));return;}
   for(let i=0;i<rest.length;i+=2){if(!['--home','--executor','--deployment','--label'].includes(rest[i])||!rest[i+1]||Object.hasOwn(options,rest[i].slice(2)))throw Error('Invalid arguments');options[rest[i].slice(2)]=rest[i+1];}
   const allowed={preflight:['home','executor'],build:['home','label'],'migrate-ledger':['deployment'],status:['deployment']};if(!allowed[action]||Object.keys(options).some(k=>!allowed[action].includes(k)))throw Error('Invalid action/options');
   const result=action==='preflight'?await preflight(options):action==='build'?await build(options):action==='migrate-ledger'?await migrateLedger(options):await installationStatus(options.deployment);console.log(JSON.stringify(result));if(result.ok===false)process.exitCode=1;

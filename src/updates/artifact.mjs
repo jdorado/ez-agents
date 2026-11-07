@@ -21,9 +21,22 @@ export function newer(a,b) {
   }
   return false;
 }
+// Release counter: `0.N.0` (and its `-rc.M` candidates), where N counts releases, and the legacy `0.1.0-beta.N` line.
+// Both sort by plain SemVer: every `0.N.0` is above every `0.1.0-beta.*`, and `0.N.0-rc.M` is below `0.N.0`.
+const counter=({numbers:[major,,patch]})=>major===0&&patch===0;
+export const nextRelease=value=>{
+  const beta=/^(.*-beta\.)(\d+)$/.exec(value),release=/^0\.([1-9]\d*)\.0$/.exec(value);
+  if(beta)return `${beta[1]}${Number(beta[2])+1}`;
+  if(release)return `0.${Number(release[1])+1}.0`;
+  throw Error(`Cannot number a release after ${value}`);
+};
+// Candidate labels for source-checkout builds and local QA: legacy `X.Y.Z-beta.N.rc.M` or `0.N.0-rc.M`.
+export const rcVersion=/^(?:\d+\.\d+\.\d+-beta\.\d+\.rc\.[1-9]\d*|0\.[1-9]\d*\.0-rc\.[1-9]\d*)$/;
+// Before 1.0 a minor bump marks a breaking change, except between release-counter versions, where every release bumps it.
 export function compatible(a,b) {
-  const x=version(a).numbers,y=version(b).numbers;
-  return x[0]===y[0]&&(x[0]!==0||x[1]===y[1]);
+  const x=version(a),y=version(b);
+  if(counter(x)&&counter(y))return true;
+  return x.numbers[0]===y.numbers[0]&&(x.numbers[0]!==0||x.numbers[1]===y.numbers[1]);
 }
 export function releaseContract(pkg, kind) {
   const r=pkg.ezRelease;

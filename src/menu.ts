@@ -71,7 +71,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       if (host) await validateSelection(preset, await catalog(), async name => (await catalog()).some(model => model.cli === name))
       else {
         const detected = await discoverDefaults(workspace, { codexHome, claudeHome })
-        if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. Refresh available AIs and select the updated choice.')
+        if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. Tap ↻ Refresh in Choose AI and select the updated choice.')
       }
     } else await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
   }
@@ -93,7 +93,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     if (!state) throw new Error('AI settings not initialized')
     const current = state.presets.find((p) => p.id === state.selectedId)!
     const fresh = !sameEngine(current, preset) || presetProvider(current) !== presetProvider(preset) || Boolean(session && !session.cli)
-    if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Refresh available AIs before trying again.')
+    if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Tap ↻ Refresh in Choose AI before trying again.')
     if (fresh) await closeSession?.(session)
     return { preset, fresh }
   }
