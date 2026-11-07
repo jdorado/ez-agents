@@ -341,7 +341,9 @@ Telegram `/usage` (owner only, no inference turn) shows each login's provider
 limits on demand: percent left and reset time per window, plus any saved quota
 block. The reply is Telegram HTML: one bold title per login and one monospace
 block of windows, sorted worst first with a status icon (🔴 blocked or under 20%
-left, ⚪ unavailable, 🟡 under 50%, 🟢 ok) and a summary line on top. In private owner chats, Claude profiles with a saved browser-login
+left, 🟠 logged out, ⚪ unavailable, 🟡 under 50%, 🟢 ok) and a summary line on top.
+Reset times are UTC unless a row names another zone. A default login with no
+credential at all is not listed; its CLI is named in a final `Hidden (no login)` line. In private owner chats, Claude profiles with a saved browser-login
 email and Codex ChatGPT logins show the email beside the profile name, even if
 usage is unavailable. Group reports, API-key logins and profiles bound to
 setup tokens use the profile name alone.
@@ -351,7 +353,10 @@ or prints the credential. Codex limits and email come from that home's
 client command that spends no model tokens and prints the session (5h) and
 weekly percentages with their reset times. A login the client cannot report
 for (for example an API-key login) shows `no limit data returned` or a short
-unavailable status. The default logins of a host-capable agent are the host's
+unavailable status. A login the client reports as logged out is marked
+`Logged out · needs a new login` without asking it for limits. A profile bound to a
+setup token is tagged `token login`; a token can only run models, so its limits
+are read with the home's own browser login when it keeps one, else shown as not readable. The default logins of a host-capable agent are the host's
 own login, which the relay container may not be able to read, so those lines can
 show an error; isolated agents and named profiles keep their login in their own
 home and are expected to be read from there. Logins are read at the same time, but the bot
