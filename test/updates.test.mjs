@@ -7,12 +7,11 @@ import { gzipSync } from 'node:zlib';
 import { spawn, execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { promisify } from 'node:util';
-import { extract, digest, version, newer, compatible } from '../src/updates/artifact.mjs';
+import { extract, digest, version, newer, compatible, nextRelease, rcVersion } from '../src/updates/artifact.mjs';
 import { prepare, submit, command, read, jobPath, eligibility, jobs, cleanupStaleBackups, cleanupStaleImages, reviewedPluginDeploymentMigration } from '../src/updates/control.mjs';
 import { perform, environment, packageManager, execute, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
 import { atomic, snapshot, compose, prepareCommand } from '../src/plugins/manager.mjs';
 import { bindUpdates } from '../src/updates/binding.mjs';
-import { TOOLS_LINE } from '../src/tools-line.mjs';
 import { status as runtimeStatus } from '../src/updates/status.mjs';
 import { idle, executorBindingArchive, executorVolumes, lockOwnerAlive, providerEnvironment, queueAutomatic, waitForHostHeartbeat, withIdleUpgrade, withUpgrade } from '../src/updates/supervisor.mjs';
 const exec=promisify(execFile);
@@ -64,8 +63,8 @@ async function fixture(t,kind='main') {
  const deployment=path.join(root,'agent'),home=path.join(deployment,'tools'),old=path.join(root,'old'),source=path.join(root,'candidate');
  for(const d of [home,old,source,path.join(home,'bin'),path.join(home,'updates'),path.join(deployment,'mind'),path.join(deployment,'control')])await fs.mkdir(d,{recursive:true});
  const pkg={name:'@ez-test/example',version:'0.1.0',packageManager:'pnpm@10.30.3',type:'module',files:['bin','src','docker','compose.yaml','compose.whatsapp.yaml','.dockerignore','Dockerfile'],bin:{example:'bin/example.mjs'},ezRelease:contract(kind)};
- const guidance=text=>`export async function bindToolDiscovery(_home,workspace){const fs=await import('node:fs/promises');await fs.writeFile(workspace+'/AGENTS.md',${JSON.stringify(text+'\n')});}\n`;
- const files={'package.json':JSON.stringify(pkg),'compose.yaml':'services: {}\n','compose.whatsapp.yaml':'services: {}\n','.dockerignore':'','Dockerfile':'FROM scratch AS runtime','docker/pnpm-lock.yaml':'lockfileVersion: 9.0\n','src/host-executor.ts':'','src/plugins/manager.mjs':guidance('old guidance'),'bin/example.mjs':'#!/usr/bin/env node\nconsole.log("example")','bin/ezenciel-agents.mjs':'console.log("0.1.1")'};
+ const stub=text=>`export const revision=${JSON.stringify(text)};\n`;
+ const files={'package.json':JSON.stringify(pkg),'compose.yaml':'services: {}\n','compose.whatsapp.yaml':'services: {}\n','.dockerignore':'','Dockerfile':'FROM scratch AS runtime','docker/pnpm-lock.yaml':'lockfileVersion: 9.0\n','src/host-executor.ts':'','src/control-state.ts':'export class ControlStore{async validate(){}}\n','src/plugins/manager.mjs':stub('old'),'bin/example.mjs':'#!/usr/bin/env node\nconsole.log("example")','bin/ezenciel-agents.mjs':'console.log("0.1.1")'};
  let record,target='main';
  if(kind==='plugin') {
   target='sample';files['ez-plugin.json']=JSON.stringify({schemaVersion:1,id:'sample',version:pkg.version,commands:{sample:{executable:'bin/example.mjs',args:[]}},skills:[]});
@@ -85,7 +84,7 @@ async function fixture(t,kind='main') {
   await atomic(record.compose,await compose(config,record,{},home));
  }
  await atomic(path.join(home,'registry.json'),{schemaVersion:1,owner:home,plugins:record?{sample:record}:{},commands:record?{sample:'sample'}:{}});
- await fs.cp(old,source,{recursive:true});pkg.version='0.1.1';await atomic(path.join(source,'package.json'),pkg);await fs.writeFile(path.join(source,'src/plugins/manager.mjs'),guidance('candidate guidance'));
+ await fs.cp(old,source,{recursive:true});pkg.version='0.1.1';await atomic(path.join(source,'package.json'),pkg);await fs.writeFile(path.join(source,'src/plugins/manager.mjs'),stub('candidate'));
  if(kind==='plugin'){const m=await read(path.join(source,'ez-plugin.json'));m.version=pkg.version;await atomic(path.join(source,'ez-plugin.json'),m);}
  const pack=async()=>{const entries=[];async function walk(dir,prefix=''){for(const e of await fs.readdir(dir,{withFileTypes:true})){const rel=prefix+e.name;if(e.isDirectory())await walk(path.join(dir,e.name),rel+'/');else entries.push(['package/'+rel,await fs.readFile(path.join(dir,e.name))]);}}await walk(source);const file=path.join(root,'candidate.tgz');await fs.writeFile(file,tar(entries));return file;};
  return {root,home,old,source,agent,config,record,target,pack};
@@ -113,11 +112,15 @@ test('root preparation leaves private plugin updates readable by the installer',
  const script=`const fs=require('fs');fs.readFileSync(${JSON.stringify(path.join(dir,'job.json'))});fs.readFileSync(${JSON.stringify(path.join(dir,'candidate.tgz'))});`;
  await exec('setpriv',['--reuid=20001','--regid=20002','--clear-groups','--no-new-privs',process.execPath,'-e',script]);
 });
-function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},latest='0.160.0'}={}) {
+function runtime(f,{fail,stopped=false,buildArgs={CODEX_CLI_VERSION:'0.156.1'},latest='0.160.0',controlState='OK'}={}) {
  const calls=[],lookups=[];let failed=false,brokerImage='sha256:'+'a'.repeat(64);
  const execute=async(command,args,opts)=>{
   calls.push([command,...args]);if(args.includes('view')){lookups.push(opts?.cwd);return JSON.stringify(latest);}if(fail&&!failed&&fail(command,args)){failed=true;throw Error('Synthetic failure');}
   if(args.at(-1)==='--version')return '10.30.3';
+  if(args.some(arg=>arg.includes('EZ_CONTROL_STATE_OK'))) {
+   if(!args.at(-1).includes(JSON.stringify(f.agent.controlDir)))throw Error('Control-state probe targeted the wrong directory');
+   return `EZ_CONTROL_STATE_${controlState}\n`;
+  }
   if(args.includes('config'))return JSON.stringify({services:{relay:{build:{args:buildArgs}}}});
   if(args.includes('ps'))return stopped?'':'a'.repeat(64);
   if(args.some(arg=>arg.includes("const fs=require('fs'),crypto=require('crypto')")))return digest(await fs.readFile(path.join(f.config.deploymentDir,'host-executor.json')));
@@ -200,7 +203,22 @@ test('isolated plugin status uses bundled Compose v1 and inspect readback',async
 test('SemVer ordering and compatibility reject ranges, malformed values and downgrades',()=>{
  for(const s of ['latest','../1','1.0','01.0.0','1.0.0-01'])assert.throws(()=>version(s));
  assert(newer('0.1.0-beta.10','0.1.0-beta.2'));assert(newer('0.1.0','0.1.0-beta.10'));assert(!newer('0.1.0-beta.2','0.1.0'));assert(!newer('1.0.0','1.0.0'));
- assert(compatible('0.1.9','0.1.0'));assert(!compatible('0.2.0','0.1.0'));assert(compatible('1.9.0','1.0.0'));assert(!compatible('2.0.0','1.0.0'));
+ assert(compatible('0.1.9','0.1.0'));assert(!compatible('0.2.1','0.1.0'));assert(compatible('1.9.0','1.0.0'));assert(!compatible('2.0.0','1.0.0'));
+});
+test('release-counter 0.N.0 versions order above the legacy beta line and below their own release',()=>{
+ // Ascending SemVer order, legacy private builds included.
+ const order=['0.1.0-beta.1','0.1.0-beta.69','0.1.0-beta.69.compat.1','0.1.0-beta.69.qa.1','0.1.0-beta.69.rc.2','0.1.0-beta.70','0.1.0-beta.999.rc.9','0.70.0-rc.1','0.70.0-rc.2','0.70.0-rc.10','0.70.0','0.71.0-rc.1','0.71.0'];
+ for(const [i,a] of order.entries())for(const [j,b] of order.entries())assert.equal(newer(a,b),i>j,`${a} newer than ${b}`);
+ // Counter releases are compatible with each other and with the legacy line; other pre-1.0 packages keep the minor rule.
+ for(const [a,b] of [['0.71.0','0.1.0-beta.70'],['0.70.0','0.1.0-beta.69.rc.2'],['0.71.0','0.70.0'],['0.71.0','0.70.0-rc.2'],['0.70.0-rc.2','0.1.0-beta.69'],['0.1.0-beta.70','0.1.0-beta.69']])assert(compatible(a,b),`${a} compatible with ${b}`);
+ for(const [a,b] of [['0.2.0','0.1.1'],['0.2.1','0.1.0'],['0.71.1','0.70.0'],['1.0.0','0.70.0'],['2.0.0','1.9.0']])assert(!compatible(a,b),`${a} incompatible with ${b}`);
+ assert(compatible('0.1.2','0.1.1'));assert(compatible('1.2.0','1.1.0'));
+});
+test('release numbering and candidate labels accept the counter scheme and keep the legacy one',()=>{
+ assert.equal(nextRelease('0.1.0-beta.69'),'0.1.0-beta.70');assert.equal(nextRelease('0.70.0'),'0.71.0');
+ for(const s of ['0.1.0-beta.69.rc.2','0.70.0-rc.1','0.70.1','1.2.3','latest'])assert.throws(()=>nextRelease(s),/Cannot number/);
+ for(const s of ['0.1.0-beta.36.rc.2','0.71.0-rc.1','0.71.0-rc.12'])assert(rcVersion.test(s),s);
+ for(const s of ['0.71.0','0.1.0-beta.36','0.71.0-rc.0','0.71.0-rc.01','0.71.1-rc.1','1.2.0-rc.1','0.0.0-rc.1','0.071.0-rc.1','0.71.0-beta.1','0.71.0-rc.1.compat.1','0.71.0-qa.1'])assert(!rcVersion.test(s),s);
 });
 test('archive admission rejects traversal, links, special files, duplicates and corrupt bytes before writes',async t=>{
  const f=await fixture(t);
@@ -266,6 +284,27 @@ configs:
  await fs.rm(path.join(f.config.deploymentDir,'docker.env'));
  const job=await prepare(f.home,'main',{file:await f.pack()});assert.equal(job.deploymentMigration.id,'legacy-runtime-v1');
 });
+test('probe and comment edits pass the deployment gate; anything outside a healthcheck still needs a migration',async t=>{
+ const real=await fs.readFile(new URL('../compose.yaml',import.meta.url),'utf8');
+ // Swap whatever probe the broker has today for a different one.
+ const brokerProbe=/(  plugin-broker:\n[\s\S]*?\n    healthcheck:\n(?:      #.*\n)*)      test: .*\n/;
+ assert.match(real,brokerProbe);
+ const probe=real.replace(brokerProbe,`$1      # A different probe.\n      test: [CMD, node, -e, "process.exit(0)"]\n`).replace('      interval: 2s\n','      interval: 2s\n      start_interval: 1s\n\n');
+ const cases=[
+  [probe,true],
+  [real.replace('    # Init must forward','    # Reworded: init must forward'),true],
+  [probe.replace('      retries: 30\n','      retries: 30\n    privileged: true\n'),false],
+  [real.replace('    healthcheck:\n      test: [CMD, node, /app/docker/healthcheck.mjs]','    healthcheck:\n      test: [CMD, node, /app/docker/healthcheck.mjs]\n    cap_add: [SYS_ADMIN]'),false],
+  [real.replace('configs:\n','  healthcheck:\n    image: alpine\n    privileged: true\nconfigs:\n'),false],
+  [real.replace('      retries: 30\n','      retries: 30\r    privileged: true\n'),false],
+ ];
+ for(const [next,admitted] of cases) {
+  const f=await fixture(t);
+  await fs.writeFile(path.join(f.old,'compose.yaml'),real);await fs.writeFile(path.join(f.source,'compose.yaml'),next);
+  if(admitted)assert.equal((await prepare(f.home,'main',{file:await f.pack()})).deploymentMigration.id,'legacy-runtime-v1');
+  else await assert.rejects(eligibility(f.home,'main',f.source,false),/Runtime deployment changed/);
+ }
+});
 test('compatibility bridge hands off to the published beta.34 release',async t=>{
  const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),candidate=await read(path.join(f.source,'package.json'));
  await atomic(path.join(f.old,'package.json'),{...prior,version:'0.1.0-beta.34.compat.1'});
@@ -289,6 +328,44 @@ test('private RC and QA builds graduate only to their matching beta release',asy
   await atomic(path.join(f.source,'package.json'),{...candidate,version:'0.1.0-beta.45'});
   await assert.rejects(eligibility(f.home,'main',f.source,false),/newer/);
  }
+});
+test('old and new version families interoperate in upgrade eligibility, never moving backwards',async t=>{
+ const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),candidate=await read(path.join(f.source,'package.json'));
+ const attempt=async(installed,available,automatic)=>{
+  await atomic(path.join(f.old,'package.json'),{...prior,version:installed});
+  await atomic(path.join(f.source,'package.json'),{...candidate,version:available});
+  return eligibility(f.home,'main',f.source,automatic);
+ };
+ for(const automatic of [true,false]) {
+  for(const [installed,available] of [
+   ['0.1.0-beta.69','0.71.0'],['0.1.0-beta.69.rc.2','0.71.0'],['0.1.0-beta.99.compat.1','0.70.0'],
+   ['0.1.0-beta.69.rc.2','0.1.0-beta.69'],['0.1.0-beta.70.qa.1','0.1.0-beta.70'],['0.1.0-beta.69','0.1.0-beta.70'],
+   ['0.70.0-rc.2','0.70.0'],['0.70.0-rc.2','0.70.0-rc.3'],['0.70.0-rc.2','0.71.0'],['0.70.0','0.71.0']])
+   assert.equal((await attempt(installed,available,automatic)).pkg.version,available,`${installed} -> ${available} (automatic ${automatic})`);
+  for(const [installed,available] of [
+   ['0.70.0','0.1.0-beta.999'],['0.70.0','0.70.0-rc.9'],['0.70.0','0.70.0'],['0.70.0-rc.3','0.69.0'],['0.70.0-rc.3','0.1.0-beta.70'],
+   ['0.70.0-rc.3','0.70.0-rc.2'],['0.1.0-beta.70.rc.1','0.1.0-beta.69'],['0.1.0-beta.70.rc.1','0.1.0-beta.70.rc.1']])
+   await assert.rejects(attempt(installed,available,automatic),/newer/,`${installed} -> ${available} (automatic ${automatic})`);
+ }
+});
+test('update checks and policies discover counter releases next to legacy versions',async t=>{
+ const f=await fixture(t),prior=await read(path.join(f.old,'package.json')),name=prior.name;
+ const original=globalThis.fetch;t.after(()=>globalThis.fetch=original);
+ const registry={};
+ globalThis.fetch=async()=>new Response(JSON.stringify({name,'dist-tags':registry.tags,versions:Object.fromEntries(Object.keys(registry.versions).map(v=>[v,{name,version:v}]))}));
+ for(const [installed,latest,expected] of [['0.1.0-beta.69','0.71.0',true],['0.1.0-beta.69.rc.2','0.71.0',true],['0.1.0-beta.69.rc.2','0.1.0-beta.69',true],['0.70.0-rc.2','0.70.0',true],['0.70.0-rc.2','0.69.0',false],['0.70.0','0.1.0-beta.99',false]]) {
+  await atomic(path.join(f.old,'package.json'),{...prior,version:installed});
+  registry.tags={latest};registry.versions={[latest]:1};
+  const [main]=await command(f.home,['check']);
+  assert.equal(main.available,latest);assert.equal(main.newer,expected,`${installed} with latest ${latest}`);
+ }
+ const {registryCandidate}=await import('../src/updates/artifact.mjs');
+ registry.tags={latest:'0.71.0',beta:'0.1.0-beta.13'};registry.versions={'0.1.0-beta.13':1,'0.1.0-beta.69':1,'0.71.0-rc.1':1,'0.71.0':1};
+ assert.equal((await registryCandidate(name,'beta')).version,'0.71.0');
+ // A stable-only policy excludes every prerelease, so legacy betas and counter candidates, but follows 0.N.0 releases.
+ assert.equal((await registryCandidate(name,'stable')).version,'0.71.0');
+ delete registry.versions['0.71.0'];registry.tags={latest:'0.71.0-rc.1'};
+ assert.equal(await registryCandidate(name,'stable'),null);
 });
 test('reviewed Library beta14 command migration is exact and fail-closed',()=>{
  const manifest=(version,document)=>({schemaVersion:1,id:'library',version,description:'library',commands:{library:{executable:'bin/ez-library.mjs',args:[]},'library-query':{executable:'bin/ez-library.mjs',args:[],channelQuery:true},...(document?{'library-document':{executable:'bin/ez-library.mjs',args:[],channelQuery:true}}:{})},skills:['skills/library/SKILL.md']});
@@ -320,16 +397,17 @@ test('apply queues while a plugin call holds its lease; activation drains it fir
  assert.equal((await queued(f)).status,'queued');
  await fs.rm(path.join(directory,'00000000-0000-4000-8000-000000000002.json'));
 });
-test('main activation and rollback retire the tools footer and never write guidance',async t=>{
- const footer='Owner mandate\n\n<!-- ez tools: begin -->\nUse `ez`.\n<!-- ez tools: end -->\n';
+test('main activation and rollback never rewrite the agent AGENTS.md: old marked blocks, mode and inode stay',async t=>{
+ const text='Owner mandate\n\n<!-- ez tools: begin -->\nUse `ez`.\n<!-- ez tools: end -->\n<!-- ez shared guidance: begin -->\nold\n<!-- ez shared guidance: end -->\n';
  for(const outcome of ['completed','rolled-back']) {
-  const f=await fixture(t),instructions=path.join(f.agent.workspace,'AGENTS.md');await fs.writeFile(instructions,footer);
+  const f=await fixture(t),instructions=path.join(f.agent.workspace,'AGENTS.md');await fs.writeFile(instructions,text);await fs.chmod(instructions,0o660);
+  const before=await fs.stat(instructions);
   await bindUpdates(f.home,path.join(f.config.deploymentDir,'host-executor.json'),f.old);
-  const retired=await fs.readFile(instructions,'utf8');
-  assert.equal(retired,'Owner mandate\n\n'+TOOLS_LINE+'\n');
   const options=outcome==='rolled-back'?{fail:(_command,args)=>args.includes('up')}:undefined;
   assert.equal((await perform(f.home,await queued(f),runtime(f,options))).status,outcome);
-  assert.equal(await fs.readFile(instructions,'utf8'),retired);
+  const after=await fs.stat(instructions);
+  assert.equal(await fs.readFile(instructions,'utf8'),text);
+  assert.equal(after.ino,before.ino);assert.equal(after.mode&0o777,0o660);
  }
 });
 test('latest overrides stale deployment pins and changing latest changes image bindings',async t=>{
@@ -398,6 +476,17 @@ test('failed preparation never stops runtime; failed activation rolls back code 
   assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
   if(stage==='build')assert(!r.calls.some(c=>c[0]==='stopHost'));
   else assert((await fs.readFile(path.join(f.config.deploymentDir,'docker.env'),'utf8')).includes('sha256:'+'a'.repeat(64)));
+ }
+});
+test('a candidate that cannot read the control state fails before anything stops',async t=>{
+ for(const code of ['UNSUPPORTED','UNREADABLE']) {
+  const f=await fixture(t),job=await queued(f),r=runtime(f,{controlState:code});
+  const result=await perform(f.home,job,r);
+  assert.equal(result.status,'failed');
+  assert.match(result.error,new RegExp(`control-state=${code.toLowerCase()}`));
+  assert.equal(result.rollback,undefined);
+  assert(!r.calls.some(c=>c[0]==='stopHost'||c[0]==='startHost'||(c[0]==='docker'&&c[1]==='build')),'nothing is built or stopped');
+  assert.equal((await read(path.join(f.home,'config.json'))).packageRoot,f.old);
  }
 });
 test('main health-gate rollback retains only the recognized sanitized predicate',async t=>{

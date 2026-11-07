@@ -1,8 +1,14 @@
 # Agent-owned software upgrades
 
 Private `beta.N.rc.M` and `beta.N.qa.M` candidates may upgrade to the matching
-published `beta.N`, despite SemVer's prerelease ordering. All identity, integrity,
-deployment and owner-policy checks still apply; older betas remain rejected.
+published `beta.N`, despite SemVer's prerelease ordering. Release-counter versions
+(`0.N.0`, candidates `0.N.0-rc.M`) need no such rule: `0.N.0-rc.M` sorts below
+`0.N.0`, and every `0.N.0` is above every `0.1.0-beta.*`. Automatic policy treats
+moves between counter releases and the legacy beta line as compatible. All
+identity, integrity, deployment and owner-policy checks still apply; older
+versions remain rejected. Updaters in `0.1.0-beta.69` and older refuse an
+automatic update to `0.N.0` (explicit `prepare` and `apply` work), so the first
+release with this scheme is `0.1.0-beta.70` (see [releasing](releasing.md#release-numbering)).
 
 For an application's independently deployed frontend, backend or embedded gateway,
 see [managed applications](managed-applications.md). They use their existing
@@ -72,6 +78,18 @@ Point the host service and relay Compose source/image at the candidate, then
 restart and verify. Do not recreate the agent or its registry. Subsequent
 compatible upgrades are agent-owned. Noncanonical/multi-agent host configuration
 files require migration to one canonical deployment per service first.
+
+## Control-state compatibility check
+
+Before the image build and before any service stops, the supervisor runs the
+candidate's own control-state reader against the agent's `control-state.json`,
+read-only (no lock, no write). A candidate that cannot read it fails the job as
+`failed`, not `rolled-back`, with `control-state=unsupported` (shape rejected,
+for example an engine the candidate has retired) or `control-state=unreadable`
+(missing permission or invalid JSON); the receipt never contains state text.
+Nothing was stopped, so no recovery is needed. Repair the state, then prepare
+and apply a new job. Core never rewrites control state. The check runs in the
+installed supervisor, so it protects upgrades from the release that ships it.
 
 ## Recovering an isolated-executor or supervisor admission defect
 
@@ -185,7 +203,7 @@ Examples are candidate version placeholders, not a claim of published versions.
 unsafe archive entries, and records identity/version/hash. It does not stop a
 service. Local candidates never qualify for `--automatic`; an explicit request
 is required. Stable automation excludes prereleases, major changes and 0.x minor
-changes. Beta policy permits compatible prereleases. Downgrades are rejected;
+changes, except moves between release-counter `0.N.0` versions. Beta policy permits compatible prereleases. Downgrades are rejected;
 rollback is a recovery operation for the previous installation only.
 
 `apply` records one durable queued job. **For a core upgrade from a runtime without the handoff contract, the agent must finish its turn after queuing it** so the supervisor can drain native work. New compatible runtimes can swap while native work continues. A plugin upgrade can complete while that turn continues; only plugin-call admission is held during activation. Calls already executing finish first.
@@ -299,23 +317,19 @@ WhatsApp fixture. The smoke uses synthetic transport only. VM installation,
 agent-led upgrades, restart and real account acceptance remain separate QA gates.
 
 Beta policy discovers the newer of npm latest and the legacy beta tag. Stable-only
-policy selects non-deprecated stable versions, even when latest is a prerelease.
+policy selects non-deprecated versions without a prerelease tag, even when latest
+is a prerelease: legacy betas and `0.N.0-rc.M` candidates are excluded, while a
+`0.N.0` release is followed.
 No eligible version is reported as available:null with newer:false. Older installed
 updaters need an exact-version core update to adopt this discovery behavior.
 
 ## Operating-agent instructions
 
-Setup and the main upgrade step strip any obsolete `<!-- ez shared guidance -->`
-handbook from workspace `AGENTS.md` (and existing `AGENTS.override.md`).
-Personal text outside that block is preserved byte-for-byte. Do not reinsert
-coding, KISS, contribution or repair loops into operating minds.
-
-Ez writes no managed guidance after the initial workspace seed. Update binding
-(init with a host config, `enable-updates`, upgrade and rollback) replaces a former
-`<!-- ez tools -->` footer once with the seeded static line
-"Tools: run `ez tools list --details`; each plugin's `--help` gives usage." and
-otherwise leaves `AGENTS.md` untouched. Malformed markers and symlinks fail visibly
-rather than overwriting personal work. Inventory and usage are generated on read.
+Ez writes workspace `AGENTS.md` only as the initial seed. Setup, update binding
+(init with a host config, `enable-updates`, upgrade and rollback) and upgrades never
+rewrite it afterwards, so its content, mode and ACL stay as the owner and agent left
+them. Do not reinsert coding, KISS, contribution or repair loops into operating
+minds. Inventory and usage are generated on read.
 
 Codex, Grok, OpenCode and Claude Code discover workspace `AGENTS.md` natively
 (Claude Code loads it when the workspace has no `CLAUDE.md`). Fresh and resumed owner input is literal; ez does

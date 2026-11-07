@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { installAgentGuidance } from '../src/agent-guidance.js'
 import { taskArguments } from '../src/task-executor.js'
 import { initializeWorkspace } from '../src/workspace.js'
 
@@ -42,25 +41,17 @@ test('restricted task arguments retain bounded permissions and do not receive ow
   assert.ok(!args.some((arg) => arg.includes('# Shared Ez guidance')))
 })
 
-test('upgrade strips the obsolete shared handbook and preserves personal instructions', async t => {
-  const root = path.join(tmpdir(), `ez-guidance-upgrade-${randomUUID()}`)
+test('workspace initialization never rewrites an existing AGENTS.md: old marked blocks, mode and inode stay', async t => {
+  const root = path.join(tmpdir(), `ez-guidance-untouched-${randomUUID()}`)
   await mkdir(root); t.after(() => rm(root, { recursive: true, force: true }))
-  const personal = '# Identity\r\nPersonal instructions and trailing spaces.  \r\n'
-  for (const name of ['AGENTS.md', 'AGENTS.override.md']) {
-    await writeFile(path.join(root, name), personal + '<!-- ez shared guidance: begin -->\nold installed defaults\nKISS coding and PR loops\n<!-- ez shared guidance: end -->\nTail stays.')
-  }
-  await installAgentGuidance(root)
-  for (const name of ['AGENTS.md', 'AGENTS.override.md']) {
-    const result = await readFile(path.join(root, name), 'utf8')
-    assert.ok(result.startsWith(personal)); assert.ok(result.endsWith('\nTail stays.'))
-    assert.ok(!result.includes('ez shared guidance'))
-    assert.ok(!result.includes('old installed defaults'))
-    assert.ok(!result.includes('KISS coding'))
-  }
-  await installAgentGuidance(root)
-  assert.equal(await readFile(path.join(root, 'AGENTS.md'), 'utf8'), personal + '\nTail stays.')
-  const broken = '<!-- ez shared guidance: begin -->\nMy unfinished edit'
-  await writeFile(path.join(root, 'AGENTS.md'), broken)
-  await assert.rejects(installAgentGuidance(root), /Malformed/)
-  assert.equal(await readFile(path.join(root, 'AGENTS.md'), 'utf8'), broken)
+  const file = path.join(root, 'AGENTS.md')
+  const text = '# Identity\nPersonal.\n<!-- ez shared guidance: begin -->\nold block\n<!-- ez shared guidance: end -->\n<!-- ez tools: begin -->\nold footer\n<!-- ez tools: end -->\n'
+  await writeFile(file, text)
+  await chmod(file, 0o660)
+  const before = await stat(file)
+  await initializeWorkspace(root)
+  const after = await stat(file)
+  assert.equal(await readFile(file, 'utf8'), text)
+  assert.equal(after.ino, before.ino)
+  assert.equal(after.mode & 0o777, 0o660)
 })

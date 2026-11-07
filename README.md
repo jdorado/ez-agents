@@ -156,8 +156,8 @@ claim. The source branch may contain changes newer than the published beta, so
 inspect the supplied artifact's documentation when installing a pinned release.
 
 The npm package is `@jc_stack/ez-agents`. Approved beta publications use npm's
-`latest` distribution tag while their versions and GitHub releases remain
-prereleases. For a reproducible download, choose an exact version from
+`latest` distribution tag while their GitHub releases remain prereleases (versions
+are `0.N.0`, or legacy `0.1.0-beta.N`, below 1.0). For a reproducible download, choose an exact version from
 [GitHub prereleases](https://github.com/jdorado/ez-agents/releases) and substitute
 it for `VERSION` in `npm pack @jc_stack/ez-agents@VERSION`.
 You can also download the release's candidate tarball and verify its SHA-256
@@ -171,11 +171,17 @@ transport, with separate agent workspaces and sessions. See
 [Docker setup, state and QA](docs/docker-runtime.md).
 
 Telegram `/status` shows the running relay and host versions plus installed
-plugin versions. Its read-only **Scheduled tasks** control lists the paired
-owner's active schedules in alphabetical order, with their frequency/timezone
-and ordered CLI/login-profile/model/effort execution path (primary → fallbacks),
-next occurrence or current queued/running state, and a short preview of the
-saved invocation prompt; it never creates, changes or runs a task. The agent's `ez status` adds verified plugin
+plugin versions. It leads with a headline (🟢 idle or running, 🟡 something needs
+attention, 🔴 host transport down), then each queued or running item with its
+engine and age, what needs attention, failures from the last 24 hours and the
+system versions. Stop, cancel and retry buttons appear only when there is
+something to act on. Its read-only **Scheduled tasks** control (`/tasks`) lists
+the paired owner's active schedules in alphabetical order as one table row each:
+number, task with its running/queued/paused state, short schedule, time to the
+next run and the last result, with failed last runs and quota waits called out
+above it. `/tasks N` shows the full schedule and timezone, next and last run
+times, the ordered CLI/login-profile/model/effort path (primary → fallbacks) and
+the saved instructions. It never creates, changes or runs a task. The agent's `ez status` adds verified plugin
 runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).
 
 ## You are the installing agent
@@ -238,7 +244,7 @@ credentials, startup, and verified pairing; never present this as human homework
 | Tool | Purpose |
 |---|---|
 | `ezenciel-agents-install preflight --executor <path-or-name>` | Check prerequisites, disk and executor identity hints before setup |
-| `ezenciel-agents-install build [--label <X.Y.Z-beta.N.rc.M>]` | Build once per artifact, with a private log and duplicate-build detection; a source checkout requires the RC label and a clean reviewed commit |
+| `ezenciel-agents-install build [--label <0.N.0-rc.M>]` | Build once per artifact, with a private log and duplicate-build detection; a source checkout requires the RC label and a clean reviewed commit |
 | `ezenciel-agents-install migrate-ledger --deployment <path>` | Add the loopback host ledger endpoint to an existing host-capable deployment (idempotent; no restart) |
 | `ezenciel-agents-install status --deployment <path>` | Distinguish runtime/configuration, pairing and Telegram reply evidence |
 | `ezenciel-agents-create --register-cli <current-cli>` | Record the CLI that installs the initial package |

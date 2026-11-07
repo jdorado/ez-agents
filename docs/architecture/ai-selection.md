@@ -16,7 +16,7 @@ Batches cannot cross that boundary. The run copies that choice and invokes the
 native adapter with its exact model/effort. A later menu change cannot reroute it.
 Each named conversation saves its model and reasoning level. Switching back through
 `/chats` restores that choice and the exact native session, including after restart.
-`/ai` shows the current choice and saves changes immediately. Changing model or
+`/ai` shows the current choice; rows move a draft and Apply saves it. Changing model or
 reasoning level on the same client and provider preserves the conversation's name
 and native history; subsequent turns pass the new settings to the native engine.
 Changing client, provider or auth profile starts a separate native conversation.
@@ -83,11 +83,15 @@ catalogs, refresh by opening the native client;
 the relay does not install models, manage subscriptions or guess aliases.
 
 Setup initialization and relay startup seed one default choice per installed client.
-Choose AI shows the three most recent valid choices and installed clients, then
-the selected client's models and reasoning levels. Selecting a model and reasoning
-level applies that choice immediately. The retired Settings control points to
+Choose AI is one card that edits itself: the current choice, up to three other
+recent valid choices (one tap applies), then engine, account (only when the client
+has several logins), model and reasoning-level rows. The rows move a draft and say
+whether Apply keeps the history or starts a new conversation; Apply saves it through
+the same validation as before and the card becomes a receipt. Account and engine
+prefixes the catalog puts in model names are shown as their own rows. More than nine
+models of one login page within the model row. The retired Settings control points to
 Choose AI; application-backed channels keep these controls in their application.
-Refresh available AIs repeats default discovery. Active/default
+Refresh repeats default discovery. Active/default
 presets and queued snapshots are preserved; discovery only refreshes unused
 detected entries.
 Codex uses its native `config/read` interface; Grok reads its documented user

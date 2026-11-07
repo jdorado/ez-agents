@@ -10,7 +10,7 @@ import { ApplicationBindings } from './application-channel.js'
 import { assertId, ownsRun } from './identity.js'
 import { type AiPreset, type ExecutionChoice, isExecutionChoice, persistedPreset } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
-import { quotaCategory, quotaScope } from './setup-fallback.js'
+import { quotaCategory, quotaScope, type QuotaWait } from './setup-fallback.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { Scripts, assertScriptArgs, assertScriptId, type ScriptRunRef } from './scripts.js'
 
@@ -32,8 +32,10 @@ export type ScheduledRunSummary = {
   status: 'completed' | 'failed' | 'cancelled'
   at: string
   currentRevision: boolean
+  // First line of the already-redacted failure evidence.
+  reason?: string
 }
-export type ScheduledTaskView = Schedule & { nextAt: number | null; runState?: 'queued' | 'running'; lastRun?: ScheduledRunSummary; scriptRevision?: string }
+export type ScheduledTaskView = Schedule & { nextAt: number | null; runState?: 'queued' | 'running'; quotaWait?: QuotaWait; lastRun?: ScheduledRunSummary; scriptRevision?: string }
 export type ScheduledOrigin = { id: string; revision: string; dueAt: string; pairedAt: string; originRunId?: string }
 export const validScheduledOrigin = (v: unknown): v is ScheduledOrigin => {
   const s = v as ScheduledOrigin
@@ -150,8 +152,10 @@ export class Scheduler {
       try {
         const nextAt = s.enabled ? await this.pendingOccurrence(s) : null
         const scriptRevision = s.script ? await new Scripts(this.controlDir).get(s.script.id).then(r => r.revision, () => undefined) : undefined
-        if (!s.enabled || runState || nextAt !== null) active.push({...s,nextAt,runState,...(scriptRevision ? {scriptRevision} : {}),...(last ? {
-          lastRun: {status:last.status,at:last.endedAt ?? last.startedAt ?? last.createdAt,currentRevision:last.scheduled!.revision===s.revision},
+        const quotaWait = current.find(r => r.status === 'queued' && r.quotaWait)?.quotaWait
+        const reason = last?.status === 'failed' ? last.failure?.error.split('\n')[0].slice(0,200) : undefined
+        if (!s.enabled || runState || nextAt !== null) active.push({...s,nextAt,runState,...(quotaWait ? {quotaWait} : {}),...(scriptRevision ? {scriptRevision} : {}),...(last ? {
+          lastRun: {status:last.status,at:last.endedAt ?? last.startedAt ?? last.createdAt,currentRevision:last.scheduled!.revision===s.revision,...(reason ? {reason} : {})},
         } : {})})
       }
       catch { console.error('Unreadable schedule cursor',s.id) }
