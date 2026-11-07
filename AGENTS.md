@@ -152,7 +152,7 @@ for new integrations. Keep internal plans and private evidence outside this
 repository.
 
 Source-checkout image builds are RCs: commit and open the PR first, then
-`ezenciel-agents-install build --label X.Y.Z-beta.N.rc.M` (increasing `.rc.N`)
+`ezenciel-agents-install build --label 0.N.0-rc.M` (increasing `.rc.M`)
 from the clean reviewed commit. The build refuses a dirty checkout or a package
 tree that is not the checkout root; `/status` must show the RC tag for source
 installs.

@@ -156,8 +156,8 @@ claim. The source branch may contain changes newer than the published beta, so
 inspect the supplied artifact's documentation when installing a pinned release.
 
 The npm package is `@jc_stack/ez-agents`. Approved beta publications use npm's
-`latest` distribution tag while their versions and GitHub releases remain
-prereleases. For a reproducible download, choose an exact version from
+`latest` distribution tag while their GitHub releases remain prereleases (versions
+are `0.N.0`, or legacy `0.1.0-beta.N`, below 1.0). For a reproducible download, choose an exact version from
 [GitHub prereleases](https://github.com/jdorado/ez-agents/releases) and substitute
 it for `VERSION` in `npm pack @jc_stack/ez-agents@VERSION`.
 You can also download the release's candidate tarball and verify its SHA-256
@@ -242,7 +242,7 @@ credentials, startup, and verified pairing; never present this as human homework
 | Tool | Purpose |
 |---|---|
 | `ezenciel-agents-install preflight --executor <path-or-name>` | Check prerequisites, disk and executor identity hints before setup |
-| `ezenciel-agents-install build [--label <X.Y.Z-beta.N.rc.M>]` | Build once per artifact, with a private log and duplicate-build detection; a source checkout requires the RC label and a clean reviewed commit |
+| `ezenciel-agents-install build [--label <0.N.0-rc.M>]` | Build once per artifact, with a private log and duplicate-build detection; a source checkout requires the RC label and a clean reviewed commit |
 | `ezenciel-agents-install migrate-ledger --deployment <path>` | Add the loopback host ledger endpoint to an existing host-capable deployment (idempotent; no restart) |
 | `ezenciel-agents-install status --deployment <path>` | Distinguish runtime/configuration, pairing and Telegram reply evidence |
 | `ezenciel-agents-create --register-cli <current-cli>` | Record the CLI that installs the initial package |
