@@ -55,3 +55,16 @@ export const markdownToTelegramHtml = (markdown: string): string => {
   // 9. Restore stashed blocks
   return text.replace(/\x00(\d+)\x00/g, (_match, index) => stashed[Number(index)] ?? '')
 }
+
+// Compact duration for owner replies: `<1m`, `42m`, `2h 10m`, `3d 4h`.
+export const age = (ms: number): string => {
+  const minutes = Math.floor(ms / 60_000)
+  return minutes < 1 ? '<1m' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+    : `${Math.floor(minutes / 1440)}d ${Math.floor(minutes % 1440 / 60)}h`
+}
+
+// One plain line: control characters and runs of whitespace collapse, long text ends in an ellipsis.
+export const clip = (text: string, max: number): string => {
+  const plain = text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim()
+  return plain.length > max ? `${plain.slice(0, max - 1).trimEnd()}…` : plain
+}

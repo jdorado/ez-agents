@@ -968,21 +968,20 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if (view.retry) keyboard.text('Retry failed incoming message', 'menu:retry')
     return keyboard.inline_keyboard.length ? keyboard : undefined
   }
-  const scheduledTasks = async () => {
+  const replyScheduledTasks = async (ctx: Context, number?: number) => {
     const owner = (await control.status()).owner
-    if (!owner) return 'Scheduled tasks\n\nNo paired owner.'
+    // Telegram HTML; the table is chunked by the renderer so no block is cut open.
+    const reply = (part: string) => ctx.reply(part, { parse_mode: 'HTML' })
+    if (!owner) return void await reply('Scheduled tasks\n\nNo paired owner.')
     // This intentionally uses the reader that does not create a schedules directory.
     const active = await scheduler.listTasksReadOnly(await runs.list())
-    return { owner, active, text: scheduledTasksText(active, owner) }
-  }
-  const replyScheduledTasks = async (ctx: Context, number?: number) => {
-    const result = await scheduledTasks()
-    const text = typeof result === 'string' ? result : number === undefined ? result.text : (() => {
-      const owned = ownedScheduledTasks(result.active, result.owner)
-      const schedule = owned[number - 1]
-      return schedule ? scheduledTaskDetailText(schedule, number, owned.length) : `Scheduled task ${number} was not found. Use /tasks to list active tasks.`
-    })()
-    for (const part of splitTelegramText(text)) await ctx.reply(part)
+    if (number === undefined) {
+      for (const part of scheduledTasksText(active, owner)) await reply(part)
+      return
+    }
+    const owned = ownedScheduledTasks(active, owner)
+    const schedule = owned[number - 1]
+    await reply(schedule ? scheduledTaskDetailText(schedule, number, owned.length) : `Scheduled task ${number} was not found. Use /tasks to list active tasks.`)
   }
   const statusReply = async (ctx: Context) => {
     const running = await runs.running(false)
