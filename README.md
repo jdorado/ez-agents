@@ -171,11 +171,17 @@ transport, with separate agent workspaces and sessions. See
 [Docker setup, state and QA](docs/docker-runtime.md).
 
 Telegram `/status` shows the running relay and host versions plus installed
-plugin versions. Its read-only **Scheduled tasks** control lists the paired
-owner's active schedules in alphabetical order, with their frequency/timezone
-and ordered CLI/login-profile/model/effort execution path (primary → fallbacks),
-next occurrence or current queued/running state, and a short preview of the
-saved invocation prompt; it never creates, changes or runs a task. The agent's `ez status` adds verified plugin
+plugin versions. It leads with a headline (🟢 idle or running, 🟡 something needs
+attention, 🔴 host transport down), then each queued or running item with its
+engine and age, what needs attention, failures from the last 24 hours and the
+system versions. Stop, cancel and retry buttons appear only when there is
+something to act on. Its read-only **Scheduled tasks** control (`/tasks`) lists
+the paired owner's active schedules in alphabetical order as one table row each:
+number, task with its running/queued/paused state, short schedule, time to the
+next run and the last result, with failed last runs and quota waits called out
+above it. `/tasks N` shows the full schedule and timezone, next and last run
+times, the ordered CLI/login-profile/model/effort path (primary → fallbacks) and
+the saved instructions. It never creates, changes or runs a task. The agent's `ez status` adds verified plugin
 runtime states and upgrade job receipts. See [status and upgrades](docs/upgrades.md).
 
 ## You are the installing agent

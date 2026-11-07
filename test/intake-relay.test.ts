@@ -165,8 +165,8 @@ test('approved owner group accepts different members, controls and group deliver
     assert.equal((await new InboxStore(f.dir).status()).pending, 0)
     const status = group(9); status.message!.text = '/status'
     await f.relay.bot.handleUpdate(status)
-    assert.ok(f.replies.some(text => text.includes('🟢 Ez is online')))
-    assert.ok(f.replies.some(text => text.includes('Queue:')))
+    // The fixture has running and queued group work and no host transport; a group reply never previews message text.
+    assert.ok(f.replies.some(text => text.includes('🔴 Ez · running · host transport unavailable') && text.includes('<b>chat message</b> · queued') && !text.includes('Hi from the group')))
     // Seed the retry fixture only after the relay writer and its timer are idle.
     await f.relay.stop()
     await f.relay.drainInbox()
@@ -437,7 +437,7 @@ test('slow voice normalization preserves instruction order and leaves controls r
     await downloading
     await f.relay.bot.handleUpdate(message(3, '/status'))
     assert.ok(f.replies.some((text) => text.includes('2 incoming messages')))
-    assert.ok(f.replies.some((text) => text.includes(`Relay: running · v${packageVersion}`)))
+    assert.ok(f.replies.some((text) => text.includes(`running · v${packageVersion}`)))
     await f.relay.bot.handleUpdate(message(4, 'Next instruction'))
     assert.equal(f.launched.length, 0)
     release()
@@ -467,8 +467,8 @@ test('cancel clears accepted and queued work, never spawns a cancelled run, and 
     assert.equal(f.launched.length, 0)
     assert.equal((await runs.get(run.id))?.status, 'cancelled')
     await f.relay.bot.handleUpdate(message(3, '/status'))
-    assert.match(f.replies.at(-1)!, /Queue: empty/)
-    assert.match(f.replies.at(-1)!, /1 delivery is awaiting confirmation/)
+    assert.match(f.replies.at(-1)!, /Nothing running or queued/)
+    assert.match(f.replies.at(-1)!, /1 delivery awaiting confirmation/)
   } finally {
     await f.close()
   }
@@ -817,22 +817,22 @@ test('tasks list and detail show saved frequency and ordered setup path without 
     const saved=await scheduler.save({id:'analyst',name:'Analyst',text:'Read the saved role.',owner:(await control.status()).owner!,
       execution:{sessionId:randomUUID(),preset,fallbacks},
       enabled:true,trigger:{cron:'*/30 * * * *',timezone:'America/New_York',start:'2027-01-01T00:00:00Z'}})
-    const path='claude (default login) · opus · high → claude@claude2 · opus · high → codex@work · gpt-6-sol · xhigh → pi · anthropic/claude-sonnet · medium'
+    const path=['Engine    claude (default login) · opus · high','          → claude@claude2 · opus · high','          → codex@work · gpt-6-sol · xhigh','          → pi · anthropic/claude-sonnet · medium'].join('\n')
     await f.relay.bot.handleUpdate(message(1,'/tasks'))
     const list=f.replies.at(-1)!
-    assert.ok(list.includes('Schedule · Every 30 minutes · America/New_York'))
-    assert.ok(list.includes(`Execution · ${path}`))
+    assert.match(list,/ 1  ● Analyst +Every 30m /)
+    assert.doesNotMatch(list,/Engine|claude@claude2/)
     await f.relay.bot.handleUpdate(message(2,'/tasks 1'))
     const detail=f.replies.at(-1)!
-    assert.ok(detail.includes('Schedule\nEvery 30 minutes · America/New_York'))
-    assert.ok(detail.includes(`Execution path\n${path}`))
+    assert.ok(detail.includes('Schedule  Every 30 minutes · America/New_York'))
+    assert.ok(detail.includes(path))
     assert.deepEqual(await scheduler.get(saved.id),saved)
     const paused=await scheduler.enable(saved.id,false)
     await f.relay.bot.handleUpdate(message(3,'/tasks'))
-    assert.match(f.replies.at(-1)!,/0 active · 1 paused[\s\S]*⏸ Paused[\s\S]*Next · —/)
+    assert.match(f.replies.at(-1)!,/0 active · 1 paused[\s\S]*‖ Analyst +Every 30m +paused/)
     await f.relay.bot.handleUpdate(message(4,'/tasks 1'))
-    assert.match(f.replies.at(-1)!,/⏸ Paused[\s\S]*Next run\n—/)
-    assert.ok(f.replies.at(-1)!.includes(`Execution path\n${path}`))
+    assert.match(f.replies.at(-1)!,/⏸ Paused[\s\S]*Next +—/)
+    assert.ok(f.replies.at(-1)!.includes(path))
     assert.deepEqual(await scheduler.get(saved.id),paused)
     assert.equal(f.launched.length,0)
   }finally{await f.close()}

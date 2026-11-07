@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { readClaudeLimits, readCodexLimits, usageReport } from '../src/usage.js'
+import { readClaudeLimits, readCodexEmail, readCodexLimits, usageReport } from '../src/usage.js'
 
 const temp = async (t: test.TestContext, name: string) => {
   const root = await mkdtemp(path.join(tmpdir(), `ez-usage-${name}-`))
@@ -113,26 +113,37 @@ test('the report lists each login with percent left, resets and blocks, and neve
     'claude@work': { resetAt: new Date(now + 3600_000).toISOString() },
     'codex@work': { manualRetry: true },
   }, { readers, available: async () => true, now })
+  // Telegram HTML, worst first: blocked or under 20% left, then unavailable, low, ok.
   assert.equal(report, [
-    'Account usage', '',
-    'codex',
-    '  5h ███████░░░ 72% left · resets in 2h 10m (11-01 14:10 UTC)',
-    '  7d ░░░░░░░░░░ 0% left · resets in 3d 4h (11-04 16:00 UTC)', '',
-    'claude',
-    '  5h █████████░ 85% left · resets Oct 31 at 11:50am (Asia/Dubai)', '',
-    'codex@work',
-    '  ⛔ quota-blocked · awaiting /retry_quota',
-    '  no limit data returned', '',
-    'claude@work',
-    '  ⛔ quota-blocked · resets in 1h 0m (11-01 13:00 UTC)',
-    '  unavailable',
+    '<b>Usage</b> · % left, time to reset',
+    '🔴 3 need attention · 🟢 1 ok',
+    '<b>🔴 codex</b>',
+    '<pre>5h ███████░░░  72% · 2h 10m',
+    '7d ░░░░░░░░░░   0% · 3d 4h</pre>',
+    '<b>🔴 codex@work</b>',
+    '⛔ quota-blocked · awaiting /retry_quota',
+    'no limit data returned',
+    '<b>🔴 claude@work</b>',
+    '⛔ quota-blocked · resets in 1h 0m',
+    'unavailable',
+    '<b>🟢 claude</b>',
+    '<pre>5h █████████░  85% · resets Oct 31 at 11:50am (Asia/Dubai)</pre>',
   ].join('\n'))
   assert.equal(await usageReport(path.join(root, 'none'), {}, { readers, available: async () => false, now }), 'No Codex or Claude login is installed.')
 
-  // Many profiles stay under Telegram's reply limit, cut at a line break.
-  for (let index = 0; index < 40; index++) await mkdir(path.join(root, 'cli', 'profiles', `p${index}`, 'codex'), { recursive: true })
+  // Many profiles stay under Telegram's reply limit; whole sections drop, so no tag is cut open.
+  for (let index = 0; index < 120; index++) await mkdir(path.join(root, 'cli', 'profiles', `p${index}`, 'codex'), { recursive: true })
   const long = await usageReport(root, {}, { readers: { ...readers, codex: async () => [{ label: '5h', usedPercent: 1, resetsAt: now / 1000 + 60 }, { label: '7d', usedPercent: 2, resetsAt: now / 1000 + 600 }] }, available: async () => true, now })
   assert.ok(long.length <= 4096 && long.endsWith('\n…'), String(long.length))
+  assert.equal(long.split('<pre>').length, long.split('</pre>').length)
+
+  // Mixed levels sort by status: under 20% left, unavailable, under 50%, then ok.
+  const level = (used: number) => async () => [{ label: '5h', usedPercent: used, resetsAt: now / 1000 + 60 }]
+  const mixed = await usageReport(root, {}, { readers: { ...readers, codex: async (home: string) =>
+    home.includes('p0') ? level(55)() : home.includes('p1') ? level(90)() : home.includes('p2') ? [] : level(10)() }, available: async cli => cli === 'codex', now })
+  const order = [...mixed.matchAll(/<b>(.) /g)].map(match => match[1]).join('')
+  assert.equal(order, [...order].sort((a, b) => '🔴⚪🟡🟢'.indexOf(a) - '🔴⚪🟡🟢'.indexOf(b)).join(''))
+  assert.match(mixed, /🔴 .* need attention/)
 })
 
 test('Claude usage shows only saved emails in private reports, including unavailable profiles', async t => {
@@ -151,6 +162,7 @@ test('Claude usage shows only saved emails in private reports, including unavail
   await save(profileHome('token'), 'old@example.com')
   await writeFile(path.join(profileHome('token'), 'oauth-token'), 'private-token')
   await save(profileHome('invalid'), 'invalid@example.com\nInjected line')
+  await save(profileHome('amp'), 'amp&ersand@example.com')
   const deps = {
     available: async (cli: string) => cli === 'claude',
     readers: {
@@ -163,12 +175,58 @@ test('Claude usage shows only saved emails in private reports, including unavail
   }
 
   const report = await usageReport(root, {}, { ...deps, showAccountEmails: true })
-  assert.match(report, /^claude · primary@example\.com$/m)
-  assert.match(report, /^claude@expired · relogin\+work@example\.com\n  unavailable$/m)
-  assert.match(report, /^claude@token$/m)
-  assert.match(report, /^claude@invalid$/m)
+  assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>claude<\/code>\nno limit data returned$/m)
+  assert.match(report, /^<b>⚪ relogin\+work@example\.com<\/b> · <code>claude@expired<\/code>\nunavailable$/m)
+  assert.match(report, /^<b>⚪ amp&amp;ersand@example\.com<\/b> · <code>claude@amp<\/code>$/m)
+  assert.match(report, /^<b>⚪ claude@token<\/b>$/m)
+  assert.match(report, /^<b>⚪ claude@invalid<\/b>$/m)
   assert.doesNotMatch(report, /old@example|invalid@example|Injected|private-/)
   const group = await usageReport(root, {}, deps)
-  assert.match(group, /^claude@expired\n  unavailable$/m)
+  assert.match(group, /^<b>⚪ claude@expired<\/b>\nunavailable$/m)
+  assert.doesNotMatch(group, /@example\.com/)
+})
+
+test('Codex usage shows the app-server account email only in private reports, never for API-key logins', { skip: process.platform === 'win32' }, async t => {
+  const root = await temp(t, 'codex-email'), bin = path.join(root, 'bin')
+  const prior = process.env.PATH
+  t.after(() => { process.env.PATH = prior })
+  await mkdir(bin)
+  process.env.PATH = bin + path.delimiter + prior
+  // The fake answers `account/read` from the bound home's account.json, as the native client does.
+  await writeFile(path.join(bin, 'codex'), `#!${process.execPath}
+const fs = require('fs'), path = require('path')
+let buffer = ''
+process.stdin.on('data', chunk => {
+  buffer += chunk
+  for (let at = buffer.indexOf('\\n'); at >= 0; at = buffer.indexOf('\\n')) {
+    const message = JSON.parse(buffer.slice(0, at)); buffer = buffer.slice(at + 1)
+    if (message.method === 'initialize') console.log(JSON.stringify({ id: message.id, result: {} }))
+    if (message.method === 'account/read') {
+      if (message.params.refreshToken !== false) process.exit(3)
+      console.log(JSON.stringify({ id: message.id, result: { account: JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, 'account.json'), 'utf8')) } }))
+    }
+    if (message.method === 'account/rateLimits/read') console.log(JSON.stringify({ id: message.id, error: { message: 'private-error' } }))
+  }
+})`, { mode: 0o700 })
+  const save = async (home: string, account: object) => {
+    await mkdir(home, { recursive: true })
+    await writeFile(path.join(home, 'account.json'), JSON.stringify(account))
+  }
+  const profileHome = (name: string) => path.join(root, 'cli', 'profiles', name, 'codex')
+  await save(path.join(root, 'cli', 'codex'), { type: 'chatgpt', email: 'primary@example.com', planType: 'pro' })
+  await save(profileHome('work'), { type: 'chatgpt', email: 'work+codex@example.com' })
+  await save(profileHome('key'), { type: 'apiKey', email: 'key@example.com' })
+  await save(profileHome('invalid'), { type: 'chatgpt', email: 'invalid@example.com\nInjected line' })
+  assert.equal(await readCodexEmail(path.join(root, 'cli', 'codex')), 'primary@example.com')
+  assert.equal(await readCodexEmail(path.join(root, 'missing')), undefined)
+
+  const deps = { available: async (cli: string) => cli === 'codex' }
+  const report = await usageReport(root, {}, { ...deps, showAccountEmails: true })
+  assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>codex<\/code>\nlimits unavailable/m)
+  assert.match(report, /^<b>⚪ work\+codex@example\.com<\/b> · <code>codex@work<\/code>$/m)
+  assert.match(report, /^<b>⚪ codex@key<\/b>$/m)
+  assert.match(report, /^<b>⚪ codex@invalid<\/b>$/m)
+  assert.doesNotMatch(report, /key@example|invalid@example|Injected|private-error|pro\b/)
+  const group = await usageReport(root, {}, deps)
   assert.doesNotMatch(group, /@example\.com/)
 })
