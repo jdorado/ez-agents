@@ -36,8 +36,9 @@ release authority or establish npm trust automatically.
    validates the **calling** workflow for reusable workflows. Both caller and
    publishing job need `id-token: write`; test/validation jobs do not receive it. GitHub requires `contents: write`
    to read unpublished draft assets: only the validation job receives that
-   capability and makes GET requests only. The separate OIDC job has
-   `contents: read`. No package code or lifecycle scripts run in validation.
+   capability. It makes GET requests and, once every check has passed, one POST
+   that creates a missing `vVERSION` tag; it never updates or deletes a ref. The
+   separate OIDC job has `contents: read`. No package code or lifecycle scripts run in validation.
    Do not add `NODE_AUTH_TOKEN`, npm tokens, or private profiles to these jobs.
 
 An npm package must already exist before trust enrollment. If a registered
@@ -64,25 +65,27 @@ main-push CI run for that source before checking success, then requires the name
 jobs from its latest attempt. Tag, PR and other workflow runs cannot shadow it;
 failed, pending or incomplete main CI cannot fall back to an older success.
 
-Create the `vVERSION` tag at that exact source commit and a **draft prerelease**
-with these assets under existing release authority. **Creating a draft release
-with `--target` does not create a Git tag.** Create and push the tag explicitly,
-then use `--verify-tag` to prevent staging against a missing remote tag:
+Stage a **draft prerelease** at that exact source commit with these assets under
+existing release authority. A draft release creates no Git tag, and you do not
+need to create one: validation creates the missing `vVERSION` tag at `source-sha`
+after every other check has passed, so a failed validation leaves no tag. An
+existing tag is never moved, deleted or recreated; it must already point at
+`source-sha` (annotated tags are peeled) or validation fails. Once created, the
+tag stays at that commit even if a later step fails, so a version staged from one
+commit cannot be redone from another: prepare a new version instead. If you push
+the tag yourself, create it at the source commit and add `--verify-tag` to the
+`gh release create` command below.
 
 ```sh
 # VERSION and SOURCE_SHA identify the reviewed, current-main candidate.
-git tag "v$VERSION" "$SOURCE_SHA"
-git push origin "refs/tags/v$VERSION"
-git ls-remote origin "refs/tags/v$VERSION"
 # Copy the already tested bytes, without rebuilding, to this exact basename.
 cp /absolute/tested-package.tgz /absolute/release/candidate.tgz
-gh release create "v$VERSION" --repo OWNER/REPO --verify-tag --draft --prerelease \
+gh release create "v$VERSION" --repo OWNER/REPO --target "$SOURCE_SHA" --draft --prerelease \
   --title "v$VERSION" --notes-file /absolute/release/notes.md \
   /absolute/release/candidate.tgz /absolute/release/release-receipt.json
 ```
 
-If the tag already exists, read and verify its commit (peel annotated tags) rather
-than recreating or force-pushing it. Read back the draft by numeric ID and check
+Read back the draft by numeric ID and check
 asset names and downloaded SHA-256 before dispatch. `npm pack`'s default filename
 is not the publisher's asset name; GitHub asset labels do not rename the asset.
 Use `gh release upload` only to add a missing asset, never `--clobber` to replace
@@ -114,8 +117,8 @@ release-by-tag API only returns published releases). Dispatch `publish-beta.yml`
 on `main` with `release-id`, `version`, `source-sha` and
 `artifact-sha256`. Copy the digest from the independently verified Mac receipt,
 not an unreviewed replacement release asset. The validator checks current public
-scope, source/tag identity, required GitHub Actions checks, receipt identity,
-package metadata and tarball hash. It transfers the validated bytes using an
+scope, source identity, required GitHub Actions checks, receipt identity,
+package metadata and tarball hash, then creates or verifies the tag at the source. It transfers the validated bytes using an
 immutable Actions artifact ID. A fresh job revalidates before publication and
 runs npm from a clean directory without package lifecycle scripts.
 
@@ -129,14 +132,22 @@ publication. No npm login smoke publication or stable-version release occurs.
 ## Readback, failure and release completion
 
 The publisher reads registry metadata, checks that `latest` identifies the released version and downloads the
-published tarball to compare its SHA-256. Preserve the workflow's readback receipt, run URL and source/artifact
+published tarball to compare its SHA-256. npm can take minutes to list a version
+it has just accepted, so right after the single publish call the readback polls:
+waits of 5 s growing to 30 s over a window just under 10 minutes (21 retries), each
+read recorded in the readback receipt. Only reads repeat, never the publish. A
+readback that verifies at any attempt completes the job exactly as an immediate
+one does. If the exact version and `latest` are not verified within the window the
+job fails closed as `Publication unresolved`; a tarball whose digest differs from
+the candidate fails at once, without waiting. Preserve the workflow's readback receipt, run URL and source/artifact
 identity on the release PR. A failed command after the publish call may mean npm
 accepted it: inspect registry state first. A rerun may verify an existing exact
 version; if the version is absent it refuses a second write. Reconcile first,
-then create a fresh authorized dispatch if appropriate. Never repeat or overwrite that version or silently repair tags.
+then create a fresh authorized dispatch if appropriate. Never repeat or overwrite that version, and never move or rewrite its tag.
 When validation fails, use the logged GitHub API path to identify the missing
-input. A tag lookup 404 is not evidence of a draft-release permission problem.
-A draft/asset 404 can mean absent evidence or insufficient access; verify with
+input. A missing tag is not an error, since validation creates it; if creating it
+fails, check that the caller grants `contents: write` and that no ruleset blocks
+tag creation. A draft/asset 404 can mean absent evidence or insufficient access; verify with
 the existing authorized identity before diagnosing credentials. Do not broaden
 token permissions based on a generic 404.
 
@@ -153,8 +164,9 @@ follow [upgrades](upgrades.md) under the installation's saved policy.
 Missing trust or registry access is an external dependency, not a reason to use
 a token workaround.
 
-After successful registry readback, finish the GitHub prerelease with the tested
-artifact/checksum and verify its public availability. Perform the clean-host
+After successful registry readback, finish the GitHub prerelease by hand: publish
+the draft with the tested artifact/checksum (the workflow does not) and verify its
+public availability. Perform the clean-host
 installation and runtime/provider checks required by the package's release
 rules. Actions success proves registry delivery only; it does not prove a
 running agent was upgraded. Respect each installation's saved update policy.
@@ -163,7 +175,7 @@ running agent was upgraded. Respect each installation's saved update policy.
 
 Existing plugin callers are SHA-pinned: regenerate each caller against the merged
 shared-publisher revision and update its package publishConfig together through
-review. Old pins retain the old behavior. Do not mutate an already staged or
+review (see [releasing](releasing.md#shared-publisher-updates)). Old pins retain the old behavior. Do not mutate an already staged or
 published artifact; prepare a new version when package metadata changes.
 
 The publisher uses one native npm publish operation with OIDC and `--tag latest`.

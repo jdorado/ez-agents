@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { identity, sha256, validateManifest, validateReceipt, validateChecks, tarManifest, validateSource, registryState, publishOnce, githubClient } from '../scripts/trusted-beta.mjs';
+import { identity, sha256, validateManifest, validateReceipt, validateChecks, tarManifest, validateSource, registryState, publishOnce, githubClient, githubTagCreator, ensureTag, readbackDelays } from '../scripts/trusted-beta.mjs';
 
 const env = { RELEASE_ID: '123', RELEASE_REPOSITORY: 'jdorado/ez-agents', RELEASE_PACKAGE: '@jc_stack/ez-agents', RELEASE_VERSION: '1.2.3-beta.1', RELEASE_SOURCE_SHA: 'a'.repeat(40), RELEASE_SHA256: sha256(Buffer.from('candidate')), RELEASE_REQUIRED_CHECKS: '["verify (22)"]', GITHUB_REPOSITORY: 'jdorado/ez-agents', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: 'a'.repeat(40) };
 const expected = identity(env);
@@ -44,8 +44,10 @@ function sourceApi(overrides = {}) {
     [`/repos/jdorado/ez-agents/git/ref/tags/v${expected.version}`]: { object: { type: 'commit', sha: expected.sourceSha } },
     ...overrides,
   };
-  return async path => { assert.ok(path in responses, `Unexpected API request ${path}`); return responses[path]; };
+  return async path => { assert.ok(path in responses, `Unexpected API request ${path}`); if (responses[path] instanceof Error) throw responses[path]; return responses[path]; };
 }
+const tagPath = `/repos/jdorado/ez-agents/git/ref/tags/v${expected.version}`;
+const missingTag = () => Object.assign(new Error(`HTTP 404 while reading GitHub GET ${tagPath}`), { status: 404 });
 
 test('source gates reject private repository, changed main, wrong tag and failed CI', async () => {
   await validateSource(expected, sourceApi());
@@ -103,7 +105,7 @@ test('existing matching publication is read-only; partial or changed tag never r
   assert.equal(writes, 0);
   for (const after of [{ exists: true, latest: 'changed', beta: expected.version }, { exists: true, latest: '1.0.0', beta: 'other' }, { exists: false, latest: '1.0.0' }]) {
     let reads = 0;
-    await assert.rejects(publishOnce(expected, { readState: async () => reads++ === 0 ? { exists: false, latest: '1.0.0' } : after, publishTarball: async () => { writes++; }, sleep: async () => {} }), /do not repeat/);
+    await assert.rejects(publishOnce(expected, { readState: async () => reads++ === 0 ? { exists: false, latest: '1.0.0' } : after, publishTarball: async () => { writes++; }, sleep: async () => {}, report: () => {} }), /do not repeat/);
   }
   assert.equal(writes, 3);
 });
@@ -128,7 +130,7 @@ test('workflow reruns can verify success but cannot repeat an absent-version wri
 
 test('write-started receipt precedes publication and readback records partial failures', async () => {
   const events = []; let read = 0;
-  await assert.rejects(publishOnce(expected, { readState: async () => read++ === 0 ? { exists: false, latest: '1' } : { exists: false, latest: '1' }, record: async event => events.push(event), publishTarball: async () => { assert.equal(events.at(-1).phase, 'write-started'); throw new Error('timeout'); }, sleep: async () => {} }), /unresolved/);
+  await assert.rejects(publishOnce(expected, { readState: async () => read++ === 0 ? { exists: false, latest: '1' } : { exists: false, latest: '1' }, record: async event => events.push(event), publishTarball: async () => { assert.equal(events.at(-1).phase, 'write-started'); throw new Error('timeout'); }, sleep: async () => {}, report: () => {} }), /unresolved/);
   assert.equal(events[0].phase, 'preflight');
   assert.ok(events.some(event => event.phase === 'readback' && event.publishCommandFailed));
 });
@@ -225,10 +227,14 @@ test('workflow runs and attempt jobs are paginated before selecting required evi
 
 test('GitHub errors identify the failed read without exposing credentials or signed URLs', async () => {
   const missing = githubClient('private-token', async () => new Response('private-body', { status: 404 }));
-  await assert.rejects(missing('/repos/jdorado/ez-agents/git/ref/tags/v1.2.3-beta.1'), /GitHub GET .*\/git\/ref\/tags\/v1\.2\.3-beta\.1: release tag is missing or inaccessible/);
+  await assert.rejects(missing('/repos/jdorado/ez-agents/git/ref/tags/v1.2.3-beta.1'), error => {
+    assert.match(error.message, /HTTP 404.*GitHub GET .*\/git\/ref\/tags\/v1\.2\.3-beta\.1/);
+    assert.equal(error.status, 404);
+    return true;
+  });
   await assert.rejects(missing('/repos/jdorado/ez-agents/releases/123'), error => {
     assert.match(error.message, /HTTP 404.*GitHub GET .*\/releases\/123/);
-    assert.doesNotMatch(error.message, /private-token|private-body|release tag/);
+    assert.doesNotMatch(error.message, /private-token|private-body/);
     return true;
   });
   let request = 0;
@@ -242,7 +248,7 @@ test('GitHub errors identify the failed read without exposing credentials or sig
   });
 });
 
-test('staging recovery requires a real source tag and canonical asset before validating exact bytes', async t => {
+test('staging validation creates the missing tag only after every other check passes', async t => {
   const { validate } = await import('../scripts/trusted-beta.mjs');
   const { readFile } = await import('node:fs/promises');
   const dir = await mkdtemp(join(tmpdir(), 'beta-staging-recovery-'));
@@ -253,13 +259,11 @@ test('staging recovery requires a real source tag and canonical asset before val
   const bytes = await readFile(join(dir, 'candidate.tgz'));
   const candidateEnv = { ...env, RELEASE_SHA256: sha256(bytes) };
   let tagExists = false, assetName = 'jc_stack-ez-agents-1.2.3-beta.1.tgz';
-  const reads = [];
+  const created = [], reads = [];
   const source = sourceApi();
   const api = async path => {
     reads.push(path);
-    if (path.includes('/git/ref/tags/') && !tagExists) {
-      return githubClient('test', async () => new Response('', { status: 404 }))(path);
-    }
+    if (path.includes('/git/ref/tags/') && !tagExists) return githubClient('test', async () => new Response('', { status: 404 }))(path);
     if (path.endsWith('/releases/123')) return { id: 123, draft: true, prerelease: true, tag_name: `v${expected.version}`, assets: [
       { id: 456, name: assetName, state: 'uploaded' }, { id: 457, name: 'release-receipt.json', state: 'uploaded' },
     ] };
@@ -268,17 +272,134 @@ test('staging recovery requires a real source tag and canonical asset before val
     if (path.endsWith('/pulls/41')) return { merged: true, base: { repo: { full_name: expected.repository }, ref: 'main' }, merge_commit_sha: expected.sourceSha };
     return source(path);
   };
+  const createTag = async value => { created.push(value); tagExists = true; };
   const output = join(dir, 'validated');
-  await assert.rejects(validate(output, candidateEnv, api), /release tag is missing/);
-  assert.ok(!reads.some(path => path.includes('/releases/')));
-  tagExists = true;
-  await assert.rejects(validate(output, candidateEnv, api), /Missing or ambiguous asset: candidate.tgz/);
-  assert.ok(!reads.some(path => path.includes('/releases/assets/')));
+  // A draft with a wrong asset name or digest fails before anything is written to GitHub.
+  await assert.rejects(validate(output, candidateEnv, api, createTag), /Missing or ambiguous asset: candidate.tgz/);
   assetName = 'candidate.tgz';
-  await assert.rejects(validate(output, { ...candidateEnv, RELEASE_SHA256: '0'.repeat(64) }, api), /SHA256 mismatch/);
-  const result = await validate(output, candidateEnv, api);
+  await assert.rejects(validate(output, { ...candidateEnv, RELEASE_SHA256: '0'.repeat(64) }, api, createTag), /SHA256 mismatch/);
+  assert.deepEqual(created, []);
+  assert.equal(tagExists, false);
+  const result = await validate(output, candidateEnv, api, createTag);
   assert.equal(result.sha256, sha256(bytes));
   assert.deepEqual(await readFile(join(output, 'candidate.tgz')), bytes);
-  // Retry cannot silently replace an existing validated bundle.
-  await assert.rejects(validate(output, candidateEnv, api), /EEXIST/);
+  // One tag, at the dispatched source, created by the validated identity.
+  assert.deepEqual(created.map(({ repository, version, sourceSha }) => ({ repository, version, sourceSha })), [{ repository: expected.repository, version: expected.version, sourceSha: expected.sourceSha }]);
+  // Retry cannot silently replace an existing validated bundle, and never recreates the tag.
+  await assert.rejects(validate(output, candidateEnv, api, createTag), /EEXIST/);
+  assert.equal(created.length, 1);
+});
+
+test('release tag is created once when absent and never moved when present', async () => {
+  const created = [];
+  let current = null;
+  const api = async path => {
+    assert.equal(path, tagPath);
+    if (current === null) throw missingTag();
+    return { object: current };
+  };
+  const createTag = async value => { created.push(value); current = { type: 'commit', sha: expected.sourceSha }; };
+  await ensureTag(expected, api, createTag);
+  assert.equal(created.length, 1);
+  await ensureTag(expected, api, createTag);
+  assert.equal(created.length, 1);
+  // An existing tag is accepted only at the source, including an annotated tag that peels to it.
+  const annotated = async path => path === tagPath ? { object: { type: 'tag', sha: 'c'.repeat(40) } } : { object: { type: 'commit', sha: expected.sourceSha } };
+  await ensureTag(expected, annotated, createTag);
+  for (const object of [{ type: 'commit', sha: 'b'.repeat(40) }, { type: 'tree', sha: expected.sourceSha }]) {
+    await assert.rejects(ensureTag(expected, async () => ({ object }), createTag), /does not identify approved source/);
+  }
+  assert.equal(created.length, 1);
+});
+
+test('missing release tag fails closed without a creator, on a failed read, or when creation does not take effect', async () => {
+  const writes = [];
+  const createTag = async value => { writes.push(value); };
+  await assert.rejects(validateSource(expected, sourceApi({ [tagPath]: missingTag() })), /Release tag v1\.2\.3-beta\.1 is missing/);
+  // Server and permission failures are not "missing": nothing is created.
+  await assert.rejects(ensureTag(expected, async () => { throw Object.assign(new Error('HTTP 500'), { status: 500 }); }, createTag), /HTTP 500/);
+  await assert.rejects(ensureTag(expected, async () => { throw Object.assign(new Error('HTTP 403'), { status: 403 }); }, createTag), /HTTP 403/);
+  assert.equal(writes.length, 0);
+  // A creator that returns without a tag appearing, or a racing tag at another commit, is rejected.
+  await assert.rejects(ensureTag(expected, async () => { throw missingTag(); }, createTag), /was not created/);
+  let raced = false;
+  await assert.rejects(ensureTag(expected, async () => { if (!raced) throw missingTag(); return { object: { type: 'commit', sha: 'b'.repeat(40) } }; }, async () => { raced = true; }), /does not identify approved source/);
+});
+
+test('tag creation is one POST of a lightweight ref and tolerates only an already-existing ref', async () => {
+  const requests = [];
+  const creator = status => githubTagCreator('private-token', async (url, options) => { requests.push({ url: String(url), options }); return new Response('private-body', { status }); });
+  await creator(201)(expected);
+  await creator(422)(expected);
+  assert.equal(requests.length, 2);
+  for (const { url, options } of requests) {
+    assert.equal(url, 'https://api.github.com/repos/jdorado/ez-agents/git/refs');
+    assert.equal(options.method, 'POST');
+    assert.deepEqual(JSON.parse(options.body), { ref: `refs/tags/v${expected.version}`, sha: expected.sourceSha });
+    assert.equal(options.headers.Authorization, 'Bearer private-token');
+  }
+  for (const status of [401, 403, 404, 500]) {
+    await assert.rejects(creator(status)(expected), error => {
+      assert.match(error.message, new RegExp(`HTTP ${status} while creating release tag v1\\.2\\.3-beta\\.1`));
+      assert.doesNotMatch(error.message, /private-token|private-body/);
+      return true;
+    });
+  }
+});
+
+test('readback waits for slow registry visibility within a bounded window and writes once', async () => {
+  const delays = readbackDelays();
+  assert.equal(delays[0], 5000);
+  assert.ok(delays.every((delay, i) => delay <= 30_000 && (i === 0 || delay >= delays[i - 1])));
+  const budget = delays.reduce((sum, delay) => sum + delay, 0);
+  assert.ok(budget >= 5 * 60_000 && budget <= 10 * 60_000, `readback window is ${budget} ms`);
+  for (const visibleAt of [0, 1, 3, delays.length]) {
+    let writes = 0, reads = 0; const waits = [], events = [];
+    const result = await publishOnce(expected, {
+      readState: async () => reads++ > visibleAt ? { exists: true, latest: expected.version } : { exists: false, latest: '1.0.0' },
+      publishTarball: async () => { writes++; },
+      sleep: async ms => { waits.push(ms); }, record: async event => events.push(event.phase), report: () => {},
+    });
+    assert.deepEqual(result, { status: 'published', version: expected.version, sha256: expected.sha256 });
+    assert.equal(writes, 1);
+    assert.deepEqual(waits, delays.slice(0, visibleAt));
+    assert.equal(events.filter(phase => phase === 'readback').length, visibleAt + 1);
+  }
+});
+
+test('readback that never verifies fails closed after the bounded window without a second write', async () => {
+  const delays = readbackDelays();
+  for (const after of [{ exists: false, latest: '1.0.0' }, { exists: true, latest: '1.0.0' }, 'error']) {
+    let writes = 0, reads = 0; const waits = [];
+    await assert.rejects(publishOnce(expected, {
+      readState: async () => { if (reads++ === 0) return { exists: false, latest: '1.0.0' }; if (after === 'error') throw new Error('registry unavailable'); return after; },
+      publishTarball: async () => { writes++; },
+      sleep: async ms => { waits.push(ms); }, record: async () => {}, report: () => {},
+    }), /Publication unresolved; do not repeat the write/);
+    assert.equal(writes, 1);
+    assert.deepEqual(waits, delays);
+    assert.equal(reads, delays.length + 2);
+  }
+});
+
+test('transient readback errors are retried but different registry bytes fail at once', async () => {
+  let reads = 0, writes = 0; const waits = [];
+  const flaky = await publishOnce(expected, {
+    readState: async () => { reads++; if (reads === 1) return { exists: false, latest: '1.0.0' }; if (reads < 4) throw new Error('HTTP 503 while reading registry'); return { exists: true, latest: expected.version }; },
+    publishTarball: async () => { writes++; }, sleep: async ms => { waits.push(ms); }, record: async () => {}, report: () => {},
+  });
+  assert.equal(flaky.status, 'published'); assert.equal(writes, 1); assert.equal(waits.length, 2);
+  // A registry whose tarball digest differs is final: no waiting, no second write.
+  const document = { name: expected.package, versions: {}, 'dist-tags': { latest: '1.0.0' } };
+  const published = { ...manifest, dist: { tarball: 'https://registry.npmjs.org/file.tgz' } };
+  let calls = 0; waits.length = 0; writes = 0;
+  const events = [];
+  const readState = () => {
+    if (calls++ === 0) return registryState(expected, async () => new Response(JSON.stringify(document)));
+    let n = 0;
+    return registryState(expected, async () => n++ === 0 ? new Response(JSON.stringify({ ...document, versions: { [expected.version]: published } })) : new Response('changed'));
+  };
+  await assert.rejects(publishOnce(expected, { readState, publishTarball: async () => { writes++; }, sleep: async ms => { waits.push(ms); }, record: async event => events.push(event.phase), report: () => {} }), /Publication unresolved.*differs/);
+  assert.equal(writes, 1); assert.deepEqual(waits, []);
+  assert.ok(events.includes('readback-error'));
 });
