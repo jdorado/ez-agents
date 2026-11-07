@@ -16,10 +16,11 @@ Commit, push and open a PR first — then stage only from that PR's exact commit
 ```sh
 node scripts/stage-qa.mjs --source /absolute/feature-checkout \
   --catalog /absolute/deployment/tools/qa --label beta-12 \
-  --version 0.1.0-beta.12.rc.1 --flow /absolute/feature-QA.md
+  --version 0.12.0-rc.1 --flow /absolute/feature-QA.md
 ```
 
-`beta-12` is a local catalog label, distinct from public `0.1.0-beta.12`. The
+`beta-12` is a local catalog label (N is the release counter), distinct from the
+public `0.12.0`; the legacy `0.1.0-beta.12.rc.1` form is still accepted. The
 manifest records the private version, source commit and archive SHA-256. Only
 package version and `ezQa` provenance metadata differ from the source npm package.
 Do not publish these private archives. Each new candidate gets a new label and a

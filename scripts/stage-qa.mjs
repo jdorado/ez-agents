@@ -5,13 +5,13 @@ import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {parseArgs} from 'node:util';
-import {digest, extract, version, newer} from '../src/updates/artifact.mjs';
+import {digest, extract, version, newer, rcVersion} from '../src/updates/artifact.mjs';
 
 const {values:v}=parseArgs({options:Object.fromEntries(['source','catalog','label','version','flow'].map(k=>[k,{type:'string'}]))});
-if(!['source','catalog','label','version','flow'].every(k=>v[k]))throw Error('Required: --source CHECKOUT --catalog DIRECTORY --label beta-12 --version 0.1.0-beta.12.rc.1 --flow QA.md');
+if(!['source','catalog','label','version','flow'].every(k=>v[k]))throw Error('Required: --source CHECKOUT --catalog DIRECTORY --label beta-12 --version 0.12.0-rc.1 --flow QA.md');
 if(!/^beta-[1-9]\d*$/.test(v.label))throw Error('Label must be beta-N');
 version(v.version);
-if(!/^\d+\.\d+\.\d+-beta\.\d+\.rc\.[1-9]\d*$/.test(v.version))throw Error('Use a distinct private version: X.Y.Z-beta.N.rc.M');
+if(!rcVersion.test(v.version))throw Error('Use a distinct private version: 0.N.0-rc.M (or legacy X.Y.Z-beta.N.rc.M)');
 const source=await fs.realpath(v.source),catalog=path.resolve(v.catalog);
 const run=(cmd,args,cwd=source)=>execFileSync(cmd,args,{cwd,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 if(run('git',['status','--porcelain']))throw Error('Commit the reviewed source before staging QA');
@@ -28,7 +28,8 @@ try {
   await extract(await fs.readFile(path.join(temp,original.filename)),path.join(temp,'source'));
   const root=path.join(temp,'source'),pkg=JSON.parse(await fs.readFile(path.join(root,'package.json'),'utf8'));
   if(pkg.ezRelease?.kind!=='main')throw Error('This staging command accepts the main package only');
-  if(!newer(v.version,pkg.version))throw Error('Private QA version must be newer than source package version');
+  // A `0.N.0-rc.M` sorts below `0.N.0`, so it may also be staged from a source already numbered `0.N.0`.
+  if(!newer(v.version,pkg.version)&&v.version.replace(/-rc\.\d+$/,'')!==pkg.version)throw Error('Private QA version must be newer than source package version');
   pkg.version=v.version;pkg.ezQa={label:v.label,commit,private:true};
   await fs.writeFile(path.join(root,'package.json'),JSON.stringify(pkg,null,2)+'\n');
   const packed=pack(root,staged),artifact=await fs.readFile(path.join(staged,packed.filename));
