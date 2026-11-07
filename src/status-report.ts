@@ -1,4 +1,4 @@
-import { escapeHtml } from './format.js'
+import { age, clip, escapeHtml } from './format.js'
 import { activeSetup, type RunRecord } from './runs.js'
 
 // Owner `/status` as Telegram HTML. Pure render of relay state the caller
@@ -25,19 +25,8 @@ export type StatusView = { html: string; stop: boolean; cancel: boolean; retry: 
 
 const ROWS = 5, FAILURE_HOURS = 24, FAILURES = 3
 
-const age = (ms: number): string => {
-  const minutes = Math.floor(ms / 60_000)
-  return minutes < 1 ? '<1m' : minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-    : `${Math.floor(minutes / 1440)}d ${Math.floor(minutes % 1440 / 60)}h`
-}
 const since = (iso: string | undefined, now: number): string | undefined =>
   iso && Date.parse(iso) <= now ? age(now - Date.parse(iso)) : undefined
-const clip = (text: string, max: number): string => {
-  const plain = text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim()
-  // Cut by code point: a UTF-16 slice can split an emoji, which Telegram rejects.
-  const chars = Array.from(plain)
-  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : plain
-}
 const plural = (count: number, one: string, many = `${one}s`): string => `${count} ${count === 1 ? one : many}`
 
 const label = (run: RunRecord, input: StatusInput): string =>
