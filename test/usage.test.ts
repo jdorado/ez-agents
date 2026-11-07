@@ -3,7 +3,7 @@ import test from 'node:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { readClaudeLimits, readCodexLimits, usageReport } from '../src/usage.js'
+import { readClaudeLimits, readCodexEmail, readCodexLimits, usageReport } from '../src/usage.js'
 
 const temp = async (t: test.TestContext, name: string) => {
   const root = await mkdtemp(path.join(tmpdir(), `ez-usage-${name}-`))
@@ -170,5 +170,50 @@ test('Claude usage shows only saved emails in private reports, including unavail
   assert.doesNotMatch(report, /old@example|invalid@example|Injected|private-/)
   const group = await usageReport(root, {}, deps)
   assert.match(group, /^claude@expired\n  unavailable$/m)
+  assert.doesNotMatch(group, /@example\.com/)
+})
+
+test('Codex usage shows the app-server account email only in private reports, never for API-key logins', { skip: process.platform === 'win32' }, async t => {
+  const root = await temp(t, 'codex-email'), bin = path.join(root, 'bin')
+  const prior = process.env.PATH
+  t.after(() => { process.env.PATH = prior })
+  await mkdir(bin)
+  process.env.PATH = bin + path.delimiter + prior
+  // The fake answers `account/read` from the bound home's account.json, as the native client does.
+  await writeFile(path.join(bin, 'codex'), `#!${process.execPath}
+const fs = require('fs'), path = require('path')
+let buffer = ''
+process.stdin.on('data', chunk => {
+  buffer += chunk
+  for (let at = buffer.indexOf('\\n'); at >= 0; at = buffer.indexOf('\\n')) {
+    const message = JSON.parse(buffer.slice(0, at)); buffer = buffer.slice(at + 1)
+    if (message.method === 'initialize') console.log(JSON.stringify({ id: message.id, result: {} }))
+    if (message.method === 'account/read') {
+      if (message.params.refreshToken !== false) process.exit(3)
+      console.log(JSON.stringify({ id: message.id, result: { account: JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, 'account.json'), 'utf8')) } }))
+    }
+    if (message.method === 'account/rateLimits/read') console.log(JSON.stringify({ id: message.id, error: { message: 'private-error' } }))
+  }
+})`, { mode: 0o700 })
+  const save = async (home: string, account: object) => {
+    await mkdir(home, { recursive: true })
+    await writeFile(path.join(home, 'account.json'), JSON.stringify(account))
+  }
+  const profileHome = (name: string) => path.join(root, 'cli', 'profiles', name, 'codex')
+  await save(path.join(root, 'cli', 'codex'), { type: 'chatgpt', email: 'primary@example.com', planType: 'pro' })
+  await save(profileHome('work'), { type: 'chatgpt', email: 'work+codex@example.com' })
+  await save(profileHome('key'), { type: 'apiKey', email: 'key@example.com' })
+  await save(profileHome('invalid'), { type: 'chatgpt', email: 'invalid@example.com\nInjected line' })
+  assert.equal(await readCodexEmail(path.join(root, 'cli', 'codex')), 'primary@example.com')
+  assert.equal(await readCodexEmail(path.join(root, 'missing')), undefined)
+
+  const deps = { available: async (cli: string) => cli === 'codex' }
+  const report = await usageReport(root, {}, { ...deps, showAccountEmails: true })
+  assert.match(report, /^codex · primary@example\.com\n  limits unavailable/m)
+  assert.match(report, /^codex@work · work\+codex@example\.com$/m)
+  assert.match(report, /^codex@key$/m)
+  assert.match(report, /^codex@invalid$/m)
+  assert.doesNotMatch(report, /key@example|invalid@example|Injected|private-error|pro\b/)
+  const group = await usageReport(root, {}, deps)
   assert.doesNotMatch(group, /@example\.com/)
 })

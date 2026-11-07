@@ -340,11 +340,12 @@ identifiers.
 Telegram `/usage` (owner only, no inference turn) shows each login's provider
 limits on demand: percent left and reset time per window, plus any saved quota
 block. In private owner chats, Claude profiles with a saved browser-login
-email show it beside the profile name, even if usage is unavailable. Group
-reports and profiles bound to setup tokens use the profile name alone.
+email and Codex ChatGPT logins show the email beside the profile name, even if
+usage is unavailable. Group reports, API-key logins and profiles bound to
+setup tokens use the profile name alone.
 Each client answers for its own bound home, and Ez never stores, copies
-or prints the credential. Codex limits come from that home's `codex app-server`
-(`account/rateLimits/read`); Claude limits from `claude -p /usage`, a local
+or prints the credential. Codex limits and email come from that home's
+`codex app-server` (`account/rateLimits/read`, `account/read`); Claude limits from `claude -p /usage`, a local
 client command that spends no model tokens and prints the session (5h) and
 weekly percentages with their reset times. A login the client cannot report
 for (for example an API-key login) shows `no limit data returned` or a short
