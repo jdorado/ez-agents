@@ -199,7 +199,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       const current = state.presets.find((preset) => preset.id === initial.id)
       const owned = new Set<string>()
       if (current) issue(keyboard, owned, `✓ ${current.name}`, (next) => choose(next, current), true)
-      issue(keyboard, owned, 'Refresh available AIs', async (next) => { await refresh(); await list(next) })
+      issue(keyboard, owned, '↻ Refresh', async (next) => { await refresh(); await list(next) })
       await show(ctx, `Choose AI\nCurrent: ${presetLabel(selected)}\nNo client catalog available. Showing the current client setup only.`, keyboard)
       return
     }
