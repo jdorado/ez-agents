@@ -134,3 +134,41 @@ test('the report lists each login with percent left, resets and blocks, and neve
   const long = await usageReport(root, {}, { readers: { ...readers, codex: async () => [{ label: '5h', usedPercent: 1, resetsAt: now / 1000 + 60 }, { label: '7d', usedPercent: 2, resetsAt: now / 1000 + 600 }] }, available: async () => true, now })
   assert.ok(long.length <= 4096 && long.endsWith('\n…'), String(long.length))
 })
+
+test('Claude usage shows only saved emails in private reports, including unavailable profiles', async t => {
+  const root = await temp(t, 'identities')
+  const defaultHome = path.join(root, 'cli', 'claude')
+  const save = async (home: string, emailAddress: string) => {
+    await mkdir(home, { recursive: true })
+    await writeFile(path.join(home, '.claude.json'), JSON.stringify({
+      oauthAccount: { emailAddress, accountUuid: 'private-account-id' },
+      unrelated: 'private-value',
+    }))
+  }
+  await save(defaultHome, 'primary@example.com')
+  const profileHome = (name: string) => path.join(root, 'cli', 'profiles', name, 'claude')
+  await save(profileHome('expired'), 'relogin+work@example.com')
+  await save(profileHome('token'), 'old@example.com')
+  await writeFile(path.join(profileHome('token'), 'oauth-token'), 'private-token')
+  await save(profileHome('invalid'), 'invalid@example.com\nInjected line')
+  const deps = {
+    available: async (cli: string) => cli === 'claude',
+    readers: {
+      codex: async () => [],
+      claude: async (_home: string, profile?: string) => {
+        if (profile === 'expired') throw new Error('private-error')
+        return []
+      },
+    },
+  }
+
+  const report = await usageReport(root, {}, { ...deps, showAccountEmails: true })
+  assert.match(report, /^claude · primary@example\.com$/m)
+  assert.match(report, /^claude@expired · relogin\+work@example\.com\n  unavailable$/m)
+  assert.match(report, /^claude@token$/m)
+  assert.match(report, /^claude@invalid$/m)
+  assert.doesNotMatch(report, /old@example|invalid@example|Injected|private-/)
+  const group = await usageReport(root, {}, deps)
+  assert.match(group, /^claude@expired\n  unavailable$/m)
+  assert.doesNotMatch(group, /@example\.com/)
+})
