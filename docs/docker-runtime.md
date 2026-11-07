@@ -339,7 +339,9 @@ identifiers.
 
 Telegram `/usage` (owner only, no inference turn) shows each login's provider
 limits on demand: percent left and reset time per window, plus any saved quota
-block. In private owner chats, Claude profiles with a saved browser-login
+block. The reply is Telegram HTML: one bold title per login and one monospace
+block of windows, sorted worst first with a status icon (🔴 blocked or under 20%
+left, ⚪ unavailable, 🟡 under 50%, 🟢 ok) and a summary line on top. In private owner chats, Claude profiles with a saved browser-login
 email and Codex ChatGPT logins show the email beside the profile name, even if
 usage is unavailable. Group reports, API-key logins and profiles bound to
 setup tokens use the profile name alone.

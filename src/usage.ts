@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { authHomes, installed } from './ai.js'
 import { claudeAuthEnvironment, cliHome } from './auth-profile.js'
 import { executorEnvironment, executorInvocation } from './executor.js'
+import { escapeHtml } from './format.js'
 import { quotaBlockedUntil, quotaScope, type SetupHealth } from './setup-fallback.js'
 
 // Read-only owner view of each login's provider limits, asked of the native
@@ -129,15 +130,20 @@ const remaining = (ms: number): string => {
   const minutes = Math.max(0, Math.round(ms / 60_000)), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60)
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`
 }
-const clock = (ms: number): string => { const iso = new Date(ms).toISOString(); return `${iso.slice(5, 10)} ${iso.slice(11, 16)} UTC` }
-const resetNote = (ms: number, now: number): string => ms > now ? `resets in ${remaining(ms - now)} (${clock(ms)})` : 'reset due'
+const resetNote = (ms: number, now: number): string => ms > now ? `resets in ${remaining(ms - now)}` : 'reset due'
 
 const windowLine = (window: UsageWindow, width: number, now: number): string => {
   const left = Math.round(100 - window.usedPercent), filled = Math.round(left / 10)
-  return `  ${window.label.padEnd(width)} ${'█'.repeat(filled)}${'░'.repeat(10 - filled)} ${left}% left` +
-    (window.resetsAt !== undefined ? ` · ${resetNote(window.resetsAt * 1000, now)}` : window.resetsText ? ` · resets ${window.resetsText}` : '')
+  const reset = window.resetsAt !== undefined ? resetNote(window.resetsAt * 1000, now).replace('resets in ', '')
+    : window.resetsText ? `resets ${window.resetsText}` : ''
+  return `${window.label.padEnd(width)} ${'█'.repeat(filled)}${'░'.repeat(10 - filled)} ${String(left).padStart(3)}%${reset ? ` · ${reset}` : ''}`
 }
 
+// Worst first: attention (blocked or under 20% left), unavailable, low, ok.
+const STATUS = [{ icon: '🔴', name: 'need attention' }, { icon: '⚪', name: 'unavailable' }, { icon: '🟡', name: 'low' }, { icon: '🟢', name: 'ok' }]
+
+// Telegram HTML: a bold title per login (the email when shown, else the login
+// name) and one monospace block of windows so the bars align.
 export const usageReport = async (controlDir: string, health: SetupHealth = {},
   deps: { readers?: UsageReaders; available?: (cli: string) => Promise<boolean>; now?: number; showAccountEmails?: boolean } = {}): Promise<string> => {
   const readers = deps.readers ?? defaultReaders, now = deps.now ?? Date.now()
@@ -147,19 +153,33 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
     const scope = quotaScope({ id: 'usage', name: 'usage', cli, ...(authProfile ? { authProfile } : {}) })
     const home = cliHome(controlDir, cli, authProfile)
     const email = !deps.showAccountEmails ? undefined : cli === 'claude' ? await savedClaudeEmail(home) : await readers.codexEmail?.(home)
-    const lines = [email ? `${scope} · ${email}` : scope]
-    const blockedUntil = quotaBlockedUntil(health[scope])
-    if (blockedUntil > now) lines.push(Number.isFinite(blockedUntil) ? `  ⛔ quota-blocked · ${resetNote(blockedUntil, now)}` : '  ⛔ quota-blocked · awaiting /retry_quota')
+    const blockedUntil = quotaBlockedUntil(health[scope]), blocked = blockedUntil > now
+    let windows: UsageWindow[] = [], note: string | undefined
     try {
-      const windows = await (cli === 'codex' ? readers.codex(home) : readers.claude(home, authProfile))
-      const width = Math.max(0, ...windows.map(window => window.label.length))
-      lines.push(...(windows.length ? windows.map(window => windowLine(window, width, now)) : ['  no limit data returned']))
+      windows = await (cli === 'codex' ? readers.codex(home) : readers.claude(home, authProfile))
+      if (!windows.length) note = 'no limit data returned'
     } catch (error) {
-      lines.push(`  ${error instanceof UsageError ? error.message : 'unavailable'}`)
+      note = error instanceof UsageError ? error.message : 'unavailable'
     }
-    return lines.join('\n')
+    const left = Math.min(...windows.map(window => Math.round(100 - window.usedPercent)))
+    const rank = blocked || left < 20 ? 0 : !windows.length ? 1 : left < 50 ? 2 : 3
+    const width = Math.max(0, ...windows.map(window => window.label.length))
+    const lines = [`<b>${STATUS[rank].icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}`]
+    if (blocked) lines.push(`⛔ quota-blocked · ${Number.isFinite(blockedUntil) ? resetNote(blockedUntil, now) : 'awaiting /retry_quota'}`)
+    if (note) lines.push(escapeHtml(note))
+    if (windows.length) lines.push(`<pre>${escapeHtml(windows.map(window => windowLine(window, width, now)).join('\n'))}</pre>`)
+    return { rank, html: lines.join('\n') }
   }))
-  const report = ['Account usage', '', ...sections.flatMap((section, index) => index ? ['', section] : [section])].join('\n')
-  // Telegram rejects replies over 4096 characters; cut at a line break.
-  return report.length > 4000 ? `${report.slice(0, report.lastIndexOf('\n', 4000))}\n…` : report
+  sections.sort((first, second) => first.rank - second.rank)
+  const summary = STATUS.flatMap((status, rank) => {
+    const count = sections.filter(section => section.rank === rank).length
+    return count ? [`${status.icon} ${count} ${status.name}`] : []
+  }).join(' · ')
+  let report = `<b>Usage</b> · % left, time to reset\n${summary}`
+  for (const section of sections) {
+    // Telegram rejects replies over 4096 characters; drop whole sections, never cut inside a tag.
+    if (report.length + section.html.length + 1 > 4000) { report += '\n…'; break }
+    report += `\n${section.html}`
+  }
+  return report
 }

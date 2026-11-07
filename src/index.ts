@@ -1221,7 +1221,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if (text === '/usage') {
       await ctx.reply(await usageReport(config.controlDir, (await control.status()).setupHealth, {
         showAccountEmails: ctx.chat.type === 'private',
-      }))
+      }), { parse_mode: 'HTML' })
       return
     }
 
