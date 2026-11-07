@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { identity, sha256, validateManifest, validateReceipt, validateChecks, tarManifest, validateSource, registryState, publishOnce, githubClient, githubTagCreator, ensureTag, readbackDelays } from '../scripts/trusted-beta.mjs';
+import { fileURLToPath } from 'node:url';
+import { identity, sha256, validateManifest, validateReceipt, validateChecks, tarManifest, validateSource, registryState, publishOnce, githubClient, githubTagCreator, githubReleaseWriter, ensureTag, readbackDelays, publicationReceipt, finishRelease, finish } from '../scripts/trusted-beta.mjs';
 
 const env = { RELEASE_ID: '123', RELEASE_REPOSITORY: 'jdorado/ez-agents', RELEASE_PACKAGE: '@jc_stack/ez-agents', RELEASE_VERSION: '1.2.3-beta.1', RELEASE_SOURCE_SHA: 'a'.repeat(40), RELEASE_SHA256: sha256(Buffer.from('candidate')), RELEASE_REQUIRED_CHECKS: '["verify (22)"]', GITHUB_REPOSITORY: 'jdorado/ez-agents', GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', GITHUB_SHA: 'a'.repeat(40) };
 const expected = identity(env);
@@ -407,4 +408,215 @@ test('transient readback errors are retried but different registry bytes fail at
   await assert.rejects(publishOnce(expected, { readState, publishTarball: async () => { writes++; }, sleep: async ms => { waits.push(ms); }, record: async event => events.push(event.phase), report: () => {} }), /Publication unresolved.*differs/);
   assert.equal(writes, 1); assert.deepEqual(waits, []);
   assert.ok(events.includes('readback-error'));
+});
+
+const publicationBytes = (status = 'published', events = []) => Buffer.from(JSON.stringify({ schema: 1, expected, events: [{ phase: 'preflight' }, ...events, { phase: 'complete', result: { status, version: expected.version, sha256: expected.sha256 } }] }, null, 2) + '\n');
+const receiptBytes = publicationBytes();
+const sumsBytes = Buffer.from(`${expected.sha256}  candidate.tgz\n`);
+const candidateBytes = Buffer.from('candidate');
+
+// A stateful fake of the draft release and its two writes; `writes` records every attempted GitHub write in order.
+function fakeRelease({ draft = true, assets = [], tag = { type: 'commit', sha: expected.sourceSha }, release = {}, failUpload = false, stayDraft = false, dropUploads = false } = {}) {
+  const state = { reads: [], writes: [], tag, bytes: {}, release: { id: 123, draft, prerelease: true, tag_name: `v${expected.version}`, assets: [], ...release } };
+  let next = 100;
+  const add = (name, bytes, extra = {}) => { const asset = { id: ++next, name, state: 'uploaded', ...extra }; state.release.assets.push(asset); state.bytes[asset.id] = bytes; return asset; };
+  add('candidate.tgz', candidateBytes); add('release-receipt.json', Buffer.from('{}'));
+  for (const [name, bytes, extra] of assets) add(name, bytes, extra);
+  const api = async (path, binary) => {
+    state.reads.push(path);
+    if (path === tagPath) { if (!state.tag) throw missingTag(); return { object: state.tag }; }
+    if (path === '/repos/jdorado/ez-agents/releases/123') return structuredClone(state.release);
+    const match = path.match(/^\/repos\/jdorado\/ez-agents\/releases\/assets\/(\d+)$/);
+    assert.ok(match && binary, `Unexpected API request ${path}`);
+    return state.bytes[match[1]];
+  };
+  const writer = {
+    upload: async (value, name, { type, bytes }) => {
+      assert.deepEqual(value, expected); state.writes.push(`upload ${name}`);
+      if (failUpload) throw new Error('HTTP 502 while uploading release asset');
+      if (!dropUploads) add(name, bytes);
+      state.uploaded = { ...state.uploaded, [name]: { type, bytes } };
+    },
+    publish: async value => { assert.deepEqual(value, expected); state.writes.push('publish'); if (!stayDraft) state.release.draft = false; },
+  };
+  return { state, api, writer };
+}
+const finishWith = (fake, bytes = receiptBytes) => finishRelease(expected, bytes, fake);
+
+test('publication receipt counts only when complete for this exact dispatch', () => {
+  publicationReceipt(receiptBytes, expected);
+  publicationReceipt(publicationBytes('already-published'), expected);
+  const complete = { phase: 'complete', result: { status: 'published', version: expected.version, sha256: expected.sha256 } };
+  const receiptWith = change => Buffer.from(JSON.stringify({ schema: 1, expected, events: [{ phase: 'preflight' }, complete], ...change }));
+  for (const bytes of [
+    Buffer.from('not json'), Buffer.from('null'), Buffer.alloc(1024 * 1024 + 1),
+    receiptWith({ schema: 2 }), receiptWith({ expected: { ...expected, sourceSha: 'b'.repeat(40) } }), receiptWith({ expected: { ...expected, releaseId: 124 } }),
+    receiptWith({ events: undefined }), receiptWith({ events: [] }),
+    receiptWith({ events: [{ phase: 'write-started' }] }), receiptWith({ events: [{ phase: 'readback', after: { exists: true, latest: expected.version } }] }),
+    receiptWith({ events: [complete, { phase: 'failed', error: 'late' }] }),
+    receiptWith({ events: [{ ...complete, result: { ...complete.result, status: 'unresolved' } }] }),
+    receiptWith({ events: [{ ...complete, result: { ...complete.result, version: '9.9.9' } }] }),
+    receiptWith({ events: [{ ...complete, result: { ...complete.result, sha256: '0'.repeat(64) } }] }),
+  ]) assert.throws(() => publicationReceipt(bytes, expected));
+});
+
+test('finish adds the checksum and receipt, then publishes the draft as a prerelease, in that order', async () => {
+  const fake = fakeRelease();
+  const result = await finishWith(fake);
+  assert.deepEqual(result, { status: 'finished', version: expected.version, sha256: expected.sha256 });
+  assert.deepEqual(fake.state.writes, ['upload SHA256SUMS', 'upload publication-receipt.json', 'publish']);
+  // The uploaded checksum file verifies the candidate asset and the receipt is the publish job's own file.
+  assert.deepEqual(fake.state.uploaded['SHA256SUMS'], { type: 'application/octet-stream', bytes: sumsBytes });
+  assert.equal(sha256(candidateBytes), sumsBytes.toString().split('  ')[0]);
+  assert.deepEqual(fake.state.uploaded['publication-receipt.json'], { type: 'application/json', bytes: receiptBytes });
+  assert.equal(fake.state.release.draft, false);
+  assert.equal(fake.state.release.prerelease, true);
+});
+
+test('finish is a no-op on a finished release and continues an interrupted one without replacing anything', async () => {
+  const done = fakeRelease();
+  await finishWith(done);
+  const before = done.state.writes.length;
+  // A rerun may carry a different but valid receipt (for example already-published); the existing one stays.
+  for (const bytes of [receiptBytes, publicationBytes('already-published', [{ phase: 'readback' }])]) {
+    assert.equal((await finishWith(done, bytes)).status, 'already-finished');
+  }
+  assert.equal(done.state.writes.length, before);
+  const cases = [
+    { name: 'checksum already uploaded', assets: [['SHA256SUMS', sumsBytes]], writes: ['upload publication-receipt.json', 'publish'] },
+    { name: 'both assets uploaded, still a draft', assets: [['SHA256SUMS', sumsBytes], ['publication-receipt.json', receiptBytes]], writes: ['publish'] },
+    { name: 'published by hand without a receipt', draft: false, assets: [['SHA256SUMS', sumsBytes]], writes: ['upload publication-receipt.json'] },
+    { name: 'published by hand without any asset', draft: false, assets: [], writes: ['upload SHA256SUMS', 'upload publication-receipt.json'] },
+  ];
+  for (const { name, writes, ...options } of cases) {
+    const fake = fakeRelease(options);
+    assert.equal((await finishWith(fake)).status, 'finished', name);
+    assert.deepEqual(fake.state.writes, writes, name);
+    assert.equal(fake.state.release.draft, false, name);
+  }
+});
+
+test('finish fails closed before writing anything when the release, tag, bytes or assets do not match', async () => {
+  const wrongReceipt = Buffer.from(JSON.stringify({ schema: 1, expected: { ...expected, sourceSha: 'b'.repeat(40) }, events: [] }));
+  const cases = {
+    'candidate bytes changed': { mutate: state => { state.bytes[101] = Buffer.from('replaced'); } },
+    'candidate missing': { mutate: state => { state.release.assets = state.release.assets.filter(asset => asset.name !== 'candidate.tgz'); } },
+    'candidate partially uploaded': { mutate: state => { state.release.assets[0].state = 'starter'; } },
+    'tag missing': { options: { tag: null } },
+    'tag at another commit': { options: { tag: { type: 'commit', sha: 'b'.repeat(40) } } },
+    'not a prerelease': { options: { release: { prerelease: false } } },
+    'another release tag': { options: { release: { tag_name: 'v9.9.9' } } },
+    'another release id': { options: { release: { id: 124 } } },
+    'unknown draft state': { options: { release: { draft: undefined } } },
+    'checksum differs': { options: { assets: [['SHA256SUMS', Buffer.from(`${'0'.repeat(64)}  candidate.tgz\n`)]] } },
+    'checksum partially uploaded': { options: { assets: [['SHA256SUMS', sumsBytes, { state: 'starter' }]] } },
+    'receipt for another dispatch': { options: { assets: [['publication-receipt.json', wrongReceipt]] } },
+    'duplicate checksum': { options: { assets: [['SHA256SUMS', sumsBytes], ['SHA256SUMS', sumsBytes]] } },
+  };
+  for (const [name, { options, mutate }] of Object.entries(cases)) {
+    const fake = fakeRelease(options);
+    mutate?.(fake.state);
+    await assert.rejects(finishWith(fake), undefined, name);
+    assert.deepEqual(fake.state.writes, [], name);
+  }
+  // An invalid receipt stops before the first GitHub read.
+  const fake = fakeRelease();
+  for (const bytes of [Buffer.from('{}'), publicationBytes('unresolved')]) await assert.rejects(finishWith(fake, bytes), /Publication receipt/);
+  assert.deepEqual(fake.state.reads, []);
+});
+
+test('finish never publishes after a failed upload and rejects an unconfirmed readback', async () => {
+  const failed = fakeRelease({ failUpload: true });
+  await assert.rejects(finishWith(failed), /HTTP 502/);
+  assert.deepEqual(failed.state.writes, ['upload SHA256SUMS']);
+  const stuck = fakeRelease({ stayDraft: true });
+  await assert.rejects(finishWith(stuck), /still a draft/);
+  const dropped = fakeRelease({ draft: false, dropUploads: true });
+  await assert.rejects(finishWith(dropped), /incomplete/);
+  const swapped = fakeRelease();
+  const publish = swapped.writer.publish;
+  swapped.writer.publish = async value => { await publish(value); swapped.state.release.assets[0].id = 999; };
+  await assert.rejects(finishWith(swapped), /changed during publication/);
+});
+
+test('release writer makes only one POST upload per asset and one PATCH publish, and reports failures without secrets', async () => {
+  const requests = [];
+  const writer = status => githubReleaseWriter('private-token', async (url, options) => { requests.push({ url: String(url), options }); return new Response('private-body', { status }); });
+  await writer(201).upload(expected, 'SHA256SUMS', { type: 'application/octet-stream', bytes: sumsBytes });
+  await writer(200).publish(expected);
+  assert.deepEqual(requests.map(({ url, options }) => [options.method, url]), [
+    ['POST', 'https://uploads.github.com/repos/jdorado/ez-agents/releases/123/assets?name=SHA256SUMS'],
+    ['PATCH', 'https://api.github.com/repos/jdorado/ez-agents/releases/123'],
+  ]);
+  assert.equal(requests[0].options.headers['Content-Type'], 'application/octet-stream');
+  assert.equal(requests[0].options.body, sumsBytes);
+  assert.deepEqual(JSON.parse(requests[1].options.body), { draft: false, prerelease: true, make_latest: 'false' });
+  for (const { options } of requests) { assert.equal(options.headers.Authorization, 'Bearer private-token'); assert.equal(options.redirect, 'manual'); }
+  for (const status of [200, 401, 403, 404, 422, 500]) {
+    await assert.rejects(writer(status).upload(expected, 'SHA256SUMS', { type: 'text/plain', bytes: sumsBytes }), error => {
+      assert.match(error.message, new RegExp(`HTTP ${status} while uploading release asset SHA256SUMS`));
+      assert.doesNotMatch(error.message, /private-token|private-body/);
+      return true;
+    });
+  }
+  for (const status of [201, 401, 403, 404, 422, 500]) {
+    await assert.rejects(writer(status).publish(expected), error => {
+      assert.match(error.message, new RegExp(`HTTP ${status} while publishing release v1\\.2\\.3-beta\\.1`));
+      assert.doesNotMatch(error.message, /private-token|private-body/);
+      return true;
+    });
+  }
+});
+
+test('finish entry point reads the receipt the publish job preserved and needs the dispatch identity', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'beta-finish-test-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const fake = fakeRelease();
+  // No receipt, or a push-triggered run, fails before any GitHub read.
+  await assert.rejects(finish(dir, env, fake.api, fake.writer), /ENOENT/);
+  await writeFile(join(dir, 'publication-receipt.json'), receiptBytes);
+  await assert.rejects(finish(dir, { ...env, GITHUB_EVENT_NAME: 'push' }, fake.api, fake.writer), /manually dispatch/);
+  assert.deepEqual(fake.state.reads, []);
+  assert.equal((await finish(dir, env, fake.api, fake.writer)).status, 'finished');
+  assert.deepEqual(fake.state.writes, ['upload SHA256SUMS', 'upload publication-receipt.json', 'publish']);
+});
+
+test('only the finish job after publish can write the release, with no OIDC and no npm publish', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/npm-beta-shared.yml', import.meta.url), 'utf8');
+  const jobs = {}; let current;
+  for (const line of workflow.slice(workflow.indexOf('\njobs:\n')).split('\n').slice(2)) {
+    const name = line.match(/^ {2}([a-z][a-z-]*):$/)?.[1];
+    if (name) jobs[current = name] = ''; else if (current) jobs[current] += line + '\n';
+  }
+  const permissions = block => Object.fromEntries([...block.matchAll(/^ {6}([a-z-]+): (read|write)$/gm)].map(match => [match[1], match[2]]));
+  assert.match(workflow, /^permissions: \{\}$/m);
+  assert.deepEqual(Object.keys(jobs), ['validate', 'publish', 'finish']);
+  assert.equal(permissions(jobs.validate).contents, 'write');
+  assert.deepEqual(permissions(jobs.publish), { contents: 'read', actions: 'read', checks: 'read', 'id-token': 'write' });
+  assert.deepEqual(permissions(jobs.finish), { contents: 'write', actions: 'read' });
+  assert.match(jobs.publish, /^ {4}needs: validate$/m);
+  assert.match(jobs.finish, /^ {4}needs: publish$/m);
+  assert.doesNotMatch(jobs.finish, /id-token|NODE_AUTH_TOKEN|npm |trusted-beta\.mjs (?:validate|publish)/);
+  assert.match(jobs.finish, /trusted-beta\.mjs finish "\$RUNNER_TEMP\/readback"/);
+  assert.doesNotMatch(jobs.validate + jobs.publish, /trusted-beta\.mjs finish/);
+  assert.match(jobs.finish, /persist-credentials: false/);
+  assert.doesNotMatch(jobs.finish, /^ {4}if:/m);
+  assert.match(jobs.finish, /merge-multiple: true/);
+  assert.match(jobs.finish, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  // The finish job reads the receipt the publish job preserved, by immutable artifact ID.
+  assert.match(jobs.publish, /readback-artifact-id: \$\{\{ steps\.readback\.outputs\.artifact-id \}\}/);
+  assert.match(jobs.finish, /artifact-ids: \$\{\{ needs\.publish\.outputs\.readback-artifact-id \}\}/);
+});
+
+test('command line runs finish against the preserved receipt and rejects other modes', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'beta-finish-cli-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const run = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/trusted-beta.mjs', import.meta.url)), ...args], { encoding: 'utf8', env });
+  // With a valid dispatch identity and no receipt, finish fails on the missing file before any network access.
+  const missing = run('finish', dir);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /publication-receipt\.json/);
+  const unknown = run('release', dir);
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /Usage: trusted-beta\.mjs validate\|publish\|finish OUTPUT_DIR/);
 });

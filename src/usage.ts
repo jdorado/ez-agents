@@ -4,16 +4,18 @@ import { join } from 'node:path'
 import { authHomes, installed } from './ai.js'
 import { claudeAuthEnvironment, cliHome } from './auth-profile.js'
 import { executorEnvironment, executorInvocation } from './executor.js'
+import { escapeHtml } from './format.js'
 import { quotaBlockedUntil, quotaScope, type SetupHealth } from './setup-fallback.js'
 
 // Read-only owner view of each login's provider limits, asked of the native
 // client on demand. Nothing is stored and Ez never copies or prints the
 // credential: each client runs with its own bound home. Only percentages,
 // clocks, scope names and short status words are projected, with an optional
-// saved Claude email for a private owner chat.
+// saved Claude or Codex email for a private owner chat.
 export type UsageWindow = { label: string; usedPercent: number; resetsAt?: number; resetsText?: string }
 export type UsageReaders = {
   codex: (home: string) => Promise<UsageWindow[]>
+  codexEmail?: (home: string) => Promise<string | undefined>
   claude: (home: string, authProfile?: string) => Promise<UsageWindow[]>
 }
 
@@ -36,14 +38,16 @@ const codexWindows = (limits: any): UsageWindow[] => (['primary', 'secondary'] a
   return [{ label: durationLabel(limits[name].windowDurationMins, name), usedPercent, ...(typeof resetsAt === 'number' ? { resetsAt } : {}) }]
 })
 
-export const readCodexLimits = (home: string, timeoutMs = 10_000): Promise<UsageWindow[]> => new Promise((resolve, reject) => {
+// One request to the home's `codex app-server`; the native client answers for
+// its own login, so Ez never opens the credential file.
+const codexRequest = (home: string, method: string, params: object, rejected: string, timeoutMs: number): Promise<any> => new Promise((resolve, reject) => {
   const { command, args } = executorInvocation('codex', ['app-server', '--stdio'])
   const child = spawn(command, args, { cwd: home, env: { ...executorEnvironment(), CODEX_HOME: home }, stdio: ['pipe', 'pipe', 'ignore'] })
   let buffer = '', settled = false
-  const finish = (error?: UsageError, windows?: UsageWindow[]) => {
+  const finish = (error?: UsageError, result?: unknown) => {
     if (settled) return
     settled = true; clearTimeout(timer); child.kill()
-    error ? reject(error) : resolve(windows!)
+    error ? reject(error) : resolve(result)
   }
   const timer = setTimeout(() => finish(new UsageError('timed out')), timeoutMs)
   const send = (message: object) => child.stdin!.write(JSON.stringify(message) + '\n')
@@ -61,15 +65,24 @@ export const readCodexLimits = (home: string, timeoutMs = 10_000): Promise<Usage
       if (!message || typeof message !== 'object' || message.method) continue
       if (message.id === 1) {
         send({ method: 'initialized', params: {} })
-        send({ id: 2, method: 'account/rateLimits/read', params: {} })
+        send({ id: 2, method, params })
       } else if (message.id === 2) {
-        if (message.error) finish(new UsageError('limits unavailable (not logged in?)'))
-        else finish(undefined, codexWindows(message.result?.rateLimits))
+        if (message.error) finish(new UsageError(rejected))
+        else finish(undefined, message.result)
       }
     }
   })
   send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ezenciel-agents', version: '1' } } })
 })
+
+export const readCodexLimits = async (home: string, timeoutMs = 10_000): Promise<UsageWindow[]> =>
+  codexWindows((await codexRequest(home, 'account/rateLimits/read', {}, 'limits unavailable (not logged in?)', timeoutMs))?.rateLimits)
+
+// `account/read` returns the email of a ChatGPT login; an API-key login has none.
+export const readCodexEmail = async (home: string, timeoutMs = 10_000): Promise<string | undefined> => {
+  const account = (await codexRequest(home, 'account/read', { refreshToken: false }, 'account unavailable', timeoutMs).catch(() => undefined))?.account
+  return account?.type === 'chatgpt' ? cleanEmail(account.email) : undefined
+}
 
 // `claude -p /usage` is a local client command: no model turn, no tokens. It
 // prints lines like "Current session: 15% used · resets Oct 31 at 11:50am
@@ -98,16 +111,18 @@ export const readClaudeLimits = async (home: string, authProfile?: string, timeo
   })
 }
 
-const defaultReaders: UsageReaders = { codex: readCodexLimits, claude: readClaudeLimits }
+const defaultReaders: UsageReaders = { codex: readCodexLimits, codexEmail: readCodexEmail, claude: readClaudeLimits }
+
+const cleanEmail = (email: unknown): string | undefined =>
+  typeof email === 'string' && email.length <= 254 && email === email.trim() &&
+    /^[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email) ? email : undefined
 
 const savedClaudeEmail = async (home: string): Promise<string | undefined> => {
   // A setup token overrides the saved browser login and has no saved identity.
   const hasSetupToken = await lstat(join(home, 'oauth-token')).then(() => true, error => error.code !== 'ENOENT')
   if (hasSetupToken) return
   try {
-    const email: unknown = JSON.parse(await readFile(join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress
-    if (typeof email === 'string' && email.length <= 254 && email === email.trim() &&
-        /^[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email)) return email
+    return cleanEmail(JSON.parse(await readFile(join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress)
   } catch {}
 }
 
@@ -115,15 +130,20 @@ const remaining = (ms: number): string => {
   const minutes = Math.max(0, Math.round(ms / 60_000)), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60)
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`
 }
-const clock = (ms: number): string => { const iso = new Date(ms).toISOString(); return `${iso.slice(5, 10)} ${iso.slice(11, 16)} UTC` }
-const resetNote = (ms: number, now: number): string => ms > now ? `resets in ${remaining(ms - now)} (${clock(ms)})` : 'reset due'
+const resetNote = (ms: number, now: number): string => ms > now ? `resets in ${remaining(ms - now)}` : 'reset due'
 
 const windowLine = (window: UsageWindow, width: number, now: number): string => {
   const left = Math.round(100 - window.usedPercent), filled = Math.round(left / 10)
-  return `  ${window.label.padEnd(width)} ${'█'.repeat(filled)}${'░'.repeat(10 - filled)} ${left}% left` +
-    (window.resetsAt !== undefined ? ` · ${resetNote(window.resetsAt * 1000, now)}` : window.resetsText ? ` · resets ${window.resetsText}` : '')
+  const reset = window.resetsAt !== undefined ? resetNote(window.resetsAt * 1000, now).replace('resets in ', '')
+    : window.resetsText ? `resets ${window.resetsText}` : ''
+  return `${window.label.padEnd(width)} ${'█'.repeat(filled)}${'░'.repeat(10 - filled)} ${String(left).padStart(3)}%${reset ? ` · ${reset}` : ''}`
 }
 
+// Worst first: attention (blocked or under 20% left), unavailable, low, ok.
+const STATUS = [{ icon: '🔴', name: 'need attention' }, { icon: '⚪', name: 'unavailable' }, { icon: '🟡', name: 'low' }, { icon: '🟢', name: 'ok' }]
+
+// Telegram HTML: a bold title per login (the email when shown, else the login
+// name) and one monospace block of windows so the bars align.
 export const usageReport = async (controlDir: string, health: SetupHealth = {},
   deps: { readers?: UsageReaders; available?: (cli: string) => Promise<boolean>; now?: number; showAccountEmails?: boolean } = {}): Promise<string> => {
   const readers = deps.readers ?? defaultReaders, now = deps.now ?? Date.now()
@@ -132,20 +152,34 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
   const sections = await Promise.all(homes.map(async ({ cli, authProfile }) => {
     const scope = quotaScope({ id: 'usage', name: 'usage', cli, ...(authProfile ? { authProfile } : {}) })
     const home = cliHome(controlDir, cli, authProfile)
-    const email = deps.showAccountEmails && cli === 'claude' ? await savedClaudeEmail(home) : undefined
-    const lines = [email ? `${scope} · ${email}` : scope]
-    const blockedUntil = quotaBlockedUntil(health[scope])
-    if (blockedUntil > now) lines.push(Number.isFinite(blockedUntil) ? `  ⛔ quota-blocked · ${resetNote(blockedUntil, now)}` : '  ⛔ quota-blocked · awaiting /retry_quota')
+    const email = !deps.showAccountEmails ? undefined : cli === 'claude' ? await savedClaudeEmail(home) : await readers.codexEmail?.(home)
+    const blockedUntil = quotaBlockedUntil(health[scope]), blocked = blockedUntil > now
+    let windows: UsageWindow[] = [], note: string | undefined
     try {
-      const windows = await (cli === 'codex' ? readers.codex(home) : readers.claude(home, authProfile))
-      const width = Math.max(0, ...windows.map(window => window.label.length))
-      lines.push(...(windows.length ? windows.map(window => windowLine(window, width, now)) : ['  no limit data returned']))
+      windows = await (cli === 'codex' ? readers.codex(home) : readers.claude(home, authProfile))
+      if (!windows.length) note = 'no limit data returned'
     } catch (error) {
-      lines.push(`  ${error instanceof UsageError ? error.message : 'unavailable'}`)
+      note = error instanceof UsageError ? error.message : 'unavailable'
     }
-    return lines.join('\n')
+    const left = Math.min(...windows.map(window => Math.round(100 - window.usedPercent)))
+    const rank = blocked || left < 20 ? 0 : !windows.length ? 1 : left < 50 ? 2 : 3
+    const width = Math.max(0, ...windows.map(window => window.label.length))
+    const lines = [`<b>${STATUS[rank].icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}`]
+    if (blocked) lines.push(`⛔ quota-blocked · ${Number.isFinite(blockedUntil) ? resetNote(blockedUntil, now) : 'awaiting /retry_quota'}`)
+    if (note) lines.push(escapeHtml(note))
+    if (windows.length) lines.push(`<pre>${escapeHtml(windows.map(window => windowLine(window, width, now)).join('\n'))}</pre>`)
+    return { rank, html: lines.join('\n') }
   }))
-  const report = ['Account usage', '', ...sections.flatMap((section, index) => index ? ['', section] : [section])].join('\n')
-  // Telegram rejects replies over 4096 characters; cut at a line break.
-  return report.length > 4000 ? `${report.slice(0, report.lastIndexOf('\n', 4000))}\n…` : report
+  sections.sort((first, second) => first.rank - second.rank)
+  const summary = STATUS.flatMap((status, rank) => {
+    const count = sections.filter(section => section.rank === rank).length
+    return count ? [`${status.icon} ${count} ${status.name}`] : []
+  }).join(' · ')
+  let report = `<b>Usage</b> · % left, time to reset\n${summary}`
+  for (const section of sections) {
+    // Telegram rejects replies over 4096 characters; drop whole sections, never cut inside a tag.
+    if (report.length + section.html.length + 1 > 4000) { report += '\n…'; break }
+    report += `\n${section.html}`
+  }
+  return report
 }
