@@ -13,6 +13,7 @@ import { mkdir, stat, writeFile } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
 import { Scripts } from './scripts.js'
 import { redactFailure } from './failure.js'
+import { statusReport, type StatusView } from './status-report.js'
 import { ownedScheduledTasks, scheduledTaskDetailText, scheduledTasksText } from './scheduled-tasks.js'
 import { EventSources, eventRunId, batchReady, type SourceEvent } from './event-sources.js'
 import {removeTaskAttachments} from './task-attachments.js'
@@ -958,9 +959,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     return match ? (match[1] ? Number(match[1]) : undefined) : null
   }
   const isTasksCommand = (text?: string): boolean => /^\/tasks(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text?.trim() ?? '')
-  const statusKeyboard = () => new InlineKeyboard()
-    .text('Stop active work', 'menu:stop').text('Cancel queue', 'menu:cancel').row()
-    .text('Retry failed incoming message', 'menu:retry')
+  // Buttons appear only for what the snapshot shows can be acted on.
+  const statusKeyboard = (view: StatusView) => {
+    const keyboard = new InlineKeyboard()
+    if (view.stop) keyboard.text('Stop active work', 'menu:stop')
+    if (view.cancel) keyboard.text('Cancel queue', 'menu:cancel')
+    if (view.stop || view.cancel) keyboard.row()
+    if (view.retry) keyboard.text('Retry failed incoming message', 'menu:retry')
+    return keyboard.inline_keyboard.length ? keyboard : undefined
+  }
   const scheduledTasks = async () => {
     const owner = (await control.status()).owner
     if (!owner) return 'Scheduled tasks\n\nNo paired owner.'
@@ -977,51 +984,28 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     })()
     for (const part of splitTelegramText(text)) await ctx.reply(part)
   }
-  const statusText = async () => {
+  const statusReply = async (ctx: Context) => {
     const running = await runs.running(false)
     const all = await runs.list()
     const waitingForHost = running && process.env.EZ_EXECUTOR_TRANSPORT === 'host' && await stat(join(config.controlDir, 'host-executor', running.id + '.request.json')).then(() => true, () => false)
-    const incoming = await inbox.status()
-    const delivery = await runs.deliveryStatus()
     const ai = await control.aiState(aiMenu.initial)
     const selected = ai.presets.find((p) => p.id === ai.selectedId)!
     const discovered = await discoverDefaults(config.workspace, { codexHome, claudeHome: claudeConfigHome(config.controlDir), nativeCodexFallback: true })
-    const displayedSelected = statusPreset(selected, discovered)
-    const scheduled = all.filter(run => run.scheduled && run.status === 'running').length
-    const queued = all.filter(run => run.status === 'queued').length
-    const failedRuns = all.filter(run => run.status === 'failed').length
-    const blocked = all.filter(run => run.blockReason === 'external-execution-unavailable').length
-    const attention = [
-      ...(failedRuns || incoming.failed
-        ? [`• Past failures: ${failedRuns} run${failedRuns === 1 ? '' : 's'}; ${incoming.failed} incoming batch${incoming.failed === 1 ? '' : 'es'}. Current work is unaffected.`]
-        : []),
-      ...(blocked ? [`• ${blocked} external run${blocked === 1 ? ' was' : 's were'} blocked because isolated execution was unavailable.`] : []),
-      ...(delivery.failed ? [`• ${delivery.failed} message${delivery.failed === 1 ? ' failed' : 's failed'} to send.`] : []),
-      ...(delivery.unknown ? [`• ${delivery.unknown} delivery ${delivery.unknown === 1 ? 'is' : 'attempts are'} awaiting confirmation — inspect before retrying.`] : []),
-      ...(unavailableSources.size ? [`• Event sources unavailable: ${[...unavailableSources].join(', ')}.`] : []),
-    ]
-    return [
-      '🟢 Ez is online',
-      '',
-      'System',
-      ...await softwareStatus(config.controlDir, config.isolation),
-      `AI: ${selected.name} (${presetLabel(displayedSelected)})`,
-      '',
-      'Work',
-      `Current: ${running ? (waitingForHost ? 'waiting for the workspace' : 'running') : 'idle'}`,
-      `Scheduled limit: ${config.scheduledConcurrency ?? 6}`,
-      `Background: ${scheduled ? `${scheduled} scheduled task${scheduled === 1 ? '' : 's'} running` : 'none'}`,
-      ...all.filter(r => r.status === 'queued' && r.quotaWait).map(r => `Waiting for quota: ${r.scheduled?.id ?? r.id}${r.quotaWait!.retryAt ? ` · next check ${r.quotaWait!.retryAt}` : ' · awaiting availability or /retry_quota'}`),
-      `Queue: ${queued || incoming.pending ? `${queued} run${queued === 1 ? '' : 's'}; ${incoming.pending} incoming message${incoming.pending === 1 ? '' : 's'}` : 'empty'}`,
-      ...(attention.length ? ['', 'Needs attention', ...attention] : []),
-      '',
-      'Controls: /stop stops active work. /cancel clears queued work.',
-      ...(config.executorCli === 'grok'
-        ? [
-            'Known limitation: interrupted Grok sessions may stall on resume. /new explicitly resets the conversation.',
-          ]
-        : []),
-    ].join('\n')
+    const view = statusReport({
+      now: Date.now(),
+      runs: all,
+      names: new Map((await scheduler.listReadOnly().catch(() => [])).map(schedule => [schedule.id, schedule.name])),
+      system: [...await softwareStatus(config.controlDir, config.isolation), `AI: ${selected.name} (${presetLabel(statusPreset(selected, discovered))})`],
+      scheduledLimit: config.scheduledConcurrency ?? 6,
+      incoming: await inbox.status(),
+      delivery: runs.deliveryProblems(),
+      unavailableSources: [...unavailableSources],
+      ...(waitingForHost && running ? { waitingRunId: running.id } : {}),
+      privateChat: ctx.chat?.type === 'private',
+      ...(config.executorCli === 'grok' ? { note: 'Known limitation: interrupted Grok sessions may stall on resume. /new explicitly resets the conversation.' } : {}),
+    })
+    const markup = statusKeyboard(view)
+    await ctx.reply(view.html, { parse_mode: 'HTML', ...(markup ? { reply_markup: markup } : {}) })
   }
   const stopActiveWork = async (): Promise<boolean> => {
     const children: [string | undefined, ChildProcess][] = [...background]
@@ -1214,7 +1198,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
 
     if (text === '/status') {
-      await ctx.reply(await statusText(), { reply_markup: statusKeyboard() })
+      await statusReply(ctx)
       return
     }
 
@@ -1410,7 +1394,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         )
       } else if (action === 'status') {
         await ctx.answerCallbackQuery()
-        await ctx.reply(await statusText(), { reply_markup: statusKeyboard() })
+        await statusReply(ctx)
       } else if (action === 'scheduled-tasks') {
         await ctx.answerCallbackQuery()
         await replyScheduledTasks(ctx)
