@@ -113,6 +113,12 @@ test('source checkouts build RCs only: clean reviewed commit plus increasing lab
   const args=built.at(-1);
   assert.ok(args.includes('BUILD_TAG=0.1.0-beta.36.rc.2'));assert.ok(args.includes(`BUILD_SHA=${sha}`));
   assert.ok(args.includes('ezenciel-agents:0.1.0-beta.36.rc.2'));
+  // The counter scheme's candidate label is accepted too, and a bare release is not a candidate.
+  await assert.rejects(build({home,source,label:'0.71.0'},invoke),/RC label/);
+  const counterResult=await build({home,source,label:'0.71.0-rc.1'},invoke);
+  assert.equal(counterResult.label,'0.71.0-rc.1');
+  const counterArgs=built.at(-1);
+  assert.ok(counterArgs.includes('BUILD_TAG=0.71.0-rc.1'));assert.ok(counterArgs.includes('ezenciel-agents:0.71.0-rc.1'));
   inside=false;
   await assert.rejects(build({home,source,label:'0.1.0-beta.36.rc.2'},invoke),/--label requires a git checkout/);
   // A tarball unpacked inside an unrelated repository is not a source checkout.
