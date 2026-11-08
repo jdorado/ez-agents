@@ -114,13 +114,19 @@ export const workspaceFile = async (workspace: string, file: string, regular = t
 export const MAX_INCOMING_ATTACHMENT_BYTES = 10 * 1024 * 1024
 // Inbound files are only stored for the agent to open, never parsed here, so any format is accepted
 // except programs and scripts that are dangerous to hand around by name.
-const DANGEROUS_EXTENSION = /\.(exe|dll|msi|scr|com|bat|cmd|ps1|vbs|vbe|wsf|lnk|sh|bash|zsh|command|app|dmg|pkg|deb|rpm|jar|apk|ipa|so|dylib)$/i
-const dangerousBytes = (b: Buffer) => b.subarray(0, 2).toString('latin1') === 'MZ' || b.subarray(0, 2).toString('latin1') === '#!' ||
-  b.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
-  [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(b.length >= 4 ? b.readUInt32BE(0) : -1)
+const DANGEROUS_EXTENSION = /\.(exe|dll|msi|scr|com|bat|cmd|ps1|psm1|vbs|vbe|wsf|hta|reg|lnk|sh|bash|zsh|command|scpt|applescript|app|appimage|run|dmg|pkg|deb|rpm|jar|apk|ipa|so|dylib)$/i
+// Program headers only count when the file is not plain text: a .md starting with `#!` or a CSV starting with `MZ,` is data.
+const dangerousBytes = (name: string, b: Buffer) => {
+  const head = b.length >= 4 ? b.readUInt32BE(0) : -1
+  if (b.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) || [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(head)) return true
+  if (b.subarray(0, 2).toString('latin1') === 'MZ' && detectFileType(b) !== 'text') return true
+  return b.subarray(0, 2).toString('latin1') === '#!' && !/\.(txt|md|markdown|csv)$/i.test(name)
+}
 export const stageChatAttachment = async (stagingRoot: string, name: string, bytes: Buffer, comment: string) => {
   if (!bytes.length || bytes.length > MAX_INCOMING_ATTACHMENT_BYTES) throw new Error('Invalid application attachment: empty or larger than 10 MiB')
-  if (DANGEROUS_EXTENSION.test(name) || dangerousBytes(bytes)) throw new Error('Invalid application attachment: executables and scripts are not accepted')
+  // Test the name staging will use (basename): `run.sh/` must not slip past the extension check.
+  const safeName = sanitizeFileName(name)
+  if (DANGEROUS_EXTENSION.test(safeName) || dangerousBytes(safeName, bytes)) throw new Error('Invalid application attachment: executables and scripts are not accepted')
   const staged = await stageIncomingFile(stagingRoot, name, bytes, true)
   const kind = ['jpeg', 'png', 'webp'].includes(staged.fileType) ? 'image' : staged.fileType === 'mp4' ? 'video' : 'document'
   return { text: `[Attached ${kind} staged at ${staged.fullPath} (type: ${staged.fileType}, size: ${bytes.length} bytes)]${comment ? `\n\nCaption: ${comment}` : ''}`,

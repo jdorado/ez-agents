@@ -439,8 +439,8 @@ It is not forwarded to the host executor.
 `attachment: {name, data}`, where `data` is canonical padded base64 of the file
 bytes. `text` remains the literal user comment and may be empty with an attachment.
 Any file up to 10 MiB decoded is staged for the agent to open (HTML, docx, xlsx, CSV,
-zip, ...); empty files, programs and scripts (`.exe`, `.sh`, `.bat`, `.jar`, `.dmg` and
-similar names, or ELF/Mach-O/PE/`#!` content) are rejected. Core detects file
+zip, ...); empty files, programs and operating-system scripts (`.exe`, `.sh`, `.bat`, `.jar`, `.dmg` and
+similar names, or ELF/Mach-O/PE/`#!` content that is not plain text) are rejected. Core detects file
 content rather than trusting a client MIME label; formats it does not recognise
 are staged as `type: file`. This same limit and staging
 contract apply to Telegram photo/document input.
