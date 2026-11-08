@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 export type DetectedFileType = 'pdf' | 'jpeg' | 'png' | 'webp' | 'text' | 'mp4' | 'unknown'
+export type StagedFileType = Exclude<DetectedFileType, 'unknown'> | 'file'
 
 export const detectFileType = (buffer: Buffer): DetectedFileType => {
   if (buffer.length >= 5 && buffer.subarray(0, 5).toString('ascii') === '%PDF-') {
@@ -55,9 +56,12 @@ export const stageIncomingFile = async (
   stagingRoot: string,
   fileName: string,
   bytes: Buffer,
-): Promise<{ relativePath: string; fullPath: string; fileType: DetectedFileType }> => {
-  const fileType = detectFileType(bytes)
-  if (fileType === 'unknown' || bytes.length > 20 * 1024 * 1024)
+  opaque = false,
+): Promise<{ relativePath: string; fullPath: string; fileType: StagedFileType }> => {
+  const detected = detectFileType(bytes)
+  // Opaque staging keeps any other format (docx, zip, xlsx...) as a plain file for the agent to open itself.
+  const fileType: StagedFileType = detected === 'unknown' && opaque ? 'file' : detected as StagedFileType
+  if (detected === 'unknown' && !opaque || bytes.length > 20 * 1024 * 1024)
     throw new Error('Unsupported or oversized attachment')
   const attachmentsDir = path.join(stagingRoot, 'attachments')
   await mkdir(attachmentsDir, { recursive: true, mode: 0o700 })
@@ -108,11 +112,16 @@ export const workspaceFile = async (workspace: string, file: string, regular = t
 
 // Canonical native-engine attachment metadata for every inbound channel.
 export const MAX_INCOMING_ATTACHMENT_BYTES = 10 * 1024 * 1024
+// Inbound files are only stored for the agent to open, never parsed here, so any format is accepted
+// except programs and scripts that are dangerous to hand around by name.
+const DANGEROUS_EXTENSION = /\.(exe|dll|msi|scr|com|bat|cmd|ps1|vbs|vbe|wsf|lnk|sh|bash|zsh|command|app|dmg|pkg|deb|rpm|jar|apk|ipa|so|dylib)$/i
+const dangerousBytes = (b: Buffer) => b.subarray(0, 2).toString('latin1') === 'MZ' || b.subarray(0, 2).toString('latin1') === '#!' ||
+  b.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) ||
+  [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca].includes(b.length >= 4 ? b.readUInt32BE(0) : -1)
 export const stageChatAttachment = async (stagingRoot: string, name: string, bytes: Buffer, comment: string) => {
-  const type = detectFileType(bytes)
-  if (!bytes.length || bytes.length > MAX_INCOMING_ATTACHMENT_BYTES || type === 'unknown' ||
-    (type === 'text' && !/\.(txt|md|markdown)$/i.test(name))) throw new Error('Invalid application attachment: unsupported type or size')
-  const staged = await stageIncomingFile(stagingRoot, name, bytes)
+  if (!bytes.length || bytes.length > MAX_INCOMING_ATTACHMENT_BYTES) throw new Error('Invalid application attachment: empty or larger than 10 MiB')
+  if (DANGEROUS_EXTENSION.test(name) || dangerousBytes(bytes)) throw new Error('Invalid application attachment: executables and scripts are not accepted')
+  const staged = await stageIncomingFile(stagingRoot, name, bytes, true)
   const kind = ['jpeg', 'png', 'webp'].includes(staged.fileType) ? 'image' : staged.fileType === 'mp4' ? 'video' : 'document'
   return { text: `[Attached ${kind} staged at ${staged.fullPath} (type: ${staged.fileType}, size: ${bytes.length} bytes)]${comment ? `\n\nCaption: ${comment}` : ''}`,
     attachment: {path: staged.fullPath, type: staged.fileType}, fullPath: staged.fullPath }
@@ -121,6 +130,7 @@ export const stageChatAttachment = async (stagingRoot: string, name: string, byt
 // Shared inbound staging/validation with Telegram; restricted correspondence
 // can read only this already-authorized input, never arbitrary workspace paths.
 export async function readChatAttachment(stagingRoot: string, name: string, bytes: Buffer) {
+  if (detectFileType(bytes) === 'unknown' || (detectFileType(bytes) === 'text' && !/\.(txt|md|markdown)$/i.test(name))) throw new Error('Invalid application attachment: unsupported type or size')
   const staged = await stageChatAttachment(stagingRoot, name, bytes, '')
   // Untrusted media parsers never inherit relay secrets.
   const execute = (command: string, args: string[], options: {timeout:number;maxBuffer:number}) =>
