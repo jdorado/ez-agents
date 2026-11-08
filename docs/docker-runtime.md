@@ -345,8 +345,8 @@ left, 🟠 logged out, ⚪ unavailable, 🟡 under 50%, 🟢 ok) and a summary l
 Reset times are UTC unless a row names another zone. A default login with no
 credential at all is not listed; its CLI is named in a final `Hidden (no login)` line. In private owner chats, Claude profiles with a saved browser-login
 email and Codex ChatGPT logins show the email beside the profile name, even if
-usage is unavailable. Group reports, API-key logins and profiles bound to
-setup tokens use the profile name alone.
+usage is unavailable. A setup-token profile shows the email its home last signed in with, since a token
+has no identity of its own. Group reports and API-key logins use the profile name alone.
 Each client answers for its own bound home, and Ez never stores, copies
 or prints the credential. Codex limits and email come from that home's
 `codex app-server` (`account/rateLimits/read`, `account/read`); Claude limits from `claude -p /usage`, a local

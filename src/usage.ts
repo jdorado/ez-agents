@@ -121,10 +121,10 @@ const cleanEmail = (email: unknown): string | undefined =>
   typeof email === 'string' && email.length <= 254 && email === email.trim() &&
     /^[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email) ? email : undefined
 
+// A setup token carries no identity of its own, so a token profile shows the
+// email its home last signed in with; the owner provisions the token for that
+// same account, and the limits are read from that same login.
 const savedClaudeEmail = async (home: string): Promise<string | undefined> => {
-  // A setup token overrides the saved browser login and has no saved identity.
-  const hasSetupToken = await lstat(join(home, 'oauth-token')).then(() => true, error => error.code !== 'ENOENT')
-  if (hasSetupToken) return
   try {
     return cleanEmail(JSON.parse(await readFile(join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress)
   } catch {}

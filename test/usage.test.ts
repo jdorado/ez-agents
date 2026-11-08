@@ -186,12 +186,13 @@ test('Claude usage shows only saved emails in private reports, including unavail
   assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>claude<\/code>\nno limit data returned$/m)
   assert.match(report, /^<b>⚪ relogin\+work@example\.com<\/b> · <code>claude@expired<\/code>\nunavailable$/m)
   assert.match(report, /^<b>⚪ amp&amp;ersand@example\.com<\/b> · <code>claude@amp<\/code>$/m)
-  assert.match(report, /^<b>⚪ claude@token<\/b> · token login\nlimits not readable on a token login$/m)
+  assert.match(report, /^<b>⚪ old@example\.com<\/b> · <code>claude@token<\/code> · token login\nlimits not readable on a token login$/m)
   assert.match(report, /^<b>⚪ claude@invalid<\/b>$/m)
-  assert.doesNotMatch(report, /old@example|invalid@example|Injected|private-/)
+  assert.doesNotMatch(report, /invalid@example|Injected|private-/)
   const group = await usageReport(root, {}, deps)
   assert.match(group, /^<b>⚪ claude@expired<\/b>\nunavailable$/m)
   assert.doesNotMatch(group, /@example\.com/)
+  assert.match(group, /^<b>⚪ claude@token<\/b> · token login$/m)
 })
 
 test('Codex usage shows the app-server account email only in private reports, never for API-key logins', { skip: process.platform === 'win32' }, async t => {
