@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { lstat, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { authHomes, installed } from './ai.js'
+import { authProfileStatus, installed, type AuthProfileStatus } from './ai.js'
 import { claudeAuthEnvironment, cliHome } from './auth-profile.js'
 import { executorEnvironment, executorInvocation } from './executor.js'
 import { escapeHtml } from './format.js'
@@ -93,11 +93,15 @@ const claudeWindows = (text: string): UsageWindow[] => text.split('\n').flatMap(
   const match = line.match(/^Current (session|week)(?: \(([^)]{1,40})\))?: (\d{1,3}(?:\.\d+)?)% used(?: \S resets (.{1,60}))?$/)
   if (!match) return []
   const [, kind, scope, used, resets] = match
-  return [{ label: kind === 'session' ? '5h' : `7d${scope ? ` ${plain(scope)}` : ''}`, usedPercent: percent(Number(used))!, ...(resets ? { resetsText: plain(resets) } : {}) }]
+  return [{ label: kind === 'session' ? '5h' : `7d${scope ? ` ${plain(scope).replace(/^all models$/i, 'all')}` : ''}`, usedPercent: percent(Number(used))!, ...(resets ? { resetsText: plain(resets) } : {}) }]
 })
 
+// A long-lived setup token can only run models, so `/usage` has no limits for
+// it. When the home also keeps its own browser login, ask with that login:
+// limits belong to the account, and `/usage` runs no model turn.
 export const readClaudeLimits = async (home: string, authProfile?: string, timeoutMs = 20_000): Promise<UsageWindow[]> => {
   const auth = await claudeAuthEnvironment(home, authProfile).catch(() => { throw new UsageError('login unreadable') })
+  if (await lstat(join(home, '.credentials.json')).then(() => true, () => false)) delete auth.CLAUDE_CODE_OAUTH_TOKEN
   const { command, args } = executorInvocation('claude', ['-p', '/usage', '--output-format', 'json', '--no-session-persistence'])
   return new Promise((resolve, reject) => {
     const child = execFile(command, args, { cwd: home, env: { ...executorEnvironment(), ...auth }, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout) => {
@@ -117,10 +121,10 @@ const cleanEmail = (email: unknown): string | undefined =>
   typeof email === 'string' && email.length <= 254 && email === email.trim() &&
     /^[\w.!#$%&'*+/=?^`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(email) ? email : undefined
 
+// A setup token carries no identity of its own, so a token profile shows the
+// email its home last signed in with; the owner provisions the token for that
+// same account, and the limits are read from that same login.
 const savedClaudeEmail = async (home: string): Promise<string | undefined> => {
-  // A setup token overrides the saved browser login and has no saved identity.
-  const hasSetupToken = await lstat(join(home, 'oauth-token')).then(() => true, error => error.code !== 'ENOENT')
-  if (hasSetupToken) return
   try {
     return cleanEmail(JSON.parse(await readFile(join(home, '.claude.json'), 'utf8'))?.oauthAccount?.emailAddress)
   } catch {}
@@ -132,39 +136,49 @@ const remaining = (ms: number): string => {
 }
 const resetNote = (ms: number, now: number): string => ms > now ? `resets in ${remaining(ms - now)}` : 'reset due'
 
+// One short line per window so a phone does not wrap it: the header says reset
+// times are UTC, and only another zone keeps its name.
+const shortReset = (text: string): string => text.replace(/ at /, ' ').replace(/\s*\(UTC\)$/, '')
+
 const windowLine = (window: UsageWindow, width: number, now: number): string => {
   const left = Math.round(100 - window.usedPercent), filled = Math.round(left / 10)
   const reset = window.resetsAt !== undefined ? resetNote(window.resetsAt * 1000, now).replace('resets in ', '')
-    : window.resetsText ? `resets ${window.resetsText}` : ''
+    : window.resetsText ? shortReset(window.resetsText) : ''
   return `${window.label.padEnd(width)} ${'█'.repeat(filled)}${'░'.repeat(10 - filled)} ${String(left).padStart(3)}%${reset ? ` · ${reset}` : ''}`
 }
 
-// Worst first: attention (blocked or under 20% left), unavailable, low, ok.
-const STATUS = [{ icon: '🔴', name: 'need attention' }, { icon: '⚪', name: 'unavailable' }, { icon: '🟡', name: 'low' }, { icon: '🟢', name: 'ok' }]
+// Worst first: attention (blocked or under 20% left), logged out, unavailable, low, ok.
+const STATUS = [{ icon: '🔴', name: 'need attention' }, { icon: '🟠', name: 'logged out' }, { icon: '⚪', name: 'unavailable' }, { icon: '🟡', name: 'low' }, { icon: '🟢', name: 'ok' }]
 
 // Telegram HTML: a bold title per login (the email when shown, else the login
-// name) and one monospace block of windows so the bars align.
+// name) and one monospace block of windows so the bars align. A default login
+// with no credential at all is left out and named once at the end.
 export const usageReport = async (controlDir: string, health: SetupHealth = {},
-  deps: { readers?: UsageReaders; available?: (cli: string) => Promise<boolean>; now?: number; showAccountEmails?: boolean } = {}): Promise<string> => {
+  deps: { readers?: UsageReaders; available?: (cli: string) => Promise<boolean>; statuses?: () => Promise<AuthProfileStatus[]>
+    now?: number; showAccountEmails?: boolean } = {}): Promise<string> => {
   const readers = deps.readers ?? defaultReaders, now = deps.now ?? Date.now()
-  const homes = await authHomes(controlDir, deps.available ?? installed)
-  if (!homes.length) return 'No Codex or Claude login is installed.'
-  const sections = await Promise.all(homes.map(async ({ cli, authProfile }) => {
+  const all = await (deps.statuses ?? (() => authProfileStatus(controlDir, deps.available ?? installed)))()
+  if (!all.length) return 'No Codex or Claude login is installed.'
+  const hidden = all.filter(status => !status.authProfile && !status.credentialFiles.length)
+  const sections = await Promise.all(all.filter(status => !hidden.includes(status)).map(async ({ cli, authProfile: profile, credentialFiles, loggedIn }) => {
+    const authProfile = profile ?? undefined
     const scope = quotaScope({ id: 'usage', name: 'usage', cli, ...(authProfile ? { authProfile } : {}) })
     const home = cliHome(controlDir, cli, authProfile)
+    const token = credentialFiles.includes('oauth-token')
     const email = !deps.showAccountEmails ? undefined : cli === 'claude' ? await savedClaudeEmail(home) : await readers.codexEmail?.(home)
     const blockedUntil = quotaBlockedUntil(health[scope]), blocked = blockedUntil > now
     let windows: UsageWindow[] = [], note: string | undefined
-    try {
+    if (loggedIn === false) note = 'Logged out · needs a new login'
+    else try {
       windows = await (cli === 'codex' ? readers.codex(home) : readers.claude(home, authProfile))
-      if (!windows.length) note = 'no limit data returned'
+      if (!windows.length) note = token ? 'limits not readable on a token login' : 'no limit data returned'
     } catch (error) {
       note = error instanceof UsageError ? error.message : 'unavailable'
     }
     const left = Math.min(...windows.map(window => Math.round(100 - window.usedPercent)))
-    const rank = blocked || left < 20 ? 0 : !windows.length ? 1 : left < 50 ? 2 : 3
+    const rank = blocked || left < 20 ? 0 : loggedIn === false ? 1 : !windows.length ? 2 : left < 50 ? 3 : 4
     const width = Math.max(0, ...windows.map(window => window.label.length))
-    const lines = [`<b>${STATUS[rank].icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}`]
+    const lines = [`<b>${STATUS[rank].icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}${token ? ' · token login' : ''}`]
     if (blocked) lines.push(`⛔ quota-blocked · ${Number.isFinite(blockedUntil) ? resetNote(blockedUntil, now) : 'awaiting /retry_quota'}`)
     if (note) lines.push(escapeHtml(note))
     if (windows.length) lines.push(`<pre>${escapeHtml(windows.map(window => windowLine(window, width, now)).join('\n'))}</pre>`)
@@ -175,11 +189,12 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
     const count = sections.filter(section => section.rank === rank).length
     return count ? [`${status.icon} ${count} ${status.name}`] : []
   }).join(' · ')
-  let report = `<b>Usage</b> · % left, time to reset\n${summary}`
+  let report = `<b>Usage</b> · % left · reset times UTC${summary ? `\n${summary}` : ''}`
   for (const section of sections) {
     // Telegram rejects replies over 4096 characters; drop whole sections, never cut inside a tag.
     if (report.length + section.html.length + 1 > 4000) { report += '\n…'; break }
     report += `\n${section.html}`
   }
-  return report
+  const footer = hidden.map(status => status.cli).join(', ')
+  return footer && report.length + footer.length + 20 <= 4000 ? `${report}\nHidden (no login): ${escapeHtml(footer)}` : report
 }

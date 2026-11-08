@@ -3,7 +3,13 @@ import test from 'node:test'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import type { AuthProfileStatus } from '../src/ai.js'
 import { readClaudeLimits, readCodexEmail, readCodexLimits, usageReport } from '../src/usage.js'
+
+// The report takes each home's login state from the shared auth status; tests supply it.
+const status = (cli: string, authProfile: string | null = null, extra: Partial<AuthProfileStatus> = {}): AuthProfileStatus => ({
+  cli, authProfile, provisioned: true, sharesHostLogin: false, loggedIn: true, method: null,
+  credentialFiles: [cli === 'codex' ? 'auth.json' : '.credentials.json'], ...extra })
 
 const temp = async (t: test.TestContext, name: string) => {
   const root = await mkdtemp(path.join(tmpdir(), `ez-usage-${name}-`))
@@ -112,10 +118,10 @@ test('the report lists each login with percent left, resets and blocks, and neve
   const report = await usageReport(root, {
     'claude@work': { resetAt: new Date(now + 3600_000).toISOString() },
     'codex@work': { manualRetry: true },
-  }, { readers, available: async () => true, now })
+  }, { readers, statuses: async () => [status('codex'), status('claude'), status('codex', 'work'), status('claude', 'work')], now })
   // Telegram HTML, worst first: blocked or under 20% left, then unavailable, low, ok.
   assert.equal(report, [
-    '<b>Usage</b> · % left, time to reset',
+    '<b>Usage</b> · % left · reset times UTC',
     '🔴 3 need attention · 🟢 1 ok',
     '<b>🔴 codex</b>',
     '<pre>5h ███████░░░  72% · 2h 10m',
@@ -127,22 +133,23 @@ test('the report lists each login with percent left, resets and blocks, and neve
     '⛔ quota-blocked · resets in 1h 0m',
     'unavailable',
     '<b>🟢 claude</b>',
-    '<pre>5h █████████░  85% · resets Oct 31 at 11:50am (Asia/Dubai)</pre>',
+    '<pre>5h █████████░  85% · Oct 31 11:50am (Asia/Dubai)</pre>',
   ].join('\n'))
-  assert.equal(await usageReport(path.join(root, 'none'), {}, { readers, available: async () => false, now }), 'No Codex or Claude login is installed.')
+  assert.equal(await usageReport(path.join(root, 'none'), {}, { readers, statuses: async () => [], now }), 'No Codex or Claude login is installed.')
 
   // Many profiles stay under Telegram's reply limit; whole sections drop, so no tag is cut open.
-  for (let index = 0; index < 120; index++) await mkdir(path.join(root, 'cli', 'profiles', `p${index}`, 'codex'), { recursive: true })
-  const long = await usageReport(root, {}, { readers: { ...readers, codex: async () => [{ label: '5h', usedPercent: 1, resetsAt: now / 1000 + 60 }, { label: '7d', usedPercent: 2, resetsAt: now / 1000 + 600 }] }, available: async () => true, now })
+  const profiles = Array.from({ length: 120 }, (_, index) => `p${index}`)
+  const many = async () => [status('codex'), ...profiles.map(name => status('codex', name))]
+  const long = await usageReport(root, {}, { readers: { ...readers, codex: async () => [{ label: '5h', usedPercent: 1, resetsAt: now / 1000 + 60 }, { label: '7d', usedPercent: 2, resetsAt: now / 1000 + 600 }] }, statuses: many, now })
   assert.ok(long.length <= 4096 && long.endsWith('\n…'), String(long.length))
   assert.equal(long.split('<pre>').length, long.split('</pre>').length)
 
   // Mixed levels sort by status: under 20% left, unavailable, under 50%, then ok.
   const level = (used: number) => async () => [{ label: '5h', usedPercent: used, resetsAt: now / 1000 + 60 }]
   const mixed = await usageReport(root, {}, { readers: { ...readers, codex: async (home: string) =>
-    home.includes('p0') ? level(55)() : home.includes('p1') ? level(90)() : home.includes('p2') ? [] : level(10)() }, available: async cli => cli === 'codex', now })
+    home.includes('p0') ? level(55)() : home.includes('p1') ? level(90)() : home.includes('p2') ? [] : level(10)() }, statuses: many, now })
   const order = [...mixed.matchAll(/<b>(.) /g)].map(match => match[1]).join('')
-  assert.equal(order, [...order].sort((a, b) => '🔴⚪🟡🟢'.indexOf(a) - '🔴⚪🟡🟢'.indexOf(b)).join(''))
+  assert.equal(order, [...order].sort((a, b) => '🔴🟠⚪🟡🟢'.indexOf(a) - '🔴🟠⚪🟡🟢'.indexOf(b)).join(''))
   assert.match(mixed, /🔴 .* need attention/)
 })
 
@@ -164,7 +171,8 @@ test('Claude usage shows only saved emails in private reports, including unavail
   await save(profileHome('invalid'), 'invalid@example.com\nInjected line')
   await save(profileHome('amp'), 'amp&ersand@example.com')
   const deps = {
-    available: async (cli: string) => cli === 'claude',
+    statuses: async () => [status('claude'), status('claude', 'expired'), status('claude', 'token', { credentialFiles: ['oauth-token'] }),
+      status('claude', 'invalid'), status('claude', 'amp')],
     readers: {
       codex: async () => [],
       claude: async (_home: string, profile?: string) => {
@@ -178,12 +186,13 @@ test('Claude usage shows only saved emails in private reports, including unavail
   assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>claude<\/code>\nno limit data returned$/m)
   assert.match(report, /^<b>⚪ relogin\+work@example\.com<\/b> · <code>claude@expired<\/code>\nunavailable$/m)
   assert.match(report, /^<b>⚪ amp&amp;ersand@example\.com<\/b> · <code>claude@amp<\/code>$/m)
-  assert.match(report, /^<b>⚪ claude@token<\/b>$/m)
+  assert.match(report, /^<b>⚪ old@example\.com<\/b> · <code>claude@token<\/code> · token login\nlimits not readable on a token login$/m)
   assert.match(report, /^<b>⚪ claude@invalid<\/b>$/m)
-  assert.doesNotMatch(report, /old@example|invalid@example|Injected|private-/)
+  assert.doesNotMatch(report, /invalid@example|Injected|private-/)
   const group = await usageReport(root, {}, deps)
   assert.match(group, /^<b>⚪ claude@expired<\/b>\nunavailable$/m)
   assert.doesNotMatch(group, /@example\.com/)
+  assert.match(group, /^<b>⚪ claude@token<\/b> · token login$/m)
 })
 
 test('Codex usage shows the app-server account email only in private reports, never for API-key logins', { skip: process.platform === 'win32' }, async t => {
@@ -220,7 +229,7 @@ process.stdin.on('data', chunk => {
   assert.equal(await readCodexEmail(path.join(root, 'cli', 'codex')), 'primary@example.com')
   assert.equal(await readCodexEmail(path.join(root, 'missing')), undefined)
 
-  const deps = { available: async (cli: string) => cli === 'codex' }
+  const deps = { statuses: async () => [status('codex'), status('codex', 'work'), status('codex', 'key'), status('codex', 'invalid')] }
   const report = await usageReport(root, {}, { ...deps, showAccountEmails: true })
   assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>codex<\/code>\nlimits unavailable/m)
   assert.match(report, /^<b>⚪ work\+codex@example\.com<\/b> · <code>codex@work<\/code>$/m)
@@ -229,4 +238,44 @@ process.stdin.on('data', chunk => {
   assert.doesNotMatch(report, /key@example|invalid@example|Injected|private-error|pro\b/)
   const group = await usageReport(root, {}, deps)
   assert.doesNotMatch(group, /@example\.com/)
+})
+
+test('the report marks a dead login, keeps token logins readable and names a CLI with no login instead of listing it', async t => {
+  const root = await temp(t, 'states'), now = Date.UTC(2026, 10, 7, 12, 0)
+  const claude = async (_home: string, profile?: string) => profile === 'token'
+    ? [{ label: '5h', usedPercent: 100, resetsText: 'Nov 7, 2:50pm (UTC)' }, { label: '7d all', usedPercent: 100, resetsText: 'Nov 9, 3pm (UTC)' }]
+    : (() => { throw new Error('a logged-out login is never asked for limits') })()
+  const report = await usageReport(root, { 'claude@token': { resetAt: new Date(now + 3 * 3600_000).toISOString() } }, {
+    readers: { codex: async () => [], claude }, now,
+    statuses: async () => [
+      status('codex', null, { credentialFiles: [] }),
+      status('claude', null, { loggedIn: false }),
+      status('claude', 'token', { credentialFiles: ['oauth-token', '.credentials.json'] }),
+    ] })
+  assert.equal(report, [
+    '<b>Usage</b> · % left · reset times UTC',
+    '🔴 1 need attention · 🟠 1 logged out',
+    '<b>🔴 claude@token</b> · token login',
+    '⛔ quota-blocked · resets in 3h 0m',
+    '<pre>5h     ░░░░░░░░░░   0% · Nov 7, 2:50pm',
+    '7d all ░░░░░░░░░░   0% · Nov 9, 3pm</pre>',
+    '<b>🟠 claude</b>',
+    'Logged out · needs a new login',
+    'Hidden (no login): codex',
+  ].join('\n'))
+})
+
+test('Claude limits use the home\'s own login when it has one, so a setup token does not hide them', { skip: process.platform === 'win32' }, async t => {
+  const root = await temp(t, 'token-limits'), bin = path.join(root, 'bin'), home = path.join(root, 'home'), observed = path.join(root, 'observed.json')
+  const prior = process.env.PATH
+  t.after(() => { process.env.PATH = prior })
+  await mkdir(bin); await mkdir(home)
+  process.env.PATH = bin + path.delimiter + prior
+  await writeFile(path.join(home, 'oauth-token'), 'sk-ant-oat01-named_profile_token_value')
+  await writeFile(path.join(bin, 'claude'), fakeClaude(observed, { type: 'result', is_error: false, result: claudeUsageText }), { mode: 0o700 })
+  await readClaudeLimits(home, 'work')
+  assert.equal(JSON.parse(await readFile(observed, 'utf8')).token, 'sk-ant-oat01-named_profile_token_value')
+  await writeFile(path.join(home, '.credentials.json'), '{}')
+  await readClaudeLimits(home, 'work')
+  assert.equal(JSON.parse(await readFile(observed, 'utf8')).token, undefined)
 })
