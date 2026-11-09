@@ -92,3 +92,15 @@ test('HEIF stills and audio-only M4A are not treated as MP4 video', () => {
   for (const brand of ['heic', 'avif', 'mif1', 'M4A ']) assert.equal(detectFileType(box(brand)), 'unknown')
   for (const brand of ['isom', 'mp42']) assert.equal(detectFileType(box(brand)), 'mp4')
 })
+
+test('chat attachments accept any format except programs and scripts', async () => {
+  const {stageChatAttachment}=await import('../src/files.js'),{mkdtemp,readFile}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path')
+  const dir=await mkdtemp(join(tmpdir(),'chat-attach-'))
+  const html=await stageChatAttachment(dir,'page.html',Buffer.from('<html><body>hi</body></html>'),'look')
+  assert.equal(html.attachment.type,'text');assert.match(html.text,/Caption: look/)
+  const docx=await stageChatAttachment(dir,'report.docx',Buffer.from([0x50,0x4b,3,4,0,0,1,2]),'')
+  assert.equal(docx.attachment.type,'file');assert.deepEqual([...await readFile(docx.fullPath)],[0x50,0x4b,3,4,0,0,1,2])
+  for (const [name,note] of [['notes.md','#!important\n'],['states.csv','MZ,Montserrat\n'],['tool.py','import os\n']]) assert.ok((await stageChatAttachment(dir,name,Buffer.from(note),'')).fullPath,name)
+  for (const [name,bytes] of [['run.exe',Buffer.from('hello')],['tool',Buffer.from([0x7f,0x45,0x4c,0x46,1])],['win',Buffer.from('MZ\x90\x00')],['script',Buffer.from('#!/bin/sh\nrm -rf x')],['run.sh/',Buffer.from('echo hi')],['x/install.exe/',Buffer.from('hello')],['install.sh',Buffer.from('echo')],['big.bin',Buffer.alloc(10*1024*1024+1)]] as const)
+    await assert.rejects(stageChatAttachment(dir,name,bytes,''),/Invalid application attachment/,name)
+})

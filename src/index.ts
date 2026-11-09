@@ -1277,7 +1277,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       console.error('Failed to process incoming document:', safeError(err))
       await ctx
         .reply(
-          '⚠️ Document could not be processed. Check the local relay log; /retry retries the saved batch.',
+          /^Invalid application attachment/.test(safeError(err))
+            ? '⚠️ This file was not accepted: programs and scripts (exe, sh, bat, jar, ...) and files over 10 MiB are refused. Any other format is fine.'
+            : '⚠️ Document could not be processed. Check the local relay log; /retry retries the saved batch.',
         )
         .catch(() => {})
       throw err

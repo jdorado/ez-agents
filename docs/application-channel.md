@@ -438,9 +438,11 @@ It is not forwarded to the host executor.
 `POST /v1/runs` (and `runApplication`) accepts one optional
 `attachment: {name, data}`, where `data` is canonical padded base64 of the file
 bytes. `text` remains the literal user comment and may be empty with an attachment.
-JPEG, PNG, WebP, PDF and UTF-8 TXT/Markdown (`.txt`, `.md`, `.markdown`) are supported,
-up to 10 MiB decoded; empty files and other types are rejected. Core detects file
-content rather than trusting a client MIME label. This same limit and staging
+Any file up to 10 MiB decoded is staged for the agent to open (HTML, docx, xlsx, CSV,
+zip, ...); empty files, programs and operating-system scripts (`.exe`, `.sh`, `.bat`, `.jar`, `.dmg` and
+similar names, or ELF/Mach-O/PE/`#!` content that is not plain text) are rejected. Core detects file
+content rather than trusting a client MIME label; formats it does not recognise
+are staged as `type: file`. This same limit and staging
 contract apply to Telegram photo/document input.
 
 Authentication precedes staging. Core stages the file privately under the
