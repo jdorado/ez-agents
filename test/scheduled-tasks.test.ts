@@ -40,7 +40,7 @@ test('scheduled task view is read-only, owner-bound, and shows active task promp
   await runs.patch(run.id, { status: 'completed', endedAt: '2026-01-01T05:04:00.000Z' })
   const active = await scheduler.listTasksReadOnly(await runs.list())
   const now = Date.UTC(2026, 0, 1, 12, 0)
-  const text = scheduledTasksText(active, owner)
+  const text = scheduledTasksText(active, owner).join('\n\n')
 
   assert.equal(text, '📅 Scheduled tasks · 1 active · 0 paused\n\nNext/last times UTC. Use /tasks 1 for task details.\n\n1 · Daily report\n  ● Active\n  Schedule · Weekdays at 09:00 · Asia/Dubai\n  Next · Thu, Jan 1 · 05:00 UTC\n  Last · ✓ Completed · Thu, Jan 1 · 05:04 UTC\n  Execution · codex (default login) · fixture-model · default effort\n  Read the ledger and send the owner a concise report.')
   assert.match(scheduledTaskDetailText(active.find(schedule => schedule.id === saved.id)!, 1, undefined, now), /Last +✓ Completed · Thu, Jan 1 · 05:04 UTC \(6h 56m ago\)/)
@@ -68,8 +68,8 @@ test('active view follows existing cursor and run state without changing schedul
   const paused = (await scheduler.listTasksReadOnly(await runs.list())).find(s=>s.id==='paused')!
   assert.equal(paused.enabled,false)
   assert.equal(paused.nextAt,null)
-  assert.match(scheduledTasksText([paused],owner),/0 active · 1 paused[\s\S]*⏸ Paused[\s\S]*Next · —/)
-  assert.match(scheduledTasksText([paused],{...owner,pairedAt:'different'}),/No scheduled tasks/)
+  assert.match(scheduledTasksText([paused],owner).join('\n\n'),/0 active · 1 paused[\s\S]*⏸ Paused[\s\S]*Next · —/)
+  assert.match(scheduledTasksText([paused],{...owner,pairedAt:'different'}).join('\n\n'),/No scheduled tasks/)
   assert.match(scheduledTaskDetailText({...paused,runState:'running'},1),/▶ Running · ⏸ Paused/)
   assert.match(scheduledTaskDetailText({...paused,runState:'queued'},1),/◌ Queued · ⏸ Paused/)
   await scheduler.tick(owner,runs,due)
@@ -80,7 +80,7 @@ test('active view follows existing cursor and run state without changing schedul
   const view = (await scheduler.listTasksReadOnly(await runs.list())).find(s=>s.id==='once')!
   assert.equal(view.nextAt,null)
   assert.equal(view.runState,'queued')
-  assert.match(scheduledTasksText([view],owner),/◌ Queued/)
+  assert.match(scheduledTasksText([view],owner).join('\n\n'),/◌ Queued/)
   await runs.patch(queued.id,{status:'running'})
   assert.equal((await scheduler.listTasksReadOnly(await runs.list())).find(s=>s.id==='once')!.runState,'running')
   for (const run of await runs.list()) await runs.patch(run.id,run.scheduled?.id==='interrupted'
@@ -106,7 +106,7 @@ test('the list shows a bounded one-sentence preview and the engine path; the det
     enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}})
   const active=await scheduler.listTasksReadOnly([])
   const now = Date.UTC(2026,11,31,12,0)
-  const list=scheduledTasksText(active,owner)
+  const list=scheduledTasksText(active,owner).join('\n\n')
   assert.match(list,/Execution · codex \(default login\) · gpt-5.6-terra · high → claude \(default login\) · sonnet/)
   assert.equal(Array.from(list.split('\n').at(-1)!.trim()).length,140)
   assert.ok(list.endsWith('…'))
@@ -116,7 +116,7 @@ test('the list shows a bounded one-sentence preview and the engine path; the det
   assert.match(detail,/Next +Fri, Jan 1 · 00:00 UTC \(in 12h 0m\)/)
   assert.ok(detail.includes('Second line &lt;b&gt;stays&lt;/b&gt; &amp; escaped.'))
   assert.equal((await scheduler.get(saved.id)).text,text)
-  const other=scheduledTasksText(await scheduler.listTasksReadOnly([]),{...owner,pairedAt:'other-pairing'})
+  const other=scheduledTasksText(await scheduler.listTasksReadOnly([]),{...owner,pairedAt:'other-pairing'}).join('\n\n')
   assert.match(other,/No scheduled tasks/)
   assert.doesNotMatch(other,/Preview|🧪/)
 })
@@ -167,7 +167,7 @@ test('frequency describes saved rules without inventing a uniform interval for a
   for(const [i,[trigger,label]] of cases.entries()){
     const saved=await scheduler.save({id:`t-${i}`,name:`Task ${i}`,text:'Inspect saved work.',owner,execution,enabled:true,trigger})
     const active=(await scheduler.listTasksReadOnly([])).find(s=>s.id===saved.id)!
-    assert.ok(scheduledTasksText([active],owner).includes(`Schedule · ${label}\n`))
+    assert.ok(scheduledTasksText([active],owner).join('\n\n').includes(`Schedule · ${label}\n`))
     assert.ok(scheduledTaskDetailText(active,1).includes(`Schedule  ${label}\n`))
   }
 })
@@ -181,8 +181,21 @@ test('the list shows a failed run reason and keeps the numbering that /tasks N r
   const base=await scheduler.listTasksReadOnly([])
   const reason='time="2026-11-08T07:16:11Z" level=warning msg="flex report unavailable: <timeout> & retry"'
   const views=base.map(s=>({...s,nextAt:now+60_000,lastRun:s.id==='a'?{status:'failed',at:new Date(now-3_600_000).toISOString(),currentRevision:true,reason}:undefined})) as ScheduledTaskView[]
-  const text=scheduledTasksText(views,owner)
+  const text=scheduledTasksText(views,owner).join('\n\n')
   assert.match(text,/1 · Actual Book daily IBKR Flex refresh\n[\s\S]*Last · ✕ Failed · Sat, Nov 7 · 11:00 UTC\n  Reason · time="2026-11-08T07:16:11Z" level=warning msg="flex report unavailable: <timeout> & retry"\n/)
   assert.match(text,/2 · Analyst\n[\s\S]*Last · — Not run yet/)
   assert.deepEqual(ownedScheduledTasks(views,owner).map(s=>s.id),['a','b'])
+})
+
+test('a long list is split between task blocks, never inside one', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'ez-schedule-split-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+  const scheduler=new Scheduler(dir)
+  for(let i=0;i<40;i++) await scheduler.save({id:`t${i}`,name:`Task ${String(i).padStart(2,'0')}`,text:'Inspect saved work.',owner,execution,enabled:true,trigger:{everySeconds:900,start:'2026-01-01T00:00:00Z'}})
+  const parts=scheduledTasksText(await scheduler.listTasksReadOnly([]),owner)
+  assert.ok(parts.length>1)
+  for(const part of parts) assert.ok(part.length<=4000)
+  for(const part of parts.slice(1)) assert.match(part,/^\d+ · Task \d\d\n  ● Active\n/)
+  const blocks=parts.flatMap(part=>part.split('\n\n')).filter(block=>/^\d+ · /.test(block))
+  assert.equal(blocks.length,40)
+  for(const block of blocks) assert.equal(block.split('\n').length,7)
 })

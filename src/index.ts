@@ -974,7 +974,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     // This intentionally uses the reader that does not create a schedules directory.
     const active = await scheduler.listTasksReadOnly(await runs.list())
     if (number === undefined) {
-      for (const part of splitTelegramText(scheduledTasksText(active, owner))) await ctx.reply(part)
+      for (const part of scheduledTasksText(active, owner).flatMap(text => splitTelegramText(text))) await ctx.reply(part)
       return
     }
     const owned = ownedScheduledTasks(active, owner)

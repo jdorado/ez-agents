@@ -100,13 +100,21 @@ const lastRun = (schedule: ScheduledTaskView) => {
   return `${lastStatus(schedule)} · ${time(schedule.lastRun.at)}${schedule.lastRun.currentRevision ? '' : ' · previous version'}${reason}`
 }
 
-export const scheduledTasksText = (schedules: ScheduledTaskView[], owner: Owner) => {
+// Messages hold whole task blocks: a block is moved to the next message, never cut in the middle.
+const MESSAGE_LIMIT = 4_000
+export const scheduledTasksText = (schedules: ScheduledTaskView[], owner: Owner): string[] => {
   const owned = ownedScheduledTasks(schedules, owner)
-  if (!owned.length) return '📅 Scheduled tasks\n\nNo scheduled tasks.'
+  if (!owned.length) return ['📅 Scheduled tasks\n\nNo scheduled tasks.']
   const paused = owned.filter(schedule => !schedule.enabled).length
-  return [`📅 Scheduled tasks · ${owned.length - paused} active · ${paused} paused`, 'Next/last times UTC. Use /tasks 1 for task details.', ...owned.map((schedule, index) =>
-    `${index + 1} · ${schedule.name}\n  ${currentState(schedule)}\n  Schedule · ${frequency(schedule)}\n  Next · ${schedule.nextAt === null ? '—' : time(schedule.nextAt)}\n  Last · ${lastRun(schedule)}\n  Execution · ${engineLabel(schedule)}\n  ${preview(schedule)}`
-  )].join('\n\n')
+  const messages: string[] = []
+  let current = [`📅 Scheduled tasks · ${owned.length - paused} active · ${paused} paused`, 'Next/last times UTC. Use /tasks 1 for task details.']
+  for (const [index, schedule] of owned.entries()) {
+    const block = `${index + 1} · ${schedule.name}\n  ${currentState(schedule)}\n  Schedule · ${frequency(schedule)}\n  Next · ${schedule.nextAt === null ? '—' : time(schedule.nextAt)}\n  Last · ${lastRun(schedule)}\n  Execution · ${engineLabel(schedule)}\n  ${preview(schedule)}`
+    if (current.length && [...current, block].join('\n\n').length > MESSAGE_LIMIT) { messages.push(current.join('\n\n')); current = [] }
+    current.push(block)
+  }
+  messages.push(current.join('\n\n'))
+  return messages
 }
 
 export const scheduledTaskDetailText = (schedule: ScheduledTaskView, number: number, total?: number, now = Date.now()) => {
