@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.71.0
+
+- First release numbered `0.N.0` (see docs/releasing.md, Release numbering); it supersedes `0.1.0-beta.70`.
 
 - Accept any file a person sends in chat, not only PDF, images and `.txt`/`.md`. Telegram and application channels (Slack, web) only store the file privately for the agent to open with its own tools, so a type allowlist meant every new format (HTML, docx, xlsx, csv, zip) needed new code, and an `.html` file was refused because its name did not end in `.txt`/`.md`. The one limit now is 10 MiB plus a refusal of programs and operating-system scripts (`.exe`, `.sh`, `.bat`, `.ps1`, `.hta`, `.jar`, `.dmg`, `.so` and similar names, checked on the name staging uses, and ELF, Mach-O, PE or `#!` content that is not plain text). Source files such as `.py` or `.js` are accepted as text. Telegram replies with the reason instead of the retry hint. Formats core does not recognise are staged as `type: file` and the agent is told where it is; PDF, image and video handling is unchanged, and any UTF-8 file (`.html`, `.csv`, `.json`) is now staged as `type: text`. Restricted correspondence and task attachment reads, which do parse files, keep the strict list.
 - Make the owner `/usage` reply tell the truth about each login. A login the client reports as logged out now shows 🟠 `Logged out · needs a new login` instead of the same grey `no limit data returned` as a healthy setup-token login; a setup-token profile is tagged `token login`, keeps showing its home's saved email in private chats (it used to lose it), and its limits are read with the home's own browser login when it keeps one (a token can only run models, so `/usage` had nothing for it); a default login with no credential file is left out and named in one `Hidden (no login)` line. Rows are shorter (`7d all`, no `resets` word, no per-row `(UTC)`) so a phone no longer wraps them. It reuses the existing auth status, with no new state or setting.
