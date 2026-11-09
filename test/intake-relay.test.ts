@@ -817,11 +817,12 @@ test('tasks list and detail show saved frequency and ordered setup path without 
     const saved=await scheduler.save({id:'analyst',name:'Analyst',text:'Read the saved role.',owner:(await control.status()).owner!,
       execution:{sessionId:randomUUID(),preset,fallbacks},
       enabled:true,trigger:{cron:'*/30 * * * *',timezone:'America/New_York',start:'2027-01-01T00:00:00Z'}})
+    const engine='claude (default login) · opus · high → claude@claude2 · opus · high → codex@work · gpt-6-sol · xhigh → pi · anthropic/claude-sonnet · medium'
     const path=['Engine    claude (default login) · opus · high','          → claude@claude2 · opus · high','          → codex@work · gpt-6-sol · xhigh','          → pi · anthropic/claude-sonnet · medium'].join('\n')
     await f.relay.bot.handleUpdate(message(1,'/tasks'))
     const list=f.replies.at(-1)!
-    assert.match(list,/ 1  ● Analyst +Every 30m /)
-    assert.doesNotMatch(list,/Engine|claude@claude2/)
+    assert.ok(list.includes('Schedule · Every 30 minutes · America/New_York'))
+    assert.ok(list.includes(`Execution · ${engine}`))
     await f.relay.bot.handleUpdate(message(2,'/tasks 1'))
     const detail=f.replies.at(-1)!
     assert.ok(detail.includes('Schedule  Every 30 minutes · America/New_York'))
@@ -829,7 +830,7 @@ test('tasks list and detail show saved frequency and ordered setup path without 
     assert.deepEqual(await scheduler.get(saved.id),saved)
     const paused=await scheduler.enable(saved.id,false)
     await f.relay.bot.handleUpdate(message(3,'/tasks'))
-    assert.match(f.replies.at(-1)!,/0 active · 1 paused[\s\S]*‖ Analyst +Every 30m +paused/)
+    assert.match(f.replies.at(-1)!,/0 active · 1 paused[\s\S]*⏸ Paused[\s\S]*Next · —/)
     await f.relay.bot.handleUpdate(message(4,'/tasks 1'))
     assert.match(f.replies.at(-1)!,/⏸ Paused[\s\S]*Next +—/)
     assert.ok(f.replies.at(-1)!.includes(path))

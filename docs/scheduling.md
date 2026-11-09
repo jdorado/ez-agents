@@ -503,13 +503,14 @@ The Telegram Scheduled tasks menu lists paused schedules alongside enabled sched
 that still have a pending occurrence or a queued/running occurrence. Paused tasks
 are labeled Paused and have no next run; an existing queued/running occurrence
 keeps its execution state visible. Finished enabled one-time tasks and enabled
-revisions stopped for review are hidden. The list is one table row per task
-(number, state glyph, short schedule, time to the next run, last result), with
-failed last runs and quota waits called out above it. `/tasks N` shows the full
-frequency with the cron timezone, the next and last run in UTC with time remaining or
-elapsed, the saved primary and fallback setups in order (CLI, login profile, model and
-effort) and the saved instructions. This is a read-only view; history remains available
-through the scheduling CLI. Common minute/hourly,
+revisions stopped for review are hidden. Each list entry shows the
+frequency with the cron timezone, the saved primary and fallback setups in order
+(CLI, login profile, model and effort), next occurrence in UTC (or queued/running state),
+the last result (a failed run adds its redacted reason, first line, up to 200 characters)
+and the first sentence of its saved invocation prompt, limited to 140 characters.
+`/tasks N` shows one task with the next and last run in UTC with time remaining or
+elapsed and the full saved instructions. This is a read-only view; history remains
+available through the scheduling CLI. Common minute/hourly,
 daily and weekday rules have plain-language labels; other calendar rules show
 the exact cron expression and timezone. Interval rules show their fixed period,
 and one-time tasks show `Once`. This describes the schedule, not a guarantee of

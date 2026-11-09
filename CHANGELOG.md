@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Restore the full owner `/tasks` list. The table from #342 cut task names to 14 characters and failure reasons to 80, and moved each task's schedule, engine path and prompt preview out of the list, so the list could no longer be read. `/tasks` is again plain text with one block per task (state, frequency and timezone, next run, last result, engine path, prompt preview); a failed last run now also shows its redacted reason (first line, up to 200 characters). A list longer than one Telegram message is split between tasks, never inside one. `/tasks N` keeps the aligned Telegram HTML detail view. The `/usage` and `/status` changes from #342 are unchanged.
+
 ## 0.71.0
 
 - First release numbered `0.N.0` (see docs/releasing.md, Release numbering); it supersedes `0.1.0-beta.70`.

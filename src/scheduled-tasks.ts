@@ -92,46 +92,29 @@ export const ownedScheduledTasks = (schedules: ScheduledTaskView[], owner: Owner
   schedules.filter((schedule) => ownsSchedule(owner, schedule))
     .sort((a, b) => a.name.localeCompare(b.name))
 
-// Table cells: one short label per rule (the timezone lives in the detail view).
-const shortFrequency = (schedule: Schedule) => clip(frequency(schedule).split(' · ')[0]
-  .replace('Weekdays at ', 'Wkdy ').replace('Daily at ', 'Daily ').replace('Hourly at ', 'Hourly ')
-  .replace(/^Every minute$/, 'Every 1m').replace(/^Every hour$/, 'Hourly')
-  .replace(/^Every (\d+) (minute|hour|day|second)s?$/, (_, count, unit) => `Every ${count}${unit[0]}`), 11)
-
-const NAME = 14, ROWS = 40, ATTENTION = 8
-const row = (schedule: ScheduledTaskView, number: number, now: number) => {
-  const glyph = schedule.runState === 'running' ? '▶' : schedule.runState === 'queued' ? '◌' : !schedule.enabled ? '‖' : '●'
-  const next = !schedule.enabled ? 'paused' : until(schedule.nextAt ?? undefined, now) ?? '—'
-  const last = !schedule.lastRun ? '—' : schedule.lastRun.status === 'completed' ? '✓' : schedule.lastRun.status === 'failed' ? '✕' : '⊘'
-  return `${String(number).padStart(2)}  ${glyph} ${clip(schedule.name, NAME).padEnd(NAME)} ${shortFrequency(schedule).padEnd(11)} ${next.padEnd(7)} ${last}`
+// One plain-text block per task, so the list alone shows the schedule, engine path and last result.
+// Numbers follow the alphabetical order that `/tasks N` resolves.
+const lastRun = (schedule: ScheduledTaskView) => {
+  if (!schedule.lastRun) return '— Not run yet'
+  const reason = schedule.lastRun.status === 'failed' && schedule.lastRun.reason ? `\n  Reason · ${clip(schedule.lastRun.reason, 200)}` : ''
+  return `${lastStatus(schedule)} · ${time(schedule.lastRun.at)}${schedule.lastRun.currentRevision ? '' : ' · previous version'}${reason}`
 }
-const HEADER = ` #  ${'Task'.padEnd(17)}${'Runs'.padEnd(12)}${'Next'.padEnd(8)}Last`
 
-// Telegram HTML, one message per ROWS tasks so a table block is never cut. Numbers follow
-// the alphabetical order that `/tasks N` resolves, so they stay stable between the two commands.
-export const scheduledTasksText = (schedules: ScheduledTaskView[], owner: Owner, now = Date.now()): string[] => {
+// Messages hold whole task blocks: a block is moved to the next message, never cut in the middle.
+const MESSAGE_LIMIT = 4_000
+export const scheduledTasksText = (schedules: ScheduledTaskView[], owner: Owner): string[] => {
   const owned = ownedScheduledTasks(schedules, owner)
   if (!owned.length) return ['📅 Scheduled tasks\n\nNo scheduled tasks.']
   const paused = owned.filter(schedule => !schedule.enabled).length
-  const attention = owned.flatMap(schedule => {
-    const name = `<b>${escapeHtml(clip(schedule.name, 40))}</b>`
-    const failed = schedule.lastRun?.status === 'failed'
-      ? [`✕ ${name} failed${since(schedule.lastRun.at, now) ? ` ${escapeHtml(since(schedule.lastRun.at, now)!)} ago` : ''}${
-        schedule.lastRun.reason ? ` · ${escapeHtml(clip(schedule.lastRun.reason, 80))}` : ''}`] : []
-    const waiting = schedule.runState === 'queued' && schedule.quotaWait
-      ? [`◌ ${name} waiting for quota · ${until(schedule.quotaWait.retryAt, now) ? `next check in ${escapeHtml(until(schedule.quotaWait.retryAt, now)!)}` : 'awaiting availability or /retry_quota'}`] : []
-    return [...failed, ...waiting]
-  })
-  const lines = attention.slice(0, ATTENTION)
-  if (attention.length > ATTENTION) lines.push(`+${attention.length - ATTENTION} more`)
-  const title = `<b>📅 Scheduled tasks</b> · ${owned.length - paused} active · ${paused} paused`
-  const parts: string[] = []
-  for (let start = 0; start < owned.length; start += ROWS) {
-    const table = `<pre>${escapeHtml([HEADER, ...owned.slice(start, start + ROWS).map((schedule, index) => row(schedule, start + index + 1, now))].join('\n'))}</pre>`
-    parts.push(start === 0 ? [title, ...(lines.length ? ['', '<b>⚠ Needs attention</b>', ...lines] : []), table].join('\n') : table)
+  const messages: string[] = []
+  let current = [`📅 Scheduled tasks · ${owned.length - paused} active · ${paused} paused`, 'Next/last times UTC. Use /tasks 1 for task details.']
+  for (const [index, schedule] of owned.entries()) {
+    const block = `${index + 1} · ${schedule.name}\n  ${currentState(schedule)}\n  Schedule · ${frequency(schedule)}\n  Next · ${schedule.nextAt === null ? '—' : time(schedule.nextAt)}\n  Last · ${lastRun(schedule)}\n  Execution · ${engineLabel(schedule)}\n  ${preview(schedule)}`
+    if (current.length && [...current, block].join('\n\n').length > MESSAGE_LIMIT) { messages.push(current.join('\n\n')); current = [] }
+    current.push(block)
   }
-  parts[parts.length - 1] += '\n▶ running ◌ queued ‖ paused · ✓ ok ✕ failed ⊘ cancelled\n/tasks N for details'
-  return parts
+  messages.push(current.join('\n\n'))
+  return messages
 }
 
 export const scheduledTaskDetailText = (schedule: ScheduledTaskView, number: number, total?: number, now = Date.now()) => {
