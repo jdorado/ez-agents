@@ -315,7 +315,7 @@ Without any login, Claude turns fail closed with the native "not logged in"
 error. Host-capable agents use the same agent-bound directory but share the
 installer login in place (`CLAUDE_SECURESTORAGE_CONFIG_DIR` empty).
 
-## Claude and Codex accounts
+## Auth profiles
 
 One agent can keep several owner-provisioned Codex or Claude logins, for example
 a work and a personal account. Each named profile is a separate native home,
