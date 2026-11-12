@@ -9,14 +9,15 @@ import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
 import { CliUnavailableError, startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
 import { activeSetup } from './runs.js'
-import { startupLine, startupObserver } from './setup-fallback.js'
+import { startupLine, startupObserver, usesAccountPool } from './setup-fallback.js'
 import { telemetryLine, telemetryObserver } from './run-telemetry.js'
 import { parseIsolationClass, type IsolationClass } from './isolation.js'
-import { readModels, sameEngine, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
+import { authProfileStatus, readModels, sameEngine, validateSelection, validateOpencodeProviders, type ModelChoice } from './ai.js'
 import type { ChildProcess } from 'node:child_process'
 import { packageVersion } from './version.js'
 import { installedPluginVersions } from './software-status.js'
 import { assertScheduledModel } from './model-policy.js'
+import { provisionedHome } from './auth-profile.js'
 import { processSnapshot } from './process-tree.js'
 
 export type PluginNetworkRoute = { revisions:string[]; bindings:{service:string;network:string}[] }
@@ -76,9 +77,16 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     return [...discovered.filter(model => !isReplacedByProvider(model)), ...declared]
   }
   const freshCatalog = readCatalog ?? catalog
+  const nativeLogins = new Map<HostBinding, string[]>()
+  const refreshLogins = async (agent: HostBinding) => {
+    if (containerId) return
+    const statuses = await authProfileStatus(agent.controlDir)
+    nativeLogins.set(agent, statuses.filter(status => status.loggedIn && !status.credentialFiles.length)
+      .map(({ cli, authProfile }) => authProfile ? `${cli}@${authProfile}` : cli))
+  }
   const beat = async (agent: HostBinding) => {
     const directory = path.join(agent.controlDir, 'host-executor')
-    await writeFile(path.join(directory, 'heartbeat.tmp'), JSON.stringify({ at: Date.now(), pid: process.pid, version: packageVersion, platform: process.platform, arch: process.arch, ...(process.env.EZ_CONTAINER_EXECUTOR === '1' ? {containerExecutor:true,containerId} : {}), plugins: await installedPluginVersions(agent.toolsHome) }), { mode: 0o600 })
+    await writeFile(path.join(directory, 'heartbeat.tmp'), JSON.stringify({ at: Date.now(), pid: process.pid, version: packageVersion, platform: process.platform, arch: process.arch, ...(process.env.EZ_CONTAINER_EXECUTOR === '1' ? {containerExecutor:true,containerId} : {}), plugins: await installedPluginVersions(agent.toolsHome), nativeLogins: nativeLogins.get(agent) }), { mode: 0o600 })
     await rename(path.join(directory, 'heartbeat.tmp'), path.join(directory, 'heartbeat.json'))
   }
   const recoverClaims = async (agent: HostBinding) => {
@@ -134,7 +142,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
       await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid),...(containerId ? {containerId} : {})}),{mode:0o600,flag:'wx'})
       locks.push(lock)
-      const models = await freshCatalog(agent)
+      const [models] = await Promise.all([freshCatalog(agent), refreshLogins(agent)])
       await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
       const modelsFile=path.join(directory,'models.json')
       await writeFile(modelsFile+'.tmp',JSON.stringify(models),{mode:0o600});await rename(modelsFile+'.tmp',modelsFile)
@@ -160,7 +168,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           for(const agent of installation.agents){
             if(signal.aborted)break
             try {
-              await refreshAgentCatalog(agent, freshCatalog, catalogSeen)
+              await Promise.all([refreshAgentCatalog(agent, freshCatalog, catalogSeen), refreshLogins(agent)])
             } catch (error) {
               console.error('Host catalog refresh failed, keeping last-good models', error instanceof Error ? error.message : error)
             }
@@ -268,7 +276,13 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 // Admission and execution must use the same catalog snapshot. A
                 // transient native-client probe failure must not reject a model
                 // that the host just advertised to the relay and application.
-                if (cli !== installation.cli || opts.authProfile !== undefined) await validateSelection({id:'selected',name:'Selected model',cli,provider:opts.provider,authProfile:opts.authProfile,model,effort:opts.effort},JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
+                if (cli !== installation.cli || opts.authProfile !== undefined) {
+                  const pooled = run?.scheduled && captured && usesAccountPool(captured)
+                  if (pooled && opts.authProfile) await provisionedHome(agent.controlDir, cli, opts.authProfile)
+                  await validateSelection({ id:'selected', name:'Selected model', cli, provider:opts.provider,
+                    authProfile:pooled ? undefined : opts.authProfile, model, effort:opts.effort },
+                  JSON.parse(await readFile(path.join(directory,'models.json'),'utf8')))
+                }
                 const options:ExecutorOptions={catalogTransport:containerId?'local':'host',workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),cli,
                   runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
                   sessionId:opts.sessionId,isResume:opts.isResume,model,effort:opts.effort,provider:opts.provider,authProfile:opts.authProfile,codexAutoCompactTokens:opts.codexAutoCompactTokens,codexProvider:provider,

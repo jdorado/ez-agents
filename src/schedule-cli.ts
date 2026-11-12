@@ -147,7 +147,9 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     const interruptedRunIds=held.filter(r=>r.interrupted).map(r=>r.id)
     const failedReviewRunIds=held.filter(r=>!r.interrupted).map(r=>r.id)
     const next=s.enabled && !held.length ? await scheduler.pendingOccurrence(s) : null
-    return {...s,executionType:executionType(s),preflightReceipt:await scheduler.preflightReceipt(s),interruptedRunIds,failedReviewRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString(),
+    const [preset, ...fallbacks] = s.execution ? scheduledSetups(s.execution) : []
+    const execution = s.execution && { sessionId: s.execution.sessionId, preset, ...(fallbacks.length ? { fallbacks } : {}) }
+    return {...s,execution,executionType:executionType(s),preflightReceipt:await scheduler.preflightReceipt(s),interruptedRunIds,failedReviewRunIds,nextEligibleAt:next===null ? null : new Date(next).toISOString(),
       ...(held.length ? {recovery:'Inspect the failed run and explicitly edit this schedule to resume; pause/resume does not clear the stop.'} : {})}
   }
   const scripts=new Scripts(config.controlDir)

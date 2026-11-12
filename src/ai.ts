@@ -329,29 +329,30 @@ export const authHomes = async (controlDir: string, available = installed): Prom
 // are projected, never tokens, account identifiers or raw native output.
 export const authProfileStatus = async (controlDir: string, available = installed, run = nativeStatus,
   isolated = process.env.EZ_ISOLATION === 'isolated'): Promise<AuthProfileStatus[]> => {
-  const statuses: AuthProfileStatus[] = []
-  for (const { cli, authProfile } of await authHomes(controlDir, available)) {
+  return Promise.all((await authHomes(controlDir, available)).map(async ({ cli, authProfile }) => {
     const home = cliHome(controlDir, cli, authProfile)
     const provisioned = await access(home).then(() => true, () => false)
     const credentials = await credentialFiles(home, cli)
+    const sharesHostLogin = !isolated && !authProfile
+    const cwd = provisioned ? home : homedir()
     let loggedIn: boolean | null = null, method: string | null = null
-    if (provisioned) {
+    if (provisioned || sharesHostLogin) {
       try {
         if (cli === 'codex') {
-          const result = await run('codex', ['login', 'status'], { ...executorEnvironment(), CODEX_HOME: home }, home)
+          const loginHome = sharesHostLogin && !credentials.length ? join(homedir(), '.codex') : home
+          const result = await run('codex', ['login', 'status'], { ...executorEnvironment(), CODEX_HOME: loginHome }, cwd)
           loggedIn = result.code === null ? null : result.code === 0
           // Codex prints its login status on stderr.
           const text = result.stdout + result.stderr
           method = loggedIn ? /chatgpt/i.test(text) ? 'chatgpt' : /api key/i.test(text) ? 'api-key' : 'other' : null
         } else {
-          const result = await run('claude', ['auth', 'status', '--json'], { ...executorEnvironment(), ...await claudeAuthEnvironment(home, authProfile, isolated) }, home)
+          const result = await run('claude', ['auth', 'status', '--json'], { ...executorEnvironment(), ...await claudeAuthEnvironment(home, authProfile, isolated) }, cwd)
           const status = result.code === null ? undefined : JSON.parse(result.stdout) as { loggedIn?: unknown; authMethod?: unknown }
           loggedIn = status ? status.loggedIn === true : null
           method = loggedIn && safe(status?.authMethod) ? status.authMethod : null
         }
       } catch { loggedIn = false }
     }
-    statuses.push({ cli, authProfile: authProfile ?? null, provisioned, sharesHostLogin: !isolated && !authProfile, credentialFiles: credentials, loggedIn, method })
-  }
-  return statuses
+    return { cli, authProfile: authProfile ?? null, provisioned, sharesHostLogin, credentialFiles: credentials, loggedIn, method }
+  }))
 }

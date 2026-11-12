@@ -28,7 +28,8 @@ test('work, attention and recent failures carry their details, worst-first and c
   const view = statusReport(input({
     names: new Map([['t1', 'daily-brief'], ['t2', 'nightly-sync']]),
     runs: [
-      run('a', { status: 'running', startedAt: at(4), scheduled: { id: 't1', revision: 'r', dueAt: at(5), pairedAt: at(999) }, execution: execution('codex', 'work', 'gpt-6-astra') }),
+      run('a', { status: 'running', startedAt: at(4), scheduled: { id: 't1', revision: 'r', dueAt: at(5), pairedAt: at(999) }, execution: execution('codex', undefined, 'gpt-6-astra'),
+        attempts: [{ preset: { ...preset('codex', undefined, 'gpt-6-astra'), authProfile: 'work' }, quotaScope: 'codex@work', outcome: 'running' }] }),
       run('b', { status: 'queued', createdAt: at(12), texts: ['rebalance the <b>portfolio</b> before the market opens'], execution: execution('claude', undefined, 'sonnet') }),
       run('c', { status: 'queued', createdAt: at(3), quotaWait: { retryAt: '11-07 06:00' } as never, scheduled: { id: 't2', revision: 'r', dueAt: at(5), pairedAt: at(999) } }),
       run('d', { status: 'failed', endedAt: at(120), scheduled: { id: 't2', revision: 'r', dueAt: at(130), pairedAt: at(999) }, failure: { error: 'exit 1: market <data> timeout\nstack line', relayVersion: 'v' } }),

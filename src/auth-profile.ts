@@ -60,7 +60,16 @@ export const credentialFiles = async (home: string, cli: string): Promise<string
 
 export const accountHomes = async (controlDir: string): Promise<{ cli: string; authProfile?: string }[]> => {
   const homes = [...AUTH_PROFILE_CLIS.map(cli => ({ cli, authProfile: undefined as string | undefined })), ...await listAuthProfiles(controlDir)]
-  const bound = await Promise.all(homes.map(async home =>
-    (await credentialFiles(cliHome(controlDir, home.cli, home.authProfile), home.cli)).length ? home : undefined))
+  // The host can see native secure storage that is outside the relay's mount.
+  const heartbeat = process.env.EZ_EXECUTOR_TRANSPORT === 'host'
+    ? await readFile(path.join(controlDir, 'host-executor', 'heartbeat.json'), 'utf8')
+      .then(text => JSON.parse(text), () => undefined).catch(() => undefined)
+    : undefined
+  const hostLogins: unknown[] = Array.isArray(heartbeat?.nativeLogins) ? heartbeat.nativeLogins : []
+  const bound = await Promise.all(homes.map(async home => {
+    const scope = home.authProfile ? `${home.cli}@${home.authProfile}` : home.cli
+    const files = await credentialFiles(cliHome(controlDir, home.cli, home.authProfile), home.cli)
+    return files.length || hostLogins.includes(scope) ? home : undefined
+  }))
   return bound.filter(home => home !== undefined)
 }

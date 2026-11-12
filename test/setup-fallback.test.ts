@@ -162,6 +162,24 @@ test('scheduled setups expand each client pool in rotation, preserving the model
   assert.equal(nextSetup([b,c,a],[{preset:b,quotaScope:'claude@claude2',outcome:'failed',category:'quota'}]).preset,c,'rotation never retries an attempted login')
 })
 
+test('host-reported secure storage logins join only their provisioned account pool',async t=>{
+  const dir = await mkdtemp(join(tmpdir(), 'ez-host-account-pool-'))
+  const prior = process.env.EZ_EXECUTOR_TRANSPORT
+  t.after(async () => {
+    if (prior === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT
+    else process.env.EZ_EXECUTOR_TRANSPORT = prior
+    await rm(dir, { recursive:true, force:true })
+  })
+  process.env.EZ_EXECUTOR_TRANSPORT = 'host'
+  await registerAccount(dir, 'claude', 'keychain', false)
+  await registerAccount(dir, 'claude', 'file')
+  const host = join(dir, 'host-executor')
+  await mkdir(host)
+  await writeFile(join(host, 'heartbeat.json'), JSON.stringify({nativeLogins:['claude', 'claude@keychain', 'claude@unknown']}))
+  const execution = {sessionId:'00000000-0000-4000-8000-000000000000',preset:claudeA}
+  assert.deepEqual((await setupCandidates(dir,execution)).map(quotaScope), ['claude','claude@file','claude@keychain'])
+})
+
 type Script={lines?:unknown[];stderr?:string;code?:number;unavailable?:boolean;hold?:boolean;session?:string;stage?:string}
 const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA,options:{telemetry?:boolean;accounts?:[string,string?][]}={})=>{
   const dir=await mkdtemp(join(tmpdir(),`ez-fallback-${name}-`)),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
@@ -557,6 +575,7 @@ test('host transport admits only the active task setup and profile, forwards onl
   try{
     await mkdir(workspace,{recursive:true});await mkdir(directory,{recursive:true});await mkdir(join(root,'bin'))
     await writeFile(join(root,'bin','claude'),'#!/bin/sh\nexit 0\n',{mode:0o700})
+    await registerAccount(controlDir,'claude','work')
     process.env.PATH=join(root,'bin')+':'+oldPath
     const control=new ControlStore(controlDir,900_000);await control.requestPairing(101,101);await control.approveOwner(101)
     const owner=(await control.status()).owner!,runs=new RunStore(controlDir),id='r_schedule_fallback'
@@ -568,7 +587,7 @@ test('host transport admits only the active task setup and profile, forwards onl
       const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({...revoked,error:{...revoked.error,message:'secret provider diagnostic'}}),JSON.stringify({...retry,error:'secret provider diagnostic'})].join('\n')+'\n':JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,stop_reason:null,result:'secret provider diagnostic',errors:['secret provider diagnostic']})
       const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(lines)});process.exit(1)`])
       return {child,cleanup:async()=>{},stdout:''}
-    },async()=>[{cli:'claude',authProfile:'work',model:'opus',name:'Work',efforts:[]}])
+    },async()=>[{cli:'claude',model:'opus',name:'Opus',efforts:[]}])
     const events=async()=>{for(let n=0;n<150;n++){try{const text=await readFile(join(directory,id+'.events'),'utf8');if(text.includes('"stream":"exit"'))return text}catch{};await new Promise(r=>setTimeout(r,20))}throw new Error('No exit event')}
     const request=(options:object)=>writeFile(join(directory,id+'.request.json'),JSON.stringify({texts:['work'],options}))
     for(let n=0;n<100 && !await readFile(join(directory,'heartbeat.json')).then(()=>true,()=>false);n++)await new Promise(r=>setTimeout(r,20))

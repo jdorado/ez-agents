@@ -322,7 +322,8 @@ a work and a personal account. Each named profile is a separate native home,
 `control/cli/profiles/<name>/<cli>` (`CODEX_HOME` or `CLAUDE_CONFIG_DIR`), with
 its own credentials, configuration and native sessions. Scheduled tasks rotate
 through the credential homes for the selected client, including the existing
-unnamed home if it has credentials. Add an account and get its native sign-in
+unnamed home if it has credentials. For a host-capable agent, the host worker
+also detects logins stored in the native credential store. Add an account and get its native sign-in
 command with:
 
 ```sh
