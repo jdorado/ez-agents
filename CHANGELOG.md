@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.72.0
 
 - Move the relay image's pinned Claude Code client from 2.1.286 to 2.1.322. Claude's model catalog now lists Fable 5.2 with a minimum client of 2.1.290, so the `fable` alias on the old pin cannot reach it. The new pin also handles `/usage` locally, which the 2.1.286 client was not verified to do. Saved `fable`, `opus` and `sonnet` choices are unchanged: aliases follow the installed client.
 - Restore the full owner `/tasks` list. The table from #342 cut task names to 14 characters and failure reasons to 80, and moved each task's schedule, engine path and prompt preview out of the list, so the list could no longer be read. `/tasks` is again plain text with one block per task (state, frequency and timezone, next run, last result, engine path, prompt preview); a failed last run now also shows its redacted reason (first line, up to 200 characters). A list longer than one Telegram message is split between tasks, never inside one. `/tasks N` keeps the aligned Telegram HTML detail view. The `/usage` and `/status` changes from #342 are unchanged.
+- Register the Slack plugin in the public plugin catalog (docs only), which the shared trusted publisher requires before ez-slack can publish through CI.
 
 ## 0.71.0
 
