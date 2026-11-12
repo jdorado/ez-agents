@@ -258,6 +258,7 @@ test('the report keeps named login states and omits an unconfigured default', as
     '<b>Usage</b> · % left · resets UTC',
     '',
     '<b>🔴 claude@token</b> · setup token',
+    'Browser quota',
     'Blocked for 3h 0m',
     '5h · 0% · Nov 7, 2:50pm',
     '7d · 0% · Nov 9, 3pm',

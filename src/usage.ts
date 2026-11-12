@@ -184,7 +184,10 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
       ? `<b>${icon} ${escapeHtml(scope)}</b> · setup token`
       : `<b>${icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}`
     const lines = [heading]
-    if (token && email) lines.push(`${windows.length ? 'Browser quota' : 'Saved browser'} · ${escapeHtml(email)}`)
+    if (token && (email || windows.length)) {
+      const source = windows.length ? 'Browser quota' : 'Saved browser'
+      lines.push(email ? `${source} · ${escapeHtml(email)}` : source)
+    }
     const block = !blocked ? undefined : Number.isFinite(blockedUntil)
       ? `Blocked for ${remaining(blockedUntil - now)}`
       : 'Blocked · awaiting /retry_quota'
