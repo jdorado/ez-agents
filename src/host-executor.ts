@@ -81,7 +81,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
   const refreshLogins = async (agent: HostBinding) => {
     if (containerId) return
     const statuses = await authProfileStatus(agent.controlDir)
-    nativeLogins.set(agent, statuses.filter(status => status.loggedIn && !status.credentialFiles.length)
+    nativeLogins.set(agent, statuses.filter(status => status.loggedIn)
       .map(({ cli, authProfile }) => authProfile ? `${cli}@${authProfile}` : cli))
   }
   const beat = async (agent: HostBinding) => {

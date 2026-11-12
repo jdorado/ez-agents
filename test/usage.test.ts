@@ -279,3 +279,25 @@ test('Claude limits use the home\'s own login when it has one, so a setup token 
   await readClaudeLimits(home, 'work')
   assert.equal(JSON.parse(await readFile(observed, 'utf8')).token, undefined)
 })
+
+test('usage shows host-only sign-ins as available accounts with unreadable quota', async t => {
+  const root = await temp(t, 'host-logins')
+  const previous = process.env.EZ_EXECUTOR_TRANSPORT
+  process.env.EZ_EXECUTOR_TRANSPORT = 'host'
+  t.after(() => {
+    if (previous === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT
+    else process.env.EZ_EXECUTOR_TRANSPORT = previous
+  })
+  const host = path.join(root, 'host-executor')
+  await mkdir(host)
+  await writeFile(path.join(host, 'heartbeat.json'), JSON.stringify({ nativeLogins:['codex','claude@work'] }))
+  const unreadable = async () => { assert.fail('the relay must not try to read host-only quotas') }
+  const report = await usageReport(root, {}, {
+    statuses: async () => [status('codex', null, { credentialFiles:[], loggedIn:false }),
+      status('claude', 'work', { credentialFiles:[], loggedIn:false })],
+    readers:{ codex:unreadable, claude:unreadable, codexEmail:unreadable }, showAccountEmails:true,
+  })
+  assert.match(report, /⚪ codex<\/b>\nSigned in on host · quota unavailable from relay/)
+  assert.match(report, /⚪ claude@work<\/b>\nSigned in on host · quota unavailable from relay/)
+  assert.doesNotMatch(report, /Hidden|Logged out/)
+})

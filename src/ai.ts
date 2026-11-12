@@ -1,5 +1,5 @@
 import { assertEffort, allowedEffort } from './model-policy.js'
-import { access, readFile } from 'node:fs/promises'
+import { access, readFile, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -331,7 +331,7 @@ export const authProfileStatus = async (controlDir: string, available = installe
   isolated = process.env.EZ_ISOLATION === 'isolated'): Promise<AuthProfileStatus[]> => {
   return Promise.all((await authHomes(controlDir, available)).map(async ({ cli, authProfile }) => {
     const home = cliHome(controlDir, cli, authProfile)
-    const provisioned = await access(home).then(() => true, () => false)
+    const provisioned = await stat(home).then(entry => entry.isDirectory(), () => false)
     const credentials = await credentialFiles(home, cli)
     const sharesHostLogin = !isolated && !authProfile
     const cwd = provisioned ? home : homedir()

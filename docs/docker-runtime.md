@@ -359,10 +359,9 @@ for (for example an API-key login) shows `No quota data returned by the client` 
 unavailable status. A login the client reports as logged out is marked
 `Logged out · needs a new login` without asking it for limits. A profile bound to a
 setup token is tagged `token login`; a token can only run models, so its limits
-are read with the home's own browser login when it keeps one, else shown as not readable. The default logins of a host-capable agent are the host's
-own login, which the relay container may not be able to read, so those lines can
-show an error; isolated agents and named profiles keep their login in their own
-home and are expected to be read from there. Logins are read at the same time, but the bot
+are read with the home's own browser login when it keeps one. If only the host
+can see a signed-in account, the report lists it with quota unavailable from
+the relay. Logins are read at the same time, but the bot
 answers no other message until the reply is built, up to 20 seconds when a
 client hangs. The report is generated on demand.
 

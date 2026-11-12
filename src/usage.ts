@@ -2,10 +2,10 @@ import { execFile, spawn } from 'node:child_process'
 import { lstat, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { authProfileStatus, installed, type AuthProfileStatus } from './ai.js'
-import { claudeAuthEnvironment, cliHome } from './auth-profile.js'
+import { claudeAuthEnvironment, cliHome, hostLoginScopes } from './auth-profile.js'
 import { executorEnvironment, executorInvocation } from './executor.js'
 import { escapeHtml } from './format.js'
-import { quotaBlockedUntil, quotaScope, type SetupHealth } from './setup-fallback.js'
+import { quotaBlockedUntil, type SetupHealth } from './setup-fallback.js'
 
 // Read-only owner view of each login's provider limits, asked of the native
 // client on demand. Nothing is stored and Ez never copies or prints the
@@ -157,18 +157,24 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
   deps: { readers?: UsageReaders; available?: (cli: string) => Promise<boolean>; statuses?: () => Promise<AuthProfileStatus[]>
     now?: number; showAccountEmails?: boolean } = {}): Promise<string> => {
   const readers = deps.readers ?? defaultReaders, now = deps.now ?? Date.now()
-  const all = await (deps.statuses ?? (() => authProfileStatus(controlDir, deps.available ?? installed)))()
+  const hostLogins = await hostLoginScopes(controlDir)
+  const available = deps.available ?? installed
+  const statuses = await (deps.statuses ?? (() => authProfileStatus(controlDir, async cli => hostLogins.includes(cli) || await available(cli))))()
+  const all = statuses.map(status => {
+    const scope = status.authProfile ? `${status.cli}@${status.authProfile}` : status.cli
+    return { ...status, scope, hostOnly: !status.credentialFiles.length && hostLogins.includes(scope) }
+  })
   if (!all.length) return 'No Codex or Claude login is installed.'
-  const hidden = all.filter(status => !status.authProfile && !status.credentialFiles.length)
-  const sections = await Promise.all(all.filter(status => !hidden.includes(status)).map(async ({ cli, authProfile: profile, credentialFiles, loggedIn }) => {
+  const hidden = all.filter(status => !status.authProfile && !status.credentialFiles.length && !status.hostOnly)
+  const sections = await Promise.all(all.filter(status => !hidden.includes(status)).map(async ({ cli, authProfile: profile, credentialFiles, loggedIn, scope, hostOnly }) => {
     const authProfile = profile ?? undefined
-    const scope = quotaScope({ id: 'usage', name: 'usage', cli, ...(authProfile ? { authProfile } : {}) })
     const home = cliHome(controlDir, cli, authProfile)
     const token = credentialFiles.includes('oauth-token')
-    const email = !deps.showAccountEmails ? undefined : cli === 'claude' ? await savedClaudeEmail(home) : await readers.codexEmail?.(home)
+    const email = !deps.showAccountEmails || hostOnly ? undefined : cli === 'claude' ? await savedClaudeEmail(home) : await readers.codexEmail?.(home)
     const blockedUntil = quotaBlockedUntil(health[scope]), blocked = blockedUntil > now
     let windows: UsageWindow[] = [], note: string | undefined
-    if (loggedIn === false) note = 'Logged out · needs a new login'
+    if (hostOnly) note = 'Signed in on host · quota unavailable from relay'
+    else if (loggedIn === false) note = 'Logged out · needs a new login'
     else try {
       windows = await (cli === 'codex' ? readers.codex(home) : readers.claude(home, authProfile))
       if (!windows.length) note = token ? 'Quota unavailable for setup token' : 'No quota data returned by the client'
@@ -176,7 +182,7 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
       note = error instanceof UsageError ? error.message : 'unavailable'
     }
     const left = Math.min(...windows.map(window => Math.round(100 - window.usedPercent)))
-    const rank = blocked || left < 20 ? 0 : loggedIn === false ? 1 : !windows.length ? 2 : left < 50 ? 3 : 4
+    const rank = blocked || left < 20 ? 0 : loggedIn === false && !hostOnly ? 1 : !windows.length ? 2 : left < 50 ? 3 : 4
     const width = Math.max(0, ...windows.map(window => window.label.length))
     const lines = token
       ? [`<b>${STATUS[rank].icon} ${escapeHtml(scope)}</b> · setup token`, ...(email ? [`Saved browser login · ${escapeHtml(email)}`] : [])]
