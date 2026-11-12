@@ -315,17 +315,18 @@ Without any login, Claude turns fail closed with the native "not logged in"
 error. Host-capable agents use the same agent-bound directory but share the
 installer login in place (`CLAUDE_SECURESTORAGE_CONFIG_DIR` empty).
 
-## Auth profiles
+## Claude and Codex accounts
 
 One agent can keep several owner-provisioned Codex or Claude logins, for example
 a work and a personal account. Each named profile is a separate native home,
 `control/cli/profiles/<name>/<cli>` (`CODEX_HOME` or `CLAUDE_CONFIG_DIR`), with
-its own credentials, configuration and native sessions. The unnamed default
-keeps the bindings above unchanged. Create the empty home and get the exact
-native login command with:
+its own credentials, configuration and native sessions. Scheduled tasks rotate
+through the credential homes for the selected client, including the existing
+unnamed home if it has credentials. Add an account and get its native sign-in
+command with:
 
 ```sh
-ezenciel-agents-ai profile add --cli claude --auth-profile work
+ezenciel-agents-ai profile add --cli claude
 ```
 
 Then the owner logs in once with the printed command, inside the relay for
@@ -345,14 +346,15 @@ left, 🟠 logged out, ⚪ unavailable, 🟡 under 50%, 🟢 ok) and a summary l
 Reset times are UTC unless a row names another zone. A default login with no
 credential at all is not listed; its CLI is named in a final `Hidden (no login)` line. In private owner chats, Claude profiles with a saved browser-login
 email and Codex ChatGPT logins show the email beside the profile name, even if
-usage is unavailable. A setup-token profile shows the email its home last signed in with, since a token
-has no identity of its own. Group reports and API-key logins use the profile name alone.
+usage is unavailable. A setup-token row uses the profile name and labels any
+saved browser identity separately. Any usage figures on that row come from that
+browser login. Group reports and API-key logins use the profile name alone.
 Each client answers for its own bound home, and Ez never stores, copies
 or prints the credential. Codex limits and email come from that home's
 `codex app-server` (`account/rateLimits/read`, `account/read`); Claude limits from `claude -p /usage`, a local
 client command that spends no model tokens and prints the session (5h) and
 weekly percentages with their reset times. A login the client cannot report
-for (for example an API-key login) shows `no limit data returned` or a short
+for (for example an API-key login) shows `No quota data returned by the client` or a short
 unavailable status. A login the client reports as logged out is marked
 `Logged out · needs a new login` without asking it for limits. A profile bound to a
 setup token is tagged `token login`; a token can only run models, so its limits
@@ -364,8 +366,8 @@ answers no other message until the reply is built, up to 20 seconds when a
 client hangs. The report is generated on demand.
 
 Select a profile with `ezenciel-agents-ai select --cli claude --auth-profile work`,
-the profile entries in Choose AI, or `ezenciel-agents-schedule create ...
---auth-profile work`. A conversation is bound to its CLI and profile; changing
+or the profile entries in Choose AI for a chat. A conversation is bound to its
+CLI and profile; changing
 profile starts a new native conversation, and a run whose request names another
 profile than its captured choice is rejected before launch.
 

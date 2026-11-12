@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile } from 'node:fs/promises'
+import { access, lstat, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 
 // Owner-provisioned named credential homes beside the agent default binding.
@@ -50,4 +50,17 @@ export const claudeAuthEnvironment = async (home: string, authProfile?: string, 
     environment.CLAUDE_CODE_OAUTH_TOKEN = token
   }
   return environment
+}
+
+export const credentialFiles = async (home: string, cli: string): Promise<string[]> => {
+  const names = cli === 'codex' ? ['auth.json'] : ['oauth-token', '.credentials.json']
+  const present = await Promise.all(names.map(name => access(path.join(home, name)).then(() => name, () => undefined)))
+  return present.filter(name => name !== undefined)
+}
+
+export const accountHomes = async (controlDir: string): Promise<{ cli: string; authProfile?: string }[]> => {
+  const homes = [...AUTH_PROFILE_CLIS.map(cli => ({ cli, authProfile: undefined as string | undefined })), ...await listAuthProfiles(controlDir)]
+  const bound = await Promise.all(homes.map(async home =>
+    (await credentialFiles(cliHome(controlDir, home.cli, home.authProfile), home.cli)).length ? home : undefined))
+  return bound.filter(home => home !== undefined)
 }

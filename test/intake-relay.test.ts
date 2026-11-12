@@ -817,8 +817,8 @@ test('tasks list and detail show saved frequency and ordered setup path without 
     const saved=await scheduler.save({id:'analyst',name:'Analyst',text:'Read the saved role.',owner:(await control.status()).owner!,
       execution:{sessionId:randomUUID(),preset,fallbacks},
       enabled:true,trigger:{cron:'*/30 * * * *',timezone:'America/New_York',start:'2027-01-01T00:00:00Z'}})
-    const engine='claude (default login) · opus · high → claude@claude2 · opus · high → codex@work · gpt-6-sol · xhigh → pi · anthropic/claude-sonnet · medium'
-    const path=['Engine    claude (default login) · opus · high','          → claude@claude2 · opus · high','          → codex@work · gpt-6-sol · xhigh','          → pi · anthropic/claude-sonnet · medium'].join('\n')
+    const engine='claude · opus · high → codex · gpt-6-sol · xhigh → pi · anthropic/claude-sonnet · medium'
+    const path=['Engine    claude · opus · high','          → codex · gpt-6-sol · xhigh','          → pi · anthropic/claude-sonnet · medium'].join('\n')
     await f.relay.bot.handleUpdate(message(1,'/tasks'))
     const list=f.replies.at(-1)!
     assert.ok(list.includes('Schedule · Every 30 minutes · America/New_York'))

@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import { join, delimiter } from 'node:path'
 import { CliUnavailableError, executorEnvironment, executorInvocation, executorKey, resolveExecutor } from './executor.js'
 import { desktopCodexPath } from './desktop-bridge.js'
-import { AUTH_PROFILE_CLIS, claudeAuthEnvironment, cliHome, isAuthProfile, listAuthProfiles } from './auth-profile.js'
+import { AUTH_PROFILE_CLIS, claudeAuthEnvironment, cliHome, credentialFiles, isAuthProfile, listAuthProfiles } from './auth-profile.js'
 
 export type AiPreset = { id: string; name: string; cli: string; provider?: string; authProfile?: string; model?: string; effort?: string }
 // Ordered fallback setups (scheduled tasks, or the owner's chat chain captured
@@ -314,7 +314,6 @@ const nativeStatus: StatusRunner = (command, args, env, cwd) => new Promise((res
   execFile(invocation.command, invocation.args, { env, cwd, timeout: 8000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) =>
     resolve({ code: error ? (typeof error.code === 'number' ? error.code : null) : 0, stdout: String(stdout), stderr: String(stderr) }))
 })
-const credentialNames: Record<string, string[]> = { codex: ['auth.json'], claude: ['oauth-token', '.credentials.json'] }
 
 // Credential homes Ez can bind: each installed default login plus every
 // provisioned named profile.
@@ -334,8 +333,7 @@ export const authProfileStatus = async (controlDir: string, available = installe
   for (const { cli, authProfile } of await authHomes(controlDir, available)) {
     const home = cliHome(controlDir, cli, authProfile)
     const provisioned = await access(home).then(() => true, () => false)
-    const credentialFiles: string[] = []
-    for (const name of credentialNames[cli]) if (await access(join(home, name)).then(() => true, () => false)) credentialFiles.push(name)
+    const credentials = await credentialFiles(home, cli)
     let loggedIn: boolean | null = null, method: string | null = null
     if (provisioned) {
       try {
@@ -353,7 +351,7 @@ export const authProfileStatus = async (controlDir: string, available = installe
         }
       } catch { loggedIn = false }
     }
-    statuses.push({ cli, authProfile: authProfile ?? null, provisioned, sharesHostLogin: !isolated && !authProfile, credentialFiles, loggedIn, method })
+    statuses.push({ cli, authProfile: authProfile ?? null, provisioned, sharesHostLogin: !isolated && !authProfile, credentialFiles: credentials, loggedIn, method })
   }
   return statuses
 }

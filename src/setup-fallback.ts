@@ -1,4 +1,5 @@
 import { presetLabel, presetProvider, sameChoice, type AiPreset, type ExecutionChoice } from './ai.js'
+import { accountHomes, AUTH_PROFILE_CLIS } from './auth-profile.js'
 import type { AttemptTelemetry } from './run-telemetry.js'
 
 // Ordered setups for one scheduled occurrence or captured chat/application
@@ -86,18 +87,30 @@ export const validSetupHealth = (value: unknown): value is SetupHealth => Boolea
       key === 'manualRetry' ? at === true : ['lastSuccessAt', 'resetAt', 'retryAt'].includes(key) && typeof at === 'string' &&
       Number.isFinite(Date.parse(at)) && new Date(at).toISOString() === at)))
 
-// Rotate only the primary's contiguous same-model/effort login choices. Other
-// explicitly saved engines/models keep their fallback priority.
-export const setupCandidates = (execution: ExecutionChoice, health: SetupHealth = {}, now = Date.now()): AiPreset[] => {
-  const saved = [execution.preset, ...(execution.fallbacks ?? [])], primary = saved[0]
-  const end = saved.findIndex(p => p.cli !== primary.cli || p.provider !== primary.provider || p.model !== primary.model || p.effort !== primary.effort)
-  const group = saved.slice(0, end < 0 ? saved.length : end)
-  let best = 0, latest = -Infinity
-  for (let i = 0; i < group.length; i++) {
-    const state = health[quotaScope(group[i])], at = Date.parse(state?.lastSuccessAt ?? '')
-    if (!(quotaBlockedUntil(state) > now) && at > latest) { best = i; latest = at }
+export type AccountCursor = Record<string, string>
+export const usesAccountPool = (preset: AiPreset): boolean => AUTH_PROFILE_CLIS.includes(preset.cli) && !preset.provider
+
+// Existing schedules may contain one copy of the same model per account.
+export const scheduledSetups = (execution: ExecutionChoice): AiPreset[] => {
+  const setups: AiPreset[] = []
+  for (const saved of [execution.preset, ...execution.fallbacks ?? []]) {
+    const { authProfile: _profile, ...model } = saved
+    const preset = usesAccountPool(saved) ? model : saved
+    if (!setups.some(other => sameChoice(other, preset))) setups.push(preset)
   }
-  return [...group.slice(best), ...group.slice(0, best), ...saved.slice(group.length)]
+  return setups
+}
+
+export const setupCandidates = async (controlDir: string, execution: ExecutionChoice, cursor: AccountCursor = {}): Promise<AiPreset[]> => {
+  const homes = await accountHomes(controlDir)
+  return scheduledSetups(execution).flatMap(preset => {
+    if (!usesAccountPool(preset)) return [preset]
+    const pool = homes.filter(home => home.cli === preset.cli)
+      .map(home => home.authProfile ? { ...preset, authProfile: home.authProfile } : preset)
+    if (!pool.length) return [preset] // Let the native client report a missing login.
+    const start = pool.findIndex(account => quotaScope(account) === cursor[preset.cli]) + 1
+    return [...pool.slice(start), ...pool.slice(0, start)]
+  })
 }
 
 // The owner provisions native profiles for separate provider accounts. Models

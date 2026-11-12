@@ -171,14 +171,16 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
     if (loggedIn === false) note = 'Logged out · needs a new login'
     else try {
       windows = await (cli === 'codex' ? readers.codex(home) : readers.claude(home, authProfile))
-      if (!windows.length) note = token ? 'limits not readable on a token login' : 'no limit data returned'
+      if (!windows.length) note = token ? 'Quota unavailable for setup token' : 'No quota data returned by the client'
     } catch (error) {
       note = error instanceof UsageError ? error.message : 'unavailable'
     }
     const left = Math.min(...windows.map(window => Math.round(100 - window.usedPercent)))
     const rank = blocked || left < 20 ? 0 : loggedIn === false ? 1 : !windows.length ? 2 : left < 50 ? 3 : 4
     const width = Math.max(0, ...windows.map(window => window.label.length))
-    const lines = [`<b>${STATUS[rank].icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}${token ? ' · token login' : ''}`]
+    const lines = token
+      ? [`<b>${STATUS[rank].icon} ${escapeHtml(scope)}</b> · setup token`, ...(email ? [`Saved browser login · ${escapeHtml(email)}`] : [])]
+      : [`<b>${STATUS[rank].icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}`]
     if (blocked) lines.push(`⛔ quota-blocked · ${Number.isFinite(blockedUntil) ? resetNote(blockedUntil, now) : 'awaiting /retry_quota'}`)
     if (note) lines.push(escapeHtml(note))
     if (windows.length) lines.push(`<pre>${escapeHtml(windows.map(window => windowLine(window, width, now)).join('\n'))}</pre>`)

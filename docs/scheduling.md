@@ -136,17 +136,17 @@ ezenciel-agents-schedule create --name Daily --cli claude --model opus \
 There is no fixed list-length limit. Each setup captures its own supported CLI,
 model, effort and optional provider; the installed native client owns valid model
 and effort values. The existing failure rules below apply to every setup.
-Each fallback may include `auth-profile=NAME` to select its own owner-provisioned
-Codex or Claude account. Omitting it selects the default login, independently of
-the primary setup. For four separate Claude accounts, provision and log into
-`claude2`, `claude3` and `claude4`, then use:
+Register each Claude or Codex account once with
+`ezenciel-agents-ai profile add --cli claude` or
+`ezenciel-agents-ai profile add --cli codex` and finish the printed native
+sign-in. The same pool serves all tasks of that client. Existing credential homes
+join the pool in place. A task with only `--cli codex --model MODEL` rotates within
+Codex. To try Claude before Codex, use:
 
 ```sh
 ezenciel-agents-schedule create --name Daily --cli claude --model opus \
   --cron '0 9 * * *' --timezone Asia/Dubai --text 'Prepare the daily report.' \
-  --fallback cli=claude,model=opus,auth-profile=claude2 \
-  --fallback cli=claude,model=opus,auth-profile=claude3 \
-  --fallback cli=claude,model=opus,auth-profile=claude4
+  --fallback cli=codex,model=gpt-6-sol
 ```
 
 Core advances to the next setup only with typed evidence that nothing ran: the
@@ -178,14 +178,20 @@ These same completion and fallback rules apply after a graceful relay upgrade
 adopts a running native session. Adoption attaches to that session; only an
 eligible terminal failure starts the next saved setup.
 
-For consecutive primary choices that differ only by native login profile, later
-scheduled runs start with the last successfully completed login and rotate through
-the remaining saved logins if it becomes unavailable. The existing owner control
-state retains that preference and typed quota reset times across relay restarts.
-Other tasks with saved fallbacks for those logins skip an exhausted scope until its reset;
-unknown reset times use progressively spaced checks (5, 15, 30, then 60 minutes). A concurrent older run's
-success does not erase a future reset. Saved models, effort, heterogeneous fallback
-priority and chat selection are preserved; no unconfigured login is added.
+Each Claude or Codex step starts after the last account selected for that
+client and tries eligible accounts in round-robin order. The rotation is shared
+by scheduled tasks on the agent and survives relay restarts. The next model step
+uses its own client's rotation after the current step's accounts are exhausted
+under the same failure rules. Known quota cooldowns skip individual accounts.
+Unknown reset times use spaced checks (5, 15, 30, then 60 minutes). A concurrent
+older run's success does not erase a future reset. Desktop Codex and explicit
+Codex provider bindings retain their own authentication.
+
+Older schedules may contain account pins or duplicate copies of a model for
+different logins. At execution Ez uses the pool and keeps the first occurrence
+of each distinct client, provider, model and effort combination. Editing the
+task saves the simplified chain. `ezenciel-agents-schedule run RUN_ID` shows
+the account actually used on each attempt.
 
 A login or quota rejection skips the remaining setups in the same scope: the native
 client and login profile (`claude`, `codex` including desktop and custom Codex
