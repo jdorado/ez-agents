@@ -1,6 +1,6 @@
 {
   "name": "@jc_stack/ez-agents",
-  "version": "0.71.0",
+  "version": "0.72.0",
   "private": false,
   "type": "module",
   "description": "A lightweight foundation for persistent business AI assistants using existing AI harnesses, workspaces and plugins.",
