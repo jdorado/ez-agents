@@ -121,36 +121,38 @@ test('the report lists each login with percent left, resets and blocks, and neve
   }, { readers, statuses: async () => [status('codex'), status('claude'), status('codex', 'work'), status('claude', 'work')], now })
   // Telegram HTML, worst first: blocked or under 20% left, then unavailable, low, ok.
   assert.equal(report, [
-    '<b>Usage</b> · % left · reset times UTC',
-    '🔴 3 need attention · 🟢 1 ok',
+    '<b>Usage</b> · % left · resets UTC',
+    '',
     '<b>🔴 codex</b>',
-    '<pre>5h ███████░░░  72% · 2h 10m',
-    '7d ░░░░░░░░░░   0% · 3d 4h</pre>',
+    '5h · 72% · in 2h 10m',
+    '7d · 0% · in 3d 4h',
+    '',
     '<b>🔴 codex@work</b>',
-    '⛔ quota-blocked · awaiting /retry_quota',
-    'No quota data returned by the client',
+    'Blocked · awaiting /retry_quota · Quota unavailable',
+    '',
     '<b>🔴 claude@work</b>',
-    '⛔ quota-blocked · resets in 1h 0m',
-    'unavailable',
+    'Blocked for 1h 0m · Quota unavailable',
+    '',
     '<b>🟢 claude</b>',
-    '<pre>5h █████████░  85% · Oct 31 11:50am (Asia/Dubai)</pre>',
+    '5h · 85% · Oct 31 11:50am (Asia/Dubai)',
   ].join('\n'))
-  assert.equal(await usageReport(path.join(root, 'none'), {}, { readers, statuses: async () => [], now }), 'No Codex or Claude login is installed.')
+  assert.equal(await usageReport(path.join(root, 'none'), {}, { readers, statuses: async () => [], now }), 'No Codex or Claude login is configured.')
 
   // Many profiles stay under Telegram's reply limit; whole sections drop, so no tag is cut open.
   const profiles = Array.from({ length: 120 }, (_, index) => `p${index}`)
   const many = async () => [status('codex'), ...profiles.map(name => status('codex', name))]
   const long = await usageReport(root, {}, { readers: { ...readers, codex: async () => [{ label: '5h', usedPercent: 1, resetsAt: now / 1000 + 60 }, { label: '7d', usedPercent: 2, resetsAt: now / 1000 + 600 }] }, statuses: many, now })
-  assert.ok(long.length <= 4096 && long.endsWith('\n…'), String(long.length))
-  assert.equal(long.split('<pre>').length, long.split('</pre>').length)
+  assert.ok(long.length <= 4096 && long.endsWith('\n\n…'), String(long.length))
+  assert.equal(long.split('<b>').length, long.split('</b>').length)
+  assert.doesNotMatch(long, /<pre>|need attention|logged out|unavailable| ok/)
 
   // Mixed levels sort by status: under 20% left, unavailable, under 50%, then ok.
   const level = (used: number) => async () => [{ label: '5h', usedPercent: used, resetsAt: now / 1000 + 60 }]
   const mixed = await usageReport(root, {}, { readers: { ...readers, codex: async (home: string) =>
     home.includes('p0') ? level(55)() : home.includes('p1') ? level(90)() : home.includes('p2') ? [] : level(10)() }, statuses: many, now })
-  const order = [...mixed.matchAll(/<b>(.) /g)].map(match => match[1]).join('')
+  const order = [...mixed.matchAll(/<b>(.) /gu)].map(match => match[1]).join('')
   assert.equal(order, [...order].sort((a, b) => '🔴🟠⚪🟡🟢'.indexOf(a) - '🔴🟠⚪🟡🟢'.indexOf(b)).join(''))
-  assert.match(mixed, /🔴 .* need attention/)
+  assert.match(mixed, /^<b>🔴 codex@p1<\/b>$/m)
 })
 
 test('Claude usage shows only saved emails in private reports, including unavailable profiles', async t => {
@@ -183,14 +185,14 @@ test('Claude usage shows only saved emails in private reports, including unavail
   }
 
   const report = await usageReport(root, {}, { ...deps, showAccountEmails: true })
-  assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>claude<\/code>\nNo quota data returned by the client$/m)
-  assert.match(report, /^<b>⚪ relogin\+work@example\.com<\/b> · <code>claude@expired<\/code>\nunavailable$/m)
+  assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>claude<\/code>\nQuota unavailable$/m)
+  assert.match(report, /^<b>⚪ relogin\+work@example\.com<\/b> · <code>claude@expired<\/code>\nQuota unavailable$/m)
   assert.match(report, /^<b>⚪ amp&amp;ersand@example\.com<\/b> · <code>claude@amp<\/code>$/m)
-  assert.match(report, /^<b>⚪ claude@token<\/b> · setup token\nSaved browser login · old@example\.com\nQuota unavailable for setup token$/m)
+  assert.match(report, /^<b>⚪ claude@token<\/b> · setup token\nSaved browser · old@example\.com\nQuota unavailable$/m)
   assert.match(report, /^<b>⚪ claude@invalid<\/b>$/m)
   assert.doesNotMatch(report, /invalid@example|Injected|private-/)
   const group = await usageReport(root, {}, deps)
-  assert.match(group, /^<b>⚪ claude@expired<\/b>\nunavailable$/m)
+  assert.match(group, /^<b>⚪ claude@expired<\/b>\nQuota unavailable$/m)
   assert.doesNotMatch(group, /@example\.com/)
   assert.match(group, /^<b>⚪ claude@token<\/b> · setup token$/m)
 })
@@ -231,7 +233,7 @@ process.stdin.on('data', chunk => {
 
   const deps = { statuses: async () => [status('codex'), status('codex', 'work'), status('codex', 'key'), status('codex', 'invalid')] }
   const report = await usageReport(root, {}, { ...deps, showAccountEmails: true })
-  assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>codex<\/code>\nlimits unavailable/m)
+  assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>codex<\/code>\nQuota unavailable/m)
   assert.match(report, /^<b>⚪ work\+codex@example\.com<\/b> · <code>codex@work<\/code>$/m)
   assert.match(report, /^<b>⚪ codex@key<\/b>$/m)
   assert.match(report, /^<b>⚪ codex@invalid<\/b>$/m)
@@ -240,7 +242,7 @@ process.stdin.on('data', chunk => {
   assert.doesNotMatch(group, /@example\.com/)
 })
 
-test('the report marks a dead login, keeps token logins readable and names a CLI with no login instead of listing it', async t => {
+test('the report keeps named login states and omits an unconfigured default', async t => {
   const root = await temp(t, 'states'), now = Date.UTC(2026, 10, 7, 12, 0)
   const claude = async (_home: string, profile?: string) => profile === 'token'
     ? [{ label: '5h', usedPercent: 100, resetsText: 'Nov 7, 2:50pm (UTC)' }, { label: '7d all', usedPercent: 100, resetsText: 'Nov 9, 3pm (UTC)' }]
@@ -253,15 +255,15 @@ test('the report marks a dead login, keeps token logins readable and names a CLI
       status('claude', 'token', { credentialFiles: ['oauth-token', '.credentials.json'] }),
     ] })
   assert.equal(report, [
-    '<b>Usage</b> · % left · reset times UTC',
-    '🔴 1 need attention · 🟠 1 logged out',
+    '<b>Usage</b> · % left · resets UTC',
+    '',
     '<b>🔴 claude@token</b> · setup token',
-    '⛔ quota-blocked · resets in 3h 0m',
-    '<pre>5h     ░░░░░░░░░░   0% · Nov 7, 2:50pm',
-    '7d all ░░░░░░░░░░   0% · Nov 9, 3pm</pre>',
+    'Blocked for 3h 0m',
+    '5h · 0% · Nov 7, 2:50pm',
+    '7d · 0% · Nov 9, 3pm',
+    '',
     '<b>🟠 claude</b>',
-    'Logged out · needs a new login',
-    'Hidden (no login): codex',
+    'Logged out',
   ].join('\n'))
 })
 
@@ -297,7 +299,7 @@ test('usage shows host-only sign-ins as available accounts with unreadable quota
       status('claude', 'work', { credentialFiles:[], loggedIn:false })],
     readers:{ codex:unreadable, claude:unreadable, codexEmail:unreadable }, showAccountEmails:true,
   })
-  assert.match(report, /⚪ codex<\/b>\nSigned in on host · quota unavailable from relay/)
-  assert.match(report, /⚪ claude@work<\/b>\nSigned in on host · quota unavailable from relay/)
+  assert.match(report, /⚪ codex<\/b>\nSigned in on host · quota unavailable/)
+  assert.match(report, /⚪ claude@work<\/b>\nSigned in on host · quota unavailable/)
   assert.doesNotMatch(report, /Hidden|Logged out/)
 })

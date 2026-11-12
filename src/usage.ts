@@ -134,25 +134,21 @@ const remaining = (ms: number): string => {
   const minutes = Math.max(0, Math.round(ms / 60_000)), days = Math.floor(minutes / 1440), hours = Math.floor(minutes % 1440 / 60)
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`
 }
-const resetNote = (ms: number, now: number): string => ms > now ? `resets in ${remaining(ms - now)}` : 'reset due'
-
-// One short line per window so a phone does not wrap it: the header says reset
-// times are UTC, and only another zone keeps its name.
+// Reset times are UTC unless the provider supplies another zone.
 const shortReset = (text: string): string => text.replace(/ at /, ' ').replace(/\s*\(UTC\)$/, '')
 
-const windowLine = (window: UsageWindow, width: number, now: number): string => {
-  const left = Math.round(100 - window.usedPercent), filled = Math.round(left / 10)
-  const reset = window.resetsAt !== undefined ? resetNote(window.resetsAt * 1000, now).replace('resets in ', '')
+const windowLine = (window: UsageWindow, now: number): string => {
+  const left = Math.round(100 - window.usedPercent)
+  const reset = window.resetsAt !== undefined
+    ? window.resetsAt * 1000 > now ? `in ${remaining(window.resetsAt * 1000 - now)}` : 'reset due'
     : window.resetsText ? shortReset(window.resetsText) : ''
-  return `${window.label.padEnd(width)} ${'█'.repeat(filled)}${'░'.repeat(10 - filled)} ${String(left).padStart(3)}%${reset ? ` · ${reset}` : ''}`
+  const label = window.label === '7d all' ? '7d' : window.label
+  return escapeHtml(`${label} · ${left}%${reset ? ` · ${reset}` : ''}`)
 }
 
-// Worst first: attention (blocked or under 20% left), logged out, unavailable, low, ok.
-const STATUS = [{ icon: '🔴', name: 'need attention' }, { icon: '🟠', name: 'logged out' }, { icon: '⚪', name: 'unavailable' }, { icon: '🟡', name: 'low' }, { icon: '🟢', name: 'ok' }]
+// Worst first: blocked or under 20%, logged out, unavailable, under 50%, ok.
+const STATUS_ICONS = ['🔴', '🟠', '⚪', '🟡', '🟢']
 
-// Telegram HTML: a bold title per login (the email when shown, else the login
-// name) and one monospace block of windows so the bars align. A default login
-// with no credential at all is left out and named once at the end.
 export const usageReport = async (controlDir: string, health: SetupHealth = {},
   deps: { readers?: UsageReaders; available?: (cli: string) => Promise<boolean>; statuses?: () => Promise<AuthProfileStatus[]>
     now?: number; showAccountEmails?: boolean } = {}): Promise<string> => {
@@ -164,45 +160,45 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
     const scope = status.authProfile ? `${status.cli}@${status.authProfile}` : status.cli
     return { ...status, scope, hostOnly: !status.credentialFiles.length && hostLogins.includes(scope) }
   })
-  if (!all.length) return 'No Codex or Claude login is installed.'
-  const hidden = all.filter(status => !status.authProfile && !status.credentialFiles.length && !status.hostOnly)
-  const sections = await Promise.all(all.filter(status => !hidden.includes(status)).map(async ({ cli, authProfile: profile, credentialFiles, loggedIn, scope, hostOnly }) => {
+  const visible = all.filter(status => status.authProfile || status.credentialFiles.length || status.hostOnly)
+  if (!visible.length) return 'No Codex or Claude login is configured.'
+  const sections = await Promise.all(visible.map(async ({ cli, authProfile: profile, credentialFiles, loggedIn, scope, hostOnly }) => {
     const authProfile = profile ?? undefined
     const home = cliHome(controlDir, cli, authProfile)
     const token = credentialFiles.includes('oauth-token')
     const email = !deps.showAccountEmails || hostOnly ? undefined : cli === 'claude' ? await savedClaudeEmail(home) : await readers.codexEmail?.(home)
     const blockedUntil = quotaBlockedUntil(health[scope]), blocked = blockedUntil > now
     let windows: UsageWindow[] = [], note: string | undefined
-    if (hostOnly) note = 'Signed in on host · quota unavailable from relay'
-    else if (loggedIn === false) note = 'Logged out · needs a new login'
+    if (hostOnly) note = 'Signed in on host · quota unavailable'
+    else if (loggedIn === false) note = 'Logged out'
     else try {
       windows = await (cli === 'codex' ? readers.codex(home) : readers.claude(home, authProfile))
-      if (!windows.length) note = token ? 'Quota unavailable for setup token' : 'No quota data returned by the client'
-    } catch (error) {
-      note = error instanceof UsageError ? error.message : 'unavailable'
+      if (!windows.length) note = 'Quota unavailable'
+    } catch {
+      note = 'Quota unavailable'
     }
     const left = Math.min(...windows.map(window => Math.round(100 - window.usedPercent)))
     const rank = blocked || left < 20 ? 0 : loggedIn === false && !hostOnly ? 1 : !windows.length ? 2 : left < 50 ? 3 : 4
-    const width = Math.max(0, ...windows.map(window => window.label.length))
-    const lines = token
-      ? [`<b>${STATUS[rank].icon} ${escapeHtml(scope)}</b> · setup token`, ...(email ? [`Saved browser login · ${escapeHtml(email)}`] : [])]
-      : [`<b>${STATUS[rank].icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}`]
-    if (blocked) lines.push(`⛔ quota-blocked · ${Number.isFinite(blockedUntil) ? resetNote(blockedUntil, now) : 'awaiting /retry_quota'}`)
-    if (note) lines.push(escapeHtml(note))
-    if (windows.length) lines.push(`<pre>${escapeHtml(windows.map(window => windowLine(window, width, now)).join('\n'))}</pre>`)
+    const icon = STATUS_ICONS[rank]
+    const heading = token
+      ? `<b>${icon} ${escapeHtml(scope)}</b> · setup token`
+      : `<b>${icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}`
+    const lines = [heading]
+    if (token && email) lines.push(`${windows.length ? 'Browser quota' : 'Saved browser'} · ${escapeHtml(email)}`)
+    const block = !blocked ? undefined : Number.isFinite(blockedUntil)
+      ? `Blocked for ${remaining(blockedUntil - now)}`
+      : 'Blocked · awaiting /retry_quota'
+    const status = [block, note].filter(Boolean).join(' · ')
+    if (status) lines.push(escapeHtml(status))
+    lines.push(...windows.map(window => windowLine(window, now)))
     return { rank, html: lines.join('\n') }
   }))
   sections.sort((first, second) => first.rank - second.rank)
-  const summary = STATUS.flatMap((status, rank) => {
-    const count = sections.filter(section => section.rank === rank).length
-    return count ? [`${status.icon} ${count} ${status.name}`] : []
-  }).join(' · ')
-  let report = `<b>Usage</b> · % left · reset times UTC${summary ? `\n${summary}` : ''}`
+  let report = '<b>Usage</b> · % left · resets UTC'
   for (const section of sections) {
-    // Telegram rejects replies over 4096 characters; drop whole sections, never cut inside a tag.
-    if (report.length + section.html.length + 1 > 4000) { report += '\n…'; break }
-    report += `\n${section.html}`
+    // Telegram rejects replies over 4096 characters. Drop whole account sections.
+    if (report.length + section.html.length + 2 > 4000) { report += '\n\n…'; break }
+    report += `\n\n${section.html}`
   }
-  const footer = hidden.map(status => status.cli).join(', ')
-  return footer && report.length + footer.length + 20 <= 4000 ? `${report}\nHidden (no login): ${escapeHtml(footer)}` : report
+  return report
 }

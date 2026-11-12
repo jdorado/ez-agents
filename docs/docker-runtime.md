@@ -341,11 +341,11 @@ identifiers.
 
 Telegram `/usage` (owner only, no inference turn) shows each login's provider
 limits on demand: percent left and reset time per window, plus any saved quota
-block. The reply is Telegram HTML: one bold title per login and one monospace
-block of windows, sorted worst first with a status icon (🔴 blocked or under 20%
-left, 🟠 logged out, ⚪ unavailable, 🟡 under 50%, 🟢 ok) and a summary line on top.
-Reset times are UTC unless a row names another zone. A default login with no
-credential at all is not listed; its CLI is named in a final `Hidden (no login)` line. In private owner chats, Claude profiles with a saved browser-login
+block. Each login has a bold title and a short line per quota window, with a
+blank line between logins. The report sorts by status: 🔴 blocked or under 20%
+left, 🟠 logged out, ⚪ unavailable, 🟡 under 50%, 🟢 ok.
+Reset times are UTC unless a row names another zone. A default login appears
+when it has credentials or the host reports it signed in. In private owner chats, Claude profiles with a saved browser-login
 email and Codex ChatGPT logins show the email beside the profile name, even if
 usage is unavailable. A setup-token row uses the profile name and labels any
 saved browser identity separately. Any usage figures on that row come from that
@@ -355,10 +355,8 @@ or prints the credential. Codex limits and email come from that home's
 `codex app-server` (`account/rateLimits/read`, `account/read`); Claude limits from `claude -p /usage`, a local
 client command that spends no model tokens and prints the session (5h) and
 weekly percentages with their reset times. A login the client cannot report
-for (for example an API-key login) shows `No quota data returned by the client` or a short
-unavailable status. A login the client reports as logged out is marked
-`Logged out · needs a new login` without asking it for limits. A profile bound to a
-setup token is tagged `token login`; a token can only run models, so its limits
+for (for example an API-key login) shows `Quota unavailable`. The report shows `Logged out` when the client needs a new
+login. A profile bound to a setup token is tagged `setup token`. Its limits
 are read with the home's own browser login when it keeps one. If only the host
 can see a signed-in account, the report lists it with quota unavailable from
 the relay. Logins are read at the same time, but the bot
