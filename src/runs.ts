@@ -9,8 +9,8 @@ import { normalizeReactionEmoji } from './reaction.js'
 import { validScheduledOrigin, type ScheduledOrigin } from './scheduler.js'
 import type { IncomingItem } from './inbox.js'
 import { assertId } from './identity.js'
-import { isExecutionChoice, type AiPreset, type ExecutionChoice } from './ai.js'
-import type { SetupAttempt, QuotaWait } from './setup-fallback.js'
+import { isExecutionChoice, isPreset, sameChoice, type AiPreset, type ExecutionChoice } from './ai.js'
+import { scheduledSetups, usesAccountPool, type SetupAttempt, type QuotaWait } from './setup-fallback.js'
 import type { ScriptRunRef } from './scripts.js'
 import {authorizeDeliveryContext,currentDeliveryOwner,type DeliveryContext} from './delivery-context.mjs'
 
@@ -155,12 +155,17 @@ const pruneTerminals = (controlDir: string): void => {
   }
 }
 
-// The setup the current attempt runs with: the latest recorded attempt, else the
-// saved choice. Only a setup saved on the task itself is ever admitted.
-export const activeSetup = (run: Pick<RunRecord, 'attempts' | 'execution'>): AiPreset | undefined => {
+// The relay records the concrete account before the host sees a launch request.
+export const activeSetup = (run: Pick<RunRecord, 'attempts' | 'execution' | 'scheduled'>): AiPreset | undefined => {
   if (!run.execution) return undefined
-  const preset = [...run.attempts ?? []].reverse().find(attempt => attempt.outcome !== 'skipped')?.preset ?? run.execution.preset
-  return [run.execution.preset, ...run.execution.fallbacks ?? []].find(candidate => JSON.stringify(candidate) === JSON.stringify(preset))
+  const saved = [run.execution.preset, ...run.execution.fallbacks ?? []]
+  const attempt = [...run.attempts ?? []].reverse().find(item => item.outcome !== 'skipped')
+  if (!attempt) return run.scheduled ? scheduledSetups(run.execution)[0] : saved[0]
+  const preset = attempt.preset
+  if (!isPreset(preset)) return undefined
+  const matches = (candidate: AiPreset) => candidate.id === preset.id && candidate.name === preset.name &&
+    sameChoice(candidate, run.scheduled && usesAccountPool(candidate) ? { ...preset, authProfile: candidate.authProfile } : preset)
+  return saved.some(matches) ? preset : undefined
 }
 
 export const newRunId = (): string => `r_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`

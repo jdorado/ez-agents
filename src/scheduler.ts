@@ -10,7 +10,7 @@ import { ApplicationBindings } from './application-channel.js'
 import { assertId, ownsRun } from './identity.js'
 import { type AiPreset, type ExecutionChoice, isExecutionChoice, persistedPreset } from './ai.js'
 import { type Trigger, validateTrigger, nextOccurrence } from './schedule-time.js'
-import { quotaCategory, quotaScope, type QuotaWait } from './setup-fallback.js'
+import { quotaCategory, quotaScope, setupCandidates, type QuotaWait } from './setup-fallback.js'
 import { RunStore, type RunRecord } from './runs.js'
 import { Scripts, assertScriptArgs, assertScriptId, type ScriptRunRef } from './scripts.js'
 
@@ -279,7 +279,7 @@ export class Scheduler {
         if (runId) throw new Error('Schedule changed or has another occurrence in flight; inspect the run before retrying')
         return
       }
-      const scopes = [run.execution!.preset, ...run.execution!.fallbacks ?? []].map(quotaScope)
+      const scopes = (await setupCandidates(this.controlDir, run.execution!)).map(quotaScope)
       await new ControlStore(this.controlDir, 1000).clearQuotaWait(owner, scopes)
       for (const scope of scopes) cleared.add(scope)
       await runs.patch(run.id, { status: 'queued', quotaWait: {}, pid: undefined, endedAt: undefined,

@@ -1,6 +1,6 @@
 import { executionDefaults } from './model-policy.js'
 import { presetLabel, type AiPreset } from './ai.js'
-import { AUTH_PROFILE_CLIS } from './auth-profile.js'
+import { scheduledSetups } from './setup-fallback.js'
 import type { Owner } from './control-state.js'
 import type { Schedule, ScheduledTaskView } from './scheduler.js'
 import { age, clip, escapeHtml } from './format.js'
@@ -18,16 +18,10 @@ const displayedPreset = (preset: AiPreset) => {
   catch { return preset }
 }
 
-const setupLabel = (preset: AiPreset) => {
-  const label = presetLabel(displayedPreset(preset))
-  return AUTH_PROFILE_CLIS.includes(preset.cli) && preset.authProfile === undefined
-    ? `${preset.cli} (default login)${label.slice(preset.cli.length)}` : label
-}
-
 // Script schedules have no AI preset; show what core actually invokes.
 const engineLabel = (schedule: ScheduledTaskView) => schedule.script
   ? `Script · ${schedule.script.id} · ${schedule.scriptRevision ? `rev ${schedule.scriptRevision.slice(0, 8)}` : 'not registered'}`
-  : [schedule.execution!.preset, ...schedule.execution!.fallbacks ?? []].map(setupLabel).join(' → ')
+  : scheduledSetups(schedule.execution!).map(preset => presetLabel(displayedPreset(preset))).join(' → ')
 
 const every = (count: number, unit: string) => `Every ${count === 1 ? '' : `${count} `}${unit}${count === 1 ? '' : 's'}`
 const frequency = (schedule: Schedule) => {

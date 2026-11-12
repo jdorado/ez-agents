@@ -1,17 +1,17 @@
 import { parseArgs } from 'node:util'
 import { randomBytes } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { mkdir, readFile } from 'node:fs/promises'
 import { authProfileStatus, readModels, presetLabel, presetProvider, resolveFallbacks, sameChoice, sameEngine, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
-import { cliHome, provisionedHome } from './auth-profile.js'
+import { AUTH_PROFILE_CLIS, cliHome, provisionedHome } from './auth-profile.js'
 import { ControlStore } from './control-state.js'
 import { resolveIsolation } from './isolation.js'
 import { actAsControlOwner } from './config.js'
 
-const usage='Usage: ezenciel-agents-ai list | select --cli <installed-cli> [--auth-profile <name>] [--provider <provider>] [--model <model>] [--effort <effort>] | default | profiles | profile add --cli codex|claude --auth-profile <name> | fallbacks [--fallback cli=CLI[,auth-profile=NAME][,provider=ID][,model=MODEL][,effort=EFFORT] ... | --clear] | telemetry [on|off]'
+const usage='Usage: ezenciel-agents-ai list | select --cli <installed-cli> [--auth-profile <name>] [--provider <provider>] [--model <model>] [--effort <effort>] | default | profiles | profile add --cli codex|claude [--auth-profile <name>] | fallbacks [--fallback cli=CLI[,auth-profile=NAME][,provider=ID][,model=MODEL][,effort=EFFORT] ... | --clear] | telemetry [on|off]'
 const {values,positionals}=parseArgs({allowPositionals:true,options:{help:{type:'boolean'},cli:{type:'string'},'auth-profile':{type:'string'},provider:{type:'string'},model:{type:'string'},effort:{type:'string'},fallback:{type:'string',multiple:true},clear:{type:'boolean'}}})
 if(values.help){
-  console.log(`${usage}\nChoose only values returned by list. Selection affects subsequent messages; default makes the selected AI the choice for new conversations. Queued work is unchanged.\nAuth profiles are separate owner-provisioned Codex/Claude logins with their own configuration and sessions; changing profile starts a new conversation. profile add creates an empty home and prints the native login command for the owner to run; profiles reports read-only login status without secrets.\nfallbacks sets the ordered chain tried after the selected AI for chat and application turns, captured when work is queued. An entry for the selected AI's CLI without provider, model or effort keeps the turn's own model and effort. Core advances only when a setup is unavailable or rejected before work, or stopped at its usage limit (a Codex chat setup advances only when its CLI is unavailable); each other login resumes its own native session for that conversation. Without options it shows the chain.\ntelemetry on records per-attempt model, token, tool and error-category counts in run records (ezenciel-agents-schedule run RUN_ID); off by default; never prompts, tool arguments/results or costs.`)
+  console.log(`${usage}\nChoose only values returned by list. Selection affects subsequent messages; default makes the selected AI the choice for new conversations. Queued work is unchanged.\nAuth profiles are separate owner-provisioned Codex/Claude logins with their own configuration and sessions; changing profile starts a new conversation. profile add appends an account to its client pool and prints the native login command; profiles reports read-only login status without secrets.\nfallbacks sets the ordered chain tried after the selected AI for chat and application turns, captured when work is queued. An entry for the selected AI's CLI without provider, model or effort keeps the turn's own model and effort. Core advances only when a setup is unavailable or rejected before work, or stopped at its usage limit (a Codex chat setup advances only when its CLI is unavailable); each other login resumes its own native session for that conversation. Without options it shows the chain.\ntelemetry on records per-attempt model, token, tool and error-category counts in run records (ezenciel-agents-schedule run RUN_ID); off by default; never prompts, tool arguments/results or costs.`)
   process.exit(0)
 }
 if (!process.env.EZ_CONTROL_DIR) throw new Error('Use this agent’s bound control directory')
@@ -24,12 +24,24 @@ const catalog=():Promise<ModelChoice[]>=>(process.env.EZ_AI_CATALOG==='host'||(p
 if(positionals[0]==='list')console.log(JSON.stringify(await catalog()))
 else if(positionals[0]==='profiles')console.log(JSON.stringify(await authProfileStatus(controlDir)))
 else if(positionals[0]==='profile' && positionals[1]==='add'){
-  if(!authProfile)throw new Error('profile add requires --auth-profile <name>')
-  const home=cliHome(controlDir,values.cli||'',authProfile)
-  const created=await mkdir(home,{recursive:true,mode:0o700})
-  const login=values.cli==='codex' ? `CODEX_HOME=${home} codex login`
+  const cli = values.cli || ''
+  if (!AUTH_PROFILE_CLIS.includes(cli)) throw new Error('Choose --cli claude or --cli codex')
+  let name = authProfile, home: string, created: boolean
+  if (name) {
+    home = cliHome(controlDir, cli, name)
+    created = await mkdir(home, { recursive: true, mode: 0o700 }) !== undefined
+  } else {
+    for (let number = 1; ; number++) {
+      name = `${cli}-${String(number).padStart(4, '0')}`
+      home = cliHome(controlDir, cli, name)
+      await mkdir(dirname(home), { recursive: true, mode: 0o700 })
+      try { await mkdir(home, { mode: 0o700 }); created = true; break }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    }
+  }
+  const login = cli === 'codex' ? `CODEX_HOME=${home} codex login`
     : `CLAUDE_CONFIG_DIR=${home} claude auth login (or store a \`claude setup-token\` token in ${home}/oauth-token, mode 600)`
-  console.log(JSON.stringify({cli:values.cli,authProfile,home,created:created!==undefined,ownerLogin:login}))
+  console.log(JSON.stringify({cli,authProfile:name,home,created,ownerLogin:login}))
 }
 else if(positionals[0]==='fallbacks'){
   const control=new ControlStore(controlDir,900000)

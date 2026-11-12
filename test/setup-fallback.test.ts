@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -13,6 +13,7 @@ import { Scheduler } from '../src/scheduler.js'
 import { CliUnavailableError, EXECUTOR_REGISTRY, type ExecutorOptions } from '../src/executor.js'
 import { attemptFailure, codexRejection, nextSetup, quotaScope, setupCandidates, startupObserver, startupLine } from '../src/setup-fallback.js'
 import type { AiPreset } from '../src/ai.js'
+import { AUTH_PROFILE_CLIS, cliHome } from '../src/auth-profile.js'
 
 const until=async(check:()=>Promise<boolean>)=>{for(let i=0;i<250;i++){if(await check())return;await new Promise(r=>setTimeout(r,20))}throw new Error('Timed out')}
 const setup=(id:string,cli:string,model:string):AiPreset=>({id,name:id,cli,model})
@@ -135,14 +136,25 @@ test('a quota rejection skips models in the same login scope; named accounts hav
   assert.equal(nextSetup([claudeA,claudeB],[{...first,category:'provider-rejected'}]).preset,claudeB)
 })
 
-test('same-settings login choices rotate from the last success, preserving explicit model fallback priority',()=>{
+const registerAccount = async (dir: string, cli: string, profile?: string, signedIn = true) => {
+  if (!AUTH_PROFILE_CLIS.includes(cli)) return
+  const home = cliHome(dir, cli, profile)
+  await mkdir(home, { recursive: true })
+  if (signedIn) await writeFile(join(home, cli === 'codex' ? 'auth.json' : '.credentials.json'), '{}')
+}
+
+test('scheduled setups expand each client pool in rotation, preserving the model chain',async t=>{
+  const dir = await mkdtemp(join(tmpdir(), 'ez-account-pool-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await Promise.all([registerAccount(dir,'claude'), registerAccount(dir,'claude','claude2'), registerAccount(dir,'claude','claude3'),
+    registerAccount(dir,'claude','signed-out',false), registerAccount(dir,'codex','codex1'), registerAccount(dir,'codex','codex2')])
   const a={...claudeA,effort:'xhigh'},b={...a,id:'b',authProfile:'claude2'},c={...a,id:'c',authProfile:'claude3'}
   const execution={sessionId:'00000000-0000-4000-8000-000000000000',preset:a,fallbacks:[b,c,codexA]}
-  const health={'claude@claude2':{lastSuccessAt:'2026-01-01T00:00:00.000Z'}}
-  assert.deepEqual(setupCandidates(execution,health).map(p=>p.id),['b','c','claude-a','codex-a'])
-  assert.deepEqual(setupCandidates({...execution,fallbacks:[codexA,b]},health).map(p=>p.id),['claude-a','codex-a','b'])
-  const now=Date.parse('2026-01-01T01:00:00.000Z'), resetAt='2026-01-01T02:00:00.000Z'
-  const cooling={claude:{resetAt},'claude@claude2':{...health['claude@claude2'],resetAt}}
+  const candidates=await setupCandidates(dir,execution,{claude:'claude@claude2',codex:'codex@codex1'})
+  assert.deepEqual(candidates.map(p=>[p.model,quotaScope(p)]),
+    [['opus','claude@claude3'],['opus','claude'],['opus','claude@claude2'],['gpt-6-sol','codex@codex2'],['gpt-6-sol','codex@codex1']])
+    const now=Date.parse('2026-01-01T01:00:00.000Z'), resetAt='2026-01-01T02:00:00.000Z'
+  const cooling={claude:{resetAt},'claude@claude2':{resetAt}}
   const next=nextSetup([a,b,c],[],cooling,now)
   assert.equal(next.preset,c)
   assert.deepEqual(next.skipped.map(s=>[s.quotaScope,s.category,s.resetAt]),[['claude','same-quota-scope',resetAt],['claude@claude2','same-quota-scope',resetAt]])
@@ -150,8 +162,26 @@ test('same-settings login choices rotate from the last success, preserving expli
   assert.equal(nextSetup([b,c,a],[{preset:b,quotaScope:'claude@claude2',outcome:'failed',category:'quota'}]).preset,c,'rotation never retries an attempted login')
 })
 
+test('host-reported secure storage logins join only their provisioned account pool',async t=>{
+  const dir = await mkdtemp(join(tmpdir(), 'ez-host-account-pool-'))
+  const prior = process.env.EZ_EXECUTOR_TRANSPORT
+  t.after(async () => {
+    if (prior === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT
+    else process.env.EZ_EXECUTOR_TRANSPORT = prior
+    await rm(dir, { recursive:true, force:true })
+  })
+  process.env.EZ_EXECUTOR_TRANSPORT = 'host'
+  await registerAccount(dir, 'claude', 'keychain', false)
+  await registerAccount(dir, 'claude', 'file')
+  const host = join(dir, 'host-executor')
+  await mkdir(host)
+  await writeFile(join(host, 'heartbeat.json'), JSON.stringify({nativeLogins:['claude', 'claude@keychain', 'claude@unknown']}))
+  const execution = {sessionId:'00000000-0000-4000-8000-000000000000',preset:claudeA}
+  assert.deepEqual((await setupCandidates(dir,execution)).map(quotaScope), ['claude','claude@file','claude@keychain'])
+})
+
 type Script={lines?:unknown[];stderr?:string;code?:number;unavailable?:boolean;hold?:boolean;session?:string;stage?:string}
-const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA,options:{telemetry?:boolean}={})=>{
+const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codexB],primary=claudeA,options:{telemetry?:boolean;accounts?:[string,string?][]}={})=>{
   const dir=await mkdtemp(join(tmpdir(),`ez-fallback-${name}-`)),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
   const launches:ExecutorOptions[]=[],prompts:string[][]=[],admitted:(AiPreset|undefined)[]=[],sent:string[]=[]
   const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(texts,options)=>{
@@ -166,6 +196,7 @@ const fixture=async(name:string,scripts:Script[],fallbacks=[claudeB,codexA,codex
   })
   relay.bot.api.config.use(async(_prev,method,payload)=>{if(method==='sendMessage')sent.push((payload as {text:string}).text);return {ok:true,result:{message_id:42}} as never})
   await control.requestPairing(101,101);await control.approveOwner(101)
+  await Promise.all((options.accounts ?? [primary,...fallbacks].map(p=>[p.cli,p.authProfile] as const)).map(([cli,profile])=>registerAccount(dir,cli,profile)))
   if(options.telemetry)await control.setRunTelemetry(true)
   const owner=(await control.status()).owner!
   const saved=await scheduler.save({id:'daily',name:'Daily',text:'Saved work',owner,execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,...(fallbacks.length ? {fallbacks} : {})},enabled:true,trigger:{at:'2027-01-01T00:00:00Z'}},true)
@@ -305,7 +336,7 @@ test('unavailable login advances to a saved account and the next occurrence uses
     const first=await f.done()
     assert.equal(first.status,'completed')
     assert.deepEqual(first.attempts!.map(a=>[a.quotaScope,a.category]),[
-      ['claude','login-unavailable'],['claude','same-login-scope'],['claude@claude2',undefined]])
+      ['claude','login-unavailable'],['claude@claude2',undefined]])
     const saved=await f.scheduler.get('daily')
     assert.deepEqual(saved!.execution!.fallbacks,fallbacks)
     const second=await f.scheduler.trigger(saved!.id,saved!.revision,'next-occurrence',saved!.owner,f.runs)
@@ -314,17 +345,17 @@ test('unavailable login advances to a saved account and the next occurrence uses
     assert.equal((await f.runs.get(second.id))!.status,'completed')
     assert.notEqual(first.id,second.id)
     assert.deepEqual(f.launches.map(l=>[l.authProfile,l.model,l.effort]),[
-      [undefined,'opus','high'],['claude2','opus','high'],[undefined,'opus','high'],['claude2','opus','high']])
+      [undefined,'opus','high'],['claude2','opus','high'],['claude3','opus','high'],['claude4','opus','high']])
     assert.equal(new Set(f.launches.map(l=>l.sessionId)).size,4)
   }finally{await f.close()}
 })
 
-test('each scheduled attempt launches with its own captured auth profile',async()=>{
+test('an old profile pin expands to the registered pool without changing the saved model',async()=>{
   const primary={...claudeA,authProfile:'work'}
   const f=await fixture('profile',[{lines:[{type:'assistant',error:'model_not_found'}],code:1},{lines:[work],code:0}],[claudeB],primary)
   try{
     assert.equal((await f.done()).status,'completed')
-    assert.deepEqual(f.launches.map(l=>[l.cli,l.model,l.authProfile]),[['claude','opus','work'],['claude','sonnet',undefined]])
+    assert.deepEqual(f.launches.map(l=>[l.cli,l.model,l.authProfile]),[['claude','opus',undefined],['claude','opus','work']])
   }finally{await f.close()}
 })
 
@@ -346,14 +377,15 @@ test('four Claude accounts advance in order on quota rejection before work',asyn
 
 test('the five-setup chain (four Claude logins, then Codex) recovers on its fifth setup once, and evidence lists every attempt',async()=>{
   const profiles=['claude2','claude3','claude4']
-  const claudes=profiles.map((authProfile,i)=>({...claudeA,id:`fallback-${i}`,authProfile,effort:'high'}))
   const f=await fixture('five-setups',[{lines:[quota],code:1},{lines:[quota],code:1},{lines:[quota],code:1},{lines:[quota],code:1},{lines:[work],code:0}],
-    [...claudes,{...codexA,effort:'xhigh'}],{...claudeA,effort:'high'},{telemetry:true})
+    [{...codexA,effort:'xhigh'}],{...claudeA,effort:'high'},
+    {telemetry:true,accounts:[['claude'],...profiles.map(profile=>['claude',profile] as [string,string]),['codex']]})
   try{
     const run=await f.done()
     assert.equal(run.status,'completed')
     assert.deepEqual(f.launches.map(l=>[l.cli,l.authProfile,l.model,l.effort]),[
       ['claude',undefined,'opus','high'],['claude','claude2','opus','high'],['claude','claude3','opus','high'],['claude','claude4','opus','high'],['codex',undefined,'gpt-6-sol','xhigh']])
+    assert.deepEqual(f.admitted.map(p=>p?.authProfile), [undefined,...profiles,undefined])
     assert.equal(new Set(f.launches.map(l=>l.sessionId)).size,5)
     assert.ok(f.launches.every(l=>l.runId===run.id),'one occurrence, never a second run')
     const evidence=(await runEvidence(f.dir)).runs.find(r=>r.id===run.id)!
@@ -369,10 +401,10 @@ test('the five-setup chain (four Claude logins, then Codex) recovers on its fift
   }finally{await f.close()}
 })
 
-test('later tasks reuse the last working login and retain quota resets in owner control state',async()=>{
+test('later tasks rotate past the previous account and skip accounts in cooldown',async()=>{
   const primary={...claudeA,effort:'xhigh'},profiles=['claude2','claude3'].map((authProfile,i)=>({...primary,id:`fallback-${i}`,authProfile}))
   const resetAt=new Date(Date.now()+3600_000).toISOString(),limit={type:'ez.startup',workBegan:false,rejection:{category:'quota',resetAt}}
-  const f=await fixture('sticky-login',[{lines:[limit],code:1},{lines:[work],code:0},{lines:[limit],code:1},{lines:[work],code:0},{lines:[work],code:0}],profiles,primary)
+  const f=await fixture('sticky-login',[{lines:[limit],code:1},{lines:[work],code:0},{lines:[work],code:0},{lines:[work],code:0}],profiles,primary)
   try{
     await f.done()
     const control=new ControlStore(f.dir,1000),owner=(await control.status()).owner!
@@ -383,13 +415,29 @@ test('later tasks reuse the last working login and retain quota resets in owner 
       await f.relay.drainSources()
       await until(async()=>(await f.runs.get(run.id))?.status==='completed')
     }
-    assert.deepEqual(f.launches.map(l=>l.authProfile),[undefined,'claude2','claude2','claude3','claude3'])
+    assert.deepEqual(f.launches.map(l=>l.authProfile),[undefined,'claude2','claude3','claude2'])
     assert.ok(f.launches.every(l=>l.model==='opus'&&l.effort==='xhigh'))
     const persisted=await new ControlStore(f.dir,1000).scheduledSetupHealth(owner)
     assert.equal(persisted.claude.resetAt,resetAt)
-    assert.equal(persisted['claude@claude2'].resetAt,resetAt)
     assert.ok(persisted['claude@claude3'].lastSuccessAt)
+    assert.equal((await new ControlStore(f.dir,1000).status()).accountCursor?.claude,'claude@claude2')
   }finally{await f.close()}
+})
+
+test('a Codex-only task picks up a newly registered Codex account on the next occurrence', async () => {
+  const f = await fixture('codex-pool', [], [], codexA, { accounts: [['codex','first'], ['claude','another-client']] })
+  try {
+    assert.equal((await f.done()).status, 'completed')
+    await registerAccount(f.dir, 'codex', 'second')
+    const saved = await f.scheduler.get('daily')
+    for (const key of ['second', 'third']) {
+      const run = await f.scheduler.trigger(saved.id, saved.revision, key, f.owner, f.runs)
+      await f.relay.drainSources()
+      await until(async () => (await f.runs.get(run.id))?.status === 'completed')
+    }
+    assert.deepEqual(f.launches.map(l => [l.cli, l.model, l.authProfile]),
+      ['first','second','first'].map(account => ['codex','gpt-6-sol',account]))
+  } finally { await f.close() }
 })
 
 test('arbitrary mixed setup lists preserve CLI, provider, model and effort per attempt',async()=>{
@@ -527,10 +575,11 @@ test('host transport admits only the active task setup and profile, forwards onl
   try{
     await mkdir(workspace,{recursive:true});await mkdir(directory,{recursive:true});await mkdir(join(root,'bin'))
     await writeFile(join(root,'bin','claude'),'#!/bin/sh\nexit 0\n',{mode:0o700})
+    await registerAccount(controlDir,'claude','work')
     process.env.PATH=join(root,'bin')+':'+oldPath
     const control=new ControlStore(controlDir,900_000);await control.requestPairing(101,101);await control.approveOwner(101)
     const owner=(await control.status()).owner!,runs=new RunStore(controlDir),id='r_schedule_fallback'
-    await runs.create({id,chatId:101,telegramUserId:101,texts:['work'],execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:primary,fallbacks:[claudeB]},
+    await runs.create({id,chatId:101,telegramUserId:101,texts:['work'],execution:{sessionId:'00000000-0000-4000-8000-000000000000',preset:claudeA,fallbacks:[claudeB]},
       scheduled:{id:'daily',revision:'rev',dueAt:new Date().toISOString(),pairedAt:owner.pairedAt}})
     await runs.patch(id,{status:'running',attempts:[{preset:primary,quotaScope:'claude',outcome:'running'}]})
     server=serveHostExecutor({cli:'claude',agents:[{name:'t',workspace,controlDir,binDir:join(root,'bin')}]},abort.signal,async(_texts,options)=>{
@@ -538,7 +587,7 @@ test('host transport admits only the active task setup and profile, forwards onl
       const lines=options.model==='opus'?[JSON.stringify({type:'system',subtype:'init'}),JSON.stringify({...revoked,error:{...revoked.error,message:'secret provider diagnostic'}}),JSON.stringify({...retry,error:'secret provider diagnostic'})].join('\n')+'\n':JSON.stringify({type:'result',subtype:'error_during_execution',is_error:true,stop_reason:null,result:'secret provider diagnostic',errors:['secret provider diagnostic']})
       const child=spawn(process.execPath,['-e',`process.stdout.write(${JSON.stringify(lines)});process.exit(1)`])
       return {child,cleanup:async()=>{},stdout:''}
-    },async()=>[{cli:'claude',authProfile:'work',model:'opus',name:'Work',efforts:[]}])
+    },async()=>[{cli:'claude',model:'opus',name:'Opus',efforts:[]}])
     const events=async()=>{for(let n=0;n<150;n++){try{const text=await readFile(join(directory,id+'.events'),'utf8');if(text.includes('"stream":"exit"'))return text}catch{};await new Promise(r=>setTimeout(r,20))}throw new Error('No exit event')}
     const request=(options:object)=>writeFile(join(directory,id+'.request.json'),JSON.stringify({texts:['work'],options}))
     for(let n=0;n<100 && !await readFile(join(directory,'heartbeat.json')).then(()=>true,()=>false);n++)await new Promise(r=>setTimeout(r,20))
@@ -608,38 +657,29 @@ test('schedule CLI saves ordered fallbacks, preserves them on edit and clears th
   await assert.rejects(exec(process.execPath,[bin,'create','dup','--cli','claude','--model','opus',...when,'--fallback','cli=claude,model=opus'],{env}),/distinct/)
 })
 
-test('schedule CLI saves arbitrary profile/model/effort combinations and validates every profile',async t=>{
+test('account registration appends distinct homes and schedule CLI accepts model choices only',async t=>{
   const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),{fileURLToPath}=await import('node:url')
-  const {mkdir}=await import('node:fs/promises'),{serveTestLedger}=await import('./helpers/ledger.js')
+  const {serveTestLedger}=await import('./helpers/ledger.js')
   const exec=promisify(execFile),bin=fileURLToPath(new URL('../bin/ezenciel-agents-schedule.mjs',import.meta.url))
+  const ai=fileURLToPath(new URL('../bin/ezenciel-agents-ai.mjs',import.meta.url))
   const dir=await mkdtemp(join(tmpdir(),'ez-fallback-profiles-'));t.after(()=>rm(dir,{recursive:true,force:true}))
   const ledger=await serveTestLedger(dir);t.after(()=>ledger.stop())
   const control=new ControlStore(dir,1000);await control.requestPairing(101,101);await control.approveOwner(101)
-  for(const profile of ['claude2','claude3','claude4'])await mkdir(join(dir,'cli','profiles',profile,'claude'),{recursive:true})
-  await mkdir(join(dir,'cli','profiles','work','codex'),{recursive:true})
   const env={...process.env,EZ_CONTROL_DIR:dir,EZ_RUN_ID:''}
-  const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
+  const add=async(cli:string)=>JSON.parse((await exec(process.execPath,[ai,'profile','add','--cli',cli],{env})).stdout)
+  const claudes=await Promise.all([add('claude'),add('claude')])
+  const codex=await add('codex')
+  assert.equal(new Set([...claudes,codex].map(a=>a.home)).size,3)
+  assert.ok(claudes.every(a=>a.created && a.ownerLogin.includes('claude auth login')))
+  assert.match(codex.ownerLogin,/codex login/)
   const when=['--at','2027-09-09T09:00:00+04:00','--text','Work']
-  const tuples=[
-    ['claude','claude2',undefined,'opus','high'],['claude','claude3',undefined,'sonnet','medium'],
-    ['claude','claude4',undefined,'opus','xhigh'],['codex','work',undefined,'gpt-6-sol','xhigh'],
-    ['codex-gui',undefined,undefined,'gpt-6-astra','high'],['opencode',undefined,'anthropic','anthropic/claude-sonnet','high'],
-    ['pi',undefined,undefined,'openai/gpt-6-sol','medium'],['grok',undefined,undefined,'grok-4','low']]
-  const flags=tuples.flatMap(([cli,profile,provider,model,effort])=>['--fallback',
-    `cli=${cli},model=${model},effort=${effort}${profile?`,auth-profile=${profile}`:''}${provider?`,provider=${provider}`:''}`])
-  const saved=await cli('create','chain','--cli','claude','--model','opus','--effort','high',...when,...flags)
-  assert.deepEqual(saved.execution.fallbacks.map((p:AiPreset)=>[p.cli,p.authProfile,p.provider,p.model,p.effort]),tuples)
-  assert.deepEqual((await cli('edit','chain','--expected-revision',saved.revision,...when)).execution,saved.execution)
-  const base=[bin,'create','bad','--cli','claude','--model','opus',...when,'--fallback']
-  for(const [spec,error] of [
-    ['cli=claude,model=opus,auth-profile=missing',/not provisioned/],
-    ['cli=claude,model=opus,auth-profile=../escape',/Invalid fallback/],
-    ['cli=grok,model=grok-4,auth-profile=work',/Invalid fallback/],
-    ['cli=claude,model=opus,effort=not valid',/Invalid reasoning effort/],
-    ['cli=claude,model=opus,auth-profile=',/Invalid fallback/],
-    ['cli=unknown,model=fixture',/Unsupported executor/],
-  ] as const)await assert.rejects(exec(process.execPath,[...base,spec],{env}),error)
-  await assert.rejects(exec(process.execPath,[...base,'cli=claude,model=opus,auth-profile=claude2','--fallback','cli=claude,model=opus,auth-profile=claude2'],{env}),/distinct/)
+  const cli=async(...args:string[])=>JSON.parse((await exec(process.execPath,[bin,...args],{env})).stdout)
+  const saved=await cli('create','chain','--cli','claude','--model','opus',...when,'--fallback','cli=codex,model=gpt-6-sol,effort=xhigh')
+  assert.equal(saved.execution.preset.authProfile,undefined)
+  assert.deepEqual(saved.execution.fallbacks.map((p:AiPreset)=>[p.cli,p.authProfile,p.model,p.effort]),[['codex',undefined,'gpt-6-sol','xhigh']])
+  const base=[bin,'create','bad','--cli','claude','--model','opus',...when]
+  await assert.rejects(exec(process.execPath,[...base,'--auth-profile',claudes[0].authProfile],{env}),/Unknown option/)
+  await assert.rejects(exec(process.execPath,[...base,'--fallback','cli=codex,model=gpt-6-sol,auth-profile=work'],{env}),/Fallback uses cli=EXECUTOR/)
 })
 
 

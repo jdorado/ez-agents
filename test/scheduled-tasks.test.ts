@@ -42,7 +42,7 @@ test('scheduled task view is read-only, owner-bound, and shows active task promp
   const now = Date.UTC(2026, 0, 1, 12, 0)
   const text = scheduledTasksText(active, owner).join('\n\n')
 
-  assert.equal(text, '📅 Scheduled tasks · 1 active · 0 paused\n\nNext/last times UTC. Use /tasks 1 for task details.\n\n1 · Daily report\n  ● Active\n  Schedule · Weekdays at 09:00 · Asia/Dubai\n  Next · Thu, Jan 1 · 05:00 UTC\n  Last · ✓ Completed · Thu, Jan 1 · 05:04 UTC\n  Execution · codex (default login) · fixture-model · default effort\n  Read the ledger and send the owner a concise report.')
+  assert.equal(text, '📅 Scheduled tasks · 1 active · 0 paused\n\nNext/last times UTC. Use /tasks 1 for task details.\n\n1 · Daily report\n  ● Active\n  Schedule · Weekdays at 09:00 · Asia/Dubai\n  Next · Thu, Jan 1 · 05:00 UTC\n  Last · ✓ Completed · Thu, Jan 1 · 05:04 UTC\n  Execution · codex · fixture-model · default effort\n  Read the ledger and send the owner a concise report.')
   assert.match(scheduledTaskDetailText(active.find(schedule => schedule.id === saved.id)!, 1, undefined, now), /Last +✓ Completed · Thu, Jan 1 · 05:04 UTC \(6h 56m ago\)/)
   assert.doesNotMatch(text, /Other owner task|This must never be visible/)
   assert.equal(await readFile(join(scheduleDir, 'owner-task.json'), 'utf8'), before)
@@ -107,12 +107,12 @@ test('the list shows a bounded one-sentence preview and the engine path; the det
   const active=await scheduler.listTasksReadOnly([])
   const now = Date.UTC(2026,11,31,12,0)
   const list=scheduledTasksText(active,owner).join('\n\n')
-  assert.match(list,/Execution · codex \(default login\) · gpt-5.6-terra · high → claude \(default login\) · sonnet/)
+  assert.match(list,/Execution · codex · gpt-5.6-terra · high → claude · sonnet/)
   assert.equal(Array.from(list.split('\n').at(-1)!.trim()).length,140)
   assert.ok(list.endsWith('…'))
   assert.doesNotMatch(list,/Second line/)
   const detail=scheduledTaskDetailText(active[0],1,1,now)
-  assert.match(detail,/Engine +codex \(default login\) · gpt-5.6-terra · high\n +→ claude \(default login\) · sonnet/)
+  assert.match(detail,/Engine +codex · gpt-5.6-terra · high\n +→ claude · sonnet/)
   assert.match(detail,/Next +Fri, Jan 1 · 00:00 UTC \(in 12h 0m\)/)
   assert.ok(detail.includes('Second line &lt;b&gt;stays&lt;/b&gt; &amp; escaped.'))
   assert.equal((await scheduler.get(saved.id)).text,text)
@@ -133,7 +133,7 @@ test('a legacy invalid selection does not prevent the active menu from rendering
   await writeFile(file,JSON.stringify(saved))
 
   const active = await scheduler.listTasksReadOnly([])
-  assert.match(scheduledTaskDetailText(active[0],1),/Engine +codex \(default login\) · gpt-5.6-terra · max/)
+  assert.match(scheduledTaskDetailText(active[0],1),/Engine +codex · gpt-5.6-terra · max/)
 })
 
 test('detail view truncates long instructions and tolerates invalid timestamps', async t => {

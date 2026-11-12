@@ -3,8 +3,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isPreset, persistedPreset, presetProvider, resolveFallbacks, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
-import { isAuthProfile } from './auth-profile.js'
-import { quotaScope, quotaBlockedUntil, quotaCategory, validSetupHealth, type SetupAttempt, type SetupHealth } from './setup-fallback.js'
+import { AUTH_PROFILE_CLIS, isAuthProfile } from './auth-profile.js'
+import { quotaScope, quotaBlockedUntil, quotaCategory, usesAccountPool, validSetupHealth, type AccountCursor, type SetupAttempt, type SetupHealth } from './setup-fallback.js'
 
 export type Owner = {
   id?: string
@@ -87,6 +87,7 @@ type ControlState = {
   ai?: { presets: AiPreset[]; defaultId: string; selectedId: string; recentIds?: string[]; fallbacks?: AiPreset[] }
   sessions?: SessionState[]
   setupHealth?: SetupHealth
+  accountCursor?: AccountCursor
   // Owner opt-in for per-attempt run telemetry; absent means off.
   runTelemetry?: true
 }
@@ -155,6 +156,10 @@ const isState = (value: unknown): value is ControlState => {
     Array.isArray(candidate.pending) &&
     candidate.pending.every(pairing) &&
     (candidate.owner === null || validOwner(candidate.owner)) &&
+    (candidate.accountCursor === undefined || (candidate.accountCursor && typeof candidate.accountCursor === 'object' &&
+      !Array.isArray(candidate.accountCursor) && Object.entries(candidate.accountCursor).every(([cli, scope]) =>
+        AUTH_PROFILE_CLIS.includes(cli) && typeof scope === 'string' &&
+        (scope === cli || (scope.startsWith(cli + '@') && isAuthProfile(scope.slice(cli.length + 1))))))) &&
     (candidate.setupHealth === undefined || validSetupHealth(candidate.setupHealth)) &&
     (candidate.ai === undefined || (Array.isArray(candidate.ai.presets) &&
       candidate.ai.presets.every(isPreset) &&
@@ -473,6 +478,7 @@ export class ControlStore {
       state.ai = undefined
       state.sessions = undefined
       state.setupHealth = undefined
+      state.accountCursor = undefined
       await this.writeState(state)
       return hadOwner
     })
@@ -490,6 +496,18 @@ export class ControlStore {
       const state = await this.readState()
       if (!sameOwner(owner, state.owner)) throw new Error('Scheduled setup authority revoked')
       return structuredClone(state.setupHealth ?? {})
+    })
+  }
+
+  async recordAccountSelection(owner: Owner, preset: AiPreset): Promise<void> {
+    if (!usesAccountPool(preset)) return
+    await this.withLock(async () => {
+      const state = await this.readState()
+      if (!sameOwner(owner, state.owner)) throw new Error('Scheduled setup authority revoked')
+      const scope = quotaScope(preset)
+      if (state.accountCursor?.[preset.cli] === scope) return
+      ;(state.accountCursor ??= {})[preset.cli] = scope
+      await this.writeState(state)
     })
   }
 

@@ -278,7 +278,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         return
       }
       if (run.scheduled && !run.script) {
-        const waiting = quotaWait(setupCandidates(run.execution!), await setupAvailability(owner, run.id))
+        const waiting = quotaWait(await setupCandidates(config.controlDir, run.execution!), await setupAvailability(owner, run.id))
         if (waiting) { await runs.patch(run.id, { quotaWait: waiting }); return }
       }
       await watchRun(run, texts, owner)
@@ -307,7 +307,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (unavailable && run.scheduled && run.execution) {
         const owner = (await control.status()).owner
         if (owner && ownsRun(owner, run) && await scheduler.current(run, owner) && !await scheduler.cancelled(run.id)) {
-          const waiting = quotaWait(setupCandidates(run.execution), await setupAvailability(owner, run.id))
+          const waiting = quotaWait(await setupCandidates(config.controlDir, run.execution), await setupAvailability(owner, run.id))
           if (waiting) {
             await runs.patch(run.id, { status: 'queued', quotaWait: waiting, pid: undefined })
             return
@@ -350,8 +350,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // execution slot; each is tried at most once. Telemetry also records attempts.
       const chat = !startsOwnSession
       const ordered = Boolean(!script && !run.taskId && (run.scheduled || started.execution?.fallbacks?.length || telemetryOn))
-      const candidates = run.scheduled && !script ? setupCandidates(started.execution!, await control.scheduledSetupHealth(owner))
-        : ordered ? [started.execution!.preset, ...started.execution!.fallbacks ?? []] : [selected]
       const runCancelled = async () => stoppedRuns.has(run.id) || Boolean(run.scheduled && await scheduler.cancelled(run.id))
       // Authority is rechecked before every later setup.
       const authorized = async (current: Owner) => ownsRun(current, run) && (run.scheduled ? await scheduler.current(run, current)
@@ -371,9 +369,13 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       let ignoreHealth = false
       const advance = async (): Promise<AiPreset | undefined> => {
         let preset: AiPreset | undefined
-        const current = !shuttingDown && !await runCancelled() ? (await control.status()).owner : undefined
+        const state = !shuttingDown && !await runCancelled() ? await control.status() : undefined
+        const current = state?.owner
         if (current && await authorized(current)) {
           const round = attempts.slice(roundStart)
+          const choice = started.execution!
+          const candidates = run.scheduled ? await setupCandidates(config.controlDir, choice, state.accountCursor)
+            : [choice.preset, ...choice.fallbacks ?? []]
           let next = nextSetup(candidates, round, ignoreHealth ? {} : await setupAvailability(current, run.id))
           if (!next.preset && !run.scheduled && !round.length && !ignoreHealth) { ignoreHealth = true; next = nextSetup(candidates, round) }
           attempts = [...attempts, ...next.skipped]
@@ -385,6 +387,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             throw new SetupsUnavailableError(unavailableSummary(attempts))
           }
           preset = next.preset
+          if (run.scheduled) await control.recordAccountSelection(current, preset)
         }
         await runs.patch(run.id, { attempts })
         return preset

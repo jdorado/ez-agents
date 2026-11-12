@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile } from 'node:fs/promises'
+import { lstat, readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 // Owner-provisioned named credential homes beside the agent default binding.
@@ -50,4 +50,32 @@ export const claudeAuthEnvironment = async (home: string, authProfile?: string, 
     environment.CLAUDE_CODE_OAUTH_TOKEN = token
   }
   return environment
+}
+
+export const credentialFiles = async (home: string, cli: string): Promise<string[]> => {
+  const names = cli === 'codex' ? ['auth.json'] : ['oauth-token', '.credentials.json']
+  // The isolated relay may have a different real UID from its effective UID.
+  const present = await Promise.all(names.map(name =>
+    stat(path.join(home, name)).then(entry => entry.isFile() ? name : undefined, () => undefined)))
+  return present.filter(name => name !== undefined)
+}
+
+export const hostLoginScopes = async (controlDir: string): Promise<string[]> => {
+  if (process.env.EZ_EXECUTOR_TRANSPORT !== 'host') return []
+  // The host can see native secure storage that is outside the relay's mount.
+  const heartbeat = await readFile(path.join(controlDir, 'host-executor', 'heartbeat.json'), 'utf8')
+    .then(text => JSON.parse(text)).catch(() => undefined)
+  return Array.isArray(heartbeat?.nativeLogins)
+    ? heartbeat.nativeLogins.filter((scope: unknown) => typeof scope === 'string') : []
+}
+
+export const accountHomes = async (controlDir: string): Promise<{ cli: string; authProfile?: string }[]> => {
+  const homes: { cli: string; authProfile?: string }[] = [...AUTH_PROFILE_CLIS.map(cli => ({ cli })), ...await listAuthProfiles(controlDir)]
+  const hostLogins = await hostLoginScopes(controlDir)
+  const bound = await Promise.all(homes.map(async home => {
+    const scope = home.authProfile ? `${home.cli}@${home.authProfile}` : home.cli
+    const files = await credentialFiles(cliHome(controlDir, home.cli, home.authProfile), home.cli)
+    return files.length || hostLogins.includes(scope) ? home : undefined
+  }))
+  return bound.filter(home => home !== undefined)
 }

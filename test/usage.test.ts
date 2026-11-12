@@ -128,7 +128,7 @@ test('the report lists each login with percent left, resets and blocks, and neve
     '7d ░░░░░░░░░░   0% · 3d 4h</pre>',
     '<b>🔴 codex@work</b>',
     '⛔ quota-blocked · awaiting /retry_quota',
-    'no limit data returned',
+    'No quota data returned by the client',
     '<b>🔴 claude@work</b>',
     '⛔ quota-blocked · resets in 1h 0m',
     'unavailable',
@@ -183,16 +183,16 @@ test('Claude usage shows only saved emails in private reports, including unavail
   }
 
   const report = await usageReport(root, {}, { ...deps, showAccountEmails: true })
-  assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>claude<\/code>\nno limit data returned$/m)
+  assert.match(report, /^<b>⚪ primary@example\.com<\/b> · <code>claude<\/code>\nNo quota data returned by the client$/m)
   assert.match(report, /^<b>⚪ relogin\+work@example\.com<\/b> · <code>claude@expired<\/code>\nunavailable$/m)
   assert.match(report, /^<b>⚪ amp&amp;ersand@example\.com<\/b> · <code>claude@amp<\/code>$/m)
-  assert.match(report, /^<b>⚪ old@example\.com<\/b> · <code>claude@token<\/code> · token login\nlimits not readable on a token login$/m)
+  assert.match(report, /^<b>⚪ claude@token<\/b> · setup token\nSaved browser login · old@example\.com\nQuota unavailable for setup token$/m)
   assert.match(report, /^<b>⚪ claude@invalid<\/b>$/m)
   assert.doesNotMatch(report, /invalid@example|Injected|private-/)
   const group = await usageReport(root, {}, deps)
   assert.match(group, /^<b>⚪ claude@expired<\/b>\nunavailable$/m)
   assert.doesNotMatch(group, /@example\.com/)
-  assert.match(group, /^<b>⚪ claude@token<\/b> · token login$/m)
+  assert.match(group, /^<b>⚪ claude@token<\/b> · setup token$/m)
 })
 
 test('Codex usage shows the app-server account email only in private reports, never for API-key logins', { skip: process.platform === 'win32' }, async t => {
@@ -255,7 +255,7 @@ test('the report marks a dead login, keeps token logins readable and names a CLI
   assert.equal(report, [
     '<b>Usage</b> · % left · reset times UTC',
     '🔴 1 need attention · 🟠 1 logged out',
-    '<b>🔴 claude@token</b> · token login',
+    '<b>🔴 claude@token</b> · setup token',
     '⛔ quota-blocked · resets in 3h 0m',
     '<pre>5h     ░░░░░░░░░░   0% · Nov 7, 2:50pm',
     '7d all ░░░░░░░░░░   0% · Nov 9, 3pm</pre>',
@@ -278,4 +278,26 @@ test('Claude limits use the home\'s own login when it has one, so a setup token 
   await writeFile(path.join(home, '.credentials.json'), '{}')
   await readClaudeLimits(home, 'work')
   assert.equal(JSON.parse(await readFile(observed, 'utf8')).token, undefined)
+})
+
+test('usage shows host-only sign-ins as available accounts with unreadable quota', async t => {
+  const root = await temp(t, 'host-logins')
+  const previous = process.env.EZ_EXECUTOR_TRANSPORT
+  process.env.EZ_EXECUTOR_TRANSPORT = 'host'
+  t.after(() => {
+    if (previous === undefined) delete process.env.EZ_EXECUTOR_TRANSPORT
+    else process.env.EZ_EXECUTOR_TRANSPORT = previous
+  })
+  const host = path.join(root, 'host-executor')
+  await mkdir(host)
+  await writeFile(path.join(host, 'heartbeat.json'), JSON.stringify({ nativeLogins:['codex','claude@work'] }))
+  const unreadable = async () => { assert.fail('the relay must not try to read host-only quotas') }
+  const report = await usageReport(root, {}, {
+    statuses: async () => [status('codex', null, { credentialFiles:[], loggedIn:false }),
+      status('claude', 'work', { credentialFiles:[], loggedIn:false })],
+    readers:{ codex:unreadable, claude:unreadable, codexEmail:unreadable }, showAccountEmails:true,
+  })
+  assert.match(report, /⚪ codex<\/b>\nSigned in on host · quota unavailable from relay/)
+  assert.match(report, /⚪ claude@work<\/b>\nSigned in on host · quota unavailable from relay/)
+  assert.doesNotMatch(report, /Hidden|Logged out/)
 })

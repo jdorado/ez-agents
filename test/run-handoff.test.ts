@@ -11,6 +11,7 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { Scheduler, holdsSchedule } from '../src/scheduler.js'
 import { initialPreset } from '../src/ai.js'
+import { cliHome } from '../src/auth-profile.js'
 
 const until = async (check: () => Promise<boolean>) => {
   for (let i = 0; i < 400; i++) { if (await check()) return; await new Promise(r => setTimeout(r, 25)) }
@@ -141,14 +142,17 @@ test('an adopted scheduled run continues a terminal quota limit on its next save
   const { root, dir, next, host, files, owner } = await fixture(t)
   const scheduler = new Scheduler(dir), first = new RunStore(dir)
   const primary = { ...initialPreset('claude'), model: 'opus', effort: 'xhigh' }
-  const profiles = ['claude2', 'claude3'].map((authProfile, i) => ({ ...primary, id: `fallback-${i + 1}`, authProfile }))
   const saved = await scheduler.save({ id: 'quota', name: 'Quota', text: 'Saved work', owner, enabled: true,
-    trigger: { at: '2027-01-01T00:00:00Z' }, execution: { sessionId: '00000000-0000-4000-8000-000000000000', preset: primary, fallbacks: profiles } }, true)
+    trigger: { at: '2027-01-01T00:00:00Z' }, execution: { sessionId: '00000000-0000-4000-8000-000000000000', preset: primary } }, true)
   const run = await scheduler.trigger(saved.id, saved.revision, 'adopt-quota', owner, first)
   const before = createRelay(config(dir, root))
   t.after(() => before.stop())
   before.bot.api.config.use(async () => ({ ok: true, result: { message_id: 42 } }) as never)
-  for (const profile of profiles) await mkdir(join(dir, 'cli', 'profiles', profile.authProfile, 'claude'), { recursive: true })
+  for (const profile of [undefined, 'claude2', 'claude3']) {
+    const home = cliHome(dir, 'claude', profile)
+    await mkdir(home, { recursive: true })
+    await writeFile(join(home, '.credentials.json'), '{}')
+  }
   const event = (text: unknown) => JSON.stringify({ stream: 'stdout', text: JSON.stringify(text) + '\n' }) + '\n'
   await before.drainSources()
   await until(async () => (await files()).includes(run.id + '.request.json'))

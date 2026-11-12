@@ -9,6 +9,7 @@ import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
+import { accountHomes, cliHome } from '../src/auth-profile.js'
 import { opencodeDataHome, piAgentDir } from '../src/executor.js'
 // @ts-expect-error The supervisor is a standalone Node module.
 import { idle } from '../src/updates/supervisor.mjs'
@@ -96,6 +97,12 @@ test('private control directory preserves pause, fails closed on errors, and res
         await mkdir(directory, { recursive: true, mode: 0o700 })
         await writeFile(join(directory, 'auth.json'), '{}', { mode: 0o600 })
       }
+      const account = cliHome(dir, 'claude', 'work')
+      await mkdir(account, { recursive: true, mode: 0o700 })
+      const credentials = join(account, '.credentials.json')
+      await writeFile(credentials, '{}', { mode: 0o600 })
+      await assert.rejects(access(credentials), { code: 'EACCES' })
+      assert.deepEqual(await accountHomes(dir), [{ cli:'claude', authProfile:'work' }])
       assert.equal(opencodeDataHome(dir), join(dir, 'cli'))
       assert.equal(piAgentDir(dir), join(dir, 'cli', 'pi', 'agent'))
     }
