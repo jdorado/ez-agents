@@ -332,7 +332,7 @@ test('/usage answers only the owner and starts no work', async t => {
   const f = await fixture()
   try {
     await f.relay.bot.handleUpdate(message(1, '/usage'))
-    assert.equal(f.replies.at(-1), 'No Codex or Claude login is installed.')
+    assert.equal(f.replies.at(-1), 'No Codex or Claude login is configured.')
     const stranger = message(2, '/usage')
     stranger.message!.from!.id = 202; stranger.message!.chat.id = 202
     const before = f.replies.length
