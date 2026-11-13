@@ -2,7 +2,7 @@ import { assertEffort } from './model-policy.js'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { isPreset, persistedPreset, presetProvider, resolveFallbacks, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
+import { isPreset, persistedPreset, presetProvider, resolveFallbacks, sameChoice, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
 import { AUTH_PROFILE_CLIS, isAuthProfile } from './auth-profile.js'
 import { quotaScope, quotaBlockedUntil, quotaCategory, usesAccountPool, validSetupHealth, type AccountCursor, type SetupAttempt, type SetupHealth } from './setup-fallback.js'
 
@@ -182,9 +182,15 @@ export const sessionTitle = (session: SessionState): string =>
 const engineOf = (preset: AiPreset) => ({ cli: preset.cli, ...(preset.authProfile ? { authProfile: preset.authProfile } : {}) })
 
 // Queued work captures the chain with its primary choice; later edits do not change it.
-const withChain = (choice: ExecutionChoice, chain?: AiPreset[]): ExecutionChoice => {
-  const fallbacks = resolveFallbacks(choice.preset, chain)
-  return fallbacks ? { ...choice, fallbacks } : choice
+const withChain = (choice: ExecutionChoice, chain?: AiPreset[], defaultPreset?: AiPreset): ExecutionChoice => {
+  const fallbacks = resolveFallbacks(choice.preset, chain) ?? []
+  // The agent default is a concrete choice, even when it delegates to native settings.
+  // One native session per CLI/login cannot safely resume across providers.
+  if (defaultPreset && ![choice.preset, ...fallbacks].some(preset =>
+    sameChoice(preset, defaultPreset) ||
+    (sameEngine(preset, defaultPreset) && presetProvider(preset) !== presetProvider(defaultPreset))))
+    fallbacks.push(defaultPreset)
+  return fallbacks.length ? { ...choice, fallbacks } : choice
 }
 
 // Clients that report their own native session ID; others use the Ez-assigned ID.
@@ -775,10 +781,12 @@ export class ControlStore {
     if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('Invalid application scope')
     return this.withLock(async () => {
       const state = await this.readState()
-      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
+      const ai = state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
       state.sessions ??= []
       const previous = currentApplicationSession(state, scope)
       if (expectedNativeSessionId !== undefined && previous?.nativeSessionId !== expectedNativeSessionId) throw new Error('Application request conflicts with native session; import the existing scope before cutover')
+      const fallbackDefault = !shareTelegram && !previous?.telegramShared && !requested && expectedNativeSessionId === undefined
+        ? ai.presets.find(item => item.id === ai.defaultId) : undefined
       const activate = (session: SessionState) => {
         if (!shareTelegram) return
         session.telegramShared = true
@@ -796,14 +804,14 @@ export class ControlStore {
         if (requested) previous.preset = requested
         activate(previous)
         if (shareTelegram || requested) await this.writeState(state)
-        return withChain({ sessionId: previous.sessionId, preset: previous.preset }, state.ai.fallbacks)
+        return withChain({ sessionId: previous.sessionId, preset: previous.preset }, ai.fallbacks, fallbackDefault)
       }
-      const preset = requested ?? state.ai.presets.find(item => item.id === state.ai!.selectedId)!
+      const preset = requested ?? ai.presets.find(item => item.id === ai.selectedId)!
       const session: SessionState = { sessionId: crypto.randomUUID(), hasStarted: false, ...engineOf(preset), preset, applicationScope: scope }
       state.sessions.push(session)
       activate(session)
       await this.writeState(state)
-      return withChain({ sessionId: session.sessionId, preset }, state.ai.fallbacks)
+      return withChain({ sessionId: session.sessionId, preset }, ai.fallbacks, fallbackDefault)
     })
   }
 
