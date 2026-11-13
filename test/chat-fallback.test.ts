@@ -134,6 +134,31 @@ test('a private application turn replies through the agent default after a rejec
   } finally { await f.close() }
 })
 
+test('a changed fallback provider starts a fresh linked native session', async () => {
+  const f = await fixture('provider-switch', [], { chain: [] })
+  try {
+    const scope = 'a'.repeat(64), initial = initialPreset('claude')
+    const firstDefault = { ...codex, id: 'provider-a', provider: 'provider-a' }
+    const secondDefault = { ...codex, id: 'provider-b', provider: 'provider-b' }
+    await f.control.savePreset(firstDefault)
+    await f.control.defaultPreset(firstDefault.id)
+    const first = await f.control.captureApplicationChoice(initial, scope)
+    await f.control.engineSession(first.sessionId, first.fallbacks![0])
+    await f.control.saveEngineSession(first.sessionId, firstDefault, 'provider_a_context')
+    assert.equal((await f.control.engineSession(first.sessionId, firstDefault)).nativeSessionId, 'provider_a_context')
+
+    await f.control.savePreset(secondDefault)
+    await f.control.defaultPreset(secondDefault.id)
+    const second = await f.control.captureApplicationChoice(initial, scope)
+    assert.equal(second.sessionId, first.sessionId)
+    assert.deepEqual(second.fallbacks, [secondDefault])
+    const fresh = await f.control.engineSession(second.sessionId, second.fallbacks![0])
+    assert.equal(fresh.hasStarted, false)
+    assert.equal(fresh.nativeSessionId, undefined)
+    await assert.rejects(f.control.saveEngineSession(first.sessionId, firstDefault, 'provider_a_context'), /Unknown conversation engine/)
+  } finally { await f.close() }
+})
+
 test('each login keeps its own native session for the conversation', async () => {
   const f = await fixture('sessions', [{ lines: [quota], code: 1 }, { lines: [work], code: 0 }, { lines: [work], code: 0 }, { lines: [work], code: 0 }], { chain: [chain[0]] })
   try {

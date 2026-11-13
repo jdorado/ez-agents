@@ -78,10 +78,11 @@ after uncertainty before deciding on another change.
 Ordinary private scopes, including Slack channels and threads, automatically
 try the agent's configured default AI after the owner's chat fallback chain if
 it is a different setup compatible with the conversation's native bindings.
-The selected AI and the fallback order are captured
-when each turn is queued. A fallback uses the same run and reply destination
-and leaves the scope's selected AI in place. Shared conversations and requests
-with an explicit AI or native-session assertion keep the owner-configured chain.
+Core captures the selected AI and fallback order when it queues a turn. A
+fallback uses the same run and reply destination and leaves the scope's selected
+AI in place. A provider change starts a fresh linked native session. Shared
+conversations and requests with an explicit AI or native-session assertion keep
+the owner-configured chain.
 The existing [fallback rules](docker-runtime.md#chat-fallback-chain) govern which
 failures allow another attempt.
 
