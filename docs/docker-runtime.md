@@ -347,17 +347,17 @@ left, 🟠 logged out, ⚪ unavailable, 🟡 under 50%, 🟢 ok.
 Reset times are UTC unless a row names another zone. A default login appears
 when it has credentials or the host reports it signed in. In private owner chats, Claude profiles with a saved browser-login
 email and Codex ChatGPT logins show the email beside the profile name, even if
-usage is unavailable. A setup-token row uses the profile name and labels any
-saved browser identity separately. Any usage figures on that row come from that
-browser login. Group reports and API-key logins use the profile name alone.
+usage is unavailable. The `browser` label on a setup-token account identifies
+the source of its saved email and any usage figures. Group reports and API-key
+logins use the profile name in place of the email.
 Each client answers for its own bound home, and Ez never stores, copies
 or prints the credential. Codex limits and email come from that home's
 `codex app-server` (`account/rateLimits/read`, `account/read`); Claude limits from `claude -p /usage`, a local
 client command that spends no model tokens and prints the session (5h) and
 weekly percentages with their reset times. A login the client cannot report
 for (for example an API-key login) shows `Quota unavailable`. The report shows `Logged out` when the client needs a new
-login. A profile bound to a setup token is tagged `setup token`. Its limits
-are read with the home's own browser login when it keeps one. If only the host
+login. Ez reads limits for setup-token profiles through the home's browser
+login when one is available. If only the host
 can see a signed-in account, the report lists it with quota unavailable from
 the relay. Logins are read at the same time, but the bot
 answers no other message until the reply is built, up to 20 seconds when a

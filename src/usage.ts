@@ -180,14 +180,11 @@ export const usageReport = async (controlDir: string, health: SetupHealth = {},
     const left = Math.min(...windows.map(window => Math.round(100 - window.usedPercent)))
     const rank = blocked || left < 20 ? 0 : loggedIn === false && !hostOnly ? 1 : !windows.length ? 2 : left < 50 ? 3 : 4
     const icon = STATUS_ICONS[rank]
-    const heading = token
-      ? `<b>${icon} ${escapeHtml(scope)}</b> · setup token`
-      : `<b>${icon} ${escapeHtml(email ?? scope)}</b>${email ? ` · <code>${escapeHtml(scope)}</code>` : ''}`
-    const lines = [heading]
-    if (token && (email || windows.length)) {
-      const source = windows.length ? 'Browser quota' : 'Saved browser'
-      lines.push(email ? `${source} · ${escapeHtml(email)}` : source)
-    }
+    const profileLabel = token ? authProfile ?? cli : scope
+    const heading = `<b>${icon} ${escapeHtml(email ?? scope)}</b>`
+    const profileName = email ? ` · <code>${escapeHtml(profileLabel)}</code>` : ''
+    const source = token && (email || windows.length) ? ' · <i>browser</i>' : ''
+    const lines = [heading + profileName + source]
     const block = !blocked ? undefined : Number.isFinite(blockedUntil)
       ? `Blocked for ${remaining(blockedUntil - now)}`
       : 'Blocked · awaiting /retry_quota'
