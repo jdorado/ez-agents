@@ -2,7 +2,7 @@ import { assertEffort } from './model-policy.js'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { isPreset, persistedPreset, presetProvider, resolveFallbacks, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
+import { isPreset, persistedPreset, presetProvider, resolveFallbacks, sameChoice, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
 import { AUTH_PROFILE_CLIS, isAuthProfile } from './auth-profile.js'
 import { quotaScope, quotaBlockedUntil, quotaCategory, usesAccountPool, validSetupHealth, type AccountCursor, type SetupAttempt, type SetupHealth } from './setup-fallback.js'
 
@@ -57,8 +57,10 @@ type ApplicationPairingRequest = {
 export type PairingRequest = TelegramPairingRequest | ApplicationPairingRequest
 
 // A fallback login's own native conversation beside a conversation's engine.
-export type LinkedSession = { cli: string; authProfile?: string; sessionId: string; nativeSessionId?: string; hasStarted: boolean }
-type Engine = { cli: string; authProfile?: string }
+export type LinkedSession = { cli: string; authProfile?: string; provider?: string | null; sessionId: string; nativeSessionId?: string; hasStarted: boolean }
+const sessionProvider = (preset: AiPreset) => preset.cli === 'pi' ? preset.model?.split('/')[0] : presetProvider(preset)
+const linkedProvider = (preset: AiPreset) => ['codex', 'opencode', 'pi'].includes(preset.cli) ? sessionProvider(preset) ?? null : undefined
+const matchesLinked = (linked: LinkedSession, preset: AiPreset) => sameEngine(linked, preset) && linked.provider === linkedProvider(preset)
 
 export type SessionState = {
   sessionId: string
@@ -148,6 +150,7 @@ const isState = (value: unknown): value is ControlState => {
     (s.preset === undefined || (isPreset(s.preset) && sameEngine(s.preset, s))) &&
     (s.linked === undefined || (Array.isArray(s.linked) && s.linked.length <= 16 && s.linked.every((l, i) =>
       l && typeof l.cli === 'string' && /^[a-z-]{1,20}$/.test(l.cli) && (l.authProfile === undefined || isAuthProfile(l.authProfile)) &&
+      (l.provider == null || (typeof l.provider === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(l.provider))) &&
       /^[0-9a-f-]{36}$/i.test(l.sessionId) && typeof l.hasStarted === 'boolean' &&
       (l.nativeSessionId === undefined || /^[a-zA-Z0-9_-]{1,160}$/.test(l.nativeSessionId)) &&
       !sameEngine(l, s) && !s.linked!.slice(0, i).some(other => sameEngine(other, l)))))
@@ -182,9 +185,15 @@ export const sessionTitle = (session: SessionState): string =>
 const engineOf = (preset: AiPreset) => ({ cli: preset.cli, ...(preset.authProfile ? { authProfile: preset.authProfile } : {}) })
 
 // Queued work captures the chain with its primary choice; later edits do not change it.
-const withChain = (choice: ExecutionChoice, chain?: AiPreset[]): ExecutionChoice => {
-  const fallbacks = resolveFallbacks(choice.preset, chain)
-  return fallbacks ? { ...choice, fallbacks } : choice
+const withChain = (choice: ExecutionChoice, chain?: AiPreset[], defaultPreset?: AiPreset): ExecutionChoice => {
+  const fallbacks = resolveFallbacks(choice.preset, chain) ?? []
+  // The agent default is a concrete choice, even when it delegates to native settings.
+  // The primary CLI/login has a pinned native session.
+  if (defaultPreset && ![choice.preset, ...fallbacks].some(preset =>
+    sameChoice(preset, defaultPreset)) &&
+    (!sameEngine(choice.preset, defaultPreset) || sessionProvider(choice.preset) === sessionProvider(defaultPreset)))
+    fallbacks.push(defaultPreset)
+  return fallbacks.length ? { ...choice, fallbacks } : choice
 }
 
 // Clients that report their own native session ID; others use the Ez-assigned ID.
@@ -775,10 +784,12 @@ export class ControlStore {
     if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('Invalid application scope')
     return this.withLock(async () => {
       const state = await this.readState()
-      state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
+      const ai = state.ai ??= { presets: [persistedPreset(initial)], defaultId: initial.id, selectedId: initial.id }
       state.sessions ??= []
       const previous = currentApplicationSession(state, scope)
       if (expectedNativeSessionId !== undefined && previous?.nativeSessionId !== expectedNativeSessionId) throw new Error('Application request conflicts with native session; import the existing scope before cutover')
+      const fallbackDefault = !shareTelegram && !previous?.telegramShared && !requested && expectedNativeSessionId === undefined
+        ? ai.presets.find(item => item.id === ai.defaultId) : undefined
       const activate = (session: SessionState) => {
         if (!shareTelegram) return
         session.telegramShared = true
@@ -796,14 +807,14 @@ export class ControlStore {
         if (requested) previous.preset = requested
         activate(previous)
         if (shareTelegram || requested) await this.writeState(state)
-        return withChain({ sessionId: previous.sessionId, preset: previous.preset }, state.ai.fallbacks)
+        return withChain({ sessionId: previous.sessionId, preset: previous.preset }, ai.fallbacks, fallbackDefault)
       }
-      const preset = requested ?? state.ai.presets.find(item => item.id === state.ai!.selectedId)!
+      const preset = requested ?? ai.presets.find(item => item.id === ai.selectedId)!
       const session: SessionState = { sessionId: crypto.randomUUID(), hasStarted: false, ...engineOf(preset), preset, applicationScope: scope }
       state.sessions.push(session)
       activate(session)
       await this.writeState(state)
-      return withChain({ sessionId: session.sessionId, preset }, state.ai.fallbacks)
+      return withChain({ sessionId: session.sessionId, preset }, ai.fallbacks, fallbackDefault)
     })
   }
 
@@ -867,28 +878,31 @@ export class ControlStore {
 
   // The native session an engine resumes for this conversation: the
   // conversation's own for its engine, otherwise that login's linked session,
-  // created on first use. A session never resumes under another credential home.
-  async engineSession(sessionId: string, engine: Engine): Promise<{ sessionId: string; nativeSessionId?: string; hasStarted: boolean }> {
+  // created on first use or a provider change. A session never resumes under
+  // another credential home or provider.
+  async engineSession(sessionId: string, engine: AiPreset): Promise<{ sessionId: string; nativeSessionId?: string; hasStarted: boolean }> {
     return this.withLock(async () => {
       const state = await this.readState()
       const session = this.conversation(state, sessionId)
       if (sameEngine(session, engine)) return session
-      let linked = session.linked?.find(item => sameEngine(item, engine))
+      let linked = session.linked?.find(item => matchesLinked(item, engine))
       if (!linked) {
-        linked = { cli: engine.cli, ...(engine.authProfile ? { authProfile: engine.authProfile } : {}), sessionId: crypto.randomUUID(), hasStarted: false }
-        session.linked = [...session.linked ?? [], linked].slice(-16)
+        // Legacy links for provider-capable clients have no known provider.
+        const provider = linkedProvider(engine)
+        linked = { ...engineOf(engine), ...(provider === undefined ? {} : { provider }), sessionId: crypto.randomUUID(), hasStarted: false }
+        session.linked = [...(session.linked ?? []).filter(item => !sameEngine(item, engine)), linked].slice(-16)
         await this.writeState(state)
       }
       return linked
     })
   }
 
-  async saveEngineSession(sessionId: string, engine: Engine, nativeSessionId: string): Promise<void> {
+  async saveEngineSession(sessionId: string, engine: AiPreset, nativeSessionId: string): Promise<void> {
     if (!/^[a-zA-Z0-9_-]{1,160}$/.test(nativeSessionId)) throw new Error('Invalid native session ID')
     await this.withLock(async () => {
       const state = await this.readState()
       const session = this.conversation(state, sessionId)
-      const target = sameEngine(session, engine) ? session : session.linked?.find(item => sameEngine(item, engine))
+      const target = sameEngine(session, engine) ? session : session.linked?.find(item => matchesLinked(item, engine))
       if (!target) throw new Error('Unknown conversation engine')
       if (target.nativeSessionId && target.nativeSessionId !== nativeSessionId) throw new Error('Native session changed unexpectedly')
       target.nativeSessionId = nativeSessionId
@@ -900,11 +914,11 @@ export class ControlStore {
   // After an ordered attempt: a session that began work resumes next time. A
   // client that rejected an unstarted session may already have claimed its ID,
   // so a client using Ez-assigned IDs gets a fresh one for its next attempt.
-  async settleEngineSession(sessionId: string, engine: Engine, started: boolean): Promise<void> {
+  async settleEngineSession(sessionId: string, engine: AiPreset, started: boolean): Promise<void> {
     await this.withLock(async () => {
       const state = await this.readState()
       const session = state.activeSession?.sessionId === sessionId ? state.activeSession : state.sessions?.find(s => s.sessionId === sessionId)
-      const target = !session ? undefined : sameEngine(session, engine) ? session : session.linked?.find(item => sameEngine(item, engine))
+      const target = !session ? undefined : sameEngine(session, engine) ? session : session.linked?.find(item => matchesLinked(item, engine))
       // Reporting clients start only through saveEngineSession.
       if (!target || target.hasStarted || reportsNativeSession(target.cli)) return
       if (started) target.hasStarted = true
