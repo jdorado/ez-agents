@@ -370,7 +370,9 @@ running tasks do not.
 Each scheduled task has its own Codex state under `control/cli/codex/tasks/RUN_ID`,
 with a snapshot of the agent's Codex configuration and the existing auth link.
 Foreground chat and scheduled tasks do not initialize or migrate one shared
-native database concurrently.
+native database concurrently. When the scheduled Codex process exits normally,
+Ez removes that run's downloaded plugin catalogs, app tool cache and plugin
+packages. Its native transcripts, goals and databases stay on disk.
 
 The foreground chat still uses `codex exec`. That invocation exits after one
 requested turn even if a goal is active, so delegate persistent work to the

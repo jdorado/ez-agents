@@ -1,7 +1,7 @@
 import { executionDefaults } from './model-policy.js'
 import { startTaskExecutor } from './task-executor.js'
 import { deliverySocketPath } from './delivery-socket.js'
-import { mkdtemp, rm, writeFile, mkdir, symlink, readFile, rename } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, mkdir, symlink, readFile, rename, realpath } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { accessSync, openSync, closeSync, constants as fsConstants } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
@@ -412,12 +412,14 @@ export const startExecutorJob = async (
     if (!secret) throw new Error(`Missing Codex provider credential ${provider.envKey}`)
     environment[provider.envKey] = secret
   }
+  let codexTaskHome: string | undefined
   if (!host && !gui && command === 'codex') {
     // Share the existing authentication, never the user's memory/config/sessions.
     const base = await provisionedHome(options.controlDir, 'codex', options.authProfile)
     const home = nativeSession ? path.join(base,'tasks',options.runId) : base
     await mkdir(home, {recursive:true,mode:0o700})
     if(nativeSession){
+      codexTaskHome = path.join(await realpath(base), 'tasks', options.runId)
       // Snapshot this agent's configuration, never personal global configuration.
       // Native state databases stay per task, avoiding concurrent initialization
       // and migration of the foreground session's database.
@@ -487,6 +489,17 @@ export const startExecutorJob = async (
     detached: process.platform !== 'win32',
   })
   if (cancelFile) hostCancelFiles.set(child, cancelFile)
+  let cacheCleanup: Promise<void> | undefined
+  if (codexTaskHome) {
+    const taskHome = codexTaskHome
+    child.once('close', (code) => {
+      // A killed transport can leave native descendants. A normal exit waits for Codex.
+      if (code === null) return
+      cacheCleanup = trimCodexTaskCaches(taskHome).catch((error: NodeJS.ErrnoException) => {
+        console.warn('Could not trim scheduled Codex caches:', error.code ?? 'unknown')
+      })
+    })
+  }
   await new Promise<void>((resolve, reject) => {
     child.once('spawn', resolve)
     child.once('error', reject)
@@ -522,8 +535,27 @@ export const startExecutorJob = async (
       clearTimeout(timeout)
       await rm(outputDirectory, { recursive: true, force: true })
       await metadataWork
+      await cacheCleanup
     },
     stdout,
+  }
+}
+
+// Keep native sessions and databases. Only remove downloaded data that Codex
+// can rebuild for another attempt. Never traverse a redirected cache parent.
+async function trimCodexTaskCaches(taskHome: string): Promise<void> {
+  if (await realpath(taskHome) !== taskHome) return
+  for (const [name, entries] of [
+    ['cache', ['remote_plugin_catalog', 'codex_apps_tools']],
+    ['plugins', ['cache']],
+  ] as const) {
+    const parent = path.join(taskHome, name)
+    const resolved = await realpath(parent).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined
+      throw error
+    })
+    if (resolved !== parent) continue
+    for (const entry of entries) await rm(path.join(parent, entry), { recursive: true, force: true })
   }
 }
 
