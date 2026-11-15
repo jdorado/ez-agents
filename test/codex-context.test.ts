@@ -1,7 +1,7 @@
 import { ownerRun } from './helpers/owner-run.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,readlink,readdir,rm} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,readlink,readdir,rm,symlink} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import path from 'node:path'
 import {startExecutorJob} from '../src/executor.js'
@@ -112,16 +112,38 @@ send({id:q.id,result:q.method==='thread/goal/get'?{goal:null}:{}});});setInterva
   process.env.HOME=root;process.env.PATH=bin+path.delimiter+priorPath
   await assert.rejects(startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId:'r_schedule_/../../escape',timeoutMs:0,nativeSession:true}),/Invalid native task run ID/)
   await ownerRun(controlDir, 'r_pair_fixture')
+  const outside = path.join(root,'outside')
+  await mkdir(path.join(outside,'cache'),{recursive:true})
+  await writeFile(path.join(outside,'cache','package.json'),'keep')
   await Promise.all(['r_schedule_one','r_schedule_two'].map(async runId=>{
    await ownerRun(controlDir, runId)
-   const job=await startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:0,nativeSession:true})
-   assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0);await job.cleanup()
    const home=path.join(controlDir,'cli/codex/tasks',runId)
+   for (const entry of ['cache/remote_plugin_catalog','cache/codex_apps_tools','sessions','skills']) {
+    await mkdir(path.join(home,entry),{recursive:true})
+    await writeFile(path.join(home,entry,'example'),'fixture')
+   }
+   if (runId === 'r_schedule_two') await symlink(outside,path.join(home,'plugins'))
+   else {
+    await mkdir(path.join(home,'plugins/cache'),{recursive:true})
+    await writeFile(path.join(home,'plugins/cache/package.json'),'fixture')
+   }
+   const job=await startExecutorJob(['test'],{workspace:root,controlDir,binDir:bin,cli:'codex',runId,timeoutMs:0,nativeSession:true})
+   const closed = new Promise(resolve=>job.child.once('close',resolve))
+   assert.equal(await readFile(path.join(home,'cache/remote_plugin_catalog/example'),'utf8'),'fixture')
+   assert.equal(await closed,0);await job.cleanup()
+   for (const entry of ['cache/remote_plugin_catalog','cache/codex_apps_tools']) {
+    await assert.rejects(readdir(path.join(home,entry)),{code:'ENOENT'})
+   }
+   for (const entry of ['sessions','skills']) {
+    assert.equal(await readFile(path.join(home,entry,'example'),'utf8'),'fixture')
+   }
+   if (runId === 'r_schedule_one') await assert.rejects(readdir(path.join(home,'plugins/cache')),{code:'ENOENT'})
    assert.equal(JSON.parse(await readFile(path.join(home,'observed.json'),'utf8')).home,home)
    assert.equal(await readFile(path.join(home,'config.toml'),'utf8'),'# agent configuration')
    assert.equal(await readlink(path.join(home,'auth.json')),path.join(controlDir,'cli/codex/auth.json'))
    assert.equal(await readFile(path.join(home,'auth.json'),'utf8'),'{"private_agent_fixture":true}')
   }))
+  assert.equal(await readFile(path.join(outside,'cache','package.json'),'utf8'),'keep')
   assert.deepEqual((await readdir(path.join(controlDir,'cli/codex'))).sort(),['auth.json','config.toml','tasks'])
  }finally{
   if(priorHome===undefined)delete process.env.HOME;else process.env.HOME=priorHome
