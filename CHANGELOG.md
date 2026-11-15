@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.73.0
+
+- Rotate scheduled runs across every registered Claude or Codex login (#356). Each scheduled model step now starts after the last account selected for that client and tries the eligible accounts in round-robin order, skipping any in a known quota cooldown; the rotation is shared by all scheduled tasks and survives relay restarts. Accounts are registered once with `ezenciel-agents-ai profile add --cli claude|codex` and existing credential homes join the pool in place, so a task no longer exhausts one login and stops while others sit idle. Account pins in saved fallbacks collapse into their model step, and run evidence records the login actually used.
+- Simplify the owner `/usage` report (#357): email and profile on one line, a blank line between accounts, one plain line per quota window, status beside the affected account, and a small browser label on setup-token rows whose email or quota comes from a browser login.
+
 ## 0.72.0
 
 - Move the relay image's pinned Claude Code client from 2.1.286 to 2.1.322. Claude's model catalog now lists Fable 5.2 with a minimum client of 2.1.290, so the `fable` alias on the old pin cannot reach it. The new pin also handles `/usage` locally, which the 2.1.286 client was not verified to do. Saved `fable`, `opus` and `sonnet` choices are unchanged: aliases follow the installed client.
