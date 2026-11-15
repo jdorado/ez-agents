@@ -8,6 +8,7 @@ import { once } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import type { Update } from 'grammy/types'
 import { createRelay } from '../src/index.js'
+import { applicationScope } from '../src/application-channel.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore, activeSetup } from '../src/runs.js'
 import { initialPreset, resolveFallbacks, type AiPreset } from '../src/ai.js'
@@ -95,6 +96,66 @@ test('queued work keeps the chain and choice captured when it was queued; roles 
     const captured = await f.control.captureApplicationChoice(initialPreset('claude'), 'a'.repeat(64), false, role)
     assert.deepEqual(captured.fallbacks!.map(p => [p.cli, p.authProfile, p.model, p.effort]), [...logins.map(p => ['claude', p, 'haiku', 'low']), ['codex', undefined, 'gpt-6.1-sol', 'xhigh']])
     assert.deepEqual(resolveFallbacks(opus, [{ ...opus, id: 'copy' }, ...chain, chain[0]]), resolveFallbacks(opus, chain), 'setups equal to an earlier one are dropped')
+  } finally { await f.close() }
+})
+
+test('a private application turn replies through the agent default after a rejected channel model', async () => {
+  const f = await fixture('app-default', [{ lines: [{ type: 'assistant', error: 'model_not_found' }], code: 1 }, {
+    lines: [work], code: 0, beforeExit: async () => {
+      const item = await f.runs.enqueueMessage(f.launches.at(-1)!.runId, 'Reply from the default')
+      await f.runs.claimOutbox(item.id)
+      await f.relay.applicationChannel.deliver((await f.runs.get(item.runId!))!, item)
+    },
+  }], { chain: [] })
+  try {
+    const app = f.relay.applicationChannel
+    const owner = (await f.control.status()).owner!
+    const binding = (await app.bindings.register('fixture', 'a'.repeat(43), owner))!
+    const scope = 'slack:fixture:channel'
+    const scoped = applicationScope(binding.bindingId, scope)
+    await f.control.captureApplicationChoice(initialPreset('claude'), scoped)
+    await f.control.savePreset(codex)
+    await f.control.defaultPreset(codex.id)
+
+    const input = { requestId: 'one', scope, text: 'Reply here' }
+    const run = await app.submit(binding.bindingId, input)
+    assert.deepEqual(run.execution?.fallbacks, [codex])
+    await until(async () => (await f.runs.get(run.id))?.status === 'completed')
+    assert.deepEqual(f.launches.map(l => [l.runId, l.cli, l.model]), [[run.id, 'claude', 'opus'], [run.id, 'codex', codex.model]])
+    const result = await app.snapshot(binding.bindingId, run.id)
+    assert.deepEqual(result.messages.map(m => m.text), ['Reply from the default'])
+    assert.equal(result.scope, scope)
+    assert.deepEqual((await f.control.applicationSession(scoped))?.preset, opus)
+
+    // Changing the default affects new turns; reusing the request ID keeps the original run.
+    await f.control.defaultPreset(opus.id)
+    assert.deepEqual((await app.submit(binding.bindingId, input)).execution?.fallbacks, [codex])
+    assert.equal((await f.control.captureApplicationChoice(initialPreset('claude'), scoped)).fallbacks, undefined)
+  } finally { await f.close() }
+})
+
+test('a changed fallback provider starts a fresh linked native session', async () => {
+  const f = await fixture('provider-switch', [], { chain: [] })
+  try {
+    const scope = 'a'.repeat(64), initial = initialPreset('claude')
+    const firstDefault = { ...codex, id: 'provider-a', provider: 'provider-a' }
+    const secondDefault = { ...codex, id: 'provider-b', provider: 'provider-b' }
+    await f.control.savePreset(firstDefault)
+    await f.control.defaultPreset(firstDefault.id)
+    const first = await f.control.captureApplicationChoice(initial, scope)
+    await f.control.engineSession(first.sessionId, first.fallbacks![0])
+    await f.control.saveEngineSession(first.sessionId, firstDefault, 'provider_a_context')
+    assert.equal((await f.control.engineSession(first.sessionId, firstDefault)).nativeSessionId, 'provider_a_context')
+
+    await f.control.savePreset(secondDefault)
+    await f.control.defaultPreset(secondDefault.id)
+    const second = await f.control.captureApplicationChoice(initial, scope)
+    assert.equal(second.sessionId, first.sessionId)
+    assert.deepEqual(second.fallbacks, [secondDefault])
+    const fresh = await f.control.engineSession(second.sessionId, second.fallbacks![0])
+    assert.equal(fresh.hasStarted, false)
+    assert.equal(fresh.nativeSessionId, undefined)
+    await assert.rejects(f.control.saveEngineSession(first.sessionId, firstDefault, 'provider_a_context'), /Unknown conversation engine/)
   } finally { await f.close() }
 })
 
