@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { DESKTOP_UNAVAILABLE } from './desktop-bridge.js'
 import { macosWorkspaceProfile, workspaceSiblingDenies } from './workspace-confine.js'
 import { Scripts, type ScriptRunRef } from './scripts.js'
-import { claudeAuthEnvironment, cliHome, provisionedHome } from './auth-profile.js'
+import { carryClaudeSession, claudeAuthEnvironment, cliHome, provisionedHome } from './auth-profile.js'
 import { isHostRunId } from './host-executor-protocol.js'
 
 const hostCancelFiles = new WeakMap<ChildProcess, string>()
@@ -454,6 +454,7 @@ export const startExecutorJob = async (
     // token (`claude setup-token`) never refreshes, so one file can be copied
     // to every agent without them invalidating each other's OAuth session.
     Object.assign(environment, await claudeAuthEnvironment(home, options.authProfile))
+    if (options.isResume && options.sessionId) await carryClaudeSession(options.controlDir, home, options.sessionId)
     // Print mode otherwise kills unfinished background work after 10 idle minutes.
     // Keep native background work alive until completion or cancellation.
     environment.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = '0'

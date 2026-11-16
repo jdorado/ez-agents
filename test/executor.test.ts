@@ -438,3 +438,42 @@ test('Claude runs with agent-bound configuration, shared login and the agent dir
   await ownerRun(controlDir, 'r_claude_bad_token')
   await assert.rejects(startExecutorJob(['hello'], { workspace, controlDir, binDir: bin, cli: 'claude', runId: 'r_claude_bad_token', timeoutMs: 5000, repairEnabled: false }), /Invalid Claude token binding/)
 })
+
+test('a resumed Claude session carries its newest transcript from another login home', {skip:process.platform==='win32'}, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-claude-carry-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const bin = path.join(root, 'bin'), workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control')
+  const id = '11111111-1111-4111-8111-111111111111', project = '-mind'
+  const transcript = (cli: string, profile?: string) => path.join(controlDir, 'cli', ...(profile ? ['profiles', profile] : []), cli, 'projects', project, `${id}.jsonl`)
+  await mkdir(bin); await mkdir(workspace)
+  for (const profile of ['claude1', 'claude4']) await mkdir(path.dirname(transcript('claude', profile)), { recursive: true })
+  await mkdir(path.dirname(transcript('claude')), { recursive: true })
+  // The CLI sees only its own home: it reports the transcript it would resume.
+  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nconst fs=require('fs'),p=require('path');const f=p.join(process.env.CLAUDE_CONFIG_DIR,'projects','${project}','${id}.jsonl');fs.writeFileSync('observed.txt',fs.existsSync(f)?fs.readFileSync(f,'utf8'):'missing');fs.appendFileSync(f,'turn\\n')`, { mode: 0o700 })
+  const previous = { PATH: process.env.PATH, EZ_EXECUTOR_TRANSPORT: process.env.EZ_EXECUTOR_TRANSPORT }
+  t.after(() => { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value })
+  process.env.PATH = bin + path.delimiter + process.env.PATH
+  delete process.env.EZ_EXECUTOR_TRANSPORT
+  const resume = async (runId: string, authProfile?: string) => {
+    await ownerRun(controlDir, runId)
+    const job = await startExecutorJob(['hello'], { workspace, controlDir, binDir: bin, cli: 'claude', runId, timeoutMs: 5000, repairEnabled: false, sessionId: id, isResume: true, authProfile })
+    assert.equal(await new Promise(resolve => job.child.once('close', resolve)), 0); await job.cleanup()
+    return readFile(path.join(workspace, 'observed.txt'), 'utf8')
+  }
+  await writeFile(transcript('claude'), 'default\n')
+  await new Promise(resolve => setTimeout(resolve, 20))
+  await writeFile(transcript('claude', 'claude4'), 'stale\n')
+  await new Promise(resolve => setTimeout(resolve, 20))
+  await writeFile(transcript('claude', 'claude1'), 'default\nclaude1\n')
+  await mkdir(path.join(path.dirname(transcript('claude', 'claude1')), id, 'tool-results'), { recursive: true })
+  await writeFile(path.join(path.dirname(transcript('claude', 'claude1')), id, 'tool-results', 'r.txt'), 'large result')
+  // claude4 resumes the newest copy (claude1's), not its own stale one.
+  assert.equal(await resume('r_carry_1', 'claude4'), 'default\nclaude1\n')
+  assert.equal(await readFile(path.join(path.dirname(transcript('claude', 'claude4')), id, 'tool-results', 'r.txt'), 'utf8'), 'large result')
+  // The default login then continues from claude4's turn.
+  assert.equal(await resume('r_carry_2'), 'default\nclaude1\nturn\n')
+  // Its own copy is newest now, so it is used in place.
+  assert.equal(await resume('r_carry_3'), 'default\nclaude1\nturn\nturn\n')
+  await ownerRun(controlDir, 'r_carry_bad')
+  await assert.rejects(startExecutorJob(['hello'], { workspace, controlDir, binDir: bin, cli: 'claude', runId: 'r_carry_bad', timeoutMs: 5000, repairEnabled: false, sessionId: '../x', isResume: true }), /Invalid native session ID/)
+})

@@ -1,10 +1,10 @@
-import { lstat, readdir, readFile, stat } from 'node:fs/promises'
+import { copyFile, cp, lstat, mkdir, readdir, readFile, rename, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 // Owner-provisioned named credential homes beside the agent default binding.
 // Unset keeps control/cli/<cli>; a name selects control/cli/profiles/<name>/<cli>
-// with its own credentials, configuration and native sessions. Ez never stores,
-// copies or prints credentials; the native CLI logs in inside the home.
+// with its own credentials and configuration. Ez never stores, copies or prints
+// credentials; the native CLI logs in inside the home.
 export const AUTH_PROFILE_CLIS: readonly string[] = ['codex', 'claude']
 export const isAuthProfile = (value: unknown): value is string =>
   typeof value === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(value)
@@ -78,4 +78,32 @@ export const accountHomes = async (controlDir: string): Promise<{ cli: string; a
     return files.length || hostLogins.includes(scope) ? home : undefined
   }))
   return bound.filter(home => home !== undefined)
+}
+
+// One Claude conversation spans the agent's Claude logins (fallback accounts).
+// Its native session is a local transcript under the home that last served it,
+// and --resume reads it from the current CLAUDE_CONFIG_DIR, so before resuming
+// core copies the newest transcript of that session from a sibling home. Only
+// session transcripts move, never credentials or configuration.
+export const carryClaudeSession = async (controlDir: string, home: string, sessionId: string): Promise<void> => {
+  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(sessionId)) throw new Error('Invalid native session ID')
+  const homes = [home, ...[cliHome(controlDir, 'claude'), ...(await listAuthProfiles(controlDir))
+    .filter(found => found.cli === 'claude').map(found => cliHome(controlDir, 'claude', found.authProfile))]
+    .filter(candidate => path.resolve(candidate) !== path.resolve(home))]
+  let newest: { home: string; project: string; modified: number } | undefined
+  for (const candidate of homes)
+    for (const project of await readdir(path.join(candidate, 'projects')).catch(() => [] as string[])) {
+      const modified = await stat(path.join(candidate, 'projects', project, `${sessionId}.jsonl`)).then(entry => entry.isFile() ? entry.mtimeMs : undefined, () => undefined)
+      if (modified !== undefined && (!newest || modified > newest.modified)) newest = { home: candidate, project, modified }
+    }
+  if (!newest || newest.home === home) return
+  const source = path.join(newest.home, 'projects', newest.project), target = path.join(home, 'projects', newest.project)
+  await mkdir(target, { recursive: true, mode: 0o700 })
+  const temporary = path.join(target, `${sessionId}.jsonl.${process.pid}.tmp`)
+  await copyFile(path.join(source, `${sessionId}.jsonl`), temporary)
+  await rename(temporary, path.join(target, `${sessionId}.jsonl`))
+  // Session-side files (subagent transcripts, persisted tool results) when present.
+  await cp(path.join(source, sessionId), path.join(target, sessionId), { recursive: true, force: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ENOENT') throw error
+  })
 }

@@ -395,10 +395,13 @@ turn without replay. A login cooling down after a recorded quota rejection is
 skipped while another is available; when all are, they are tried in order.
 Codex chat turns report no typed usage-limit rejection, so a Codex setup
 advances only when its CLI is unavailable; put Codex last in the chain.
-Each login keeps its own native session for the conversation, created on first
-use and resumed on later turns; a session never resumes under another login. A
-fallback login's first turn does not see the conversation's earlier native
-history; durable context lives in the workspace.
+Claude logins share the conversation's native session: before a Claude login
+resumes it, core copies that session's newest transcript from the agent's other
+Claude homes into the login's home, so a fallback account continues the
+conversation (transcripts only, never credentials). Other clients, and Codex
+logins, keep their own native session per conversation, created on first use;
+their first turn does not see another client's native history, because native
+formats differ and core never rebuilds a transcript.
 
 ## Run telemetry
 
