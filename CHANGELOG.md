@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.74.0
+
+- Resume the Claude conversation after a login fallback (#361). A chat or application turn that fell back to another Claude login (for example at a usage limit) started a new, empty native session, because Claude transcripts live under each login's home and core kept one native session per login; a Slack thread could lose its history across three logins. Claude logins of one conversation now share its native session: before a resumed Claude launch, core copies the newest transcript of that session (and its session-side files) from the agent's other Claude homes into the current one. Credentials and configuration never move. Codex logins and other clients keep their own linked sessions, since their native formats are not portable. Conversations that already split before this release resume the conversation's original session, not the later linked ones; there is no migration.
+
 ## 0.73.0
 
 - Rotate scheduled runs across every registered Claude or Codex login (#356). Each scheduled model step now starts after the last account selected for that client and tries the eligible accounts in round-robin order, skipping any in a known quota cooldown; the rotation is shared by all scheduled tasks and survives relay restarts. Accounts are registered once with `ezenciel-agents-ai profile add --cli claude|codex` and existing credential homes join the pool in place, so a task no longer exhausts one login and stops while others sit idle. Account pins in saved fallbacks collapse into their model step, and run evidence records the login actually used.
