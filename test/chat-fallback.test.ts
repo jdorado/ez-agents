@@ -159,31 +159,26 @@ test('a changed fallback provider starts a fresh linked native session', async (
   } finally { await f.close() }
 })
 
-test('each login keeps its own native session for the conversation', async () => {
-  const f = await fixture('sessions', [{ lines: [quota], code: 1 }, { lines: [work], code: 0 }, { lines: [work], code: 0 }, { lines: [work], code: 0 }], { chain: [chain[0]] })
+test('a fallback Claude login resumes the conversation session instead of starting blank', async () => {
+  const f = await fixture('sessions', [{ lines: [work], code: 0 }, { lines: [quota], code: 1 }, { lines: [work], code: 0 }, { lines: [work], code: 0 }, { lines: [work], code: 0 }], { chain: [chain[0]] })
   try {
     const conversation = (await f.session()).sessionId
-    const first = await f.turn()
-    assert.equal(first.status, 'completed')
-    const [defaultLaunch, claude2Launch] = f.launches
-    assert.equal(defaultLaunch.sessionId, conversation); assert.equal(defaultLaunch.isResume, false)
-    assert.equal(claude2Launch.authProfile, 'claude2'); assert.notEqual(claude2Launch.sessionId, conversation); assert.equal(claude2Launch.isResume, false)
-    let state = await f.session()
-    assert.deepEqual(state.linked, [{ cli: 'claude', authProfile: 'claude2', sessionId: claude2Launch.sessionId, hasStarted: true }])
-    assert.equal(state.hasStarted, false)
-    // The rejected default login may have claimed its ID; its next attempt uses a fresh one.
-    assert.ok(state.nativeSessionId && state.nativeSessionId !== conversation)
-    // The default login is cooling down: the next turn resumes the claude2 session.
+    assert.equal((await f.turn()).status, 'completed')
+    assert.deepEqual([f.launches[0].authProfile, f.launches[0].sessionId, f.launches[0].isResume], [undefined, conversation, false])
+    // The default login hits its limit: claude2 resumes the same native session.
     const second = await f.turn()
-    assert.deepEqual(second.attempts!.map(a => [a.quotaScope, a.outcome]), [['claude', 'skipped'], ['claude@claude2', 'completed']])
-    assert.deepEqual([f.launches[2].authProfile, f.launches[2].sessionId, f.launches[2].isResume], ['claude2', claude2Launch.sessionId, true])
-    // Once the default login is available again it starts its own session, never claude2's.
+    assert.deepEqual(second.attempts!.map(a => [a.quotaScope, a.outcome]), [['claude', 'failed'], ['claude@claude2', 'completed']])
+    assert.deepEqual([f.launches[2].authProfile, f.launches[2].sessionId, f.launches[2].isResume], ['claude2', conversation, true])
+    let state = await f.session()
+    assert.equal(state.linked, undefined)
+    // While the default cools down claude2 keeps resuming it; afterwards the default does.
+    await f.turn()
+    assert.deepEqual([f.launches[3].authProfile, f.launches[3].sessionId, f.launches[3].isResume], ['claude2', conversation, true])
     await f.control.clearQuotaWait((await f.control.status()).owner!, ['claude'])
-    const third = await f.turn()
-    assert.equal(third.attempts!.length, 1)
-    assert.deepEqual([f.launches[3].authProfile, f.launches[3].sessionId, f.launches[3].isResume], [undefined, state.nativeSessionId, false])
+    await f.turn()
+    assert.deepEqual([f.launches[4].authProfile, f.launches[4].sessionId, f.launches[4].isResume], [undefined, conversation, true])
     state = await f.session()
-    assert.equal(state.hasStarted, true); assert.equal(state.cli, 'claude'); assert.equal(state.authProfile, undefined)
+    assert.equal(state.hasStarted, true); assert.equal(state.authProfile, undefined); assert.equal(state.linked, undefined)
   } finally { await f.close() }
 })
 

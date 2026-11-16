@@ -393,8 +393,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         return preset
       }
       // A scheduled attempt is a fresh native session: a rejected Claude attempt
-      // already claimed its ID, and a session cannot resume under another login's
-      // home. An ordered chat attempt resumes its own login's conversation session.
+      // already claimed its ID. An ordered chat attempt resumes the conversation's
+      // session for that engine; Claude logins share one (see carryClaudeSession).
       type Launched = { child: ChildProcess; cleanup: () => Promise<void>; preset: AiPreset; resumed?: boolean }
       const launchSetup = async (preset: AiPreset): Promise<Launched> => {
         for (;;) {

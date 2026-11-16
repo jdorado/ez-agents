@@ -21,9 +21,9 @@ reasoning level on the same client and provider preserves the conversation's nam
 and native history; subsequent turns pass the new settings to the native engine.
 Changing client, provider or auth profile starts a separate native conversation.
 A conversation records its client and auth profile when created; launch rejects a
-choice for another profile, so a native session never resumes under another
-account; a fallback login uses its own linked native session for the
-conversation. Provisioned profiles appear as additional catalog entries for their
+choice for another profile. A fallback Claude login resumes the conversation's
+Claude session, carried from the home that last served it; another client or a
+Codex login uses its own linked native session for the conversation. Provisioned profiles appear as additional catalog entries for their
 client (see [auth profiles](../docker-runtime.md#auth-profiles)). Old bindings
 remain available so accepted work can finish and owners can reopen their chats.
 

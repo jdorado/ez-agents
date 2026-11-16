@@ -60,13 +60,18 @@ export type PairingRequest = TelegramPairingRequest | ApplicationPairingRequest
 export type LinkedSession = { cli: string; authProfile?: string; provider?: string | null; sessionId: string; nativeSessionId?: string; hasStarted: boolean }
 const sessionProvider = (preset: AiPreset) => preset.cli === 'pi' ? preset.model?.split('/')[0] : presetProvider(preset)
 const linkedProvider = (preset: AiPreset) => ['codex', 'opencode', 'pi'].includes(preset.cli) ? sessionProvider(preset) ?? null : undefined
-const matchesLinked = (linked: LinkedSession, preset: AiPreset) => sameEngine(linked, preset) && linked.provider === linkedProvider(preset)
+// Claude logins share one native conversation: its transcript is a local file
+// that core carries to the resuming login's home (carryClaudeSession). Other
+// clients keep one native session per credential home.
+const sameSession = (a: { cli?: string; authProfile?: string }, b: { cli?: string; authProfile?: string }) =>
+  a.cli === b.cli && (a.cli === 'claude' || a.authProfile === b.authProfile)
+const matchesLinked = (linked: LinkedSession, preset: AiPreset) => sameSession(linked, preset) && linked.provider === linkedProvider(preset)
 
 export type SessionState = {
   sessionId: string
   hasStarted: boolean
   cli?: string
-  // Bound with cli at creation: a native session never resumes under another home.
+  // Bound with cli at creation; only Claude resumes under another home (fallbacks).
   authProfile?: string
   nativeSessionId?: string
   title?: string
@@ -877,20 +882,20 @@ export class ControlStore {
   }
 
   // The native session an engine resumes for this conversation: the
-  // conversation's own for its engine, otherwise that login's linked session,
-  // created on first use or a provider change. A session never resumes under
-  // another credential home or provider.
+  // conversation's own for its engine, otherwise that engine's linked session,
+  // created on first use or a provider change. Only Claude resumes across
+  // credential homes; a session never resumes under another provider.
   async engineSession(sessionId: string, engine: AiPreset): Promise<{ sessionId: string; nativeSessionId?: string; hasStarted: boolean }> {
     return this.withLock(async () => {
       const state = await this.readState()
       const session = this.conversation(state, sessionId)
-      if (sameEngine(session, engine)) return session
+      if (sameSession(session, engine)) return session
       let linked = session.linked?.find(item => matchesLinked(item, engine))
       if (!linked) {
         // Legacy links for provider-capable clients have no known provider.
         const provider = linkedProvider(engine)
         linked = { ...engineOf(engine), ...(provider === undefined ? {} : { provider }), sessionId: crypto.randomUUID(), hasStarted: false }
-        session.linked = [...(session.linked ?? []).filter(item => !sameEngine(item, engine)), linked].slice(-16)
+        session.linked = [...(session.linked ?? []).filter(item => !sameSession(item, engine)), linked].slice(-16)
         await this.writeState(state)
       }
       return linked
@@ -902,7 +907,7 @@ export class ControlStore {
     await this.withLock(async () => {
       const state = await this.readState()
       const session = this.conversation(state, sessionId)
-      const target = sameEngine(session, engine) ? session : session.linked?.find(item => matchesLinked(item, engine))
+      const target = sameSession(session, engine) ? session : session.linked?.find(item => matchesLinked(item, engine))
       if (!target) throw new Error('Unknown conversation engine')
       if (target.nativeSessionId && target.nativeSessionId !== nativeSessionId) throw new Error('Native session changed unexpectedly')
       target.nativeSessionId = nativeSessionId
@@ -918,7 +923,7 @@ export class ControlStore {
     await this.withLock(async () => {
       const state = await this.readState()
       const session = state.activeSession?.sessionId === sessionId ? state.activeSession : state.sessions?.find(s => s.sessionId === sessionId)
-      const target = !session ? undefined : sameEngine(session, engine) ? session : session.linked?.find(item => matchesLinked(item, engine))
+      const target = !session ? undefined : sameSession(session, engine) ? session : session.linked?.find(item => matchesLinked(item, engine))
       // Reporting clients start only through saveEngineSession.
       if (!target || target.hasStarted || reportsNativeSession(target.cli)) return
       if (started) target.hasStarted = true
