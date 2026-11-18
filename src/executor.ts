@@ -1,7 +1,7 @@
 import { executionDefaults } from './model-policy.js'
 import { startTaskExecutor } from './task-executor.js'
 import { deliverySocketPath } from './delivery-socket.js'
-import { mkdtemp, rm, writeFile, mkdir, symlink, readFile, rename, realpath } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, mkdir, symlink, readFile, readdir, rename, realpath } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { accessSync, openSync, closeSync, constants as fsConstants } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
@@ -20,6 +20,46 @@ const hostCancelFiles = new WeakMap<ChildProcess, string>()
 const hostCancelFile = (controlDir: string, runId: string): string => {
   if (!isHostRunId(runId)) throw new Error('Invalid host executor run ID')
   return path.join(controlDir, 'host-executor', runId + '.cancel')
+}
+
+// Owner input that arrives mid-turn goes into the running native turn, which
+// folds it in at its next step, like typing into the native CLI. Engines
+// without native mid-turn input answer false and the input queues as before.
+const steerers = new WeakMap<ChildProcess, (text: string) => Promise<boolean>>()
+export const steerJob = (child: ChildProcess, text: string): Promise<boolean> =>
+  steerers.get(child)?.(text) ?? Promise.resolve(false)
+const claudeInput = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n'
+
+// File transport: the host claims a request by renaming it, then acknowledges.
+// An unclaimed request is withdrawn, so input is steered or queued, never both.
+const steerHostJob = (controlDir: string, runId: string) => async (text: string): Promise<boolean> => {
+  const base = hostCancelFile(controlDir, runId).slice(0, -'.cancel'.length) + '.steer-' + randomUUID()
+  await writeFile(base + '.tmp', text, { mode: 0o600, flag: 'wx' })
+  await rename(base + '.tmp', base + '.json')
+  const acknowledged = async (ms: number): Promise<boolean | undefined> => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise(resolve => setTimeout(resolve, 100))) {
+      const ack = await readFile(base + '.ack', 'utf8').catch(() => undefined)
+      if (ack !== undefined) { await rm(base + '.ack', { force: true }); return ack === '1' }
+    }
+  }
+  const first = await acknowledged(3000)
+  if (first !== undefined) return first
+  try { await rm(base + '.json'); return false } catch { /* claimed by the host */ }
+  // A host that claimed but never acknowledged is failing this run; queue the input.
+  return await acknowledged(5000) ?? false
+}
+
+// Host side of the file transport: hand claimed requests to the local job.
+export const steerHostRequests = async (directory: string, runId: string, child: ChildProcess): Promise<void> => {
+  for (const file of await readdir(directory)) {
+    if (!file.startsWith(runId + '.steer-') || !file.endsWith('.json')) continue
+    const base = path.join(directory, file.slice(0, -'.json'.length))
+    try { await rename(base + '.json', base + '.claimed') } catch { continue }
+    const accepted = await steerJob(child, await readFile(base + '.claimed', 'utf8')).catch(() => false)
+    await writeFile(base + '.ack.tmp', accepted ? '1' : '0', { mode: 0o600 })
+    await rename(base + '.ack.tmp', base + '.ack')
+    await rm(base + '.claimed', { force: true })
+  }
 }
 
 export type ExecutorOptions = {
@@ -182,9 +222,10 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
         args.push('--session-id', opts.sessionId)
       }
       args.push('--print', '--dangerously-skip-permissions')
-      // Scheduled runs and ordered chat setups stream structured events so core
-      // can tell a provider rejection before work from a failure after work began.
-      if (opts.nativeSession || opts.structuredOutput) args.push('--output-format', 'stream-json', '--verbose')
+      // Streamed input keeps the turn open to mid-turn owner input (steerJob).
+      // Structured events also let core tell a provider rejection before work
+      // from a failure after work began.
+      args.push('--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose')
       for (const directory of [opts.controlDir, opts.sharedWorkspace, ...(opts.additionalWorkspaces ?? []), opts.toolsHome])
         if (directory) args.push('--add-dir', directory)
       if (opts.model) args.push('--model', opts.model)
@@ -508,11 +549,24 @@ export const startExecutorJob = async (
     await rm(outputDirectory, { recursive: true, force: true })
     throw error
   })
-  child.stdin?.end(host
+  if (!host && !gui && key === 'claude') {
+    // The turn's input stays open until its result; later input steers it.
+    child.stdin!.on('error', () => {})
+    child.stdin!.write(claudeInput(promptText))
+    steerers.set(child, async (text) => {
+      if (!child.stdin!.writable || child.exitCode !== null || child.signalCode !== null) return false
+      child.stdin!.write(claudeInput(text))
+      return true
+    })
+    createInterface({ input: child.stdout! }).on('line', (line) => {
+      try { if (JSON.parse(line).type === 'result') child.stdin!.end() } catch {}
+    })
+  } else child.stdin?.end(host
     ? JSON.stringify({texts,options:{...options,onSession:undefined,codexSandbox:undefined}})
     : nativeSession ? JSON.stringify({...launchOptions,onSession:undefined,prompt:promptText})
     : gui ? JSON.stringify({prompt:promptText,options:{...options,onSession:undefined}})
-    : ['codex', 'claude'].includes(key) ? promptText : undefined)
+    : key === 'codex' ? promptText : undefined)
+  if (host) steerers.set(child, steerHostJob(options.controlDir, options.runId))
   const timeout = options.timeoutMs > 0 ? setTimeout(() => terminateJob(child), options.timeoutMs) : undefined
   let stdout = ''
   let stderr = ''

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -42,4 +42,32 @@ test('owner input queues literally without creating a second agent and rejects o
   await relay.bot.handleUpdate({...message(6),message:{...message(6).message!,text:'/stop'}} as Update)
   await until(async()=>children.every(c=>c.exitCode!==null || c.signalCode!==null))
  }finally{await relay.stop();for(const c of children)c.kill();await until(async()=>!(await runs.list()).some(r=>r.status==='running'));await rm(root,{recursive:true,force:true})}
+})
+test('owner input during a running Claude turn steers it instead of queueing a second turn',{skip:process.platform==='win32'},async t=>{
+ const root=await mkdtemp(join(tmpdir(),'ez-steer-relay-')),runs=new RunStore(root),control=new ControlStore(root,1000)
+ const bin=join(root,'bin'),workspace=join(root,'mind');await mkdir(bin);await mkdir(workspace)
+ // The fake turn ends only once it has absorbed the follow-up.
+ await writeFile(join(bin,'claude'),`#!${process.execPath}
+const fs=require('fs'),seen=[];require('readline').createInterface({input:process.stdin}).on('line',line=>{
+ seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result","subtype":"success","is_error":false}\\n')})`,{mode:0o700})
+ const prior={PATH:process.env.PATH,EZ_EXECUTOR_TRANSPORT:process.env.EZ_EXECUTOR_TRANSPORT}
+ process.env.PATH=bin+':'+process.env.PATH;delete process.env.EZ_EXECUTOR_TRANSPORT
+ t.after(()=>{for(const [key,value] of Object.entries(prior))value===undefined?delete process.env[key]:process.env[key]=value})
+ const relay=createRelay({workspace,controlDir:root,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'claude',telegramBotToken:'fixture'})
+ relay.bot.botInfo={id:999,is_bot:true,first_name:'Fixture',username:'fixture_bot'} as any
+ relay.bot.api.config.use(async()=>({ok:true,result:true}) as any)
+ const message=(id:number,text:string):Update=>({update_id:id,message:{message_id:id,date:0,text,from:{id:101,is_bot:false,first_name:'Fixture'},chat:{id:101,type:'private'}}} as Update)
+ try{
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  await relay.bot.handleUpdate(message(1,'start the report'));await relay.drainInbox(true)
+  await until(async()=>(await runs.get('tg_1'))?.status==='running')
+  await relay.bot.handleUpdate(message(2,'also add totals'));await relay.drainInbox(true)
+  await until(async()=>(await runs.get('tg_1'))?.status==='completed')
+  const seen=JSON.parse(await readFile(join(workspace,'seen.json'),'utf8'))
+  assert.match(seen[0],/^start the report\n\n\[chat message 1\]/)
+  assert.match(seen[1],/^also add totals\n\n\[chat message 2\]/)
+  const steered=await runs.get('tg_2')
+  assert.equal(steered?.steeredInto,'tg_1')
+  assert.equal(steered?.status,'completed')
+ }finally{await relay.stop();await rm(root,{recursive:true,force:true})}
 })

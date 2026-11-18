@@ -28,8 +28,8 @@ import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch, type Owner, type SessionState } from './control-state.js'
 import { ApprovalStore } from './approval.js'
-import { CliUnavailableError, startExecutorJob, attachHostJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
-import { attemptFailure, continuationLine, nextSetup, quotaScope, quotaWait, quotaCategory, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
+import { CliUnavailableError, startExecutorJob, attachHostJob, steerJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
+import { attemptFailure, continuationLine, nextSetup, quotaScope, quotaWait, quotaCategory, chatCandidates, setupCandidates, startupObserver, usesAccountPool, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { telemetryObserver } from './run-telemetry.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, activeSetup, saveRunHandoff, takeRunHandoff, type RunRecord } from './runs.js'
@@ -212,6 +212,32 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     return health
   }
 
+  // Input for the conversation whose foreground turn is running steers that
+  // turn (see steerJob), whatever the channel; it does not queue a second turn.
+  const conversation = (run: RunRecord) => {
+    const app = run.application ?? run.delivery
+    return JSON.stringify(run.external ? ['event', run.external.sourceId, run.external.bindingId, run.external.conversationId]
+      : app ? ['application', app.bindingId, app.scope] : ['telegram', run.chatId])
+  }
+  const steerTarget = async (run: RunRecord): Promise<RunRecord | undefined> => {
+    if (run.scheduled || run.taskId || run.sessionClose || !activeChild) return
+    const active = await runs.get(childRuns.get(activeChild) ?? '')
+    if (!active || active.status !== 'running' || stoppedRuns.has(active.id) || active.taskId || active.scheduled || active.sessionClose ||
+      conversation(active) !== conversation(run)) return
+    // Event-source runs start their own sessions; chat and application input
+    // must share the running turn's conversation and AI.
+    if (!run.external && (run.execution?.sessionId !== active.execution?.sessionId ||
+      JSON.stringify(run.execution?.preset) !== JSON.stringify(active.execution?.preset))) return
+    return active
+  }
+  // Steered runs end with the turn that absorbed them.
+  const settleSteered = async (id: string, status: RunRecord['status']) => {
+    for (const run of await runs.list()) if (run.steeredInto === id && run.status === 'running') {
+      await runs.patch(run.id, { status, endedAt: new Date().toISOString() })
+      await releaseExternal(run)
+    }
+  }
+
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
       if (shuttingDown || activeBackend) return
@@ -219,7 +245,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
       if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled && !run.external && !run.sessionClose) return
-      if (!run.scheduled && await runs.running(false)) return
+      const target = await steerTarget(run)
+      if (!run.scheduled && !target && await runs.running(false)) return
       const owner = (await control.status()).owner
       if (!owner || !ownsRun(owner, run)) {
         await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
@@ -253,7 +280,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (run.scheduled && !(await scheduler.get(run.scheduled.id)).enabled) return
       // A long scheduled turn must not occupy the owner's chat stream.
       // Foreground stays serial; scheduled jobs have independent native sessions.
-      if (run.scheduled ? background.size >= (config.scheduledConcurrency ?? 6) : activeChild !== null) return
+      if (run.scheduled ? background.size >= (config.scheduledConcurrency ?? 6) : activeChild !== null && !target) return
       let texts = run.texts
       if (run.external) {
         // Availability failures leave durable queued work for a later check.
@@ -275,6 +302,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (blockReason) {
         await runs.patch(run.id, { status: 'cancelled', blockReason, endedAt: new Date().toISOString() })
         await releaseExternal(run)
+        return
+      }
+      if (target) {
+        // Authority and input were rechecked above; a turn that ended meanwhile
+        // leaves this run queued for its own turn.
+        const child = activeChild
+        if (child && childRuns.get(child) === target.id && await steerJob(child, texts.join('\n\n') + runPromptSuffix(run))) {
+          await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString(), steeredInto: target.id })
+          console.info('run steered', { run_id: run.id, into: target.id })
+        }
         return
       }
       if (run.scheduled && !run.script) {
@@ -349,7 +386,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // may name ordered fallback setups. They share this run, workspace and
       // execution slot; each is tried at most once. Telemetry also records attempts.
       const chat = !startsOwnSession
-      const ordered = Boolean(!script && !run.taskId && (run.scheduled || started.execution?.fallbacks?.length || telemetryOn))
+      // Chat on an engine with several logins is ordered too, so a login that
+      // reached its limit falls through to the next one automatically.
+      const ordered = Boolean(!script && !run.taskId && (run.scheduled || started.execution?.fallbacks?.length || telemetryOn ||
+        (chat && started.execution && usesAccountPool(started.execution.preset) && (await chatCandidates(config.controlDir, started.execution)).length > 1)))
       const runCancelled = async () => stoppedRuns.has(run.id) || Boolean(run.scheduled && await scheduler.cancelled(run.id))
       // Authority is rechecked before every later setup.
       const authorized = async (current: Owner) => ownsRun(current, run) && (run.scheduled ? await scheduler.current(run, current)
@@ -375,7 +415,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           const round = attempts.slice(roundStart)
           const choice = started.execution!
           const candidates = run.scheduled ? await setupCandidates(config.controlDir, choice, state.accountCursor)
-            : [choice.preset, ...choice.fallbacks ?? []]
+            : await chatCandidates(config.controlDir, choice)
           let next = nextSetup(candidates, round, ignoreHealth ? {} : await setupAvailability(current, run.id))
           if (!next.preset && !run.scheduled && !round.length && !ignoreHealth) { ignoreHealth = true; next = nextSetup(candidates, round) }
           attempts = [...attempts, ...next.skipped]
@@ -533,6 +573,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             ...(script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
             ...(failed ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(timedOut ? `Script exceeded its ${script!.registration.timeoutSeconds}s timeout and was terminated` : errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
           await releaseExternal(run)
+          await settleSteered(started.id, cancelled ? 'cancelled' : failed ? 'failed' : 'completed')
         }
         const completion = finished.then((code) => {
           console.info('run timing', { run_id: run.id, phase: 'execution',
@@ -569,6 +610,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               } catch (error) {
                 eligible = false
                 await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
+                await settleSteered(started.id, ownerStopped.has(child) ? 'cancelled' : 'failed')
                 console.error('Session completion failed', safeError(error))
               } finally {
                 // An advancing occurrence keeps its concurrency slot for the next setup.

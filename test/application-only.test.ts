@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
@@ -100,4 +100,32 @@ test('Docker health accepts application readiness when the agent has no bot', as
   assert.notEqual(spawnSync(process.execPath,[command],{env}).status,0)
   await writeFile(join(root,'heartbeat.json'),JSON.stringify({at:Date.now(),polling:false,applicationOnly:true,telegramConfigured:true}))
   assert.notEqual(spawnSync(process.execPath,[command],{env}).status,0)
+})
+
+test('a request for the running scope steers its Claude turn and reports where it went', {skip:process.platform==='win32'}, async t => {
+  const root=await mkdtemp(join(tmpdir(),'ez-app-steer-'))
+  const purpose=join(root,'purpose.md');await writeFile(purpose,'Fixture application agent\n');await initializeWorkspace(root,purpose)
+  const bin=join(root,'bin');await mkdir(bin)
+  // The fake turn ends only once it has absorbed the follow-up.
+  await writeFile(join(bin,'claude'),`#!${process.execPath}
+const fs=require('fs'),seen=[];require('readline').createInterface({input:process.stdin}).on('line',line=>{
+ seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result","subtype":"success","is_error":false}\\n')})`,{mode:0o700})
+  const prior={PATH:process.env.PATH,EZ_EXECUTOR_TRANSPORT:process.env.EZ_EXECUTOR_TRANSPORT}
+  process.env.PATH=bin+':'+process.env.PATH;delete process.env.EZ_EXECUTOR_TRANSPORT
+  const portServer=createServer();await new Promise<void>(r=>portServer.listen(0,'127.0.0.1',r))
+  const port=(portServer.address() as {port:number}).port;await new Promise<void>(r=>portServer.close(()=>r()))
+  const relay=createRelay(loadConfig({EZ_APPLICATION_PORT:String(port),EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'claude'})),runs=new RunStore(root)
+  const owner=await new ControlStore(root,1000).bootstrapApplicationOwner(42)
+  const binding=(await relay.applicationChannel.bindings.register('app','x'.repeat(48),owner))!
+  const running=relay.start()
+  t.after(async()=>{await relay.stop();await running;for(const [key,value] of Object.entries(prior))value===undefined?delete process.env[key]:process.env[key]=value;await rm(root,{recursive:true,force:true})})
+  await waitFor(async()=>relay.isRunning())
+  const first=await relay.applicationChannel.submit(binding.bindingId,{requestId:'one',scope:'main',text:'Plan my week'})
+  await waitFor(async()=>(await runs.get(first.id))?.status==='running')
+  const second=await relay.applicationChannel.submit(binding.bindingId,{requestId:'two',scope:'main',text:'Skip Friday'})
+  await waitFor(async()=>(await runs.get(first.id))?.status==='completed')
+  const snapshot=await relay.applicationChannel.snapshot(binding.bindingId,second.id)
+  assert.equal(snapshot.status,'completed')
+  assert.equal(snapshot.steeredInto,first.id)
+  assert.deepEqual(JSON.parse(await readFile(join(root,'seen.json'),'utf8')).map((text:string)=>text.split('\n')[0]),['Plan my week','Skip Friday'])
 })

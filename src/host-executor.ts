@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath, 
 import path from 'node:path'
 import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
-import { CliUnavailableError, startExecutorJob, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
+import { CliUnavailableError, startExecutorJob, steerHostRequests, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
 import { activeSetup } from './runs.js'
 import { startupLine, startupObserver, usesAccountPool } from './setup-fallback.js'
 import { telemetryLine, telemetryObserver } from './run-telemetry.js'
@@ -277,7 +277,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 // transient native-client probe failure must not reject a model
                 // that the host just advertised to the relay and application.
                 if (cli !== installation.cli || opts.authProfile !== undefined) {
-                  const pooled = run?.scheduled && captured && usesAccountPool(captured)
+                  const pooled = ordered && captured && usesAccountPool(captured)
                   if (pooled && opts.authProfile) await provisionedHome(agent.controlDir, cli, opts.authProfile)
                   await validateSelection({ id:'selected', name:'Selected model', cli, provider:opts.provider,
                     authProfile:pooled ? undefined : opts.authProfile, model, effort:opts.effort },
@@ -310,7 +310,9 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               })
               job.child.stderr?.on('data',chunk=>emit({stream:'stderr',text:chunk.toString()}))
               await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid,started:job.child.pid ? await processStart(job.child.pid) : undefined,hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}),{mode:0o600})
-              cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{}); const now=new Date();void utimes(base+'.events',now,now).catch(()=>{})},250)
+              let steering: Promise<void> | undefined
+              cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{}); const now=new Date();void utimes(base+'.events',now,now).catch(()=>{})
+                if(!steering && job)steering=steerHostRequests(directory,path.basename(base),job.child).catch(()=>{}).finally(()=>{steering=undefined})},250)
               const code=await closed
               // Flush a final JSON envelope even when the CLI omitted a newline.
               if (startup) {

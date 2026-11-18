@@ -371,6 +371,11 @@ profile than its captured choice is rejected before launch.
 
 ## Chat fallback chain
 
+Without a chain, a chat or application turn on an engine with several
+provisioned logins (Claude or Codex profiles) still tries the agent's other logins
+after the selected one, keeping the turn's model and effort. A login that reached
+its usage limit is passed over until it resets, with no owner action.
+
 Chat and application turns can name an ordered chain after the selected AI, for
 example Claude default → three other Claude logins → Codex:
 

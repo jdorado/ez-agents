@@ -113,6 +113,15 @@ export const setupCandidates = async (controlDir: string, execution: ExecutionCh
   })
 }
 
+// Owner-present work keeps its selected setup and fallbacks first, then the
+// engine's other logins, so a login that reached its limit is passed over.
+export const chatCandidates = async (controlDir: string, execution: ExecutionChoice): Promise<AiPreset[]> => {
+  const candidates: AiPreset[] = []
+  for (const preset of [execution.preset, ...execution.fallbacks ?? [], ...await setupCandidates(controlDir, execution)])
+    if (!candidates.some(other => sameChoice(other, preset))) candidates.push(preset)
+  return candidates
+}
+
 // The owner provisions native profiles for separate provider accounts. Models
 // in one login share its quota scope; another named login may be tried once.
 // OpenCode/Pi still share their upstream provider scope.
