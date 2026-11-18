@@ -66,6 +66,8 @@ const fs=require('fs'),seen=[];require('readline').createInterface({input:proces
   const seen=JSON.parse(await readFile(join(workspace,'seen.json'),'utf8'))
   assert.match(seen[0],/^start the report\n\n\[chat message 1\]/)
   assert.match(seen[1],/^also add totals\n\n\[chat message 2\]/)
-  assert.deepEqual((await runs.list()).map(run=>run.id),['tg_1'])
+  const steered=await runs.get('tg_2')
+  assert.equal(steered?.steeredInto,'tg_1')
+  assert.equal(steered?.status,'completed')
  }finally{await relay.stop();await rm(root,{recursive:true,force:true})}
 })

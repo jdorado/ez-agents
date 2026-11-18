@@ -43,7 +43,7 @@ import { createConversationMenu } from './conversation-menu.js'
 import { queueSessionClose } from './session-close.js'
 import { queueTaskWake } from './task-wake.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
-import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset, type AiPreset, type ExecutionChoice } from './ai.js'
+import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset, type AiPreset } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 import { runPromptSuffix } from './prompt-suffix.js'
 import { softwareStatus } from './software-status.js'
@@ -212,6 +212,32 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     return health
   }
 
+  // Input for the conversation whose foreground turn is running steers that
+  // turn (see steerJob), whatever the channel; it does not queue a second turn.
+  const conversation = (run: RunRecord) => {
+    const app = run.application ?? run.delivery
+    return JSON.stringify(run.external ? ['event', run.external.sourceId, run.external.bindingId, run.external.conversationId]
+      : app ? ['application', app.bindingId, app.scope] : ['telegram', run.chatId])
+  }
+  const steerTarget = async (run: RunRecord): Promise<RunRecord | undefined> => {
+    if (run.scheduled || run.taskId || run.sessionClose || !activeChild) return
+    const active = await runs.get(childRuns.get(activeChild) ?? '')
+    if (!active || active.status !== 'running' || stoppedRuns.has(active.id) || active.taskId || active.scheduled || active.sessionClose ||
+      conversation(active) !== conversation(run)) return
+    // Event-source runs start their own sessions; chat and application input
+    // must share the running turn's conversation and AI.
+    if (!run.external && (run.execution?.sessionId !== active.execution?.sessionId ||
+      JSON.stringify(run.execution?.preset) !== JSON.stringify(active.execution?.preset))) return
+    return active
+  }
+  // Steered runs end with the turn that absorbed them.
+  const settleSteered = async (id: string, status: RunRecord['status']) => {
+    for (const run of await runs.list()) if (run.steeredInto === id && run.status === 'running') {
+      await runs.patch(run.id, { status, endedAt: new Date().toISOString() })
+      await releaseExternal(run)
+    }
+  }
+
   const startJob = async (run: RunRecord): Promise<void> => {
     await withStartLock(async () => {
       if (shuttingDown || activeBackend) return
@@ -219,7 +245,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (await stat(join(config.controlDir,'upgrade-pause.json')).then(()=>true,e=>{if(e.code==='ENOENT')return false;throw e})) return
       if ((await runs.get(run.id))?.status !== 'queued') return
       if (!telegramEnabled && !run.application && !run.delivery && !run.scheduled && !run.external && !run.sessionClose) return
-      if (!run.scheduled && await runs.running(false)) return
+      const target = await steerTarget(run)
+      if (!run.scheduled && !target && await runs.running(false)) return
       const owner = (await control.status()).owner
       if (!owner || !ownsRun(owner, run)) {
         await runs.patch(run.id, { status: 'failed', endedAt: new Date().toISOString() })
@@ -253,7 +280,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (run.scheduled && !(await scheduler.get(run.scheduled.id)).enabled) return
       // A long scheduled turn must not occupy the owner's chat stream.
       // Foreground stays serial; scheduled jobs have independent native sessions.
-      if (run.scheduled ? background.size >= (config.scheduledConcurrency ?? 6) : activeChild !== null) return
+      if (run.scheduled ? background.size >= (config.scheduledConcurrency ?? 6) : activeChild !== null && !target) return
       let texts = run.texts
       if (run.external) {
         // Availability failures leave durable queued work for a later check.
@@ -275,6 +302,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       if (blockReason) {
         await runs.patch(run.id, { status: 'cancelled', blockReason, endedAt: new Date().toISOString() })
         await releaseExternal(run)
+        return
+      }
+      if (target) {
+        // Authority and input were rechecked above; a turn that ended meanwhile
+        // leaves this run queued for its own turn.
+        const child = activeChild
+        if (child && childRuns.get(child) === target.id && await steerJob(child, texts.join('\n\n') + runPromptSuffix(run))) {
+          await runs.patch(run.id, { status: 'running', startedAt: new Date().toISOString(), steeredInto: target.id })
+          console.info('run steered', { run_id: run.id, into: target.id })
+        }
         return
       }
       if (run.scheduled && !run.script) {
@@ -533,6 +570,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             ...(script ? { output: redactFailure(safeError(outputTail)), ...(timedOut ? { timedOut } : {}) } : {}),
             ...(failed ? { failureReason, interrupted, failure: await failureEvidence(config.controlDir, safeError(timedOut ? `Script exceeded its ${script!.registration.timeoutSeconds}s timeout and was terminated` : errorTail || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)) } : {}) })
           await releaseExternal(run)
+          await settleSteered(started.id, cancelled ? 'cancelled' : failed ? 'failed' : 'completed')
         }
         const completion = finished.then((code) => {
           console.info('run timing', { run_id: run.id, phase: 'execution',
@@ -569,6 +607,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
               } catch (error) {
                 eligible = false
                 await runs.patch(started.id, { status: ownerStopped.has(child) ? 'cancelled' : 'failed', failureReason: 'session-finalization', failure: await failureEvidence(config.controlDir, safeError(error)), endedAt: new Date().toISOString() })
+                await settleSteered(started.id, ownerStopped.has(child) ? 'cancelled' : 'failed')
                 console.error('Session completion failed', safeError(error))
               } finally {
                 // An advancing occurrence keeps its concurrency slot for the next setup.
@@ -732,16 +771,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       void drainInbox().catch((error) => console.error('Inbox drain failed', safeError(error)))
     }, 250)
   }
-  // Owner input for the chat whose turn is running steers that turn instead of
-  // queueing a second one (see steerJob). Any mismatch queues as before.
-  const steerActive = async (chatId: number, execution: ExecutionChoice | undefined, items: IncomingItem[]): Promise<boolean> => {
-    const child = activeChild
-    const active = child && execution ? await runs.get(childRuns.get(child) ?? '') : undefined
-    if (!child || !active || active.status !== 'running' || stoppedRuns.has(active.id) || active.chatId !== chatId ||
-      active.application || active.delivery || active.external || active.taskId || active.scheduled || active.sessionClose ||
-      active.execution?.sessionId !== execution!.sessionId || JSON.stringify(active.execution.preset) !== JSON.stringify(execution!.preset)) return false
-    return steerJob(child, items.map(item => item.text).join('\n\n') + runPromptSuffix({ ...active, messageId: items.at(-1)!.messageId }))
-  }
   const drainInbox = (force = false): Promise<void> => {
     if (!telegramEnabled) return Promise.resolve()
     if (intakeWork) return intakeWork
@@ -768,9 +797,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             if (shuttingDown || !(await inbox.pending(batch.id))) return
             const first = collected[0]
             const owner = telegramOwner((await control.status()).owner)
-            if (first && owner && await steerActive(first.chatId, batch.entries[0].execution, collected))
-              console.info('run steered', { run_id: childRuns.get(activeChild!), batch: batch.id })
-            else if (first && owner)
+            if (first && owner)
               run = await runs.create({
                 id: batch.id,
                 ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner),

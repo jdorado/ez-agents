@@ -170,6 +170,11 @@ not that a human read it. Failure adds a generic `error`; detailed logs remain
 local to core. Cancellation uses the existing child termination boundary and may
 return `running` until the process exits.
 
+A request for the same scope (and AI) as the running foreground turn steers that
+turn instead of queueing a second one: the native CLI folds it in at its next
+step. Its run adds `steeredInto` (the absorbing run's ID), carries no messages of
+its own, and ends with that run's status; the reply arrives on the absorbing run.
+
 Inside an active native application run, `ezenciel-agents-message history
 --limit 8` reads delivered text from this same inbox for the run's immutable
 application binding and scope, including earlier runs in that scope. It cannot

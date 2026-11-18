@@ -46,6 +46,8 @@ export type RunRecord = {
   replyOnly?: boolean
   // Silent end-of-conversation turn in a replaced chat session (session-close.ts).
   sessionClose?: true
+  // Input steered into this running foreground turn; ends with that turn.
+  steeredInto?: string
   exitCode?: number | null
   failureReason?: string
   failure?: FailureEvidence
@@ -295,7 +297,7 @@ export class RunStore {
 
   async patch(
     id: string,
-    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut' | 'attempts' | 'quotaWait' | 'attemptRound' | 'telemetry'>>,
+    change: Partial<Pick<RunRecord, 'status' | 'startedAt' | 'endedAt' | 'pid' | 'nativeSessionId' | 'interrupted' | 'blockReason' | 'backendSubmitted' | 'replyOnly' | 'exitCode' | 'failureReason' | 'failure' | 'failureReview' | 'externalReleased' | 'output' | 'timedOut' | 'attempts' | 'quotaWait' | 'attemptRound' | 'telemetry' | 'steeredInto'>>,
   ): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     const run = store.get(id)
@@ -337,7 +339,7 @@ export class RunStore {
   async running(background?: boolean): Promise<RunRecord | undefined> {
     let first: RunRecord | undefined
     for (const run of [...runsFor(this.controlDir).values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt))) {
-      if (run.status === 'running' && (background === undefined || Boolean(run.scheduled) === background)) {
+      if (run.status === 'running' && !run.steeredInto && (background === undefined || Boolean(run.scheduled) === background)) {
         first ??= run
       }
     }
