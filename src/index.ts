@@ -29,7 +29,7 @@ import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch, type Owner, type SessionState } from './control-state.js'
 import { ApprovalStore } from './approval.js'
 import { CliUnavailableError, startExecutorJob, attachHostJob, steerJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
-import { attemptFailure, continuationLine, nextSetup, quotaScope, quotaWait, quotaCategory, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
+import { attemptFailure, continuationLine, nextSetup, quotaScope, quotaWait, quotaCategory, chatCandidates, setupCandidates, startupObserver, usesAccountPool, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { telemetryObserver } from './run-telemetry.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, activeSetup, saveRunHandoff, takeRunHandoff, type RunRecord } from './runs.js'
@@ -386,7 +386,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       // may name ordered fallback setups. They share this run, workspace and
       // execution slot; each is tried at most once. Telemetry also records attempts.
       const chat = !startsOwnSession
-      const ordered = Boolean(!script && !run.taskId && (run.scheduled || started.execution?.fallbacks?.length || telemetryOn))
+      // Chat on an engine with several logins is ordered too, so a login that
+      // reached its limit falls through to the next one automatically.
+      const ordered = Boolean(!script && !run.taskId && (run.scheduled || started.execution?.fallbacks?.length || telemetryOn ||
+        (chat && started.execution && usesAccountPool(started.execution.preset) && (await chatCandidates(config.controlDir, started.execution)).length > 1)))
       const runCancelled = async () => stoppedRuns.has(run.id) || Boolean(run.scheduled && await scheduler.cancelled(run.id))
       // Authority is rechecked before every later setup.
       const authorized = async (current: Owner) => ownsRun(current, run) && (run.scheduled ? await scheduler.current(run, current)
@@ -412,7 +415,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           const round = attempts.slice(roundStart)
           const choice = started.execution!
           const candidates = run.scheduled ? await setupCandidates(config.controlDir, choice, state.accountCursor)
-            : [choice.preset, ...choice.fallbacks ?? []]
+            : await chatCandidates(config.controlDir, choice)
           let next = nextSetup(candidates, round, ignoreHealth ? {} : await setupAvailability(current, run.id))
           if (!next.preset && !run.scheduled && !round.length && !ignoreHealth) { ignoreHealth = true; next = nextSetup(candidates, round) }
           attempts = [...attempts, ...next.skipped]

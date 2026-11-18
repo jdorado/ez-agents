@@ -49,7 +49,7 @@ test('owner input during a running Claude turn steers it instead of queueing a s
  // The fake turn ends only once it has absorbed the follow-up.
  await writeFile(join(bin,'claude'),`#!${process.execPath}
 const fs=require('fs'),seen=[];require('readline').createInterface({input:process.stdin}).on('line',line=>{
- seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result"}\\n')})`,{mode:0o700})
+ seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result","subtype":"success","is_error":false}\\n')})`,{mode:0o700})
  const prior={PATH:process.env.PATH,EZ_EXECUTOR_TRANSPORT:process.env.EZ_EXECUTOR_TRANSPORT}
  process.env.PATH=bin+':'+process.env.PATH;delete process.env.EZ_EXECUTOR_TRANSPORT
  t.after(()=>{for(const [key,value] of Object.entries(prior))value===undefined?delete process.env[key]:process.env[key]=value})

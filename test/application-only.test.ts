@@ -109,7 +109,7 @@ test('a request for the running scope steers its Claude turn and reports where i
   // The fake turn ends only once it has absorbed the follow-up.
   await writeFile(join(bin,'claude'),`#!${process.execPath}
 const fs=require('fs'),seen=[];require('readline').createInterface({input:process.stdin}).on('line',line=>{
- seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result"}\\n')})`,{mode:0o700})
+ seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result","subtype":"success","is_error":false}\\n')})`,{mode:0o700})
   const prior={PATH:process.env.PATH,EZ_EXECUTOR_TRANSPORT:process.env.EZ_EXECUTOR_TRANSPORT}
   process.env.PATH=bin+':'+process.env.PATH;delete process.env.EZ_EXECUTOR_TRANSPORT
   const portServer=createServer();await new Promise<void>(r=>portServer.listen(0,'127.0.0.1',r))

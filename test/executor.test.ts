@@ -163,7 +163,7 @@ test('mid-turn input steers a running Claude turn, locally and across the host t
   // The turn ends only after the follow-up arrives, as a native turn absorbs it.
   await writeFile(path.join(bin, 'claude'), `#!${process.execPath}
 const fs=require('fs'),seen=[];require('readline').createInterface({input:process.stdin}).on('line',line=>{
- seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result"}\\n')})`, { mode: 0o700 })
+ seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result","subtype":"success","is_error":false}\\n')})`, { mode: 0o700 })
   process.env.PATH = bin + path.delimiter + process.env.PATH
   delete process.env.EZ_EXECUTOR_TRANSPORT
   const local = async (runId: string) => {
@@ -453,7 +453,7 @@ test('Claude runs with agent-bound configuration, shared login and the agent dir
   const bin = path.join(root, 'bin'), workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), shared = path.join(root, 'shared')
   await mkdir(bin); await mkdir(workspace)
   // Like the native CLI: one turn ends with a result event, then input closes.
-  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nprocess.stdout.write('{"type":"result"}\\n');require('fs').writeFileSync('observed.json',JSON.stringify({args:process.argv.slice(2),config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,token:process.env.CLAUDE_CODE_OAUTH_TOKEN,bgWait:process.env.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS,prompt:require('fs').readFileSync(0,'utf8')}))`, { mode: 0o700 })
+  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nprocess.stdout.write('{"type":"result","subtype":"success","is_error":false}\\n');require('fs').writeFileSync('observed.json',JSON.stringify({args:process.argv.slice(2),config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,token:process.env.CLAUDE_CODE_OAUTH_TOKEN,bgWait:process.env.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS,prompt:require('fs').readFileSync(0,'utf8')}))`, { mode: 0o700 })
   const previous = { PATH: process.env.PATH, EZ_ISOLATION: process.env.EZ_ISOLATION, EZ_EXECUTOR_TRANSPORT: process.env.EZ_EXECUTOR_TRANSPORT }
   t.after(() => { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value })
   process.env.PATH = bin + path.delimiter + process.env.PATH

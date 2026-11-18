@@ -13,6 +13,7 @@ import { ControlStore } from '../src/control-state.js'
 import { RunStore, activeSetup } from '../src/runs.js'
 import { initialPreset, resolveFallbacks, type AiPreset } from '../src/ai.js'
 import type { ExecutorOptions } from '../src/executor.js'
+import { cliHome } from '../src/auth-profile.js'
 import { telemetryObserver, validTelemetry } from '../src/run-telemetry.js'
 
 const until = async (check: () => Promise<boolean>) => { for (let i = 0; i < 250; i++) { if (await check()) return; await new Promise(r => setTimeout(r, 20)) } throw new Error('Timed out') }
@@ -411,4 +412,22 @@ test('AI CLI saves, shows and clears the chat chain and toggles telemetry', asyn
     assert.equal(JSON.parse(call('telemetry', 'off').stdout).runTelemetry, 'off')
     assert.equal(call('fallbacks', '--clear').status, 0); assert.equal((await store.status()).ai!.fallbacks, undefined)
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('a chat whose login reached its limit moves to the agent\'s next login on its own', async () => {
+  const f = await fixture('pool', [{ lines: [quota], code: 1 }, { lines: [work], code: 0 }, { lines: [work], code: 0 }], { chain: [] })
+  try {
+    // Logins the owner provisioned; no chat chain is configured.
+    for (const profile of ['claude2', 'claude5']) {
+      const home = cliHome(f.dir, 'claude', profile)
+      await mkdir(home, { recursive: true }); await writeFile(join(home, 'oauth-token'), 'sk-ant-oat01-fixture_token-value', { mode: 0o600 })
+    }
+    const run = await f.turn()
+    assert.equal(run.status, 'completed')
+    assert.deepEqual(f.launches.map(l => [l.authProfile, l.model, l.effort]), [[undefined, 'opus', 'high'], ['claude2', 'opus', 'high']])
+    // The exhausted login is passed over on the next message.
+    await f.turn('Next request')
+    assert.equal(f.launches.at(-1)!.authProfile, 'claude2')
+    assert.equal(f.sent.filter(text => /could not start|failed/i.test(text)).length, 0)
+  } finally { await f.close() }
 })
