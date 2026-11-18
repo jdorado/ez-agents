@@ -29,7 +29,7 @@ import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch, type Owner, type SessionState } from './control-state.js'
 import { ApprovalStore } from './approval.js'
 import { CliUnavailableError, startExecutorJob, attachHostJob, steerJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
-import { attemptFailure, continuationLine, nextSetup, quotaScope, quotaWait, quotaCategory, chatCandidates, setupCandidates, startupObserver, usesAccountPool, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
+import { attemptFailure, continuationLine, nativeErrorObserver, nextSetup, quotaScope, quotaWait, quotaCategory, chatCandidates, setupCandidates, startupObserver, usesAccountPool, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { telemetryObserver } from './run-telemetry.js'
 import { assertScheduledModel } from './model-policy.js'
 import { RunStore, activeSetup, saveRunHandoff, takeRunHandoff, type RunRecord } from './runs.js'
@@ -502,6 +502,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         if (script) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => { outputTail = (outputTail + chunk).slice(-16384) })
         // Structured startup events decide whether a failed setup may advance.
         const startup = ordered ? startupObserver() : undefined
+        const nativeError = script ? undefined : nativeErrorObserver()
+        if (nativeError) child.stdout?.setEncoding('utf8').on('data', (chunk: string) => nativeError.write(chunk))
         let probing = Boolean(run.quotaWait)
         // A resumed Codex session reports its session-wide total.
         const telemetry = telemetryOn ? telemetryObserver({ cumulativeSession: Boolean(resumed) && ['codex', 'codex-gui'].includes(preset.cli) }) : undefined
@@ -586,6 +588,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
                 // The next relay records a handed-off run's result.
                 if (handedOff.has(child)) return
                 const observed = startup?.result()
+                // Stderr stays first; a client that reports errors only in its
+                // structured stream (Claude) still explains the failure.
+                if (!errorTail && nativeError) errorTail = nativeError.error()
                 if (chat && ordered) await control.settleEngineSession(session.sessionId, preset, code === 0 || Boolean(observed?.workBegan))
                 else if (code === 0 && chat) await control.markSessionStarted(session.sessionId)
                 const cancelled = !timedOut && (ownerStopped.has(child) || await runCancelled())

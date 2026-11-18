@@ -1,3 +1,4 @@
+import { fakeCodex } from './helpers/fake-codex.js'
 import { ownerRun } from './helpers/owner-run.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -61,7 +62,7 @@ test('isolated Codex execution uses the bound sandbox setting, never a job overr
       process.env.EZ_CONTAINER_EXECUTOR=container;process.env.HOSTNAME='fixture-container';process.env.EZ_CODEX_SANDBOX=sandbox
       const root=await mkdtemp(path.join(tmpdir(),'ez-bound-sandbox-')),workspace=path.join(root,'mind'),controlDir=path.join(root,'control')
       const directory=path.join(controlDir,'host-executor'),abort=new AbortController()
-      let server:Promise<void>|undefined,captured:Parameters<typeof EXECUTOR_REGISTRY.codex.buildArgs>[0]|undefined
+      let server:Promise<void>|undefined,captured:Parameters<typeof EXECUTOR_REGISTRY.grok.buildArgs>[0]|undefined
       try {
         await mkdir(workspace);await mkdir(directory,{recursive:true});await ownerRun(controlDir,'tg_42')
         server=serveHostExecutor({cli,isolation,agents:[{name:'test',workspace,controlDir,binDir:root}]},abort.signal,async(_texts,options)=>{
@@ -77,10 +78,6 @@ test('isolated Codex execution uses the bound sandbox setting, never a job overr
         assert.match(events,/"stream":"exit","code":0/)
         assert.ok(captured)
         assert.equal(captured.codexSandbox,expected,`${isolation}/${cli}/${sandbox || 'unset'}`)
-        if(cli==='codex'){
-          const args=EXECUTOR_REGISTRY.codex.buildArgs(captured,'','test')
-          assert.equal(args[args.indexOf('--sandbox')+1],expected ? 'danger-full-access' : 'workspace-write')
-        }
       } finally {abort.abort();await server;await rm(root,{recursive:true,force:true})}
     }
   } finally {
@@ -212,11 +209,13 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     const binary=path.join(root,'cli')
     await writeFile(binary,`#!${process.execPath}\nif(['r_hold','tg_43'].includes(process.env.EZ_RUN_ID))setInterval(()=>{},1000);console.log(JSON.stringify({cwd:process.cwd(),home:process.env.HOME,token:process.env.TELEGRAM_BOT_TOKEN,control:process.env.EZ_CONTROL_DIR,run:process.env.EZ_RUN_ID,repair:process.env.EZ_REPAIR_ENABLED,args:process.argv.slice(2)}));\n`,{mode:0o700})
     await writeFile(path.join(root,'claude'),await readFile(binary),{mode:0o700})
-    await writeFile(path.join(root,'codex'),await readFile(binary),{mode:0o700})
+    await writeFile(path.join(root,'codex'),fakeCodex({turn:`fs.writeFileSync(${JSON.stringify(path.join(root,'codex-model'))},String(params.model))`}),{mode:0o700})
     await writeFile(path.join(root,'opencode'),'#!/bin/sh\nexit 0\n',{mode:0o700})
     process.env.PATH=root+path.delimiter+oldPath
     EXECUTOR_REGISTRY.grok.command=binary
-    EXECUTOR_REGISTRY.grok.buildArgs=(opts,file,prompt)=>[...EXECUTOR_REGISTRY.codex.buildArgs(opts,file,prompt).slice(0,-1),prompt]
+    // Echo the bound directories and transported options the host resolved.
+    EXECUTOR_REGISTRY.grok.buildArgs=(opts,_file,prompt)=>[...[opts.controlDir,opts.sharedWorkspace,...(opts.additionalWorkspaces??[]),opts.toolsHome].flatMap(dir=>dir?['--add-dir',dir]:[]),
+      ...(opts.codexAutoCompactTokens?[`model_auto_compact_token_limit=${opts.codexAutoCompactTokens}`]:[]),prompt]
     process.env.TELEGRAM_BOT_TOKEN='must-not-reach-host-cli'
     const sharedAlias=path.join(root,'shared-alias')
     await symlink(root,sharedAlias)
@@ -304,7 +303,7 @@ test('one installed CLI executes two agent bindings with separate minds and sani
     bound.stderr.on('data',chunk=>boundError+=chunk)
     bound.stdin.end(JSON.stringify({texts:['Switch to agent model'],options:{cli:'codex',model:'agent-only-fixture',timeoutMs:5000}}))
     assert.equal(await new Promise(resolve=>bound.once('close',resolve)),0,boundError)
-    assert.ok(JSON.parse(boundOutput).args.includes('agent-only-fixture'))
+    assert.equal(await readFile(path.join(root,'codex-model'),'utf8'),'agent-only-fixture')
     await assert.rejects(serveHostExecutor({cli:'grok',agents},new AbortController().signal),/already running/)
     const directory=path.join(agents[0].controlDir,'host-executor')
     const runs=new RunStore(agents[0].controlDir)

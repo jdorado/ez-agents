@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ControlStore, sessionTitle } from '../src/control-state.js'
 import { initialPreset } from '../src/ai.js'
-import { EXECUTOR_REGISTRY } from '../src/executor.js'
 
 const fixture = async (work: (store: ControlStore, dir: string) => Promise<void>) => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-conversations-'))
@@ -50,8 +49,7 @@ test('switching after restart restores native context and model while queued cho
   await restarted.switchSession(first.sessionId)
   assert.deepEqual(await restarted.captureChoice(initialPreset('grok')), first)
   const session = await restarted.executionSession(first)
-  const args = EXECUTOR_REGISTRY.codex.buildArgs({ workspace: dir, isResume: session.hasStarted, sessionId: session.nativeSessionId }, '', '')
-  assert.equal(args[args.indexOf('resume') + 1], 'native_first')
+  assert.deepEqual([session.hasStarted, session.nativeSessionId], [true, 'native_first'])
   assert.equal((await restarted.executionSession(second)).sessionId, second.sessionId)
   await restarted.switchSession(second.sessionId)
   assert.deepEqual(await restarted.captureChoice(initialPreset('codex')), second)

@@ -342,8 +342,8 @@ Set `EZ_SCHEDULED_CONCURRENCY` to a positive integer to change the scheduled-job
 limit; it defaults to six. For Docker deployments, put this setting in the
 existing private relay environment file (`EZ_RELAY_ENV_FILE`); no Compose
 layout migration is needed. Owner input (Telegram or an application scope) for the
-conversation whose Claude turn is running steers that turn: the native CLI folds it
-in at its next step, as when typing into the CLI mid-turn. Other foreground inputs
+conversation whose Claude or Codex turn is running steers that turn: the native
+client folds it in at its next step, as when typing into the CLI mid-turn. Other foreground inputs
 queue behind foreground work;
 scheduled turns queue only when their limit is occupied. A long scheduled goal therefore does not block chat. Both streams
 use the existing admission and executor path, with separate native sessions.
@@ -377,9 +377,11 @@ native database concurrently. When the scheduled Codex process exits normally,
 Ez removes that run's downloaded plugin catalogs, app tool cache and plugin
 packages. Its native transcripts, goals and databases stay on disk.
 
-The foreground chat still uses `codex exec`. That invocation exits after one
-requested turn even if a goal is active, so delegate persistent work to the
-scheduler. Desktop and other executor goal lifecycles need separate validation.
+Foreground Codex chat runs as the same native app-server session (in the
+conversation's own Codex home, resuming its thread) so mid-turn input can steer
+it, but it ends after its one requested turn even if a goal is active, so delegate
+persistent work to the scheduler. Desktop and other executor goal lifecycles need
+separate validation.
 
 The CLI binds jobs to the paired owner and the task AI choice. Queued/scheduled
 work retains that choice after the chat switches AI. Revoking/re-pairing an

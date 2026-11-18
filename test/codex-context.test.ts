@@ -5,6 +5,7 @@ import {mkdtemp,mkdir,writeFile,readFile,readlink,readdir,rm,symlink} from 'node
 import {tmpdir} from 'node:os'
 import path from 'node:path'
 import {startExecutorJob} from '../src/executor.js'
+import {fakeCodex} from './helpers/fake-codex.js'
 
 test('a package-bin Codex shim cannot retarget another agent home', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'ez-codex-host-cli-'))
@@ -18,18 +19,16 @@ test('a package-bin Codex shim cannot retarget another agent home', async () => 
     await writeFile(path.join(packageBin, 'codex'), `#!${process.execPath}
 require('fs').writeFileSync(require('path').join(process.env.HOME, 'hijacked'), 'yes'); process.exit(2)
 `, { mode: 0o700 })
-    await writeFile(path.join(hostBin, 'codex'), `#!${process.execPath}\nconsole.log(process.env.CODEX_HOME)`, { mode: 0o700 })
+    await writeFile(path.join(hostBin, 'codex'), fakeCodex({turn:`fs.writeFileSync(${JSON.stringify(path.join(root,'observed'))},process.env.CODEX_HOME)`}), { mode: 0o700 })
     process.env.HOME = root
     process.env.PATH = hostBin + path.delimiter + (priorPath ?? '')
     await ownerRun(controlDir, 'r_test')
     const job = await startExecutorJob(['hello'], {
       workspace: root, controlDir, binDir: packageBin, cli: 'codex', runId: 'r_test', timeoutMs: 5000,
     })
-    let output = ''
-    job.child.stdout?.on('data', chunk => output += chunk)
     assert.equal(await new Promise(resolve => job.child.once('close', resolve)), 0)
     await job.cleanup()
-    assert.equal(output.trim(), path.join(controlDir, 'cli/codex'))
+    assert.equal(await readFile(path.join(root, 'observed'), 'utf8'), path.join(controlDir, 'cli/codex'))
     await assert.rejects(readFile(path.join(root, 'hijacked')))
   } finally {
     if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome
@@ -64,18 +63,17 @@ test('Codex shares only auth through a link and keeps each agent runtime state s
   await mkdir(path.join(root,'.codex'));await mkdir(path.join(root,'bin'))
   await writeFile(path.join(root,'.codex/auth.json'),'{}')
   await writeFile(path.join(root,'.codex/config.toml'),'# unrelated personal config')
-  await writeFile(path.join(root,'bin/codex'),`#!${process.execPath}\nconsole.log(process.env.CODEX_HOME)`,{mode:0o700})
+  await writeFile(path.join(root,'bin/codex'),fakeCodex({turn:`fs.writeFileSync(${JSON.stringify(path.join(root,'observed'))},process.env.CODEX_HOME)`}),{mode:0o700})
   process.env.HOME=root;process.env.PATH=path.join(root,'bin')+path.delimiter+priorPath
   delete process.env.EZ_ISOLATION
   for(const agent of ['one','two']){
    const controlDir=path.join(root,agent)
    await ownerRun(controlDir, 'r_test')
    const job=await startExecutorJob(['hello'],{workspace:root,controlDir,binDir:path.join(root,'bin'),cli:'codex',runId:'r_test',timeoutMs:5000})
-   let output='';job.child.stdout?.on('data',chunk=>output+=chunk)
    assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0)
    await job.cleanup()
    const home=path.join(controlDir,'cli/codex')
-   assert.equal(output.trim(),home)
+   assert.equal(await readFile(path.join(root,'observed'),'utf8'),home)
    assert.deepEqual(await readdir(home),['auth.json'])
    assert.equal(await readlink(path.join(home,'auth.json')),path.join(root,'.codex/auth.json'))
   }

@@ -7,15 +7,15 @@ import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
 import { ApplicationChannel, ApplicationBindings, applicationScope } from '../src/application-channel.js'
 import { ControlStore, ownerId, ownerEpoch } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
 import { initialPreset } from '../src/ai.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
 import { createRelay } from '../src/index.js'
-import { EXECUTOR_REGISTRY, executorEnvironment } from '../src/executor.js'
+import { executorEnvironment } from '../src/executor.js'
 import { serveTestLedger } from './helpers/ledger.js'
+import { installFakeCodex } from './helpers/fake-codex.js'
 
 const token = () => randomBytes(32).toString('base64url')
 const owner = async (dir: string) => {
@@ -24,7 +24,7 @@ const owner = async (dir: string) => {
   return (await control.status()).owner!
 }
 const waitFor = async (condition: () => Promise<boolean>) => {
-  for (let attempt=0; attempt<200; attempt++) { if (await condition()) return; await new Promise(resolve=>setTimeout(resolve,10)) }
+  for (let attempt=0; attempt<1000; attempt++) { if (await condition()) return; await new Promise(resolve=>setTimeout(resolve,10)) }
   throw new Error('Timed out waiting for application run')
 }
 
@@ -165,17 +165,10 @@ test('owner replacement invalidates binding and client secrets never enter nativ
 
 test('app run uses real core executor process, scoped native resume and outbox without Telegram delivery',async t=>{
   const root=await mkdtemp(join(tmpdir(),'ez-app-executor-'))
-  const original=EXECUTOR_REGISTRY.codex
-  const prompts:string[]=[], resumeIds:(string|undefined)[]=[]
-  const require=createRequire(import.meta.url)
-  const fixture=join(root,'engine.mjs')
-  const nativeId='11111111-1111-1111-1111-111111111111'
-  await writeFile(fixture,`import {spawnSync} from 'node:child_process';
-console.log(JSON.stringify({type:'thread.started',thread_id:${JSON.stringify(nativeId)}}));
-const result=spawnSync(process.execPath,[${JSON.stringify(fileURLToPath(new URL('../bin/ezenciel-agents-message.mjs',import.meta.url)))},'--text','Fixture engine reply'],{env:process.env,encoding:'utf8'});
-if(result.status!==0){console.error(result.stderr);process.exit(1)};
-`)
-  EXECUTOR_REGISTRY.codex={...original,command:process.execPath,buildArgs:(options,_file,prompt)=>{prompts.push(prompt);resumeIds.push(options.isResume?options.sessionId:undefined);return ['--import',require.resolve('tsx'),fixture]}}
+  const nativeId='11111111-1111-1111-1111-111111111111', observed=join(root,'observed.jsonl')
+  const restorePath=await installFakeCodex(join(root,'bin'),{threadId:nativeId,turn:`fs.appendFileSync(${JSON.stringify(observed)},JSON.stringify({prompt,resume:params.threadId})+'\\n')
+const result=spawnSync(process.execPath,[${JSON.stringify(fileURLToPath(new URL('../bin/ezenciel-agents-message.mjs',import.meta.url)))},'--text','Fixture engine reply'],{env:process.env,encoding:'utf8'})
+if(result.status!==0)throw new Error(result.stderr)`})
   const relay=createRelay({controlDir:root,workspace:root,pairingTtlMs:1000,telegramBotToken:'fixture',executorTimeoutMs:0,executorCli:'codex'})
   // The engine child reaches the relay memory ledger through the delivery socket.
   const ledger=await serveTestLedger(root)
@@ -184,12 +177,14 @@ if(result.status!==0){console.error(result.stderr);process.exit(1)};
   const owned=await owner(root), secret=token()
   const binding=(await relay.applicationChannel.bindings.register('app',secret,owned))!
   const drain=setInterval(()=>void relay.drainOutbox(),10)
-  t.after(async()=>{clearInterval(drain);await relay.stop();EXECUTOR_REGISTRY.codex=original;await ledger.stop();await rm(root,{recursive:true,force:true})})
+  t.after(async()=>{clearInterval(drain);await relay.stop();restorePath();await ledger.stop();await rm(root,{recursive:true,force:true})})
   const first=await relay.applicationChannel.submit(binding.bindingId,{requestId:'one',scope:'program',text:'Hello from the app',context:{secret:'must-stay-out-of-prompt'}})
   await waitFor(async()=> (await new RunStore(root).get(first.id))?.status==='completed')
   const second=await relay.applicationChannel.submit(binding.bindingId,{requestId:'two',scope:'program',text:'Continue'})
   await waitFor(async()=> (await new RunStore(root).get(second.id))?.status==='completed')
-  assert.deepEqual(resumeIds,[undefined,nativeId])
+  const turns=(await readFile(observed,'utf8')).trim().split('\n').map(line=>JSON.parse(line))
+  const prompts=turns.map(turn=>turn.prompt)
+  assert.deepEqual(turns.map(turn=>turn.resume),[undefined,nativeId])
   assert.equal(telegramCalls,0)
   assert.ok(prompts[0].startsWith('Hello from the app'))
   assert.ok(prompts[0].includes('[application scope "program"]'))
@@ -203,10 +198,10 @@ test('packaged admin command discovery and existing core child cancellation',asy
   const help=spawnSync(process.execPath,[fileURLToPath(new URL('../bin/ezenciel-agents-application.mjs',import.meta.url)),'--help'],{encoding:'utf8'})
   assert.equal(help.status,0,help.stderr)
   assert.match(help.stdout,/--token-file/)
-  const root=await mkdtemp(join(tmpdir(),'ez-app-cancel-')), original=EXECUTOR_REGISTRY.codex
-  EXECUTOR_REGISTRY.codex={...original,command:process.execPath,buildArgs:()=>['-e','setInterval(()=>{},1000)']}
+  const root=await mkdtemp(join(tmpdir(),'ez-app-cancel-'))
+  const restorePath=await installFakeCodex(join(root,'bin'),{turn:'await new Promise(()=>setInterval(()=>{},1000))'})
   const relay=createRelay({controlDir:root,workspace:root,pairingTtlMs:1000,telegramBotToken:'fixture',executorTimeoutMs:0,executorCli:'codex'})
-  t.after(async()=>{await relay.stop();EXECUTOR_REGISTRY.codex=original;await rm(root,{recursive:true,force:true})})
+  t.after(async()=>{await relay.stop();restorePath();await rm(root,{recursive:true,force:true})})
   const owned=await owner(root),secret=token(),binding=(await relay.applicationChannel.bindings.register('app',secret,owned))!
   const address=await relay.applicationChannel.listen(0) as {port:number}
   const run=await relay.applicationChannel.submit(binding.bindingId,{requestId:'cancel',scope:'scope',text:'Wait'})

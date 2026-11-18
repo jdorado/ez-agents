@@ -632,7 +632,7 @@ if(q.method==='turn/start'){send({id:q.id,result:{turn:{id:'one'}}});event('turn
  send({method:'account/rateLimits/updated',params:{rateLimits:{primary:{usedPercent:100,resetsAt:1791460800}}}});
  event('turn/completed',{turn:{id:'one',status:'failed',error:{message:'limit',codexErrorInfo:'usageLimitExceeded'}}})}});setInterval(()=>{},1000);`
     const output:string[]=[]
-    const code=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',model:'gpt-6-sol',prompt:'work'},{launch:()=>spawn(process.execPath,['-e',program],{stdio:['pipe','pipe','pipe'],detached:process.platform!=='win32'}),emit:line=>output.push(line)})
+    const code=await runCodexSession({nativeSession:true,workspace:'/tmp',controlDir:'/tmp/control',model:'gpt-6-sol',prompt:'work'},{launch:()=>spawn(process.execPath,['-e',program],{stdio:['pipe','pipe','pipe'],detached:process.platform!=='win32'}),emit:line=>output.push(line)})
     assert.equal(code,1)
     const o=startupObserver();o.write(output.join('\n')+'\n')
     assert.deepEqual(o.result(),{workBegan:worked,rejection:{category:'quota',resetAt:'2026-10-08T12:00:00.000Z'}})

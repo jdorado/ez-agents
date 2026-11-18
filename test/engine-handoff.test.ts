@@ -17,24 +17,26 @@ test('owner, resumed and native scheduled subprocesses receive literal input and
  await mkdir(bin);const purpose=path.join(root,'purpose.md');await writeFile(purpose,'Fixture agent\n');await initializeWorkspace(workspace,purpose)
  const fixture=`#!${process.execPath}
 const fs=require('fs'), args=process.argv.slice(2);
-const capture=prompt=>fs.writeFileSync('capture.json',JSON.stringify({prompt,args,env:{run:process.env.EZ_RUN_ID,control:process.env.EZ_CONTROL_DIR,repair:process.env.EZ_REPAIR_ENABLED,secret:process.env.TELEGRAM_BOT_TOKEN}}));
+let thread;
+const capture=prompt=>fs.writeFileSync('capture.json',JSON.stringify({prompt,args,thread,env:{run:process.env.EZ_RUN_ID,control:process.env.EZ_CONTROL_DIR,repair:process.env.EZ_REPAIR_ENABLED,secret:process.env.TELEGRAM_BOT_TOKEN}}));
 if(args[0]==='app-server'){
  const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
  require('readline').createInterface({input:process.stdin}).on('line',line=>{
  const q=JSON.parse(line);if(!q.id)return;
  if(q.method==='initialize')send({id:q.id,result:{}});
- if(q.method==='thread/start')send({id:q.id,result:{thread:{id:'fixture-thread'}}});
+ if(q.method==='thread/start'||q.method==='thread/resume'){thread={method:q.method,threadId:q.params.threadId,sandbox:q.params.sandbox};send({id:q.id,result:{thread:{id:'fixture-thread'}}})}
  if(q.method==='turn/start'){
   capture(q.params.input[0].text);send({id:q.id,result:{turn:{id:'one'}}});
   send({method:'turn/started',params:{threadId:'fixture-thread',turn:{id:'one'}}});
   send({method:'turn/completed',params:{threadId:'fixture-thread',turn:{id:'one',status:'completed'}}});
  }
  if(q.method==='thread/goal/get')send({id:q.id,result:{goal:null}});
+ if(q.method==='account/rateLimits/read')send({id:q.id,result:{}});
  });
 }else if(args.includes('--input-format')){
  // Claude streamed input: one literal user message, then a result event ends the turn.
  require('readline').createInterface({input:process.stdin}).once('line',line=>{capture(JSON.parse(line).message.content);process.stdout.write('{"type":"result","subtype":"success","is_error":false}\\n')});
-}else capture(args.includes('--prompt-file')?fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'):args.includes('--print')||(args[0]==='exec'&&args.at(-1)==='-')?fs.readFileSync(0,'utf8'):args.at(-1));
+}else capture(args.includes('--prompt-file')?fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'):args.includes('--print')?fs.readFileSync(0,'utf8'):args.at(-1));
 `
  for(const name of ['codex','grok','claude','opencode'])await writeFile(path.join(bin,name),fixture,{mode:0o700})
  const previous={PATH:process.env.PATH,TELEGRAM_BOT_TOKEN:process.env.TELEGRAM_BOT_TOKEN,EZ_EXECUTOR_TRANSPORT:process.env.EZ_EXECUTOR_TRANSPORT}
@@ -49,8 +51,10 @@ if(args[0]==='app-server'){
    assert.equal(captured.prompt,text)
    assert.deepEqual(captured.env,{run:runId,control:controlDir,repair:'false'})
    if(cli==='codex'){
-    assert.equal(captured.args.at(-1),'-')
-    if(process.platform==='darwin')assert.equal(captured.args[captured.args.indexOf('--sandbox')+1],'danger-full-access')
+    // Chat runs as a native app-server session and resumes its thread.
+    assert.equal(captured.args[0],'app-server')
+    assert.deepEqual([captured.thread.method,captured.thread.threadId],isResume?['thread/resume','native-existing']:['thread/start',undefined])
+    if(process.platform==='darwin')assert.equal(captured.thread.sandbox,'danger-full-access')
    }
    if(['codex','claude'].includes(cli))assert.ok(!captured.args.includes('--help'))
    if(cli==='opencode')assert.equal(captured.args.at(-2),'--')
