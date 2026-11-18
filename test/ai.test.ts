@@ -784,7 +784,7 @@ test('Telegram Sonnet choice survives restart and reaches the native launch with
     const {ownerRun} = await import('./helpers/owner-run.js')
     const {startExecutorJob} = await import('../src/executor.js')
     await mkdir(join(dir,'bin'))
-    await writeFile(join(dir,'bin','claude'), `#!${process.execPath}\nrequire('fs').writeFileSync('launched.json',JSON.stringify(process.argv.slice(2)));require('fs').readFileSync(0,'utf8')`, {mode:0o700})
+    await writeFile(join(dir,'bin','claude'), `#!${process.execPath}\nrequire('fs').writeFileSync('launched.json',JSON.stringify(process.argv.slice(2)));process.stdout.write('{"type":"result"}\\n');require('fs').readFileSync(0,'utf8')`, {mode:0o700})
     process.env.PATH = join(dir,'bin') + ':' + priorPath
     await ownerRun(dir,'r_sonnet_selected')
     const job = await startExecutorJob(['synthetic request'], {workspace:dir,controlDir:dir,binDir:join(dir,'bin'),runId:'r_sonnet_selected',timeoutMs:5000,repairEnabled:false,

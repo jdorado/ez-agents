@@ -105,9 +105,9 @@ test('error-flagged success preserves typed startup rejection without authorizin
   assert.equal(attemptFailure(observe({type:'assistant',error:'oauth_org_not_allowed'},terminal)).continues,false)
 })
 
-test('only scheduled Claude runs stream structured events',()=>{
-  assert.deepEqual(EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/w',nativeSession:true},'','').slice(-3),['--output-format','stream-json','--verbose'])
-  assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/w'},'','').includes('stream-json'))
+test('Claude runs stream input and structured events',()=>{
+  for(const opts of [{workspace:'/w',nativeSession:true},{workspace:'/w'}])
+    assert.deepEqual(EXECUTOR_REGISTRY.claude.buildArgs(opts,'','').slice(-5),['--input-format','stream-json','--output-format','stream-json','--verbose'])
 })
 
 test('codex errors map to categories; policy and context errors never advance',()=>{

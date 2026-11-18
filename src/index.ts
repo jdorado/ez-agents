@@ -28,7 +28,7 @@ import { InboxStore, type IncomingItem } from './inbox.js'
 import { loadConfig, type Config } from './config.js'
 import { ControlStore, telegramOwner, ownerId, ownerEpoch, type Owner, type SessionState } from './control-state.js'
 import { ApprovalStore } from './approval.js'
-import { CliUnavailableError, startExecutorJob, attachHostJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
+import { CliUnavailableError, startExecutorJob, attachHostJob, steerJob, terminateJob, opencodeDataHome, claudeConfigHome, usesFileTransport } from './executor.js'
 import { attemptFailure, continuationLine, nextSetup, quotaScope, quotaWait, quotaCategory, setupCandidates, startupObserver, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { telemetryObserver } from './run-telemetry.js'
 import { assertScheduledModel } from './model-policy.js'
@@ -43,7 +43,7 @@ import { createConversationMenu } from './conversation-menu.js'
 import { queueSessionClose } from './session-close.js'
 import { queueTaskWake } from './task-wake.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
-import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset, type AiPreset } from './ai.js'
+import { chatPreset, initialPreset, persistedPreset, presetLabel, statusPreset, type AiPreset, type ExecutionChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 import { runPromptSuffix } from './prompt-suffix.js'
 import { softwareStatus } from './software-status.js'
@@ -732,6 +732,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       void drainInbox().catch((error) => console.error('Inbox drain failed', safeError(error)))
     }, 250)
   }
+  // Owner input for the chat whose turn is running steers that turn instead of
+  // queueing a second one (see steerJob). Any mismatch queues as before.
+  const steerActive = async (chatId: number, execution: ExecutionChoice | undefined, items: IncomingItem[]): Promise<boolean> => {
+    const child = activeChild
+    const active = child && execution ? await runs.get(childRuns.get(child) ?? '') : undefined
+    if (!child || !active || active.status !== 'running' || stoppedRuns.has(active.id) || active.chatId !== chatId ||
+      active.application || active.delivery || active.external || active.taskId || active.scheduled || active.sessionClose ||
+      active.execution?.sessionId !== execution!.sessionId || JSON.stringify(active.execution.preset) !== JSON.stringify(execution!.preset)) return false
+    return steerJob(child, items.map(item => item.text).join('\n\n') + runPromptSuffix({ ...active, messageId: items.at(-1)!.messageId }))
+  }
   const drainInbox = (force = false): Promise<void> => {
     if (!telegramEnabled) return Promise.resolve()
     if (intakeWork) return intakeWork
@@ -758,7 +768,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
             if (shuttingDown || !(await inbox.pending(batch.id))) return
             const first = collected[0]
             const owner = telegramOwner((await control.status()).owner)
-            if (first && owner)
+            if (first && owner && await steerActive(first.chatId, batch.entries[0].execution, collected))
+              console.info('run steered', { run_id: childRuns.get(activeChild!), batch: batch.id })
+            else if (first && owner)
               run = await runs.create({
                 id: batch.id,
                 ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner),

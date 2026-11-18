@@ -31,6 +31,9 @@ if(args[0]==='app-server'){
  }
  if(q.method==='thread/goal/get')send({id:q.id,result:{goal:null}});
  });
+}else if(args.includes('--input-format')){
+ // Claude streamed input: one literal user message, then a result event ends the turn.
+ require('readline').createInterface({input:process.stdin}).once('line',line=>{capture(JSON.parse(line).message.content);process.stdout.write('{"type":"result"}\\n')});
 }else capture(args.includes('--prompt-file')?fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'):args.includes('--print')||(args[0]==='exec'&&args.at(-1)==='-')?fs.readFileSync(0,'utf8'):args.at(-1));
 `
  for(const name of ['codex','grok','claude','opencode'])await writeFile(path.join(bin,name),fixture,{mode:0o700})

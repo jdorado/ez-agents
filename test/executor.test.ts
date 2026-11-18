@@ -2,11 +2,11 @@ import { ownerRun } from './helpers/owner-run.js'
 import { RunStore } from '../src/runs.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, rm, writeFile, readFile, rename, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, writeFile, readFile, rename, stat } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { EXECUTOR_REGISTRY, attachHostJob, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, terminateJob, validateCodexProvider } from '../src/executor.js'
+import { EXECUTOR_REGISTRY, attachHostJob, executorEnvironment, grokInvocation, grokJobEnv, opencodeDataHome, opencodeInvocation, piAgentDir, resolveExecutor, resolveHostCommand, startExecutorJob, steerHostRequests, steerJob, terminateJob, validateCodexProvider } from '../src/executor.js'
 import { requireOwnerExecution } from '../src/execution-authority.js'
 import { splitTelegramText } from '../src/reply.js'
 import { matchingProcessIds, processSnapshot } from '../src/process-tree.js'
@@ -149,6 +149,52 @@ test('host transport does not throw when selecting the desktop adapter', async (
     else process.env.EZ_EXECUTOR_TRANSPORT = prior
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('mid-turn input steers a running Claude turn, locally and across the host transport', {skip:process.platform==='win32'}, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-steer-'))
+  const prior = { PATH: process.env.PATH, EZ_EXECUTOR_TRANSPORT: process.env.EZ_EXECUTOR_TRANSPORT }
+  t.after(async () => {
+    for (const [key, value] of Object.entries(prior)) value === undefined ? delete process.env[key] : process.env[key] = value
+    await rm(root, { recursive: true, force: true })
+  })
+  const bin = path.join(root, 'bin'), workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), directory = path.join(controlDir, 'host-executor')
+  await mkdir(bin); await mkdir(workspace); await mkdir(directory, { recursive: true })
+  // The turn ends only after the follow-up arrives, as a native turn absorbs it.
+  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}
+const fs=require('fs'),seen=[];require('readline').createInterface({input:process.stdin}).on('line',line=>{
+ seen.push(JSON.parse(line).message.content);fs.writeFileSync('seen.json',JSON.stringify(seen));if(seen.length===2)process.stdout.write('{"type":"result"}\\n')})`, { mode: 0o700 })
+  process.env.PATH = bin + path.delimiter + process.env.PATH
+  delete process.env.EZ_EXECUTOR_TRANSPORT
+  const local = async (runId: string) => {
+    await ownerRun(controlDir, runId)
+    return startExecutorJob(['first'], { workspace, controlDir, binDir: bin, cli: 'claude', runId, timeoutMs: 5000, repairEnabled: false })
+  }
+  const job = await local('r_steer_local')
+  const closed = new Promise(resolve => job.child.once('close', resolve))
+  assert.equal(await steerJob(job.child, 'follow-up'), true)
+  assert.equal(await closed, 0); await job.cleanup()
+  assert.deepEqual(JSON.parse(await readFile(path.join(workspace, 'seen.json'), 'utf8')), ['first', 'follow-up'])
+  // After the turn's result, input is no longer steerable and queues instead.
+  assert.equal(await steerJob(job.child, 'late'), false)
+
+  // Host transport: the host claims and acknowledges; an unclaimed request is withdrawn.
+  await writeFile(path.join(directory, 'heartbeat.json'), JSON.stringify({ at: Date.now() }))
+  process.env.EZ_EXECUTOR_TRANSPORT = 'host'
+  await ownerRun(controlDir, 'r_steer_host')
+  const client = await startExecutorJob(['first'], { workspace, controlDir, binDir: bin, cli: 'claude', runId: 'r_steer_host', timeoutMs: 0, repairEnabled: false })
+  delete process.env.EZ_EXECUTOR_TRANSPORT
+  const hostJob = await local('r_steer_hosted')
+  const hostClosed = new Promise(resolve => hostJob.child.once('close', resolve))
+  const steered = steerJob(client.child, 'host follow-up')
+  for (let n = 0; n < 50 && !(await readdir(directory)).some(file => file.includes('.steer-') && file.endsWith('.json')); n++) await new Promise(r => setTimeout(r, 20))
+  await steerHostRequests(directory, 'r_steer_host', hostJob.child)
+  assert.equal(await steered, true)
+  assert.equal(await hostClosed, 0); await hostJob.cleanup()
+  assert.deepEqual(JSON.parse(await readFile(path.join(workspace, 'seen.json'), 'utf8')), ['first', 'host follow-up'])
+  assert.equal(await steerJob(client.child, 'unclaimed'), false)
+  assert.deepEqual((await readdir(directory)).filter(file => file.includes('.steer-')), [])
+  await terminateJob(client.child); await client.cleanup()
 })
 
 test('host cancellation persists before a stalled observer receives a signal', {skip:process.platform==='win32'}, async () => {
@@ -406,7 +452,8 @@ test('Claude runs with agent-bound configuration, shared login and the agent dir
   t.after(() => rm(root, { recursive: true, force: true }))
   const bin = path.join(root, 'bin'), workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), shared = path.join(root, 'shared')
   await mkdir(bin); await mkdir(workspace)
-  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nrequire('fs').writeFileSync('observed.json',JSON.stringify({args:process.argv.slice(2),config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,token:process.env.CLAUDE_CODE_OAUTH_TOKEN,bgWait:process.env.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS,prompt:require('fs').readFileSync(0,'utf8')}))`, { mode: 0o700 })
+  // Like the native CLI: one turn ends with a result event, then input closes.
+  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nprocess.stdout.write('{"type":"result"}\\n');require('fs').writeFileSync('observed.json',JSON.stringify({args:process.argv.slice(2),config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,token:process.env.CLAUDE_CODE_OAUTH_TOKEN,bgWait:process.env.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS,prompt:require('fs').readFileSync(0,'utf8')}))`, { mode: 0o700 })
   const previous = { PATH: process.env.PATH, EZ_ISOLATION: process.env.EZ_ISOLATION, EZ_EXECUTOR_TRANSPORT: process.env.EZ_EXECUTOR_TRANSPORT }
   t.after(() => { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value })
   process.env.PATH = bin + path.delimiter + process.env.PATH
@@ -421,7 +468,7 @@ test('Claude runs with agent-bound configuration, shared login and the agent dir
     assert.equal(observed.config, path.join(controlDir, 'cli', 'claude'))
     assert.equal(observed.storage, isolation ? undefined : '')
     assert.equal(observed.bgWait, '0')
-    assert.equal(observed.prompt, 'hello')
+    assert.equal(JSON.parse(observed.prompt).message.content, 'hello')
     for (const directory of [controlDir, shared]) assert.equal(observed.args[observed.args.indexOf(directory) - 1], '--add-dir')
     assert.deepEqual(observed.args.slice(-4), ['--model', 'opus', '--effort', 'high'])
     assert.equal(observed.token, undefined)
