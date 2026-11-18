@@ -1,3 +1,4 @@
+import { fakeCodex } from './helpers/fake-codex.js'
 import { ownerRun } from './helpers/owner-run.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -24,10 +25,11 @@ test('each Claude and Codex profile runs only with its own home and credentials'
   const bin = path.join(root, 'bin'), workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control')
   await mkdir(bin); await mkdir(workspace)
   const observed = path.join(root, 'observed.json')
-  for (const cli of ['claude', 'codex']) await writeFile(path.join(bin, cli), `#!${process.execPath}
-const fs=require('fs'),p=require('path');let auth=null
-try{auth=fs.lstatSync(p.join(process.env.CODEX_HOME,'auth.json')).isSymbolicLink()?'link:'+fs.readlinkSync(p.join(process.env.CODEX_HOME,'auth.json')):'file'}catch{}
-fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,token:process.env.CLAUDE_CODE_OAUTH_TOKEN,codexHome:process.env.CODEX_HOME,auth}))`, { mode: 0o700 })
+  const observe = `let auth=null
+try{auth=fs.lstatSync(path.join(process.env.CODEX_HOME,'auth.json')).isSymbolicLink()?'link:'+fs.readlinkSync(path.join(process.env.CODEX_HOME,'auth.json')):'file'}catch{}
+fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({config:process.env.CLAUDE_CONFIG_DIR,storage:process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR,token:process.env.CLAUDE_CODE_OAUTH_TOKEN,codexHome:process.env.CODEX_HOME,auth}))`
+  await writeFile(path.join(bin, 'claude'), `#!${process.execPath}\nconst fs=require('fs'),path=require('path');${observe}`, { mode: 0o700 })
+  await writeFile(path.join(bin, 'codex'), fakeCodex({ turn: observe }), { mode: 0o700 })
   process.env.PATH = bin + path.delimiter + process.env.PATH
   process.env.HOME = root
   delete process.env.EZ_ISOLATION; delete process.env.EZ_EXECUTOR_TRANSPORT

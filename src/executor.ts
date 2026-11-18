@@ -184,31 +184,8 @@ export type CliAdapter = {
 export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
   codex: {
     name: 'codex', command: 'codex', description: 'Codex CLI',
-    buildArgs: (opts, _file, prompt) => {
-      if (opts.codexSandbox !== undefined && opts.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
-      const args = ['exec', '--skip-git-repo-check', '--json', '--sandbox', opts.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write', '--disable', 'memories', '--enable', 'skip_host_skill_discovery', '-c', 'approval_policy="never"']
-      if (opts.codexProvider) {
-        const provider = validateCodexProvider(opts.codexProvider)
-        args.push(
-          '-c', `model_provider=${JSON.stringify(provider.id)}`,
-          '-c', `model_providers.${provider.id}={name=${JSON.stringify(provider.name)},base_url=${JSON.stringify(provider.baseUrl)},env_key=${JSON.stringify(provider.envKey)},wire_api="responses",supports_websockets=false}`,
-        )
-      }
-      const limit = opts.codexAutoCompactTokens
-      if (limit !== undefined) {
-        if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('Invalid Codex compaction token limit')
-        args.push('-c', `model_auto_compact_token_limit=${limit}`)
-      }
-      if (opts.controlDir) args.push('--add-dir', opts.controlDir)
-      if (opts.sharedWorkspace) args.push('--add-dir', opts.sharedWorkspace)
-      for (const workspace of opts.additionalWorkspaces ?? []) args.push('--add-dir', workspace)
-      if (opts.toolsHome) args.push('--add-dir', opts.toolsHome, '-c', 'sandbox_workspace_write.network_access=true')
-      if (opts.model) args.push('--model', opts.model)
-      if (opts.effort) args.push('-c', `model_reasoning_effort=${JSON.stringify(opts.effort)}`)
-      if (opts.isResume && opts.sessionId) args.push('resume', opts.sessionId)
-      args.push('-') // Native stdin keeps text out of option/subcommand parsing.
-      return args
-    },
+    // Every Codex run is a native app-server session (codex-session.ts).
+    buildArgs: () => { throw new Error('Codex runs through its native app-server session') },
   },
   claude: {
     name: 'claude',
@@ -424,6 +401,9 @@ export const startExecutorJob = async (
   const key = executorKey(options.cli)
   const gui = !host && key === 'codex-gui'
   const nativeSession = !host && key === 'codex' && options.nativeSession === true
+  // Codex chat also runs as a native app-server session, so mid-turn owner
+  // input can steer it; scheduled sessions keep their own per-run home.
+  const appServer = !host && key === 'codex'
   // Literal input plus the caller-provided trigger line. No coaching,
   // tool/delegate/schedule advice, or workflow guidance.
   const promptText = texts.join('\n\n') + (options.promptSuffix ?? '')
@@ -436,10 +416,13 @@ export const startExecutorJob = async (
     ? workspaceSiblingDenies(options.workspace) : []
   // Codex must not apply a nested Seatbelt; this process is already confined.
   const launchOptions = denies.length && command === 'codex' ? { ...options, codexSandbox: 'external' as const } : options
-  const args = host || nativeSession || key === 'codex-gui' ? [] : adapter.buildArgs(launchOptions, promptFile, promptText)
+  const args = host || appServer || key === 'codex-gui' ? [] : adapter.buildArgs(launchOptions, promptFile, promptText)
+  // The session resolves the host CLI like every other native launch: the
+  // package bin on the job PATH must never stand in for it.
+  const codexCommand = appServer ? resolveHostCommand('codex', executorEnvironment().PATH) : undefined
   let invocation = host
     ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./host-executor-client.ts', import.meta.url)), options.controlDir, options.runId])
-    : nativeSession
+    : appServer
       ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./codex-session.ts', import.meta.url))])
     : gui
       ? executorInvocation(process.execPath, ['--import', fileURLToPath(new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url)), fileURLToPath(new URL('./desktop-bridge.ts', import.meta.url))])
@@ -561,11 +544,31 @@ export const startExecutorJob = async (
     createInterface({ input: child.stdout! }).on('line', (line) => {
       try { if (JSON.parse(line).type === 'result') child.stdin!.end() } catch {}
     })
+  } else if (appServer) {
+    // codex-session.ts: the launch line, then acknowledged steer lines.
+    child.stdin!.on('error', () => {})
+    child.stdin!.write(JSON.stringify({...launchOptions,onSession:undefined,prompt:promptText,codexCommand}) + '\n')
+    if (nativeSession) child.stdin!.end()
+    else {
+      let next = 0
+      const waiting = new Map<number, (accepted: boolean) => void>()
+      createInterface({ input: child.stdout! }).on('line', (line) => {
+        try { const event = JSON.parse(line); if (event.type === 'ez.steer') { waiting.get(event.id)?.(event.accepted === true); waiting.delete(event.id) } } catch {}
+      })
+      child.once('close', () => { for (const settle of waiting.values()) settle(false); waiting.clear() })
+      steerers.set(child, (text) => new Promise<boolean>((resolve) => {
+        if (!child.stdin!.writable || child.exitCode !== null || child.signalCode !== null) { resolve(false); return }
+        const id = ++next
+        // Longer than the session's own request timeout, so a late answer cannot arrive.
+        const timer = setTimeout(() => { waiting.delete(id); resolve(false) }, 35000)
+        waiting.set(id, (accepted) => { clearTimeout(timer); resolve(accepted) })
+        child.stdin!.write(JSON.stringify({ steer: { id, text } }) + '\n')
+      }))
+    }
   } else child.stdin?.end(host
     ? JSON.stringify({texts,options:{...options,onSession:undefined,codexSandbox:undefined}})
-    : nativeSession ? JSON.stringify({...launchOptions,onSession:undefined,prompt:promptText})
     : gui ? JSON.stringify({prompt:promptText,options:{...options,onSession:undefined}})
-    : key === 'codex' ? promptText : undefined)
+    : undefined)
   if (host) steerers.set(child, steerHostJob(options.controlDir, options.runId))
   const timeout = options.timeoutMs > 0 ? setTimeout(() => terminateJob(child), options.timeoutMs) : undefined
   let stdout = ''

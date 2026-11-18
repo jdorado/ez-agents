@@ -5,18 +5,17 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { createServer } from 'node:net'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { loadConfig } from '../src/config.js'
 import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
 import { RunStore } from '../src/runs.js'
-import { EXECUTOR_REGISTRY } from '../src/executor.js'
+import { installFakeCodex } from './helpers/fake-codex.js'
 import { ApplicationBindings } from '../src/application-channel.js'
 import { initializeWorkspace } from '../src/workspace.js'
 
 const waitFor = async (condition: () => Promise<boolean>) => {
-  for (let i=0;i<300;i++) { if (await condition()) return; await new Promise(r=>setTimeout(r,10)) }
+  for (let i=0;i<1000;i++) { if (await condition()) return; await new Promise(r=>setTimeout(r,10)) }
   throw new Error('Timed out')
 }
 
@@ -63,17 +62,16 @@ test('botless daemon executes application turn and rejects Telegram-origin work/
   const portServer=createServer();await new Promise<void>(r=>portServer.listen(0,'127.0.0.1',r))
   const port=(portServer.address() as {port:number}).port;await new Promise<void>(r=>portServer.close(()=>r()))
   const config=loadConfig({EZ_APPLICATION_PORT:String(port),EZ_CONTROL_DIR:root,EZ_AGENT_WORKSPACE:root,EZ_EXECUTOR_CLI:'codex'})
-  const native='11111111-1111-1111-1111-111111111111', fixture=join(root,'engine.mjs')
-  await writeFile(fixture,`import {spawnSync} from 'node:child_process';if(process.env.TELEGRAM_BOT_TOKEN)throw Error('secret leak');console.log(JSON.stringify({type:'thread.started',thread_id:${JSON.stringify(native)}}));const r=spawnSync(process.execPath,[${JSON.stringify(fileURLToPath(new URL('../bin/ezenciel-agents-message.mjs',import.meta.url)))},'--text','Application reply'],{env:process.env});process.exit(r.status);`)
-  const original=EXECUTOR_REGISTRY.codex,require=createRequire(import.meta.url)
-  let launches=0
-  EXECUTOR_REGISTRY.codex={...original,command:process.execPath,buildArgs:()=>{launches++;return ['--import',require.resolve('tsx'),fixture]}}
+  const native='11111111-1111-1111-1111-111111111111'
+  const launches=join(root,'launches')
+  const restorePath=await installFakeCodex(join(root,'bin'),{threadId:native,turn:`if(process.env.TELEGRAM_BOT_TOKEN)throw new Error('secret leak');fs.appendFileSync(${JSON.stringify(launches)},'x')
+const r=spawnSync(process.execPath,[${JSON.stringify(fileURLToPath(new URL('../bin/ezenciel-agents-message.mjs',import.meta.url)))},'--text','Application reply'],{env:process.env});if(r.status)throw new Error('send failed')`})
   const relay=createRelay(config),control=new ControlStore(root,1000),runs=new RunStore(root)
   assert.equal(relay.bot,null)
   const owner=await control.bootstrapApplicationOwner(42)
   const token='x'.repeat(48),binding=(await relay.applicationChannel.bindings.register('app',token,owner))!
   const running=relay.start()
-  t.after(async()=>{await relay.stop();await running;EXECUTOR_REGISTRY.codex=original;await rm(root,{recursive:true,force:true})})
+  t.after(async()=>{await relay.stop();await running;restorePath();await rm(root,{recursive:true,force:true})})
   await waitFor(async()=>relay.isRunning())
   const unauthorized=await fetch(`http://127.0.0.1:${port}/v1/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestId:'bad',scope:'main',text:'bad'})})
   assert.equal(unauthorized.status,401)
@@ -85,7 +83,7 @@ test('botless daemon executes application turn and rejects Telegram-origin work/
   const legacy=await runs.create({chatId:42,telegramUserId:42,texts:['Old Telegram work']})
   await runs.enqueueMessage(legacy.id,'Never send')
   await relay.drainSources();await relay.drainOutbox();await relay.drainInbox(true)
-  assert.equal(launches,1)
+  assert.equal(await readFile(launches,'utf8'),'x')
   assert.equal((await runs.get(legacy.id))?.status,'queued')
 })
 

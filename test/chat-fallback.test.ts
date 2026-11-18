@@ -271,6 +271,16 @@ test('a usage limit after work began on the last setup fails the turn as started
   } finally { await f.close() }
 })
 
+test('a failed Claude turn records the client\'s own error result, not only its exit code', async () => {
+  const limit = { type: 'result', subtype: 'success', is_error: true, result: "You've hit your limit · resets 3pm (UTC)" }
+  const f = await fixture('error-text', [{ lines: [work, quota, limit], code: 1 }], { chain: [] })
+  try {
+    const run = await f.turn()
+    assert.equal(run.status, 'failed')
+    assert.equal(run.failure?.error, limit.result)
+  } finally { await f.close() }
+})
+
 test('without a chain or telemetry, chat behavior is unchanged', async () => {
   const f = await fixture('plain', [{ lines: [quota], code: 1 }], { chain: [] })
   try {

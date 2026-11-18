@@ -8,16 +8,17 @@ import { terminateJob, validateCodexProvider, type CodexProviderBinding } from '
 import { codexRejection, codexResetAt, startupLine } from './setup-fallback.js'
 import { telemetryObserver } from './run-telemetry.js'
 
-type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;additionalWorkspaces?:string[];model?:string;effort?:string;prompt:string;codexSandbox?:'external';codexProvider?:CodexProviderBinding;telemetry?:boolean}
+type Options = {workspace:string;controlDir:string;toolsHome?:string;sharedWorkspace?:string;additionalWorkspaces?:string[];model?:string;effort?:string;prompt:string;codexSandbox?:'external';codexProvider?:CodexProviderBinding;telemetry?:boolean;sessionId?:string;isResume?:boolean;codexAutoCompactTokens?:number;codexCommand?:string;nativeSession?:boolean}
 type Message = {id?:number;method?:string;params?:any;result?:any;error?:{message:string;code?:number}}
 
 // Keep Codex's native session alive. Codex itself starts goal continuation turns;
 // this transport never generates a continuation prompt or an Ez goal record.
-export async function runCodexSession(options:Options, io:{launch?:()=>ChildProcess;emit?:(line:string)=>void}={}):Promise<number> {
+// Owner input that arrives mid-turn steers the active native turn (`steerable`).
+export async function runCodexSession(options:Options, io:{launch?:()=>ChildProcess;emit?:(line:string)=>void;steerable?:(steer:(text:string)=>Promise<boolean>)=>void}={}):Promise<number> {
   options = executionDefaults('codex', options)
   if (options.codexSandbox !== undefined && options.codexSandbox !== 'external') throw new Error('Invalid Codex sandbox selection')
   const provider = options.codexProvider ? validateCodexProvider(options.codexProvider) : undefined
-  const child=io.launch?.() ?? spawn('codex',['app-server','--stdio','--disable','memories','--enable','skip_host_skill_discovery'],{cwd:options.workspace,env:process.env,stdio:['pipe','pipe','pipe']})
+  const child=io.launch?.() ?? spawn(options.codexCommand ?? 'codex',['app-server','--stdio','--disable','memories','--enable','skip_host_skill_discovery'],{cwd:options.workspace,env:process.env,stdio:['pipe','pipe','pipe']})
   const emit=io.emit ?? (line=>process.stdout.write(line+'\n'))
   let id=0,threadId:string|undefined,activeTurn:string|undefined,finished=false,sawTurn=false,hadGoal=false,workBegan=false,resetAt:string|undefined
   // Owner-enabled telemetry: app-server items and usage in the exec event shape.
@@ -98,19 +99,30 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
         }
         return
       }
+      // A chat turn ends with its one requested turn, as before; persistent
+      // goals belong to scheduled sessions.
+      if(!options.nativeSession){finish(0);return}
       // Completion of a turn is not completion of a native goal. The native
       // app-server remains running and owns any automatic next turn.
       void request('thread/goal/get',{threadId}).then(result=>settled(result.goal)).catch(fail)
     }
+  })
+  io.steerable?.(async text=>{
+    if(finished || !threadId || !activeTurn)return false
+    return await request('turn/steer',{threadId,expectedTurnId:activeTurn,input:[{type:'text',text}]}).then(()=>true,()=>false)
   })
   try{
     await request('initialize',{clientInfo:{name:'ezenciel-agents',version:'1'},capabilities:{experimentalApi:true}})
     send({method:'initialized',params:{}})
     // Read native quota metadata even when a rejected turn emits no update.
     await request('account/rateLimits/read',{}).then(limits=>{resetAt=codexResetAt(limits.rateLimits)}).catch(()=>{})
-    const result=await request('thread/start',{
+    const limit=options.codexAutoCompactTokens
+    if(limit!==undefined && (!Number.isSafeInteger(limit) || limit<=0))throw new Error('Invalid Codex compaction token limit')
+    // A chat turn resumes its conversation's native thread.
+    const resume=options.isResume && options.sessionId
+    const result=await request(resume ? 'thread/resume' : 'thread/start',{...(resume ? {threadId:options.sessionId} : {}),
       cwd:options.workspace,approvalPolicy:'never',sandbox:options.codexSandbox === 'external' ? 'danger-full-access' : 'workspace-write',model:options.model,
-      config:{project_root_markers:['AGENTS.md','.git'],'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[]),...(options.sharedWorkspace?[options.sharedWorkspace]:[]),...(options.additionalWorkspaces ?? [])],
+      config:{project_root_markers:['AGENTS.md','.git'],...(limit!==undefined?{model_auto_compact_token_limit:limit}:{}),'sandbox_workspace_write.writable_roots':[options.controlDir,...(options.toolsHome?[options.toolsHome]:[]),...(options.sharedWorkspace?[options.sharedWorkspace]:[]),...(options.additionalWorkspaces ?? [])],
         'sandbox_workspace_write.network_access':Boolean(options.toolsHome),...(options.effort?{model_reasoning_effort:options.effort}:{}),
         ...(provider?{model_provider:provider.id,[`model_providers.${provider.id}`]:{name:provider.name,base_url:provider.baseUrl,env_key:provider.envKey,wire_api:'responses',supports_websockets:false}}:{})},
     })
@@ -129,7 +141,22 @@ export async function runCodexSession(options:Options, io:{launch?:()=>ChildProc
   }
 }
 
+// Stdin: the launch options line, then optional `{"steer":{id,text}}` lines,
+// each answered on stdout with `{"type":"ez.steer",id,accepted}`.
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  let input='';for await(const chunk of process.stdin)input+=chunk
-  process.exitCode=await runCodexSession(JSON.parse(input))
+  const input=createInterface({input:process.stdin})
+  let steer:((text:string)=>Promise<boolean>)|undefined
+  const run=new Promise<number>(resolve=>{
+    let started=false
+    input.on('line',line=>{
+      if(!started){started=true;void runCodexSession(JSON.parse(line),{steerable:fn=>{steer=fn}}).then(resolve,()=>resolve(1));return}
+      let id:unknown,text:unknown
+      try{({id,text}=JSON.parse(line).steer)}catch{return}
+      if(typeof text!=='string')return
+      void (steer?.(text) ?? Promise.resolve(false)).then(accepted=>process.stdout.write(JSON.stringify({type:'ez.steer',id,accepted})+'\n'))
+    })
+    input.once('close',()=>{if(!started)resolve(1)})
+  })
+  process.exitCode=await run
+  input.close();process.stdin.destroy()
 }

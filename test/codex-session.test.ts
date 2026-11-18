@@ -50,7 +50,7 @@ if(q.method==='thread/goal/get'){
     return child
   }
   const codexProvider=mode==='tool-goal'?{id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',envKey:'OPENROUTER_API_KEY',models:['open/model']}:undefined
-  const result=await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',additionalWorkspaces:['/agent/mind/work'],prompt,codexProvider,model:codexProvider?'open/model':undefined,
+  const result=await runCodexSession({nativeSession:true,workspace:'/tmp',controlDir:'/tmp/control',sharedWorkspace:'/canonical',additionalWorkspaces:['/agent/mind/work'],prompt,codexProvider,model:codexProvider?'open/model':undefined,
     ...(mode==='external'?{codexSandbox:'external' as const}:{})},{launch,emit:line=>output.push(line)})
   assert.equal(threadSandbox!,mode==='external'?'danger-full-access':'workspace-write')
   assert.deepEqual(turnPolicy,mode==='external'?{type:'externalSandbox',networkAccess:'enabled'}:undefined)
@@ -75,4 +75,34 @@ if(q.method==='thread/goal/get'){
   if(mode==='failed-no-error')assert.ok(diagnostics.some(line=>line.includes('Native turn failed without error details')))
   if(mode==='interrupted')assert.equal(diagnostics.length,0,'owner interruption is not a provider failure')
   assert.equal(JSON.parse(output[0]).thread_id,'native-test')
+})
+
+test('native Codex chat resumes its thread, keeps compaction and steers only the active turn', async () => {
+  const program=`
+const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+const event=(method,params)=>send({method,params:{threadId:'native-chat',...params}});
+require('readline').createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);if(!q.id)return;
+if(q.method==='thread/resume'){process.stderr.write(JSON.stringify(q.params)+'\\n');return send({id:q.id,result:{thread:{id:q.params.threadId}}})}
+if(q.method==='turn/start'){send({id:q.id,result:{turn:{id:'one'}}});return event('turn/started',{turn:{id:'one'}})}
+if(q.method==='turn/steer'){process.stderr.write(JSON.stringify(q.params)+'\\n');send({id:q.id,result:{turnId:q.params.expectedTurnId}});return setTimeout(()=>event('turn/completed',{turn:{id:'one',status:'completed'}}),50)}
+send({id:q.id,result:q.method==='thread/goal/get'?{goal:null}:{}})});setInterval(()=>{},1000);`
+  const seen:any[]=[],output:string[]=[]
+  let steer!:(text:string)=>Promise<boolean>
+  const launch=()=>{
+    const child=spawn(process.execPath,['-e',program],{stdio:['pipe','pipe','pipe'],detached:process.platform!=='win32'})
+    child.stderr.setEncoding('utf8').on('data',(chunk:string)=>{for(const line of chunk.split('\n'))if(line.trim())seen.push(JSON.parse(line))})
+    return child
+  }
+  for(const value of [0,-1,1.5])assert.equal(await runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',prompt:'x',codexAutoCompactTokens:value},{launch,emit:()=>{}}),1)
+  const result=runCodexSession({workspace:'/tmp',controlDir:'/tmp/control',prompt:'first',sessionId:'native-chat',isResume:true,codexAutoCompactTokens:32000},
+    {launch,emit:line=>output.push(line),steerable:fn=>{steer=fn}})
+  for(let i=0;i<200 && !output.some(line=>line.includes('thread.started'));i++)await new Promise(r=>setTimeout(r,10))
+  await new Promise(r=>setTimeout(r,50))
+  assert.equal(await steer('second'),true)
+  assert.equal(await result,0)
+  assert.equal(await steer('late'),false,'no active turn: the input queues instead')
+  assert.equal(seen[0].threadId,'native-chat')
+  assert.equal(seen[0].config.model_auto_compact_token_limit,32000)
+  assert.deepEqual(seen[1],{threadId:'native-chat',expectedTurnId:'one',input:[{type:'text',text:'second'}]})
+  assert.equal(JSON.parse(output[0]).thread_id,'native-chat')
 })

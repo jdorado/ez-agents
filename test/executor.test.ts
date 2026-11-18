@@ -1,4 +1,5 @@
 import { ownerRun } from './helpers/owner-run.js'
+import { fakeCodex } from './helpers/fake-codex.js'
 import { RunStore } from '../src/runs.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -223,20 +224,25 @@ test('host cancellation persists before a stalled observer receives a signal', {
   }
 })
 
-test('Codex jobs disable global memory and host skill discovery', () => {
-  const args = EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent'},'/prompt','hello')
-  assert.ok(args.includes('memories'))
+test('Codex jobs disable global memory and host skill discovery', async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'ez-codex-flags-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const bin=path.join(root,'bin');await mkdir(bin)
+  await writeFile(path.join(bin,'codex'),fakeCodex({turn:`fs.writeFileSync(${JSON.stringify(path.join(root,'args.json'))},JSON.stringify(args))`}),{mode:0o755})
+  await ownerRun(root,'r_flags')
+  const prior=process.env.PATH
+  try {
+    process.env.PATH=bin+path.delimiter+prior
+    const job=await startExecutorJob(['hello'],{workspace:root,controlDir:root,binDir:bin,runId:'r_flags',timeoutMs:0,cli:'codex'})
+    assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0);await job.cleanup()
+  } finally { process.env.PATH=prior }
+  const args=JSON.parse(await readFile(path.join(root,'args.json'),'utf8'))
+  assert.equal(args[0],'app-server')
   assert.equal(args[args.indexOf('memories')-1],'--disable')
   assert.equal(args[args.indexOf('skip_host_skill_discovery')-1],'--enable')
 })
 
-test('Codex custom providers use declared runtime state and an environment key reference', () => {
+test('Codex custom providers accept only a declared environment key reference', () => {
   const provider=validateCodexProvider({id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1/',envKey:'OPENROUTER_API_KEY',models:['google/gemini-3.8-flash']})
-  const args=EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',model:'google/gemini-3.8-flash',codexProvider:provider},'','hello')
-  assert.ok(args.includes('model_provider="openrouter"'))
-  assert.ok(args.some(value=>value.includes('env_key="OPENROUTER_API_KEY"')))
-  assert.ok(args.includes('google/gemini-3.8-flash'))
-  assert.equal(JSON.stringify(args).includes('provider-secret'),false)
   assert.throws(()=>validateCodexProvider({...provider,envKey:'TELEGRAM-BOT'}),/environment key/)
   for (const envKey of ['PATH','HOME','CODEX_HOME','NODE_OPTIONS','EZ_CONTROL_DIR','TELEGRAM_BOT_TOKEN'])
     assert.throws(()=>validateCodexProvider({...provider,envKey}),/Reserved/)
@@ -354,7 +360,7 @@ test('pi jobs run with control-bound sessions and no secret leakage', async t =>
 test('a configured Codex provider receives only its declared key and runtime selection', async t => {
   const root=await mkdtemp(path.join(tmpdir(),'ez-codex-provider-'));t.after(()=>rm(root,{recursive:true,force:true}))
   const bin=path.join(root,'bin');await mkdir(bin)
-  await writeFile(path.join(bin,'codex'),`#!${process.execPath}\nconst fs=require('fs');let text='';process.stdin.on('data',b=>text+=b);process.stdin.on('end',()=>fs.writeFileSync(${JSON.stringify(path.join(root,'observed.json'))},JSON.stringify({args:process.argv.slice(2),key:process.env.OPENROUTER_API_KEY,telegram:process.env.TELEGRAM_BOT_TOKEN,text})));`,{mode:0o755})
+  await writeFile(path.join(bin,'codex'),fakeCodex({turn:`fs.writeFileSync(${JSON.stringify(path.join(root,'observed.json'))},JSON.stringify({params,key:process.env.OPENROUTER_API_KEY,telegram:process.env.TELEGRAM_BOT_TOKEN,text:prompt}))`}),{mode:0o755})
   const prior={path:process.env.PATH,key:process.env.OPENROUTER_API_KEY,telegram:process.env.TELEGRAM_BOT_TOKEN}
   const provider=validateCodexProvider({id:'openrouter',name:'OpenRouter',baseUrl:'https://openrouter.ai/api/v1',envKey:'OPENROUTER_API_KEY',models:['google/gemini-3.8-flash']})
   await ownerRun(root,'r_provider')
@@ -364,29 +370,11 @@ test('a configured Codex provider receives only its declared key and runtime sel
     assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0);await job.cleanup()
     const observed=JSON.parse(await readFile(path.join(root,'observed.json'),'utf8'))
     assert.equal(observed.key,'provider-secret');assert.equal(observed.telegram,undefined);assert.equal(observed.text,'hello')
-    assert.ok(observed.args.includes('model_provider="openrouter"'));assert.ok(observed.args.includes('google/gemini-3.8-flash'))
+    assert.equal(observed.params.config.model_provider,'openrouter');assert.equal(observed.params.model,'google/gemini-3.8-flash')
   } finally {
     for(const [key,value] of [['PATH',prior.path],['OPENROUTER_API_KEY',prior.key],['TELEGRAM_BOT_TOKEN',prior.telegram]]) if(value===undefined)delete process.env[key!];else process.env[key!]=value
   }
 })
-
-test('Codex plugin access stays scoped to the explicitly bound registry', () => {
-  const args=EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent/mind',controlDir:'/agent/control',toolsHome:'/agent/tools',sharedWorkspace:'/app',additionalWorkspaces:['/agent/mind/work']},'', 'install a plugin')
-  assert.deepEqual(args.flatMap((arg,i)=>arg==='--add-dir'?[args[i+1]]:[]),['/agent/control','/app','/agent/mind/work','/agent/tools'])
-  assert.ok(args.includes('sandbox_workspace_write.network_access=true'))
-  assert.equal(args[args.indexOf('--sandbox')+1],'workspace-write')
-  assert.ok(!EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent/mind'},'','hello').includes('sandbox_workspace_write.network_access=true'))
-})
-
-test('Codex compaction preserves native resume and validates transported options',()=>{
- const args=EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',sessionId:'native-id',isResume:true,codexAutoCompactTokens:32000},'', 'hello')
- assert.ok(args.includes('model_auto_compact_token_limit=32000'))
- assert.deepEqual(args.slice(-3),['resume','native-id','-'])
- assert.ok(!EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent'},'','hello').some(a=>a.includes('model_auto_compact_token_limit')))
- for(const value of [0,-1,NaN,1.5]) assert.throws(()=>EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',codexAutoCompactTokens:value},'','hello'),/compaction/)
- assert.ok(!EXECUTOR_REGISTRY.claude.buildArgs({workspace:'/agent',codexAutoCompactTokens:32000},'','hello').some(arg=>arg.includes('compact')))
-})
-
 
 test('adapters do not append instruction files or impose a workflow turn budget', () => {
  const opts={workspace:'/agent/work/tasks/example'}
@@ -394,10 +382,7 @@ test('adapters do not append instruction files or impose a workflow turn budget'
  assert.ok(!EXECUTOR_REGISTRY.grok.buildArgs(opts,'/tmp/prompt','literal').includes('--max-turns'))
 })
 
-test('Codex external isolation changes only explicit sandbox argv and never enters child environment', () => {
-  const args = EXECUTOR_REGISTRY.codex.buildArgs({workspace:'/agent',codexSandbox:'external',sessionId:'native-id',isResume:true},'', 'hello')
-  assert.equal(args[args.indexOf('--sandbox')+1], 'danger-full-access')
-  assert.ok(args.includes('native-id'))
+test('Codex external isolation never enters child environment', () => {
   assert.equal(executorEnvironment({EZ_CODEX_SANDBOX:'external'}).EZ_CODEX_SANDBOX, undefined)
 })
 
@@ -422,7 +407,7 @@ test('external local owner chat preserves literal input and admission rejects fo
   t.after(()=>rm(root,{recursive:true,force:true}))
   const prior={path:process.env.PATH,transport:process.env.EZ_EXECUTOR_TRANSPORT}
   const bin=path.join(root,'bin');await mkdir(bin)
-  await writeFile(path.join(bin,'codex'),`#!/usr/bin/env node\nconst fs=require('fs');let text='';process.stdin.on('data',b=>text+=b);process.stdin.on('end',()=>fs.writeFileSync(${JSON.stringify(path.join(root,'observed.json'))},JSON.stringify({args:process.argv.slice(2),text,secret:process.env.TELEGRAM_BOT_TOKEN})));`,{mode:0o755})
+  await writeFile(path.join(bin,'codex'),fakeCodex({turn:`fs.writeFileSync(${JSON.stringify(path.join(root,'observed.json'))},JSON.stringify({params,text:prompt,secret:process.env.TELEGRAM_BOT_TOKEN}))`}),{mode:0o755})
   await ownerRun(root,'r_owner_external')
   const opts={workspace:root,controlDir:root,binDir:bin,runId:'r_owner_external',timeoutMs:0,cli:'codex',codexSandbox:'external' as const}
   try {
@@ -432,7 +417,7 @@ test('external local owner chat preserves literal input and admission rejects fo
     assert.equal(code,0)
     const observed=JSON.parse(await readFile(path.join(root,'observed.json'),'utf8'))
     assert.equal(observed.text,'  literal /goal request\n')
-    assert.equal(observed.args[observed.args.indexOf('--sandbox')+1],'danger-full-access')
+    assert.equal(observed.params.sandbox,'danger-full-access')
     assert.equal(observed.secret,undefined)
     const runs=new RunStore(root)
     await runs.create({id:'r_foreign',chatId:999,telegramUserId:999,texts:['no']})
@@ -523,4 +508,22 @@ test('a resumed Claude session carries its newest transcript from another login 
   assert.equal(await resume('r_carry_3'), 'default\nclaude1\nturn\nturn\n')
   await ownerRun(controlDir, 'r_carry_bad')
   await assert.rejects(startExecutorJob(['hello'], { workspace, controlDir, binDir: bin, cli: 'claude', runId: 'r_carry_bad', timeoutMs: 5000, repairEnabled: false, sessionId: '../x', isResume: true }), /Invalid native session ID/)
+})
+
+test('Codex chat steers its running turn through the native app-server session', async t => {
+  const root=await mkdtemp(path.join(tmpdir(),'ez-codex-steer-'));t.after(()=>rm(root,{recursive:true,force:true}))
+  const bin=path.join(root,'bin');await mkdir(bin)
+  await writeFile(path.join(bin,'codex'),fakeCodex({turn:`fs.writeFileSync(${JSON.stringify(path.join(root,'steered'))},await steered)`}),{mode:0o755})
+  await ownerRun(root,'r_codex_steer')
+  const prior=process.env.PATH
+  try {
+    process.env.PATH=bin+path.delimiter+prior
+    const job=await startExecutorJob(['first'],{workspace:root,controlDir:root,binDir:bin,runId:'r_codex_steer',timeoutMs:0,cli:'codex'})
+    let output='';job.child.stdout?.on('data',chunk=>output+=chunk)
+    for(let i=0;i<300 && !output.includes('ez.startup');i++)await new Promise(r=>setTimeout(r,10))
+    assert.equal(await steerJob(job.child,'second'),true)
+    assert.equal(await new Promise(resolve=>job.child.once('close',resolve)),0);await job.cleanup()
+    assert.equal(await readFile(path.join(root,'steered'),'utf8'),'second')
+    assert.equal(await steerJob(job.child,'late'),false)
+  } finally { process.env.PATH=prior }
 })

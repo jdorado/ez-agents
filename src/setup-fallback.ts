@@ -196,6 +196,22 @@ export const startupLine = (state: { workBegan: boolean; rejection?: StartupReje
 // is not known pre-work metadata counts as work, so ambiguity never advances.
 // The rejection is the one the run ended on: later work supersedes it, except
 // an access denial, which always stops the chain.
+// The native client's own error text for a failed run: a Claude error result
+// is the provider's message (usage limit, authentication), not model output.
+export const nativeErrorObserver = () => {
+  let buffer = '', error = ''
+  const line = (text: string) => {
+    try {
+      const event = JSON.parse(text)
+      if (event?.type === 'result' && event.is_error === true && typeof event.result === 'string' && event.result.trim()) error = event.result.trim().slice(0, 2000)
+    } catch {}
+  }
+  return {
+    write: (chunk: string) => { buffer += chunk; const lines = buffer.split('\n'); buffer = lines.pop() ?? ''; for (const text of lines) line(text) },
+    error: () => { line(buffer); buffer = ''; return error },
+  }
+}
+
 export const startupObserver = () => {
   let buffer = '', workBegan = false, rejection: StartupRejection | undefined
   let terminal: NativeTerminal | undefined
@@ -229,7 +245,7 @@ export const startupObserver = () => {
       if (!failedRejection && terminal.subtype !== 'error_during_execution' && !(event.subtype === undefined && event.is_error === true) && rejection?.category !== 'access-denied') rejection = undefined
       return
     }
-    if (event?.type === 'thread.started' || event?.type === 'ez.telemetry' ||
+    if (event?.type === 'thread.started' || event?.type === 'ez.telemetry' || event?.type === 'ez.steer' ||
         (event?.type === 'system' && event.subtype === 'init')) return
     if (event?.type === 'rate_limit_event') {
       const info = event.rate_limit_info

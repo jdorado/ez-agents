@@ -88,12 +88,8 @@ test('same-client model and default changes preserve history; provider changes r
     const providerChoice = await store.captureChoice(clientDefault)
     assert.notEqual(providerChoice.sessionId, explicitAgain.sessionId)
     assert.equal(providerChoice.preset.provider, 'openrouter')
-    const args = EXECUTOR_REGISTRY.codex.buildArgs({
-      workspace: dir, isResume: true, sessionId: (await store.executionSession(next)).nativeSessionId,
-      model: next.preset.model, effort: next.preset.effort,
-    }, '', '')
-    assert.equal(args[args.indexOf('resume') + 1], 'native-deepseek')
-    assert.equal(args[args.indexOf('--model') + 1], luna.model)
+    assert.equal((await store.executionSession(next)).nativeSessionId, 'native-deepseek')
+    assert.equal(next.preset.model, luna.model)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
@@ -415,9 +411,6 @@ test('native executor flags carry the exact model and effort; only structured me
   const grok = EXECUTOR_REGISTRY.grok.buildArgs(opts, '/tmp/prompt', '')
   assert.equal(grok[grok.indexOf('--model') + 1], opts.model)
   assert.equal(grok[grok.indexOf('--reasoning-effort') + 1], opts.effort)
-  const codex = EXECUTOR_REGISTRY.codex.buildArgs(opts, '', 'fixture')
-  assert.ok(codex.includes('model_reasoning_effort="medium"'))
-  assert.deepEqual(codex.slice(-3), ['resume', opts.sessionId, '-'])
   // Opencode variants pass through verbatim on every platform; there is no
   // OS-specific effort mapping between the catalog and `run --variant`.
   const opencode = EXECUTOR_REGISTRY.opencode.buildArgs(
