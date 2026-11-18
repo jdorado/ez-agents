@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.76.0
+
+- Steer Codex chat mid-turn (#365). A follow-up sent while a Codex chat turn is running now reaches that turn, as Claude's has since 0.75.0. Codex chat runs as the native `codex app-server` session that scheduled runs already use, in the conversation's own Codex home, resuming its thread. Steered input reaches the active turn through `turn/steer`, and when no turn is active it queues as before. A chat still ends after its one requested turn, so persistent goals stay with the scheduler. Codex chat login rotation now advances on a usage limit, because the session reports typed quota events. The session also runs the host `codex` resolved by the executor, never the package bin on the job PATH, which closes the same gap for scheduled Codex sessions.
+- Record the client's own error text for a failed run (#365). When stderr is empty, a failed Claude run now records Claude's error result (for example a usage limit or authentication failure) in its failure evidence, instead of only `Executor exited with code 1`. The text is redacted like other failure evidence.
+
 ## 0.75.0
 
 - Steer a running turn with mid-turn owner input from every channel (#363). Before, a follow-up sent while the agent was still working on the same conversation queued a second turn, which produced a second reply. Now it reaches the running turn, and the agent answers both in one reply. This works in native Telegram and in application scopes (Slack, the Telegram plugin, web apps). Claude runs keep their input open (`--input-format stream-json`) until the turn's result, and Claude Code folds the new input in at its next step. The input steers only when it belongs to the same conversation, session and AI. Otherwise it queues as before. The steered run records `steeredInto`, ends with the turn that absorbed it, and application snapshots expose `steeredInto`. Isolated host executors receive it through a claim-and-acknowledge file request, so input is either steered or queued, never both. Task, scheduled, contact-event and session-close runs are unchanged. Codex chat does not steer yet; its input queues as before.
