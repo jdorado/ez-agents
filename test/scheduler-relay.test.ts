@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { createServer } from 'node:net'
 import type { Update } from 'grammy/types'
 import { createRelay } from '../src/index.js'
 import { ControlStore } from '../src/control-state.js'
@@ -208,6 +209,39 @@ for(const limit of [undefined,2])test(`scheduled admission bounds independent na
  }finally{
   await relay.stop()
   await until(async()=>!(await runs.list()).some(r=>r.status==='running'))
+  await rm(dir,{recursive:true,force:true})
+ }
+})
+
+test('a slow schedule preflight does not hold queued owner input',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'ez-preflight-nonblocking-')),control=new ControlStore(dir,1000),runs=new RunStore(dir),scheduler=new Scheduler(dir)
+ // A broker that accepts the preflight call and never answers, like a slow plugin query.
+ const held:(()=>void)[]=[],broker=createServer(socket=>{socket.setEncoding('utf8').once('data',(line:string)=>{
+  held.push(()=>socket.end(JSON.stringify({id:JSON.parse(line).id,ok:false,error:'Released by test'})+'\n'))})}),socketPath=join(dir,'broker.sock')
+ broker.listen(socketPath);await once(broker,'listening')
+ const priorSocket=process.env.EZ_PLUGIN_BROKER_SOCKET;process.env.EZ_PLUGIN_BROKER_SOCKET=socketPath
+ const launched:string[]=[]
+ const relay=createRelay({workspace:dir,controlDir:dir,pairingTtlMs:1000,executorTimeoutMs:0,executorCli:'codex',telegramBotToken:'fixture'},async(_texts,options)=>{
+  launched.push(options.runId!)
+  const child=spawn(process.execPath,['-e','setTimeout(()=>{},10)'],{detached:process.platform!=='win32'})
+  await once(child,'spawn');return {child,cleanup:async()=>{},stdout:''}
+ })
+ relay.bot.api.config.use(async()=>({ok:true,result:{message_id:42}}) as never)
+ try{
+  await control.requestPairing(101,101);await control.approveOwner(101)
+  const owner=(await control.status()).owner!,execution=await control.captureChoice({...initialPreset('codex'),model:'saved-model'}),due=Date.now()+1000
+  await scheduler.save({id:'worker',name:'Worker',text:'Work',owner,execution,enabled:true,trigger:{at:new Date(due).toISOString()},
+   preflight:{on:'eligible',checks:[{alias:'provider-work',args:['--field','Status=Ready']}]}},true)
+  await new Promise(r=>setTimeout(r,due-Date.now()+50))
+  await runs.create({id:'tg_waiting_owner',chatId:101,telegramUserId:101,texts:['hello'],execution})
+  await relay.drainSources()
+  await until(async()=>held.length>0)
+  await until(async()=>launched.includes('tg_waiting_owner'))
+ }finally{
+  for(const release of held)release()
+  broker.close()
+  await relay.stop()
+  if(priorSocket===undefined)delete process.env.EZ_PLUGIN_BROKER_SOCKET;else process.env.EZ_PLUGIN_BROKER_SOCKET=priorSocket
   await rm(dir,{recursive:true,force:true})
  }
 })
