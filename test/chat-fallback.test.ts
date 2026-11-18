@@ -91,6 +91,8 @@ test('queued work keeps the chain and choice captured when it was queued; roles 
     const run = (await f.runs.list())[0]
     assert.deepEqual(run.execution!.fallbacks!.map(p => [p.authProfile, p.model, p.effort]), [...logins.map(p => [p, 'opus', 'high']), [undefined, 'gpt-6.1-sol', 'xhigh']])
     assert.deepEqual(f.launches.map(l => [l.authProfile, l.model, l.effort]), [[undefined, 'opus', 'high'], ['claude2', 'opus', 'high']])
+    // The host admits each login as the owner's saved setup.
+    assert.deepEqual(f.admitted.map(p => p?.authProfile), [undefined, 'claude2'])
     // An application role with its own model gets the same logins at that model.
     const role = { id: 'role', name: 'Role', cli: 'claude', model: 'haiku', effort: 'low' }
     await f.control.setChatFallbacks(chain)
@@ -425,6 +427,8 @@ test('a chat whose login reached its limit moves to the agent\'s next login on i
     const run = await f.turn()
     assert.equal(run.status, 'completed')
     assert.deepEqual(f.launches.map(l => [l.authProfile, l.model, l.effort]), [[undefined, 'opus', 'high'], ['claude2', 'opus', 'high']])
+    // The host admits each login as the owner's saved setup.
+    assert.deepEqual(f.admitted.map(p => p?.authProfile), [undefined, 'claude2'])
     // The exhausted login is passed over on the next message.
     await f.turn('Next request')
     assert.equal(f.launches.at(-1)!.authProfile, 'claude2')

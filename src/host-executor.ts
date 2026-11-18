@@ -277,7 +277,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 // transient native-client probe failure must not reject a model
                 // that the host just advertised to the relay and application.
                 if (cli !== installation.cli || opts.authProfile !== undefined) {
-                  const pooled = run?.scheduled && captured && usesAccountPool(captured)
+                  const pooled = ordered && captured && usesAccountPool(captured)
                   if (pooled && opts.authProfile) await provisionedHome(agent.controlDir, cli, opts.authProfile)
                   await validateSelection({ id:'selected', name:'Selected model', cli, provider:opts.provider,
                     authProfile:pooled ? undefined : opts.authProfile, model, effort:opts.effort },

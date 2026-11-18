@@ -166,7 +166,8 @@ export const activeSetup = (run: Pick<RunRecord, 'attempts' | 'execution' | 'sch
   const preset = attempt.preset
   if (!isPreset(preset)) return undefined
   const matches = (candidate: AiPreset) => candidate.id === preset.id && candidate.name === preset.name &&
-    sameChoice(candidate, run.scheduled && usesAccountPool(candidate) ? { ...preset, authProfile: candidate.authProfile } : preset)
+    // Any provisioned login of a saved setup is that setup (account pool).
+    sameChoice(candidate, usesAccountPool(candidate) ? { ...preset, authProfile: candidate.authProfile } : preset)
   return saved.some(matches) ? preset : undefined
 }
 
