@@ -55,6 +55,42 @@ test('missed recurrences coalesce; an active occurrence cannot overlap another',
  await f.scheduler.tick(f.owner,f.runs,f.now+800000)
  assert.equal((await f.runs.list()).length,2)
 })
+test('an overlapping task starts each due tick up to its limit and only for unclaimed preflight work',async t=>{
+ const f=await fixture(t)
+ await assert.rejects(f.scheduler.save({...f.input,overlap:1}),/Overlap must be/)
+ await assert.rejects(f.scheduler.save({...f.input,overlap:21}),/Overlap must be/)
+ const start=new Date(f.now).toISOString()
+ await f.scheduler.save({...f.input,overlap:3,trigger:{everySeconds:60,start}})
+ for(let i=0;i<5;i++)await f.scheduler.tick(f.owner,f.runs,f.now+i*60000)
+ const runs=await f.runs.list()
+ assert.equal(runs.length,3)
+ assert.equal(new Set(runs.map(r=>r.id)).size,3)
+ await f.runs.patch(runs[0].id,{status:'completed'})
+ await f.scheduler.tick(f.owner,f.runs,f.now+5*60000)
+ assert.equal((await f.runs.list()).filter(r=>r.status==='queued').length,3)
+ // With a preflight, a further occurrence starts only while the count exceeds those in flight.
+ const g=await fixture(t); let count=2
+ const scheduler=new Scheduler(g.dir,async()=>({eligible:count>0,fingerprint:'a'.repeat(64),observedAt:new Date().toISOString(),count}))
+ await scheduler.save({...g.input,overlap:4,preflight:{on:'eligible',checks:[{alias:'work',args:[]}]},trigger:{everySeconds:60,start}})
+ for(let i=0;i<4;i++)await scheduler.tick(g.owner,g.runs,g.now+i*60000)
+ assert.equal((await g.runs.list()).length,2)
+ count=3; await scheduler.tick(g.owner,g.runs,g.now+4*60000)
+ assert.equal((await g.runs.list()).length,3)
+})
+test('an overlap held back by the count does not mark changed-preflight work as seen',async t=>{
+ const f=await fixture(t), start=new Date(f.now).toISOString(), count=1
+ const at=(fingerprint:string)=>new Scheduler(f.dir,async()=>({eligible:true,fingerprint,observedAt:new Date().toISOString(),count}))
+ await at('b'.repeat(64)).save({...f.input,overlap:3,preflight:{on:'changed',checks:[{alias:'work',args:[]}]},trigger:{everySeconds:60,start}})
+ await at('b'.repeat(64)).tick(f.owner,f.runs,f.now)
+ const [first]=await f.runs.list()
+ // New work arrives while one run is going; the count (one item) holds a second occurrence back.
+ await at('c'.repeat(64)).tick(f.owner,f.runs,f.now+60000)
+ assert.equal((await f.runs.list()).length,1)
+ // Once the run finishes, that unseen work still starts an occurrence.
+ await f.runs.patch(first.id,{status:'completed'})
+ await at('c'.repeat(64)).tick(f.owner,f.runs,f.now+120000)
+ assert.equal((await f.runs.list()).length,2)
+})
 test('recurring edits preserve a future cursor or start the changed rule in the future',async t=>{
  const f=await fixture(t), start=new Date(Date.now()-86400000).toISOString()
  const original=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start}},true)

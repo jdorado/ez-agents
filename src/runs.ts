@@ -241,7 +241,8 @@ export class RunStore {
     delivery?: { bindingId: string; scope: string }
     script?: ScriptRunRef
     sessionClose?: true
-  }, exclusiveSchedule = false): Promise<RunRecord> {
+  // Scheduled runs pass the task's limit of occurrences in flight (true means one).
+  }, exclusiveSchedule: boolean | number = false): Promise<RunRecord> {
     const store = runsFor(this.controlDir)
     if (input.id) {
       assertId(input.id)
@@ -252,9 +253,10 @@ export class RunStore {
         return existing
       }
     }
-    if (exclusiveSchedule && input.scheduled && [...store.values()].some(run =>
-      run.scheduled?.id === input.scheduled!.id && ['queued','running'].includes(run.status)))
-      throw new Error('Schedule already has a queued or running occurrence')
+    const limit = exclusiveSchedule === true ? 1 : exclusiveSchedule || 0
+    if (limit && input.scheduled && [...store.values()].filter(run =>
+      run.scheduled?.id === input.scheduled!.id && ['queued','running'].includes(run.status)).length >= limit)
+      throw new Error('Schedule already has its limit of queued or running occurrences')
     const run: RunRecord = {
       version: input.taskId ? 2 : 1,
       taskId: input.taskId,

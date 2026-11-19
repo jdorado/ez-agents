@@ -40,7 +40,7 @@ async function main() {
     cli:{type:'string'}, model:{type:'string'}, effort:{type:'string'}, fallback:{type:'string',multiple:true}, 'clear-fallbacks':{type:'boolean'},
     'expected-revision':{type:'string'}, stage:{type:'boolean'},
     json:{type:'boolean'}, all:{type:'boolean'}, limit:{type:'string'}, offset:{type:'string'}, expected:{type:'string'}, key:{type:'string'}, when:{type:'string'}, status:{type:'string'}, diagnosis:{type:'string'}, recovery:{type:'string'}, outcome:{type:'string'}, 'failed-at':{type:'string'},
-    'preflight-file':{type:'string'},'clear-preflight':{type:'boolean'},name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
+    'preflight-file':{type:'string'},overlap:{type:'string'},'clear-preflight':{type:'boolean'},name:{type:'string'}, text:{type:'string'}, 'text-file':{type:'string'}, at:{type:'string'}, now:{type:'boolean'},
     cron:{type:'string'}, timezone:{type:'string'}, 'every-seconds':{type:'string'}, start:{type:'string'}, until:{type:'string'}, help:{type:'boolean'},
   }})
   if(v.help){console.log(`ezenciel-agents-schedule list | runs | show ID | pause ID | resume ID | remove ID | cancel RUN_ID
@@ -55,7 +55,7 @@ async function main() {
     --now | --at ISO_WITH_OFFSET | --every-seconds N | --cron 'MIN HOUR DAY MONTH WEEKDAY' --timezone IANA
     [--cli EXECUTOR] [--model MODEL] [--effort <native-effort>]
     [--fallback cli=EXECUTOR,model=MODEL[,effort=EFFORT][,provider=ID] ... | --clear-fallbacks]
-    [--preflight-file FILE | --clear-preflight]
+    [--preflight-file FILE | --clear-preflight] [--overlap N]
     [--start ISO_WITH_OFFSET] [--until ISO_WITH_OFFSET] [--when unreviewed-failures]
   script list | show SCRIPT_ID | remove SCRIPT_ID
   script register|update SCRIPT_ID (--file WORKSPACE_PATH --interpreter COMMAND | --plugin PLUGIN) [--arg=VALUE ...] [--timeout-seconds N]
@@ -99,6 +99,10 @@ Edit replaces the full schedule from the revision you read (show prints it); a c
 It applies only while the task has no queued or running occurrence. --stage applies it to future occurrences
 and lets those occurrences finish with their captured instructions and settings. Edit needs the running relay.
 Edit keeps the paused/enabled state; only pause/resume toggle it.
+A recurring task runs one occurrence at a time. --overlap N (2..20) lets up to N run at once, so a task whose runs
+outlast its interval still starts on every due tick; with a preflight, another starts only while its count exceeds
+the occurrences already running. --overlap 1 returns to one at a time; edit keeps the saved overlap otherwise.
+An overlapping task is usually busy, so edit it with --stage. --overlap applies to recurring triggers only.
 Pause/remove affect future work; cancel stops a particular run.
 Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/weekday OR semantics.`);return}
   const config=loadControlConfig()
@@ -238,12 +242,16 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
         if (socketUnavailable(error)) throw new Error('Relay unavailable: edit needs the running relay to confirm which occurrences are queued or running')
         throw error
       }), v.stage)
+    const overlapValue = v.overlap === undefined ? previousSchedule?.overlap : Number(v.overlap)
+    if (overlapValue !== undefined && (!Number.isSafeInteger(overlapValue) || overlapValue < 1 || overlapValue > 20)) throw new Error('--overlap must be an integer from 1 to 20')
+    const overlap = overlapValue && overlapValue > 1 ? overlapValue : undefined
+    if (overlap && (v.now || v.at)) throw new Error('--overlap applies to recurring tasks (--every-seconds or --cron)')
     const preflight = v['clear-preflight'] ? undefined : v['preflight-file'] ? JSON.parse(await readFile(v['preflight-file'],'utf8')) : previousSchedule?.preflight
     const origin = caller?.application ?? caller?.delivery
     const delivery = previousSchedule ? previousSchedule.delivery : (origin ? {bindingId:origin.bindingId,scope:origin.scope} : undefined)
     if (!delivery && !owner.telegramChatId) throw new Error('Create the schedule from an authenticated channel turn to bind its reply destination')
     if (v.script) {
-      result=await show(await write({id:id || 's_'+randomUUID(),name:v.name || v.script,preflight,
+      result=await show(await write({id:id || 's_'+randomUUID(),name:v.name || v.script,preflight,overlap,
         originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:'',when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
         script:{id:v.script,args:v.arg ?? []}}))
       console.log(JSON.stringify(result,null,2));return
@@ -258,7 +266,7 @@ Cron uses numeric five-field syntax, lists/ranges/steps, and traditional day/wee
     if (!isPreset(preset)) throw new Error('Invalid task AI selection')
     const fallbacks = v['clear-fallbacks'] ? undefined : v.fallback ? v.fallback.map(fallbackSetup) : previousFallbacks
     result=await show(await write({id:id || 's_'+randomUUID(),name:v.name || 'Task',
-      preflight,
+      preflight,overlap,
       originRunId:previousSchedule?.originRunId ?? caller?.scheduled?.originRunId ?? caller?.id,delivery,text:v.text || await readFile(v['text-file']!,'utf8'),when:v.when as 'unreviewed-failures' | undefined,trigger,enabled:true,owner,
       execution:{sessionId:saved?.sessionId || randomUUID(),preset,...(fallbacks?.length ? {fallbacks} : {})}}))
   }else{

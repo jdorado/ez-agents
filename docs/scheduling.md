@@ -351,7 +351,12 @@ They share the agent-owned Markdown workspace: the agent coordinates shared file
 updates, and plugins enforce canonical record-write guards. The host keeps plugin
 workspace invocations excluded until all native turns finish.
 The agent decides when to send through the message CLI.
-A recurring schedule has at most one pending or active occurrence. Shared
+A recurring schedule has at most one pending or active occurrence unless it sets
+`--overlap N` (2 to 20): then up to N occurrences may be queued or running at once,
+so a task whose runs outlast its interval still starts on each due tick. With a
+preflight, another occurrence starts only while the preflight count exceeds the
+occurrences already in flight; the plugin's claim keeps them on separate work.
+Overlapping occurrences count toward `EZ_SCHEDULED_CONCURRENCY`. Shared
 provider resources still need writer coordination. This is admission to the existing native executor, not a second queue or
 workflow controller.
 
