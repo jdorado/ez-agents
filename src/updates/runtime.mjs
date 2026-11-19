@@ -98,6 +98,18 @@ export async function brokerNeedsRefresh(config,run=execute) {
   if(!/^[a-f0-9]{64}$/.test(mounted))throw Error('Invalid broker host binding fingerprint');
   return mounted!==expected;
 }
+// Any host writer (an installer, a route approval, an operator script) may replace
+// host-executor.json. The supervisor calls this on its loop: a file digest per
+// pass, a broker readback only after the file changed, and a recreation only
+// inside `withIdle` (the full-turn drain). Returns the digest the live broker
+// now matches, or `seen` unchanged so the next pass retries.
+export async function rebindBroker(config,seen,withIdle,run=execute) {
+  const current=digest(await fs.readFile(config.hostConfig||path.join(config.deploymentDir,'host-executor.json')));
+  if(current===seen)return seen;
+  if(!await brokerNeedsRefresh(config,run))return current;
+  const ready=await withIdle(()=>refreshBroker(config,run));
+  return ready?.hostSha256??seen;
+}
 // Plugin upgrades change the directory-mounted registry, not the broker's
 // single-file host binding. Verify the live broker without replacing its socket.
 export async function verifyBroker(config,run=execute) {

@@ -311,7 +311,7 @@ async function reviewedHostRoute(owner, record, field, setting, kind) {
     throw Error('Registry plugin identity is not the reviewed source');
   if (record.manifest.id !== trusted.manifest.id) throw Error('Registry plugin identity is not the reviewed source');
   if (!Array.isArray(route.revisions) || route.revisions.some(revision => typeof revision !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(revision)) ||
-      !route.revisions.includes(trusted.revision)) throw Error(`Host ${kind} binding is not pinned to the reviewed plugin revision`);
+      !route.revisions.includes(trusted.revision)) throw Error(`Host ${kind} binding is not pinned to the reviewed plugin revision (an isolated broker reads host-executor.json as it was at its start; the host supervisor rebinds it once native work drains)`);
   return route;
 }
 export async function hostNetworkBindings(config, record, home, owner = hostPluginOwner(config, home)) {
