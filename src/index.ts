@@ -673,6 +673,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     } catch {unavailableSources.add(run.external.sourceId);return false}
   }
   let sourceWork: Promise<void> | undefined
+  let tickWork: Promise<void> | undefined
   const drainSources = (): Promise<void> => {
     if (sourceWork) return sourceWork
     sourceWork = (async () => {
@@ -747,7 +748,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         } catch { unavailableSources.add(source.id) }
       }
       await runs.running(true)
-      if (!config.channelBackendUrl) await scheduler.tick(owner,runs)
+      // Schedule preflights call plugins and can take minutes; queued input must
+      // not wait behind them. Runs the tick creates start on the next pass.
+      if (!config.channelBackendUrl) tickWork ??= scheduler.tick(owner,runs)
+        .catch(error => console.error('Schedule tick failed', safeError(error))).finally(() => { tickWork = undefined })
       for (const run of (await runs.list()).filter(r => r.status === 'queued').sort((a,b)=>Number(Boolean(a.taskId))-Number(Boolean(b.taskId)))) {
         if (shuttingDown) break
         await startJob(run)
@@ -1536,7 +1540,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     if (sourceTimer) clearInterval(sourceTimer)
     if (taskTimer) clearInterval(taskTimer)
     if (drainTimer) clearInterval(drainTimer)
-    await Promise.all([sourceWork, intakeWork].map(work => work?.catch(() => {})))
+    await Promise.all([sourceWork, tickWork, intakeWork].map(work => work?.catch(() => {})))
     // Finish registering in-flight launches before taking the child snapshot.
     await withStartLock(async () => {
       for (const child of [...(activeChild ? [activeChild] : []), ...background.values()]) if (!handedOff.has(child)) terminateJob(child)
