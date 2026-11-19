@@ -77,6 +77,20 @@ test('an overlapping task starts each due tick up to its limit and only for uncl
  count=3; await scheduler.tick(g.owner,g.runs,g.now+4*60000)
  assert.equal((await g.runs.list()).length,3)
 })
+test('an overlap held back by the count does not mark changed-preflight work as seen',async t=>{
+ const f=await fixture(t), start=new Date(f.now).toISOString(), count=1
+ const at=(fingerprint:string)=>new Scheduler(f.dir,async()=>({eligible:true,fingerprint,observedAt:new Date().toISOString(),count}))
+ await at('b'.repeat(64)).save({...f.input,overlap:3,preflight:{on:'changed',checks:[{alias:'work',args:[]}]},trigger:{everySeconds:60,start}})
+ await at('b'.repeat(64)).tick(f.owner,f.runs,f.now)
+ const [first]=await f.runs.list()
+ // New work arrives while one run is going; the count (one item) holds a second occurrence back.
+ await at('c'.repeat(64)).tick(f.owner,f.runs,f.now+60000)
+ assert.equal((await f.runs.list()).length,1)
+ // Once the run finishes, that unseen work still starts an occurrence.
+ await f.runs.patch(first.id,{status:'completed'})
+ await at('c'.repeat(64)).tick(f.owner,f.runs,f.now+120000)
+ assert.equal((await f.runs.list()).length,2)
+})
 test('recurring edits preserve a future cursor or start the changed rule in the future',async t=>{
  const f=await fixture(t), start=new Date(Date.now()-86400000).toISOString()
  const original=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start}},true)
