@@ -370,7 +370,10 @@ export class Scheduler {
             const checked=await this.preflight(s.id,s.revision)
             preflight=checked.receipt
             if(!checked.admitted) {await atomic(cursor,{next:future,preflight});continue}
-          } catch (error) {console.error('Schedule preflight unavailable',s.id,error instanceof Error ? error.message : 'Unknown error');const prior=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {};throw e});await atomic(cursor,{next:future,preflight:{...prior.preflight,state:'unavailable',observedAt:new Date().toISOString()}});continue}
+          } catch (error) {console.error('Schedule preflight unavailable',s.id,error instanceof Error ? error.message : 'Unknown error');
+            // An update or broker rebind holds admission and recreates the broker the
+            // preflight was asking: keep this occurrence due so a later tick retries it.
+            if(await stat(join(this.controlDir,'upgrade-pause.json')).then(()=>true,()=>false))continue;const prior=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {};throw e});await atomic(cursor,{next:future,preflight:{...prior.preflight,state:'unavailable',observedAt:new Date().toISOString()}});continue}
         }
         // An edit or another dispatcher holds this task; a later tick retries.
         const release = await this.lock(s.id, false)

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,rm,readFile} from 'node:fs/promises'
+import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {randomUUID} from 'node:crypto'
@@ -23,6 +23,10 @@ test('preflight skips empty/unchanged work, admits saved worker once, and fails 
  failed=true;await scheduler.tick(owner,runs,start+240000);assert.equal((await runs.list()).length,1);assert.equal((await scheduler.preflightReceipt(s)).state,'unavailable')
  failed=false;result=packet(false);await assert.rejects(()=>scheduler.trigger(s.id,s.revision,'empty',owner,runs),/no eligible/)
  result=packet(true,'c'.repeat(64));await scheduler.tick(owner,runs,start+300000);assert.equal((await runs.list()).length,2)
+ // An update or broker rebind holds admission: a preflight that fails meanwhile keeps its occurrence due.
+ await runs.patch((await runs.list()).find(r=>r.status!=='completed')!.id,{status:'completed'})
+ failed=true;await writeFile(join(dir,'upgrade-pause.json'),'{}');await scheduler.tick(owner,runs,start+360000);assert.equal((await runs.list()).length,2)
+ failed=false;result=packet(true,'d'.repeat(64));await rm(join(dir,'upgrade-pause.json'));await scheduler.tick(owner,runs,start+361000);assert.equal((await runs.list()).length,3)
 })
 test('only bounded literal commands and fresh typed packets enter admission',()=>{
  assert.equal(validPreflight({on:'eligible',checks:[{alias:'queue',args:['x']}] }),true)
