@@ -18,6 +18,8 @@ export type Schedule = {
   originRunId?: string
   when?: 'unreviewed-failures'
   preflight?: Preflight
+  // Occurrences that may be queued or running at once (2..MAX_OVERLAP); absent means one.
+  overlap?: number
   version: 1; id: string; revision: string; name: string; text: string; trigger: Trigger; enabled: boolean
   owner: Owner
   // Exactly one execution type: an agent turn (execution) or a registered script.
@@ -68,6 +70,8 @@ const atomic = async (file: string, value: unknown, exclusive = false) => {
     else await rename(tmp,file)
   } finally { await rm(tmp,{force:true}) }
 }
+export const MAX_OVERLAP = 20
+const validOverlap = (n: unknown) => n === undefined || (Number.isSafeInteger(n) && (n as number) >= 2 && (n as number) <= MAX_OVERLAP)
 const validContinuing = (ids: unknown) => ids === undefined ||
   (Array.isArray(ids) && ids.length > 0 && ids.length <= 100 && ids.every(id => typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id)))
 export class Scheduler {
@@ -103,7 +107,7 @@ export class Scheduler {
     const s = JSON.parse(await readFile(join(this.dir,assertId(id)+'.json'),'utf8')) as Schedule
     if (s.version !== 1 || s.id !== id || !validScheduledOrigin({id:s.id,revision:s.revision,dueAt:new Date().toISOString(),pairedAt:s.owner?.pairedAt,originRunId:s.originRunId}) ||
       (s.when !== undefined && s.when !== 'unreviewed-failures') || (s.preflight !== undefined && !validPreflight(s.preflight)) || typeof s.enabled !== 'boolean' || !s.name || typeof s.text !== 'string' ||
-      !validContinuing(s.continuingRunIds) ||
+      !validContinuing(s.continuingRunIds) || !validOverlap(s.overlap) ||
       !validOwner(s.owner) || !validExecution(s) ||
       (s.delivery !== undefined && !validApplicationOrigin({...s.delivery, requestId: s.id})))
       throw new Error('Invalid schedule record')
@@ -167,6 +171,7 @@ export class Scheduler {
     if (input.when !== undefined && input.when !== 'unreviewed-failures') throw new Error('Unknown schedule condition')
     if(input.preflight !== undefined && !validPreflight(input.preflight)) throw Error('Invalid schedule preflight')
     if (!validContinuing(input.continuingRunIds)) throw new Error('Invalid continuing occurrences')
+    if (!validOverlap(input.overlap)) throw new Error(`Overlap must be an integer from 2 to ${MAX_OVERLAP}; omit it for one at a time`)
     let s: Schedule
     if (input.script) {
       if (input.execution !== undefined || !input.name) throw new Error('Script schedules need a name and no AI selection')
@@ -252,6 +257,12 @@ export class Scheduler {
         (!!s.delivery || ((s.owner.telegramLinkedAt ?? s.owner.pairedAt) === (owner.telegramLinkedAt ?? owner.pairedAt) && s.owner.telegramChatId === owner.telegramChatId))
     } catch { return false }
   }
+  // A queued occurrence already holds its slot; a failed one requeues only while its task is under its overlap limit.
+  private async roomFor(run: RunRecord, all: RunRecord[]): Promise<boolean> {
+    if (run.status === 'queued') return true
+    const limit = (await this.get(run.scheduled!.id)).overlap ?? 1
+    return all.filter(other => other.id !== run.id && other.scheduled?.id === run.scheduled!.id && inFlight(other)).length < limit
+  }
   // Explicit retry changes quota admission only; it never repeats another failure.
   async retryQuota(owner: Owner, runs: RunStore, runId?: string): Promise<{ runIds: string[]; scopes: string[] }> {
     const all = await runs.list()
@@ -263,7 +274,7 @@ export class Scheduler {
       const eligible = run && ownsRun(owner, run) && run.scheduled && !run.script && !run.interrupted &&
         ((run.status === 'queued' && run.quotaWait) || quotaFailure) &&
         await this.current(run, owner) && (await this.get(run.scheduled.id)).enabled && !await this.cancelled(run.id) &&
-        !all.some(other => other.id !== run.id && other.scheduled?.id === run.scheduled!.id && ['queued', 'running'].includes(other.status))
+        await this.roomFor(run, all)
       if (!eligible) {
         if (runId) throw new Error('Run is not a current, uncancelled quota-blocked occurrence; inspect it before retrying')
         continue
@@ -275,7 +286,7 @@ export class Scheduler {
     // An edit that replaced the occurrence's revision meanwhile wins over the requeue;
     // only a requeued occurrence clears its setups' quota backoff.
     for (const run of ready) await this.locked(run.scheduled!.id, async () => {
-      if (!await this.current(run, owner) || (await runs.list()).some(other => other.id !== run.id && other.scheduled?.id === run.scheduled!.id && inFlight(other))) {
+      if (!await this.current(run, owner) || !await this.roomFor(run, await runs.list())) {
         if (runId) throw new Error('Schedule changed or has another occurrence in flight; inspect the run before retrying')
         return
       }
@@ -329,7 +340,7 @@ export class Scheduler {
       const run=await runs.create({id:runId,ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
         ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
         texts:runTexts(s,dueAt),...(s.script ? {script:await scriptRef(this.controlDir,s,owner)} : {execution:{...s.execution!,sessionId:randomUUID()}}),
-        scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId ? {originRunId:s.originRunId} : {})}},true)
+        scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId ? {originRunId:s.originRunId} : {})}},current.overlap ?? 1)
       if(checked) await atomic(checked.cursor,{...checked.previous,preflight:checked.receipt})
       return run
     })
@@ -356,10 +367,11 @@ export class Scheduler {
         const next = await this.pendingOccurrence(s)
         if (next === null || next > now) continue
         if (!s.script) assertScheduledModel(s.execution!.preset.model)
-        // One occurrence at a time. A failed reviewer stops this revision just like
-        // interrupted work: retain its receipt until an explicit schedule edit.
-        if ((await runs.list()).some(r => r.scheduled?.id === s.id &&
-          (['queued','running'].includes(r.status) || holdsSchedule(s, r)))) continue
+        // Up to `overlap` occurrences at a time (default one). A failed reviewer stops this
+        // revision just like interrupted work: retain its receipt until an explicit schedule edit.
+        const own = (await runs.list()).filter(r => r.scheduled?.id === s.id)
+        const active = own.filter(inFlight).length
+        if (active >= (s.overlap ?? 1) || own.some(r => holdsSchedule(s, r))) continue
         const future = nextOccurrence(s.trigger,now)
         if (s.when === 'unreviewed-failures' && !(await runs.list()).some(r => needsFailureReview(r) && ownsRun(owner, r) && (!r.scheduled || r.scheduled.pairedAt === owner.pairedAt))) {
           await atomic(cursor,{next:future}); continue
@@ -370,6 +382,9 @@ export class Scheduler {
             const checked=await this.preflight(s.id,s.revision)
             preflight=checked.receipt
             if(!checked.admitted) {await atomic(cursor,{next:future,preflight});continue}
+            // An overlapping occurrence starts only for work the running ones have not taken. Keep the
+            // previous receipt so a 'changed' preflight still admits this work once they finish.
+            if(active > 0 && checked.receipt.count <= active) {await atomic(cursor,{next:future,...(checked.previous.preflight ? {preflight:checked.previous.preflight} : {})});continue}
           } catch (error) {console.error('Schedule preflight unavailable',s.id,error instanceof Error ? error.message : 'Unknown error');
             // An update or broker rebind holds admission and recreates the broker the
             // preflight was asking: keep this occurrence due so a later tick retries it.
@@ -386,7 +401,7 @@ export class Scheduler {
             ownerId:ownerId(owner),ownerEpoch:ownerEpoch(owner),
             ...(s.delivery ? {delivery:s.delivery} : {chatId:s.owner.telegramChatId,telegramUserId:s.owner.telegramUserId,telegramEpoch:s.owner.telegramLinkedAt ?? s.owner.pairedAt}),
             texts:runTexts(s,dueAt),...(s.script ? {script:await scriptRef(this.controlDir,s,owner)} : {execution:s.execution}),
-            scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}},true)
+            scheduled:{id:s.id,revision:s.revision,dueAt,pairedAt:s.owner.pairedAt,...(s.originRunId?{originRunId:s.originRunId}:{})}},latest.overlap ?? 1)
           // A restart between run creation and this cursor write sees the same occurrence ID.
           await atomic(cursor,{next:future,...(preflight ? {preflight} : {})})
         } finally { await release() }
