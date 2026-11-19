@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { atomic, locked } from '../plugins/manager.mjs';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
 import { state, read, jobs, jobPath, check, prepare, submit, missing, cleanupStaleBackups } from './control.mjs';
-import { perform, environment, brokerNeedsRefresh, execute, relayArgs } from './runtime.mjs';
+import { perform, environment, brokerNeedsRefresh, rebindBroker, execute, relayArgs } from './runtime.mjs';
 
 const reservedProviderKeys=new Set(['HOME','LANG','LC_ALL','LOGNAME','PATH','SHELL','TERM','TMPDIR','USER','CODEX_HOME','NODE_OPTIONS']);
 const providerEnvironmentKey=value=>{
@@ -265,7 +265,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       await withIdleUpgrade(agent.controlDir,{id:'executor-migration'},signal,()=>startHost(root),{isIdle:()=>idle(agent.controlDir,{pendingRequests:false})});
     };
     await initializeIsolated();
-    let nextCheck=0;
+    let nextCheck=0,nextRebind=0,brokerBinding;
     while(!signal.aborted) {
       if(!isolated && child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
       await initializeIsolated();
@@ -306,6 +306,18 @@ export async function supervise(deployment,signal,{discover=check}={}) {
         if(['completed','rolled-back'].includes(result?.status)) {
           if(pending.target==='main')reloadPending=pending;
           nextCheck=0;
+        }
+      }
+      // The broker sees host-executor.json through a single-file mount: after any
+      // atomic replace it keeps refusing newly pinned plugins until recreated.
+      if(isolated&&!reloadPending&&!pending&&Date.now()>=nextRebind) {
+        nextRebind=Date.now()+5000;
+        try {
+          brokerBinding=await rebindBroker((await state(home)).config,brokerBinding,
+            apply=>withIdleUpgrade(agent.controlDir,{id:'broker-host-binding'},signal,apply));
+        } catch(error) {
+          nextRebind=Date.now()+60000;
+          console.error(`Plugin broker rebind failed; host remains running, retrying in 60 s: ${error.message}`);
         }
       }
       if(Date.now()>=nextCheck) {

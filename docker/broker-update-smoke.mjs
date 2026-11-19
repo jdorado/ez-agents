@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { atomic, snapshot, publishBrokerPlugins } from '../src/plugins/manager.mjs';
-import { execute, refreshBroker, verifyBroker, brokerNeedsRefresh } from '../src/updates/runtime.mjs';
+import { execute, refreshBroker, verifyBroker, brokerNeedsRefresh, rebindBroker } from '../src/updates/runtime.mjs';
 const docker=(...args)=>execFileSync('docker',args,{encoding:'utf8',stdio:['ignore','pipe','pipe'],timeout:120000}).trim();
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 if(process.argv[2]!=='--inside') {
@@ -89,6 +89,21 @@ if(process.argv[2]!=='--inside') {
   await publish(a);const rolledBack=await refreshBroker(config);
   assert.equal((await mounted()).trim(),rolledBack.hostSha256);assert.equal(rolledBack.plugins[0].revision,a.revision);assert.equal((await prepare()).trim(),'prepared');assert.equal(await container('relay'),relay);
   console.log(JSON.stringify({stage:'rollback',broker:await container('plugin-broker'),relay,hostSha256:rolledBack.hostSha256,registrySha256:rolledBack.registrySha256,revision:a.revision}));
+  // A host writer outside any update (an operator approving a new pin) replaces the
+  // file: the supervisor's rebind waits while work runs, then recreates once.
+  let drains=0;const idleNow=apply=>{drains++;return apply();},busy=async()=>undefined;
+  let seen=await rebindBroker(config,undefined,idleNow);assert.equal(drains,0);assert.equal(seen,(await fingerprints())[0]);
+  const staleBroker=await container('plugin-broker');
+  await atomic(hostConfig,host([a.revision,b.revision]));await publish(b);await publishBrokerPlugins(home,controlDir);
+  await assert.rejects(prepare(),/not pinned.*rebinds it once native work drains/s);
+  assert.equal(await rebindBroker(config,seen,busy),seen);assert.equal(await container('plugin-broker'),staleBroker);
+  seen=await rebindBroker(config,seen,idleNow);
+  assert.equal(drains,1);assert.equal(seen,(await fingerprints())[0]);assert.notEqual(await container('plugin-broker'),staleBroker);
+  assert.equal((await prepare()).trim(),'prepared');assert.equal(await container('relay'),relay);
+  assert.equal(await rebindBroker(config,seen,idleNow),seen);assert.equal(drains,1);
+  await atomic(hostConfig,host([a.revision]));await publish(a);await publishBrokerPlugins(home,controlDir);
+  seen=await rebindBroker(config,seen,idleNow);assert.equal(drains,2);assert.equal((await prepare()).trim(),'prepared');
+  console.log('PASS host replace outside an update: held while busy, rebound once idle, no-op when current; relay kept');
   // Read-only probe must neither repair a tampered snapshot nor create leases.
   await fs.appendFile(path.join(a.source,'bin/example.mjs'),'\n// unreviewed');await assert.rejects(probe(),/STRUCTURAL_READINESS_FAILED/);
   await fs.writeFile(path.join(a.source,'bin/example.mjs'),'console.log("synthetic")');

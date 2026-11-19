@@ -293,11 +293,13 @@ survive command-time Compose regeneration and restarts. Before a routed plugin
 update, the host adds the inspected candidate revision to that route; both the
 current and candidate revisions may remain authorized during the transition.
 
-An isolated broker mounts `host-executor.json` as a read-only file. After the host
-atomically replaces that configuration, recreate the declared broker service
-through the deployment's bound launcher before activating the candidate:
-`ezenciel-agents-docker up -d --no-deps --no-build --force-recreate plugin-broker`.
-This refreshes the file mount without replacing the native relay or its sessions.
+An isolated broker mounts `host-executor.json` as a read-only file, so after the
+host atomically replaces that configuration the running broker still reads the
+old copy and refuses newly pinned revisions. The host update supervisor watches
+the file: within seconds of a change, once native work has drained, it recreates
+only `plugin-broker` on its running image and verifies that the broker reads the
+current file. Host writers need no manual recreate step; the relay and its sessions
+keep running.
 Host-capable executors read the current host file directly. Verify a native plugin
 call and its provider receipt after the configuration change.
 
