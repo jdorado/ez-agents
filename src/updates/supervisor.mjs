@@ -30,9 +30,17 @@ export async function waitForHostHeartbeat(controlDir,child,failure,{attempts=30
   }
   throw Error('Host transport heartbeat timeout');
 }
-export async function idle(control,{pendingRequests=true,relayRequired=false}={}) {
-  const host=await fs.readdir(path.join(control,'host-executor')).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
-  if(host.some(f=>f.endsWith('.running.json')||(pendingRequests&&f.endsWith('.request.json'))))return false;
+const containerIsRunning=id=>execute('docker',['inspect','--format','{{.State.Running}}',id],{stdoutOnly:true}).then(o=>o.trim()==='true',()=>false);
+export async function idle(control,{pendingRequests=true,relayRequired=false,containerRunning=containerIsRunning}={}) {
+  const dir=path.join(control,'host-executor');
+  const host=await fs.readdir(dir).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
+  if(pendingRequests&&host.some(f=>f.endsWith('.request.json')))return false;
+  for(const file of host.filter(f=>f.endsWith('.running.json'))) {
+    // A claim bound to a container that no longer runs is not live work: the
+    // next executor closes it on start, so it must not block that start.
+    const owner=(await read(path.join(dir,file.slice(0,-13)+'.process.json')).catch(()=>null))?.containerId;
+    if(!/^[a-f0-9]{12,64}$/.test(owner||'')||await containerRunning(owner))return false;
+  }
   // Run records live in relay memory: the live socket status is the only
   // cross-process view of active work. Reload additionally requires its
   // admission barrier; an unavailable response cannot prove a safe shutdown.

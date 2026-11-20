@@ -1030,6 +1030,22 @@ test('missing executor startup ignores queued requests but never live native wor
  assert.equal(await idle(root,{pendingRequests:false}),false);
  assert.equal(await idle(root,{pendingRequests:false,relayRequired:true}),false);
 });
+test('a claim left by a dead isolated executor container does not block relaunch',async t=>{
+ const root=await fs.mkdtemp(path.join(tmpdir(),'ez-executor-dead-claim-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const dir=path.join(root,'host-executor');await fs.mkdir(dir);
+ // Production state after the executor container died mid-run: claims bound to
+ // that container survive, no executor runs, and queued requests wait.
+ await fs.writeFile(path.join(dir,'dead.running.json'),'{}');
+ await fs.writeFile(path.join(dir,'dead.process.json'),JSON.stringify({hostPid:7,hostStarted:'x',containerId:'c207b1800089'}));
+ await fs.writeFile(path.join(dir,'queued.request.json'),'{}');
+ const asked=[];const containerRunning=async id=>{asked.push(id);return false;};
+ assert.equal(await idle(root,{pendingRequests:false,containerRunning}),true);
+ assert.deepEqual(asked,['c207b1800089']);
+ assert.equal(await idle(root,{pendingRequests:false,containerRunning:async()=>true}),false,'a live container still owns its run');
+ await fs.writeFile(path.join(dir,'host.running.json'),'{}');
+ await fs.writeFile(path.join(dir,'host.process.json'),JSON.stringify({pid:9,hostPid:8}));
+ assert.equal(await idle(root,{pendingRequests:false,containerRunning}),false,'host-native work still blocks');
+});
 test('executor preserves exact named volume identities and rejects missing declarations',()=>{
  const worker={volumes:[{type:'volume',source:'registered-whatsapp-ipc'},{type:'bind',source:'/private/workspace'}]};
  assert.deepEqual(executorVolumes({volumes:{'registered-whatsapp-ipc':{name:'existing-private-ipc'}}},worker),{'registered-whatsapp-ipc':{name:'existing-private-ipc',external:true}});
