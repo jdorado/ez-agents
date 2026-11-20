@@ -2,7 +2,7 @@
 
 ## 0.78.1
 
-- Follow-ups from the 0.78.0 reviews. A plugin workspace lease held by a dead plugin call is reclaimed 20 s after its last write instead of 60 s, so an owner's next message waits less after a killed call (a live holder is still never reclaimed). A late tap on an `/ai` button that a redraw already replaced redraws the card instead of saying the menu expired; unknown and forged buttons still read as expired. A process record stranded by a kill between the two removals of a recovered claim is swept after a day with the other settled run files. The host executor's persistent-failure exit is documented as ending the whole executor, as every throw did before 0.78.0. Tests now cover the "More models" page, a same-run-id claim after a failed cleanup, and the late-tap redraw.
+- Follow-ups from the 0.78.0 reviews. A plugin workspace lease held by a dead plugin call is reclaimed 35 s after its last write instead of 60 s (a plugin call's own timeout plus its kill is about 32 s), so an owner's next message waits less after a killed call; a live holder is still never reclaimed. A tap on a different `/ai` button after a redraw replaced it redraws the card instead of saying the menu expired; a double tap on the same button, unknown buttons and forged buttons still read as expired. A process record stranded by a kill between the two removals of a recovered claim is swept after a day with the other settled run files. The host executor's persistent-failure exit is documented as ending the whole executor, as every throw did before 0.78.0. Tests now cover the "More models" page, a same-run-id claim after a failed cleanup, the late-tap redraw, the lease window boundary and the stranded-record sweep.
 
 ## 0.78.0
 

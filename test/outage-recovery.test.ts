@@ -115,9 +115,12 @@ test('a dead plugin holder\'s workspace lease is reclaimed only once Docker no l
   await writeFile(lock, JSON.stringify(gone))
   await recoverNativeLease(home); assert.ok(!await gone_(lock))
   assert.equal(await workspaceLease(home, { kind: 'native', runId: 'r_next' }), undefined)
+  // The window outlasts a plugin call's own 30 s command timeout plus its kill: a holder killed at 30 s leaves its container time to appear.
+  const ago = (seconds: number) => new Date(Date.now() - seconds * 1000)
+  await utimes(lock, ago(30), ago(30)); await recoverNativeLease(home)
+  assert.ok(!await gone_(lock), 'inside the window')
   // Past the window, with Docker reporting no such container, startup and the next native claim both reclaim it.
-  await utimes(lock, old, old)
-  await recoverNativeLease(home)
+  await utimes(lock, ago(40), ago(40)); await recoverNativeLease(home)
   assert.ok(await gone_(lock))
   await writeFile(lock, JSON.stringify(gone)); await utimes(lock, old, old)
   const release = await workspaceLease(home, { kind: 'native', runId: 'r_next' })
