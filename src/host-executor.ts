@@ -3,8 +3,9 @@ import { Tasks } from './tasks.js'
 import { ControlStore } from './control-state.js'
 import { authorizeRun, readRun } from './delivery-socket.js'
 import { runPromptSuffix } from './prompt-suffix.js'
-import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath, utimes, stat } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, readdir, rename, rm, appendFile, realpath, utimes, stat, link } from 'node:fs/promises'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { isHostRunId } from './host-executor-protocol.js'
 import { fileURLToPath } from 'node:url'
 import { CliUnavailableError, startExecutorJob, steerHostRequests, terminateJob, resolveExecutor, validateCodexProvider, type CodexProviderBinding, type ExecutorOptions } from './executor.js'
@@ -42,6 +43,11 @@ export const refreshAgentCatalog = async (agent: HostBinding,
 }
 
 const processStart = async (pid:number) => (await processSnapshot()).get(pid)?.birth
+// Records other processes read are replaced whole: a failed write (ENOSPC, a kill)
+// must never leave a truncated file that blocks every later start.
+const writeWhole = async (file:string, data:string) => { await writeFile(file+'.tmp',data,{mode:0o600}); await rename(file+'.tmp',file) }
+const parsed = (raw:string) => { try { return JSON.parse(raw) } catch { return undefined } }
+const message = (error:unknown) => error instanceof Error ? error.message : String(error)
 
 export const serveHostExecutor = async (installation: HostInstallation, signal: AbortSignal, launch = startExecutorJob,
   readCatalog?: (agent: HostBinding) => Promise<ModelChoice[]>, retire?: AbortSignal) => {
@@ -95,7 +101,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       const base=path.join(directory,file.slice(0,-13))
       if (claimed.has(base)) continue
       let prior: {pid?:number;started?:string;hostPid?:number;hostStarted?:string;containerId?:string} | undefined
-      try { prior=JSON.parse(await readFile(base+'.process.json','utf8')) } catch(error) { if ((error as NodeJS.ErrnoException).code!=='ENOENT') throw error }
+      // A missing or unreadable process record has no live owner to wait for.
+      try { prior=parsed(await readFile(base+'.process.json','utf8')) } catch(error) { if ((error as NodeJS.ErrnoException).code!=='ENOENT') throw error }
       if(prior?.containerId && prior.containerId!==containerId){
         const touched=await stat(base+'.events').then(s=>s.mtimeMs,()=>0)
         if(Date.now()-touched<15000)continue
@@ -107,6 +114,19 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       }
       await appendFile(base+'.events',JSON.stringify({stream:'exit',code:1})+'\n',{mode:0o600})
       await rm(base+'.process.json',{force:true});await rm(base+'.running.json',{force:true})
+    }
+  }
+  // Result and control files outlive runs whose client never read the exit
+  // (a stop, an offline host, a relay restart). Remove day-old ones whose run
+  // has no request or claim left.
+  const sweepSettled = async (agent: HostBinding) => {
+    const directory=path.join(agent.controlDir,'host-executor'),files=await readdir(directory)
+    const open=new Set(files.filter(f=>f.endsWith('.request.json')||f.endsWith('.running.json')).map(f=>f.slice(0,-13)))
+    for (const file of files) {
+      const id=/^(.+?)\.(?:events|cancel|steer-.+)$/.exec(file)?.[1]
+      if (!id || !isHostRunId(id) || open.has(id)) continue
+      const modified=await stat(path.join(directory,file)).then(s=>s.mtimeMs,()=>Date.now())
+      if (Date.now()-modified>86400000) await rm(path.join(directory,file),{force:true})
     }
   }
   try {
@@ -130,23 +150,27 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
       await mkdir(directory,{recursive:true,mode:0o700})
       const lock=path.join(directory,'worker.lock')
       try {
-        const prior=JSON.parse(await readFile(lock,'utf8'))
-        if(prior.containerId&&prior.containerId!==containerId)throw Error('Previous isolated worker still owns the claim lock')
-        const currentStart=await processStart(prior.pid)
-        if (!prior.started || !currentStart || prior.started===currentStart) {
+        // The lock is linked from a complete file; an unreadable one never had an owner.
+        const prior=parsed(await readFile(lock,'utf8'))
+        if(prior?.containerId&&prior.containerId!==containerId)throw Error('Previous isolated worker still owns the claim lock')
+        const currentStart=prior && await processStart(prior.pid)
+        if (prior && (!prior.started || !currentStart || prior.started===currentStart)) {
           try { process.kill(prior.pid,0); throw new Error('Host executor already running') }
           catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
         }
         await rm(lock)
       }
       catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-      await writeFile(lock,JSON.stringify({pid:process.pid,started:await processStart(process.pid),...(containerId ? {containerId} : {})}),{mode:0o600,flag:'wx'})
+      const staged=`${lock}.${randomUUID()}.tmp`
+      await writeFile(staged,JSON.stringify({pid:process.pid,started:await processStart(process.pid),...(containerId ? {containerId} : {})}),{mode:0o600})
+      try { await link(staged,lock) } finally { await rm(staged,{force:true}) }
       locks.push(lock)
       const [models] = await Promise.all([freshCatalog(agent), refreshLogins(agent)])
       await new ControlStore(agent.controlDir, 900000).normalizeProviderBindings(models)
       const modelsFile=path.join(directory,'models.json')
       await writeFile(modelsFile+'.tmp',JSON.stringify(models),{mode:0o600});await rename(modelsFile+'.tmp',modelsFile)
       await recoverClaims(agent)
+      await sweepSettled(agent)
       if (agent.toolsHome && !containerId) await (await import('./plugins/workspace-lease.mjs')).recoverNativeLease(agent.toolsHome)
     }
     let catalogAt=Date.now()
@@ -160,8 +184,9 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
         for (const lock of locks.splice(0)) await rm(lock,{force:true})
       }
       if (retiring && !tasks.size) break
-      // Keep transport liveness independent of native catalog I/O.
-      if (!retiring) for (const agent of installation.agents) await beat(agent)
+      // Keep transport liveness independent of native catalog I/O. A failed
+      // beat (a full disk) reads as offline to new requests; running work continues.
+      if (!retiring) for (const agent of installation.agents) await beat(agent).catch(error=>console.error('Host heartbeat write failed',message(error)))
       if(!retiring && !catalogRefresh && Date.now()-catalogAt>30000){
         catalogAt=Date.now()
         catalogRefresh=(async()=>{
@@ -175,7 +200,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
           }
         })().finally(()=>{catalogRefresh=undefined})
       }
-      for (const agent of installation.agents) {
+      for (const agent of installation.agents) try {
         const directory=path.join(agent.controlDir,'host-executor')
         if (retiring) continue
         await recoverClaims(agent)
@@ -215,7 +240,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             }
           }
           try {
-            await writeFile(base+'.process.json',JSON.stringify({hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}),{mode:0o600})
+            await writeWhole(base+'.process.json',JSON.stringify({hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}))
             await appendFile(base+'.events','',{mode:0o600})
             await rename(base+'.request.json',base+'.running.json')
           }
@@ -225,7 +250,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             let cancellation: ReturnType<typeof setInterval> | undefined
             let writes=Promise.resolve()
             let observeClaude=false
-            const emit=(event:unknown)=>{writes=writes.then(()=>appendFile(base+'.events',JSON.stringify(event)+'\n',{mode:0o600}))}
+            // A failed append loses that event only; later events, the exit and the claim cleanup still run.
+            const emit=(event:unknown)=>{writes=writes.then(()=>appendFile(base+'.events',JSON.stringify(event)+'\n',{mode:0o600})).catch(error=>console.error('Host run event write failed',id,message(error)))}
             try {
               try { await readFile(base+'.cancel'); throw new Error('Cancelled') } catch(error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
               const request=JSON.parse(await readFile(base+'.running.json','utf8'))
@@ -309,7 +335,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 if (next !== summary) { summary = next; emit({stream:'stdout',text:summary+'\n'}) }
               })
               job.child.stderr?.on('data',chunk=>emit({stream:'stderr',text:chunk.toString()}))
-              await writeFile(base+'.process.json',JSON.stringify({pid:job.child.pid,started:job.child.pid ? await processStart(job.child.pid) : undefined,hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}),{mode:0o600})
+              await writeWhole(base+'.process.json',JSON.stringify({pid:job.child.pid,started:job.child.pid ? await processStart(job.child.pid) : undefined,hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}))
               let steering: Promise<void> | undefined
               cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{}); const now=new Date();void utimes(base+'.events',now,now).catch(()=>{})
                 if(!steering && job)steering=steerHostRequests(directory,path.basename(base),job.child).catch(()=>{}).finally(()=>{steering=undefined})},250)
@@ -324,6 +350,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               job = undefined
               emit({stream:'exit',code})
             } catch (error) {
+              // A failure after launch reports the run failed: never leave its CLI running unobserved.
+              if (job) terminateJob(job.child)
               if (error instanceof CliUnavailableError) emit({stream:'stdout',text:startupLine({workBegan:false,rejection:{category:'cli-unavailable'}})+'\n'})
               emit({stream:'stderr',text:'Host CLI execution failed: '+redactFailure(error instanceof Error ? error.message : 'Unknown error')+'\n'}); emit({stream:'exit',code:1}) }
             finally {
@@ -338,8 +366,12 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               claimed.delete(base)
             }
           })()
-          tasks.add(task); void task.finally(()=>tasks.delete(task))
+          tasks.add(task); void task.catch(error=>console.error('Host run cleanup failed',id,message(error))).finally(()=>tasks.delete(task))
         }
+      } catch (error) {
+        // One agent's failed claim pass (I/O, a busy lease) must not stop the
+        // transport or the runs already executing; the next pass looks again.
+        console.error('Host claim pass failed',agent.name,message(error))
       }
       await new Promise(resolve=>setTimeout(resolve,250))
     }

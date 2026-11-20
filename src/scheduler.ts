@@ -345,16 +345,6 @@ export class Scheduler {
       return run
     })
   }
-  async recover(runs: RunStore) {
-    for (const run of await runs.list()) {
-      if (!run.scheduled || run.status !== 'running') continue
-      // The old relay owned the process. Stop any host-side counterpart, but do
-      // not replay or claim to know whether its external actions completed.
-      await mkdir(join(this.controlDir,'host-executor'),{recursive:true,mode:0o700})
-      await writeFile(join(this.controlDir,'host-executor',assertId(run.id)+'.cancel'),'',{mode:0o600})
-      await runs.patch(run.id,{status:'failed',interrupted:true,endedAt:new Date().toISOString()})
-    }
-  }
   async tick(owner: Schedule['owner'], runs: RunStore, now = Date.now()) {
     for (const s of await this.list()) {
       if (!s.enabled || !sameOwner(s.owner, owner)) continue

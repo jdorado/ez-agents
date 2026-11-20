@@ -152,14 +152,10 @@ test('pause, edit, removal, owner revocation, corrupt records and traversal fail
  await assert.rejects(f.scheduler.cancel('../bad'))
  await f.scheduler.cancel(run.id);assert.equal(await f.scheduler.cancelled(run.id),true)
 })
-test('startup quarantines an interrupted spawn before PID persistence; explicit edit releases its schedule',async t=>{
+test('an interrupted occurrence holds its schedule until an explicit edit releases it',async t=>{
  const f=await fixture(t),s=await f.scheduler.save({...f.input,trigger:{everySeconds:60,start:new Date(f.now).toISOString()}})
  await f.scheduler.tick(f.owner,f.runs,f.now)
- const [run]=await f.runs.list();await f.runs.patch(run.id,{status:'running'})
- await new Scheduler(f.dir).recover(f.runs)
- assert.equal((await f.runs.get(run.id))?.interrupted,true)
- assert.equal((await f.runs.get(run.id))?.status,'failed')
- assert.equal(await readFile(join(f.dir,'host-executor',run.id+'.cancel'),'utf8'),'')
+ const [run]=await f.runs.list();await f.runs.patch(run.id,{status:'failed',interrupted:true})
  await f.scheduler.tick(f.owner,f.runs,f.now+600000)
  assert.equal((await f.runs.list()).length,1)
  await f.scheduler.save({...s,trigger:{everySeconds:60,start:new Date(f.now+700000).toISOString()}})

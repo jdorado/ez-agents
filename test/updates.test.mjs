@@ -1042,6 +1042,8 @@ test('a claim left by a dead isolated executor container does not block relaunch
  assert.equal(await idle(root,{pendingRequests:false,containerRunning}),true);
  assert.deepEqual(asked,['c207b1800089']);
  assert.equal(await idle(root,{pendingRequests:false,containerRunning:async()=>true}),false,'a live container still owns its run');
+ await fs.writeFile(path.join(dir,'dead.process.json'),'');
+ assert.equal(await idle(root,{pendingRequests:false,containerRunning:async()=>true}),true,'a process record cut by a full disk has no live owner');
  await fs.writeFile(path.join(dir,'host.running.json'),'{}');
  await fs.writeFile(path.join(dir,'host.process.json'),JSON.stringify({pid:9,hostPid:8}));
  assert.equal(await idle(root,{pendingRequests:false,containerRunning}),false,'host-native work still blocks');

@@ -297,9 +297,14 @@ const invokePlugin = async (binding, request, signal, scheduledPreflight = false
     stderrBytes: Buffer.byteLength(result?.stderr || ''),
     ...(failure ? { error: failure } : {}),
   };
-  const receiptPath = await writeReceipt(binding, receipt);
-  if (failure) return { ok: false, error: failure, receipt, receiptPath };
-  return { ok: true, code: result.code, stdout: result.stdout, stderr: result.stderr, receipt, receiptPath };
+  // The command already ran (possibly an external write): a receipt that cannot
+  // be stored must not turn its real result into a failure the engine retries.
+  let receiptPath = null, receiptError;
+  try { receiptPath = await writeReceipt(binding, receipt); }
+  catch (error) { receiptError = error instanceof Error ? error.message : 'Receipt write failed'; console.error('Plugin receipt write failed', request.id, receiptError); }
+  const stored = { receipt, receiptPath, ...(receiptError ? { receiptError } : {}) };
+  if (failure) return { ok: false, error: failure, ...stored };
+  return { ok: true, code: result.code, stdout: result.stdout, stderr: result.stderr, ...stored };
 };
 
 export async function validateBrokerRequest(request, workspace) {

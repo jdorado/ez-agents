@@ -30,15 +30,21 @@ export async function waitForHostHeartbeat(controlDir,child,failure,{attempts=30
   }
   throw Error('Host transport heartbeat timeout');
 }
+// Locks are linked from complete files; an unreadable one (a write cut by a full
+// disk or a kill) never had an owner and must not block every later start.
+const readLock=file=>read(file).catch(error=>error instanceof SyntaxError?{}:missing(error));
 const containerIsRunning=id=>execute('docker',['inspect','--format','{{.State.Running}}',id],{stdoutOnly:true}).then(o=>o.trim()==='true',()=>false);
 export async function idle(control,{pendingRequests=true,relayRequired=false,containerRunning=containerIsRunning}={}) {
   const dir=path.join(control,'host-executor');
   const host=await fs.readdir(dir).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
   if(pendingRequests&&host.some(f=>f.endsWith('.request.json')))return false;
   for(const file of host.filter(f=>f.endsWith('.running.json'))) {
-    // A claim bound to a container that no longer runs is not live work: the
-    // next executor closes it on start, so it must not block that start.
-    const owner=(await read(path.join(dir,file.slice(0,-13)+'.process.json')).catch(()=>null))?.containerId;
+    // A claim bound to a container that no longer runs, or with an unreadable
+    // process record, is not live work: the next executor closes it on start,
+    // so it must not block that start.
+    const record=await read(path.join(dir,file.slice(0,-13)+'.process.json')).catch(error=>error instanceof SyntaxError?'unreadable':null);
+    if(record==='unreadable')continue;
+    const owner=record?.containerId;
     if(!/^[a-f0-9]{12,64}$/.test(owner||'')||await containerRunning(owner))return false;
   }
   // Run records live in relay memory: the live socket status is the only
@@ -118,10 +124,12 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   await fs.mkdir(directory,{recursive:true,mode:0o700});
   // Exclusive supervisor ownership. A dead owner can be recovered; a live one cannot.
   const lock=path.join(directory,'supervisor.lock');
-  const prior=await read(lock).catch(missing);
-  if(prior&&(!Number.isSafeInteger(prior.pid)||prior.pid<1))throw Error('Corrupt supervisor lock');
-  if(prior){if(await lockOwnerAlive(directory,prior.pid))throw Error('Supervisor already running');await fs.rm(lock);}
-  await fs.writeFile(lock,JSON.stringify({pid:process.pid}),{flag:'wx',mode:0o600});
+  const prior=await readLock(lock);
+  if(prior&&Object.keys(prior).length&&(!Number.isSafeInteger(prior.pid)||prior.pid<1))throw Error('Corrupt supervisor lock');
+  if(prior){if(prior.pid&&await lockOwnerAlive(directory,prior.pid))throw Error('Supervisor already running');await fs.rm(lock);}
+  const staged=`${lock}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(staged,JSON.stringify({pid:process.pid}),{mode:0o600});
+  try {await fs.link(staged,lock);} finally {await fs.rm(staged,{force:true});}
   let child,container;
   let retirements=[];
   let reloadPending;
@@ -146,7 +154,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       const pkg=await read(path.join(root,'package.json'));
       if(pkg.ezRelease?.containerExecutor!==1)return;
       const lock=path.join(agent.controlDir,'host-executor/worker.lock');
-      const prior=await read(lock).catch(missing);
+      const prior=await readLock(lock);
       if(prior?.containerId){
         if(!/^[a-f0-9]{12,64}$/.test(prior.containerId))throw Error('Invalid previous isolated worker identity');
         const running=await execute('docker',['inspect','--format','{{.State.Running}}',prior.containerId],{stdoutOnly:true}).catch(()=>null);
@@ -233,11 +241,11 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     catch(error) { console.error(`Update backup cleanup failed; host remains running: ${error.message}`); }
     // Reclaim only a lock left by this deployment's dead supervisor, including
     // a crash between queue claim and the first transaction journal write.
-    const registryLock=path.join(home,'registry.lock'),owner=await read(registryLock).catch(missing);
-    if(owner&&prior&&owner.pid===prior.pid)await fs.rm(registryLock);
+    const registryLock=path.join(home,'registry.lock'),owner=await readLock(registryLock);
+    if(owner?.pid&&owner.pid===prior?.pid)await fs.rm(registryLock);
     // Wait for an orphaned transport's parent-watch to terminate it first.
     await sleep(1200);
-    const workerOwner=await read(path.join(agent.controlDir,'host-executor/worker.lock')).catch(missing);
+    const workerOwner=await readLock(path.join(agent.controlDir,'host-executor/worker.lock'));
     if(host.isolation==='isolated'&&workerOwner?.containerId){
       if(!/^[a-f0-9]{12,64}$/.test(workerOwner.containerId))throw Error('Invalid isolated worker identity');
       if((await execute('docker',['inspect','--format','{{.State.Running}}',workerOwner.containerId],{stdoutOnly:true}).catch(()=>''))?.trim()==='true')container=workerOwner.containerId;
