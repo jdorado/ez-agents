@@ -1,6 +1,6 @@
 import { assertEffort } from './model-policy.js'
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { isPreset, persistedPreset, presetProvider, resolveFallbacks, sameChoice, sameEngine, type AiPreset, type ExecutionChoice, type ModelChoice } from './ai.js'
 import { AUTH_PROFILE_CLIS, isAuthProfile } from './auth-profile.js'
@@ -287,17 +287,23 @@ export class ControlStore {
   private async withLock<T>(work: () => Promise<T>): Promise<T> {
     await this.ensureDirectory()
     for (let attempt = 0; attempt < 80; attempt += 1) {
+      const token = randomUUID()
       try {
-        const handle = await open(this.lockPath, 'wx', 0o600)
-        try {
-          return await work()
-        } finally {
-          await handle.close()
-          await rm(this.lockPath, { force: true })
-        }
+        await writeFile(this.lockPath, token, { mode: 0o600, flag: 'wx' })
       } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-        await wait(25)
+        // Holders need milliseconds. An older lock was left by a killed process
+        // (OOM, SIGKILL after the stop grace); state writes are whole-file
+        // renames, so breaking it loses at most that holder's unfinished change.
+        if (Date.now() - await stat(this.lockPath).then(lock => lock.mtimeMs, () => Date.now()) > 30000) await rm(this.lockPath, { force: true })
+        else await wait(25)
+        continue
+      }
+      try {
+        return await work()
+      } finally {
+        // Release only this holder's lock, never one taken after it was broken as stale.
+        if (await readFile(this.lockPath, 'utf8').catch(() => '') === token) await rm(this.lockPath, { force: true })
       }
     }
     throw new Error('Timed out waiting for the authority control lock')

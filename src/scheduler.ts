@@ -345,16 +345,6 @@ export class Scheduler {
       return run
     })
   }
-  async recover(runs: RunStore) {
-    for (const run of await runs.list()) {
-      if (!run.scheduled || run.status !== 'running') continue
-      // The old relay owned the process. Stop any host-side counterpart, but do
-      // not replay or claim to know whether its external actions completed.
-      await mkdir(join(this.controlDir,'host-executor'),{recursive:true,mode:0o700})
-      await writeFile(join(this.controlDir,'host-executor',assertId(run.id)+'.cancel'),'',{mode:0o600})
-      await runs.patch(run.id,{status:'failed',interrupted:true,endedAt:new Date().toISOString()})
-    }
-  }
   async tick(owner: Schedule['owner'], runs: RunStore, now = Date.now()) {
     for (const s of await this.list()) {
       if (!s.enabled || !sameOwner(s.owner, owner)) continue
@@ -378,6 +368,9 @@ export class Scheduler {
         }
         let preflight: PreflightReceipt | undefined
         if(s.preflight) {
+          // A failed preflight looks again at its saved time, not every tick.
+          const retryAt = await readFile(cursor,'utf8').then(v => JSON.parse(v).retryAt, () => undefined)
+          if (Number.isFinite(retryAt) && retryAt > now) continue
           try {
             const checked=await this.preflight(s.id,s.revision)
             preflight=checked.receipt
@@ -388,7 +381,11 @@ export class Scheduler {
           } catch (error) {console.error('Schedule preflight unavailable',s.id,error instanceof Error ? error.message : 'Unknown error');
             // An update or broker rebind holds admission and recreates the broker the
             // preflight was asking: keep this occurrence due so a later tick retries it.
-            if(await stat(join(this.controlDir,'upgrade-pause.json')).then(()=>true,()=>false))continue;const prior=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {};throw e});await atomic(cursor,{next:future,preflight:{...prior.preflight,state:'unavailable',observedAt:new Date().toISOString()}});continue}
+            if(await stat(join(this.controlDir,'upgrade-pause.json')).then(()=>true,()=>false))continue;const prior=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(e=>{if(e.code==='ENOENT')return {};throw e})
+            // A transient failure (broker or plugin down, timeout) keeps this occurrence due for a
+            // few minutes, looking again each minute; past that, or once a newer one is due, it is skipped.
+            const unavailable={...prior.preflight,state:'unavailable',observedAt:new Date().toISOString()},retryAt=now+60000
+            await atomic(cursor,retryAt<next!+300000&&(nextOccurrence(s.trigger,next!)??Infinity)>retryAt?{next,retryAt,preflight:unavailable}:{next:future,preflight:unavailable});continue}
         }
         // An edit or another dispatcher holds this task; a later tick retries.
         const release = await this.lock(s.id, false)

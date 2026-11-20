@@ -8,12 +8,12 @@ if (!control || !isHostRunId(id || '') || (mode !== undefined && mode !== '--att
 const directory = path.join(control, 'host-executor')
 await mkdir(directory, {recursive:true, mode:0o700})
 const base = path.join(directory, id)
+const exists = (suffix: string) => stat(base+suffix).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error })
 if (mode === '--attach') {
   // A previous relay submitted this run: watch it, never resubmit. Without a
   // request, claim or event record its outcome is unknown.
   // Check in lifecycle order: claim renames the request, and the host writes
   // the exit event before removing the claim, so a live run is always seen.
-  const exists = (suffix: string) => stat(base+suffix).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error })
   if (!await exists('.request.json') && !await exists('.running.json') && !await exists('.events')) {
     console.error('Handed-off host run has no request, claim or result; its outcome is unknown')
     process.exit(1)
@@ -35,6 +35,7 @@ for (const signal of ['SIGTERM','SIGINT'] as const) process.once(signal, () => {
 })
 let offset = 0
 let lastHeartbeat = Date.now()
+let settled = false
 try {
   for (;;) {
     let content = ''
@@ -50,18 +51,23 @@ try {
     // Drain completion first. A brief missing file at the shared-filesystem
     // boundary must not cancel a healthy job or hide its terminal result.
     try {
-      const claimed = await stat(base+'.running.json').then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error})
+      const claimed = await exists('.running.json')
+      // The host writes the exit before removing the claim. With neither a
+      // request nor a claim left, a missing exit was lost (a failed write):
+      // stop counting the host heartbeat so this watch ends instead of waiting forever.
+      settled = !claimed && !await exists('.request.json')
       const heartbeat = claimed
         ? {at:(await stat(base+'.events')).mtimeMs}
-        : JSON.parse(await readFile(path.join(directory,'heartbeat.json'),'utf8'))
-      if (!Number.isFinite(heartbeat.at)) throw new Error('Invalid host CLI heartbeat')
-      lastHeartbeat = heartbeat.at
+        : settled ? undefined : JSON.parse(await readFile(path.join(directory,'heartbeat.json'),'utf8'))
+      if (heartbeat && !Number.isFinite(heartbeat.at)) throw new Error('Invalid host CLI heartbeat')
+      if (heartbeat) lastHeartbeat = heartbeat.at
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    if (Date.now()-lastHeartbeat > 15000) throw new Error('Host CLI executor is offline')
+    if (Date.now()-lastHeartbeat > 15000) throw new Error(settled ? 'Host run ended without a result' : 'Host CLI executor is offline')
     await new Promise(resolve => setTimeout(resolve,150))
   }
 } catch (error) {
-  await writeFile(base+'.cancel','',{mode:0o600})
+  // A run with neither request nor claim has nothing left to cancel.
+  if (!settled) await writeFile(base+'.cancel','',{mode:0o600})
   console.error((error as Error).message)
   process.exitCode=1
 }

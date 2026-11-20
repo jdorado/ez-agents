@@ -9,7 +9,7 @@ import { packageVersion } from './version.js'
 import {authorizeDeliveryContext} from './delivery-context.mjs'
 import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
-import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
 import { Scripts } from './scripts.js'
 import { redactFailure } from './failure.js'
@@ -32,6 +32,7 @@ import { CliUnavailableError, startExecutorJob, attachHostJob, steerJob, termina
 import { attemptFailure, continuationLine, nativeErrorObserver, nextSetup, quotaScope, quotaWait, quotaCategory, chatCandidates, setupCandidates, startupObserver, usesAccountPool, unavailableSummary, SetupsUnavailableError, type SetupAttempt } from './setup-fallback.js'
 import { telemetryObserver } from './run-telemetry.js'
 import { assertScheduledModel } from './model-policy.js'
+import { isHostRunId } from './host-executor-protocol.js'
 import { RunStore, activeSetup, saveRunHandoff, takeRunHandoff, type RunRecord } from './runs.js'
 import { splitTelegramText } from './reply.js'
 import { markdownToTelegramHtml, escapeHtml } from './format.js'
@@ -1476,10 +1477,11 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
   })
 
+  // One update's failed handler (a reply blip, a bad command) must not stop
+  // polling for every later one. Intake is memory-only, so nothing is gained by
+  // holding the acknowledgement: an in-process restart resumes past it anyway.
   bot!.catch((error) => {
     console.error('Telegram update failure', safeError(error.error))
-    // Do not let polling acknowledge an update whose journal write failed.
-    throw error
   })
   }
 
@@ -1507,6 +1509,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       await watchRun(run, run.texts, owner, true)
     }).catch(error => console.error('Run adoption failed', run.id, safeError(error)))
+    // Host work no relay watches (a crashed predecessor's, with no handoff) would hold the foreground
+    // lane and a schedule's slot, unreachable by /stop: ask the host to stop it.
+    for (const file of await readdir(join(config.controlDir, 'host-executor')).catch(() => [] as string[])) {
+      const id = /^(.+)\.(?:request|running)\.json$/.exec(file)?.[1]
+      if (id && isHostRunId(id) && (await runs.get(id))?.status !== 'running') await cancelUnobservedHostRun(id).catch(() => {})
+    }
   }
 
   let stopWork: Promise<void> | undefined
@@ -1570,8 +1578,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         beforeClose:async()=>{if(drainingHandoff){await outboxWork?.catch(()=>{});await drainOutbox(undefined,true)}},
         ...(Number.isSafeInteger(deliveryTcpPort) && deliveryTcpPort >= 1024 && deliveryTcpPort <= 65535 ? { tcpPort: deliveryTcpPort } : {}),
       })
-      // Reconcile, then adopt handed-off runs, before any intake can launch work.
-      await scheduler.recover(runs)
+      // Adopt handed-off runs before any intake can launch work; adoption also stops host work no relay watches.
       await adoptHandoff()
       if (config.applicationPort) await applicationChannel.listen(config.applicationPort, config.applicationHost)
       runtimeStarted = true

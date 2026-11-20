@@ -71,11 +71,14 @@ test('a graceful relay stop hands running host work to the next relay, which rec
   assert.deepEqual(await files(), [foreground.id + '.events', foreground.id + '.running.json', scheduled.id + '.events', scheduled.id + '.running.json'].sort(),
     'the stop must not cancel, finish or resubmit host work')
 
+  // A run some earlier relay left on the host with no handoff: nobody watches it.
+  await writeFile(join(host, 'r_orphan.running.json'), '{}')
   const after = createRelay(config(next, root)), runs = new RunStore(next)
   after.bot.botInfo = { id: 999, is_bot: true, first_name: 'Fixture', username: 'fixture_bot' } as typeof after.bot.botInfo
   after.bot.api.config.use(async () => ({ ok: true, result: { message_id: 42 } }) as never)
   try {
     await after.adoptHandoff()
+    assert.deepEqual((await files()).filter(file => file.endsWith('.cancel')), ['r_orphan.cancel'], 'only the unwatched run is cancelled; adopted ones are not')
     await assert.rejects(readFile(join(dir, 'run-handoff.json')), { code: 'ENOENT' })
     assert.deepEqual((await runs.list()).map(run => run.status), ['running', 'running'])
     assert.deepEqual(await runs.waitForDelivery(delivered.id,100),await first.waitForDelivery(delivered.id,100))
@@ -84,7 +87,7 @@ test('a graceful relay stop hands running host work to the next relay, which rec
     await scheduler.tick(owner, runs, due + 60_000); await after.drainSources()
     assert.equal((await runs.list()).length, 2, 'the next recurrence waits for the adopted occurrence')
     await new Promise(resolve => setTimeout(resolve, 300))
-    assert.ok(!(await files()).some(file => file.endsWith('.request.json') || file.endsWith('.cancel')), 'adoption never resubmits or cancels')
+    assert.ok(!(await files()).some(file => file.endsWith('.request.json') || (file.endsWith('.cancel') && !file.startsWith('r_orphan'))), 'adoption never resubmits or cancels an adopted run')
     await appendFile(join(host, foreground.id + '.events'), JSON.stringify({ stream: 'exit', code: 0 }) + '\n')
     await rm(join(host, foreground.id + '.running.json'))
     await until(async () => (await runs.get(foreground.id))?.status === 'completed')
@@ -191,4 +194,21 @@ test('an adopted scheduled run continues a terminal quota limit on its next save
     assert.match(launches[0].texts.at(-1)!, new RegExp(`began work in native session ${partialSession}.*That work may be partly applied`))
     assert.equal((await runs.list()).length, 1)
   } finally { await after.stop() }
+})
+
+test('a failing update handler is logged and does not stop Telegram polling', async t => {
+  const { root, dir } = await fixture(t)
+  const relay = createRelay(config(dir, root))
+  t.after(() => relay.stop())
+  relay.bot.botInfo = { id: 999, is_bot: true, first_name: 'Fixture', username: 'fixture_bot' } as typeof relay.bot.botInfo
+  relay.bot.api.config.use(async () => ({ ok: true, result: { message_id: 42 } }) as never)
+  let reached = false
+  relay.bot.use(async () => { reached = true; throw new Error('handler failed') })
+  const owner = { id: 101, is_bot: false, first_name: 'Owner' }
+  const errors = t.mock.method(console, 'error', () => {})
+  // Polling hands each batch to handleUpdates, which passes a handler failure to bot.catch. Rethrowing
+  // there ended bot.start(), and polling then never resumed.
+  await (relay.bot as unknown as { handleUpdates(updates: Update[]): Promise<void> }).handleUpdates([{ update_id: 7, edited_message: { message_id: 1, date: 0, text: 'edit', from: owner, chat: { id: 101, type: 'private', first_name: 'Owner' } } } as Update])
+  assert.ok(reached, 'the update reached the failing handler')
+  assert.ok(errors.mock.calls.some(call => String(call.arguments[0]).includes('Telegram update failure')))
 })

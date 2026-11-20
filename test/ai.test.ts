@@ -236,7 +236,7 @@ const aiScreens = (menu: ReturnType<typeof createAiMenu>) => {
   }
 }
 
-test('Choose AI is one card: engine, model and effort rows move a draft that Apply saves', async () => {
+test('Choose AI is one list: a model or effort tap applies at once and engine sits behind More', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-'))
   try {
     const store = new ControlStore(dir, 1000)
@@ -252,35 +252,65 @@ test('Choose AI is one card: engine, model and effort rows move a draft that App
       { cli: 'codex', model: 'second-model', name: 'Second', efforts: ['low'] },
       { cli: 'codex-gui', model: 'fixture-model', name: 'codex-gui · Desktop Fixture', efforts: ['medium'] },
       { cli: 'claude', name: 'claude · client default', efforts: [] },
-    ], undefined, undefined, async (name) => name === 'codex')
+    ], undefined, undefined, async (name) => name === 'codex' || name === 'claude')
     const card = aiScreens(menu)
     await card.open()
-    assert.match(card.screens.at(-1)!.text, /Current: <code>codex · fixture-model · medium<\/code>\nℹ Already in use/)
-    assert.match(card.screens.at(-1)!.text, /Rows: engine · model · effort/)
-    assert.deepEqual(card.labels(), [
-      '⏱ codex · second-model · low', 'claude', '✓ codex', 'codex-gui (desktop)', '✓ Fixture', 'Second', '✓ medium', 'high', '↻ Refresh',
-    ])
+    assert.match(card.screens.at(-1)!.text, /Current: <code>codex · fixture-model · medium<\/code>/)
+    // Models of the current engine and its efforts only; engine and account stay hidden.
+    assert.deepEqual(card.labels(), ['⏱ codex · second-model · low', '✓ Fixture', 'Second', '✓ medium', 'high', '▾ Engine and account', '↻ Refresh'])
 
-    // Rows only move the draft: nothing is saved until Apply.
+    // One tap on an effort saves it and shows the list again on the new choice.
     await card.click('high')
-    assert.match(card.screens.at(-1)!.text, /New: <code>codex · fixture-model · high<\/code>\nℹ History kept/)
-    assert.deepEqual(card.labels().slice(-4), ['medium', '✓ high', 'Apply', '↻ Refresh'])
-    assert.equal((await store.status()).ai!.selectedId, 'recent')
-    await card.click('Apply')
-    const state = await store.status()
-    const selected = state.ai!.presets.find((preset) => preset.id === state.ai!.selectedId)!
-    assert.deepEqual({ cli: selected.cli, model: selected.model, effort: selected.effort }, { cli: 'codex', model: 'fixture-model', effort: 'high' })
-    assert.match(card.screens.at(-1)!.text, /Saved for this conversation. History kept/)
+    const selectedOf = async () => { const state = await store.status(); return state.ai!.presets.find((preset) => preset.id === state.ai!.selectedId)! }
+    assert.deepEqual((({ cli, model, effort }) => ({ cli, model, effort }))(await selectedOf()), { cli: 'codex', model: 'fixture-model', effort: 'high' })
+    assert.match(card.screens.at(-1)!.text, /✅ Saved for this conversation. History kept/)
+    assert.ok(card.labels().includes('✓ high') && card.labels().includes('medium'))
 
-    // A different engine warns that it starts a new conversation and lists that engine's models.
-    await card.open()
+    // One tap on a model saves it too; its efforts replace the old ones.
+    await card.click('Second')
+    assert.equal((await selectedOf()).model, 'second-model')
+    assert.ok(card.labels().includes('✓ low'))
+
+    // More opens the engine row; browsing another engine changes nothing until a model is tapped.
+    await card.click('▾ Engine and account')
+    assert.deepEqual(card.labels().filter((label) => /claude|codex/.test(label) && !label.startsWith('⏱')), ['claude', '✓ codex', 'codex-gui (desktop)'])
     await card.click('claude')
-    assert.match(card.screens.at(-1)!.text, /⚠ Starts a new conversation/)
-    assert.deepEqual(card.labels().filter((label) => ['✓ Default', 'Fixture', 'Second'].includes(label)), ['✓ Default'])
+    assert.equal((await selectedOf()).model, 'second-model')
+    assert.deepEqual(card.labels().filter((label) => /Default|Fixture|Second/.test(label)), ['Default'])
+    await card.click('Default')
+    assert.equal((await selectedOf()).cli, 'claude')
+    assert.match(card.screens.at(-1)!.text, /✅ Client or provider changed: fresh conversation/)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
-test('Choose AI shows logins as their own row and strips account and engine prefixes from model names', async () => {
+test('an effort tap on an older card never re-applies that card\'s model over a newer choice', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-stale-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    const initial = initialPreset('grok')
+    await store.aiState(initial)
+    await store.savePreset({ id: 'recent', name: 'Recent', cli: 'codex', model: 'fixture-model', effort: 'medium' })
+    await store.selectPreset('recent', (await store.captureChoice(initial)).sessionId, true)
+    const menu = createAiMenu(store, 'grok', async () => [
+      { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium', 'high'] },
+      { cli: 'codex', model: 'second-model', name: 'Second', efforts: ['low', 'high'] },
+    ], undefined, undefined, async (name) => name === 'codex')
+    const card = aiScreens(menu)
+    await card.open(); await card.open()
+    // The newer card switches model; the older one still shows Fixture's efforts.
+    await card.click('Second')
+    const stale = card.screens[0].buttons.find((button) => button.text === 'high')!
+    const replies: string[] = []
+    await menu.handle({ callbackQuery: { data: stale.callback_data }, answerCallbackQuery: async () => ({}),
+      reply: async (text: string) => { replies.push(text); return {} as never } } as never)
+    const state = await store.status()
+    const selected = state.ai!.presets.find((preset) => preset.id === state.ai!.selectedId)!
+    assert.equal(selected.model, 'second-model', 'the older card did not switch back to its own model')
+    assert.match(replies.at(-1)!, /Current: <code>codex · second-model/)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('Choose AI shows logins as their own row under More and strips account and engine prefixes from model names', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-accounts-'))
   try {
     const store = new ControlStore(dir, 1000)
@@ -294,31 +324,32 @@ test('Choose AI shows logins as their own row and strips account and engine pref
     ], undefined, undefined, async () => true)
     const card = aiScreens(menu)
     await card.open()
-    assert.match(card.screens.at(-1)!.text, /Rows: engine · account · model/)
-    assert.deepEqual(card.labels(), ['✓ claude', '✓ default', 'claude2', 'claude3', '✓ Default', 'opus', '↻ Refresh'])
+    assert.deepEqual(card.labels(), ['✓ Default', 'opus', '▾ Engine and account', '↻ Refresh'])
+    await card.click('▾ Engine and account')
+    assert.deepEqual(card.labels(), ['✓ claude', '✓ default', 'claude2', 'claude3', '✓ Default', 'opus', '▴ Fewer options', '↻ Refresh'])
 
-    // Opus at the default login, then claude2: same model name, same effort, new account.
+    // Opus at the default login applies at once with the default effort and closes More.
     await card.click('opus')
-    assert.deepEqual(card.labels().slice(-5), ['low', '✓ high', 'max', 'Apply', '↻ Refresh'])
+    assert.deepEqual(card.labels(), ['Default', '✓ opus', 'low', '✓ high', 'max', '▾ Engine and account', '↻ Refresh'])
+    // Browsing claude2 keeps the same model name; an account without it lists its own models.
+    await card.click('▾ Engine and account')
     await card.click('claude2')
-    assert.match(card.screens.at(-1)!.text, /New: <code>claude@claude2 · opus · high<\/code>\n⚠ Starts a new conversation/)
-    assert.deepEqual(card.labels().filter((label) => /Default|opus|sonnet/.test(label)), ['Default', '✓ opus'])
-    // An account without the model falls back to its first model and a supported effort.
+    assert.deepEqual(card.labels().filter((label) => /Default|opus|sonnet/.test(label)), ['Default', 'opus'])
     await card.click('claude3')
-    assert.deepEqual(card.labels().filter((label) => /Default|opus|sonnet/.test(label)), ['✓ sonnet'])
-    await card.click('Apply')
+    assert.deepEqual(card.labels().filter((label) => /Default|opus|sonnet/.test(label)), ['sonnet'])
+    await card.click('sonnet')
     const state = await store.status()
     const selected = state.ai!.presets.find((preset) => preset.id === state.ai!.selectedId)!
     assert.deepEqual({ cli: selected.cli, authProfile: selected.authProfile, model: selected.model, effort: selected.effort }, { cli: 'claude', authProfile: 'claude3', model: 'sonnet', effort: 'high' })
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
-test('Choose AI edits its own message in place and pages long model lists', async () => {
+test('Choose AI edits its own message in place, shows the first models and opens the rest on request', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-edit-'))
   try {
     const store = new ControlStore(dir, 1000)
     await store.aiState(initialPreset('codex'))
-    const models = Array.from({ length: 11 }, (_, index) => ({ cli: 'codex', model: `model-${index}`, name: `Model ${index}`, efforts: [] as string[] }))
+    const models = Array.from({ length: 20 }, (_, index) => ({ cli: 'codex', model: `model-${index}`, name: `Model ${index}`, efforts: [] as string[] }))
     const menu = createAiMenu(store, 'codex', async () => models, undefined, undefined, async () => true)
     const sent: string[] = [], edited: Array<{ text: string; buttons: Array<{ text: string; callback_data: string }> }> = []
     const context = (data?: string) => ({
@@ -331,11 +362,18 @@ test('Choose AI edits its own message in place and pages long model lists', asyn
     })
     const opened: Array<Array<{ text: string; callback_data: string }>> = []
     await menu.list({ ...context(), callbackQuery: undefined, reply: async (_text: string, options?: { reply_markup?: { inline_keyboard?: Array<Array<{ text: string; callback_data: string }>> } }) => { opened.push(options!.reply_markup!.inline_keyboard!.flat()); return {} as never } } as never)
-    assert.equal(opened[0].filter((button) => /Model \d+/.test(button.text)).length, 9)
-    await menu.handle(context(opened[0].find((button) => button.text.endsWith('/2 ›') || button.text === '1/2 ›')!.callback_data) as never)
-    assert.deepEqual(edited.at(-1)!.buttons.filter((button) => /Model \d+/.test(button.text)).map((button) => button.text), ['Model 9', 'Model 10'])
+    const names = (buttons: Array<{ text: string }>) => buttons.map((button) => button.text).filter((text) => /Model \d+/.test(text) && !text.startsWith('More'))
+    // Six models and a button for the rest: no page of one, no wall of look-alike names.
+    assert.deepEqual(names(opened[0]), ['Model 0', 'Model 1', 'Model 2', 'Model 3', 'Model 4', 'Model 5'])
+    await menu.handle(context(opened[0].find((button) => button.text === 'More models (14) ▸')!.callback_data) as never)
+    assert.equal(names(edited.at(-1)!.buttons).length, 12)
+    assert.ok(edited.at(-1)!.buttons.some((button) => button.text === '1/2 ›'))
+    await menu.handle(context(edited.at(-1)!.buttons.find((button) => button.text === '1/2 ›')!.callback_data) as never)
+    assert.deepEqual(names(edited.at(-1)!.buttons), ['Model 12', 'Model 13', 'Model 14', 'Model 15', 'Model 16', 'Model 17', 'Model 18', 'Model 19'])
+    // Tapping a model from the full list saves it; the short list then keeps it in view with its tick.
+    await menu.handle(context(edited.at(-1)!.buttons.find((button) => button.text === 'Model 15')!.callback_data) as never)
+    assert.deepEqual(names(edited.at(-1)!.buttons), ['Model 0', 'Model 1', 'Model 2', 'Model 3', 'Model 4', 'Model 5', '✓ Model 15'])
     assert.equal(sent.length, 0)
-    assert.equal(edited.length, 1)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
@@ -396,8 +434,8 @@ test('Choose AI lists the agent-bound Codex home instead of only the desktop fal
       async (cli) => cli === 'codex' || cli === 'codex-gui')
     const card = aiScreens(menu)
     await card.open()
-    // The seed setup has no model pinned, so the card starts on the engine's first model as a draft.
-    assert.deepEqual(card.labels(), ['✓ codex', 'codex-gui (desktop)', '✓ Bound Fixture', 'medium', 'Apply', '↻ Refresh'])
+    // The seed setup has no model pinned, so nothing is current yet: the engine's models list, one tap applies.
+    assert.deepEqual(card.labels(), ['Bound Fixture', '▾ Engine and account', '↻ Refresh'])
   } finally {
     process.env.PATH = previousPath
     await rm(dir, { recursive: true, force: true })
@@ -765,8 +803,8 @@ test('Telegram Sonnet choice survives restart and reaches the native launch with
     const menu = createAiMenu(store, 'claude', async()=>models, dir, undefined, async()=>true)
     const card = aiScreens(menu)
     await card.open()
-    // Opus's xhigh is not a Sonnet level, so the draft moves to high; Apply saves it.
-    await card.click('Sonnet');assert.ok(card.labels().includes('✓ high'));await card.click('Apply')
+    // Opus's xhigh is not a Sonnet level, so the tap saves Sonnet at high.
+    await card.click('Sonnet');assert.ok(card.labels().includes('✓ high'))
     const restarted = new ControlStore(dir,1000)
     const captured = await restarted.captureChoice(menu.initial)
     assert.equal(captured.preset.model,'sonnet');assert.equal(captured.preset.effort,'high')
