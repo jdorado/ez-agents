@@ -81,6 +81,10 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     } else await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
   }
   const buttons = new Map<string, { expires: number; action: (ctx: Context) => Promise<void> }>()
+  // Ids a redraw replaced: a late tap on one (two quick taps on one card) redraws the card instead of
+  // saying the menu expired. Unknown ids, and the id being handled, still read as expired.
+  const released = new Set<string>()
+  let handling: string | undefined
   // Buttons of one rendered card; a re-render releases them so edits never leak entries.
   const issue = (keyboard: InlineKeyboard, owned: Set<string>, label: string, action: (ctx: Context) => Promise<void>, row = false) => {
     for (const [id, b] of buttons) if (b.expires < Date.now()) buttons.delete(id)
@@ -137,7 +141,12 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
   // One card: the current choice, its models and efforts. A model or effort tap saves through the
   // same select/save path as before; engine and account sit behind "More".
   const card = async (ctx: Context, models: ModelChoice[], draft: Draft, owned = new Set<string>(), notice?: string): Promise<void> => {
-    for (const id of owned) buttons.delete(id)
+    for (const id of owned) {
+      buttons.delete(id)
+      if (id === handling) continue
+      released.add(id)
+      if (released.size > 300) released.delete(released.values().next().value!)
+    }
     owned.clear()
     const state = await control.aiState(initial)
     const selected = state.presets.find((preset) => preset.id === state.selectedId)!
@@ -246,13 +255,17 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     async handle(ctx: Context): Promise<boolean> {
       const data = ctx.callbackQuery?.data
       if (!data?.startsWith('ai:')) return false
-      const entry = buttons.get(data.slice(3))
+      const id = data.slice(3), entry = buttons.get(id)
       await ctx.answerCallbackQuery().catch(() => {})
-      if (!entry || entry.expires < Date.now()) await ctx.reply('Menu expired. Open /ai again.')
-      else {
-        buttons.delete(data.slice(3))
+      if (!entry || entry.expires < Date.now()) {
+        if (!released.has(id)) await ctx.reply('Menu expired. Open /ai again.')
+        else try { await list(ctx) } catch (error) { await ctx.reply(error instanceof Error ? error.message : 'AI selection failed.') }
+      } else {
+        buttons.delete(id)
+        handling = id
         try { await entry.action(ctx) }
         catch (error) { await ctx.reply(error instanceof Error ? error.message : 'AI selection failed.') }
+        finally { handling = undefined }
       }
       return true
     },

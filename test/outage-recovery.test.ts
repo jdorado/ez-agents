@@ -115,9 +115,12 @@ test('a dead plugin holder\'s workspace lease is reclaimed only once Docker no l
   await writeFile(lock, JSON.stringify(gone))
   await recoverNativeLease(home); assert.ok(!await gone_(lock))
   assert.equal(await workspaceLease(home, { kind: 'native', runId: 'r_next' }), undefined)
+  // The window outlasts a plugin call's own 30 s command timeout plus its kill: a holder killed at 30 s leaves its container time to appear.
+  const ago = (seconds: number) => new Date(Date.now() - seconds * 1000)
+  await utimes(lock, ago(30), ago(30)); await recoverNativeLease(home)
+  assert.ok(!await gone_(lock), 'inside the window')
   // Past the window, with Docker reporting no such container, startup and the next native claim both reclaim it.
-  await utimes(lock, old, old)
-  await recoverNativeLease(home)
+  await utimes(lock, ago(40), ago(40)); await recoverNativeLease(home)
   assert.ok(await gone_(lock))
   await writeFile(lock, JSON.stringify(gone)); await utimes(lock, old, old)
   const release = await workspaceLease(home, { kind: 'native', runId: 'r_next' })
@@ -165,6 +168,25 @@ test('a failed cleanup removal does not leak the foreground lane or the claim', 
   await ownerRun(controlDir, 'r_next')
   await writeFile(path.join(directory, 'r_next.request.json'), JSON.stringify({ texts: ['b'], options: { cli: 'grok' } }))
   await waitFor(async () => (await readFile(path.join(directory, 'r_next.events'), 'utf8')).includes('"stream":"exit","code":0'))
+  // The claim is released too: the same run id (a fallback attempt reuses it) is claimed again.
+  await rm(path.join(directory, 'r_leak.cancel'), { recursive: true })
+  await writeFile(path.join(directory, 'r_leak.request.json'), JSON.stringify({ texts: ['c'], options: { cli: 'grok' } }))
+  await waitFor(async () => (await readFile(path.join(directory, 'r_leak.events'), 'utf8')).includes('"stream":"exit","code":0'))
+})
+
+test('a process record stranded by a kill is swept after a day, a recent one is kept', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-sweep-'))
+  const workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), directory = path.join(controlDir, 'host-executor')
+  await mkdir(workspace); await mkdir(directory, { recursive: true })
+  const old = new Date(Date.now() - 2 * 86_400_000)
+  await writeFile(path.join(directory, 'r_stranded.process.json'), '{}'); await utimes(path.join(directory, 'r_stranded.process.json'), old, old)
+  await writeFile(path.join(directory, 'r_recent.process.json'), '{}')
+  const abort = new AbortController()
+  const server = serveHostExecutor({ cli: 'grok', agents: [{ name: 'test', workspace, controlDir, binDir: root }] }, abort.signal, undefined, async () => [])
+  t.after(async () => { abort.abort(); await server; await rm(root, { recursive: true, force: true }) })
+  await waitFor(async () => Boolean(await readFile(path.join(directory, 'heartbeat.json'))))
+  assert.ok(await gone_(path.join(directory, 'r_stranded.process.json')))
+  assert.ok(!await gone_(path.join(directory, 'r_recent.process.json')))
 })
 
 test('idle treats only a definite "no such container" as gone: a Docker failure keeps the claim live', async t => {
