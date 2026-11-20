@@ -112,12 +112,13 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     }
   }
   // Applies a choice and shows the card again on it, so a follow-up tap (effort, another model) needs no reopening.
-  const choose = async (ctx: Context, preset: AiPreset) => {
+  const choose = async (ctx: Context, preset: AiPreset, owned?: Set<string>) => {
     const session = await control.getActiveSession()
     const { fresh } = await select(preset, session?.sessionId ?? null)
+    // The card being replaced hands over its button entries, so repeated taps strand none.
     await list(ctx, fresh
       ? 'Client or provider changed: fresh conversation. Files kept; queued work unchanged.'
-      : 'Saved for this conversation. History kept; queued work unchanged.')
+      : 'Saved for this conversation. History kept; queued work unchanged.', owned)
   }
   // The default login first, then named logins in catalog order (sort() would push undefined last).
   const accountsOf = (models: ModelChoice[], cli: string) => {
@@ -150,7 +151,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       .slice(0, 3)
     for (const preset of recent) issue(keyboard, owned,
       `⏱ ${clientLabel(preset.cli)}${preset.authProfile ? `@${preset.authProfile}` : ''} · ${preset.model ?? 'default'}${preset.effort ? ` · ${preset.effort}` : ''}`,
-      (next) => choose(next, preset), true)
+      (next) => choose(next, preset, owned), true)
     const accounts = accountsOf(models, draft.model.cli)
     if (draft.more) {
       const engines = [...new Set(models.map((model) => model.cli))].sort((a, b) => clientLabel(a).localeCompare(clientLabel(b)))
@@ -172,49 +173,54 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     // Long names get two buttons per row so a phone does not cut them off.
     for (const row of chunks(visible, visible.some((model) => modelName(model).length > 11) ? 2 : 3)) {
       for (const model of row) issue(keyboard, owned, `${isCurrent(model) ? '✓ ' : ''}${modelName(model)}`,
-        async (next) => choose(next, await saveSelection(model, keepOrDefaultEffort(model, draft.effort))))
+        async (next) => choose(next, await saveSelection(model, keepOrDefaultEffort(model, draft.effort)), owned))
       keyboard.row()
     }
     if (pages > 1) {
       issue(keyboard, owned, '‹ Models', redraw({ ...draft, page: (page + pages - 1) % pages }))
       issue(keyboard, owned, `${page + 1}/${pages} ›`, redraw({ ...draft, page: (page + 1) % pages }), true)
     }
-    if (collapsed) issue(keyboard, owned, `More models (${listed.length - shown.length}) ▸`, redraw({ ...draft, page: 0, all: true }), true)
+    if (collapsed) issue(keyboard, owned, `More models (${listed.length - shown.length}) ▸`, redraw({ ...draft, page: Math.max(0, Math.floor(listed.findIndex(isCurrent) / MODELS_PER_PAGE)), all: true }), true)
     else if (draft.all && listed.length > FEATURED + 2) issue(keyboard, owned, '▴ Fewer models', redraw({ ...draft, page: 0, all: false }), true)
     // Effort belongs to the model in use; another engine's models start from their own default.
     const efforts = isCurrent(draft.model) ? supportedEfforts(draft.model) : []
     for (const row of balanced(efforts, 4)) {
       for (const effort of row) issue(keyboard, owned, `${effort === selected.effort ? '✓ ' : ''}${effort}`,
-        async (next) => choose(next, await saveSelection(draft.model, effort)))
+        async (next) => {
+          // An older card (a second /ai message) must not re-apply its own model over a newer choice.
+          const live = await control.aiState(initial), now = live.presets.find((preset) => preset.id === live.selectedId)!
+          if (!(sameEngine(draft.model, now) && draft.model.model === now.model && draft.model.provider === now.provider)) { await list(next, undefined, owned); return }
+          await choose(next, await saveSelection(draft.model, effort), owned)
+        })
       keyboard.row()
     }
     issue(keyboard, owned, draft.more ? '▴ Fewer options' : '▾ Engine and account',
       (again) => card(again, models, { ...draft, more: !draft.more }, owned), true)
-    issue(keyboard, owned, '↻ Refresh', async (next) => { await refresh(); await list(next) })
+    issue(keyboard, owned, '↻ Refresh', async (next) => { await refresh(); await list(next, undefined, owned) })
     await show(ctx, [
       '<b>🤖 Choose AI</b>',
       `Current: <code>${escapeHtml(presetLabel(selected))}</code>`,
       ...(notice ? [`✅ ${escapeHtml(notice)}`] : []),
-      '<i>Tap a model or effort to switch · same engine keeps history; another engine starts a new conversation (files kept)</i>',
+      '<i>Tap a model or effort to switch · same engine and provider keeps history; otherwise a new conversation starts (files kept)</i>',
     ].join('\n'), keyboard, true)
   }
-  const list = async (ctx: Context, notice?: string) => {
+  const list = async (ctx: Context, notice?: string, owned?: Set<string>) => {
     const models = await catalog()
     const state = await control.aiState(initial)
     const selected = state.presets.find((preset) => preset.id === state.selectedId)!
     if (!models.length) {
       const keyboard = new InlineKeyboard()
       const current = state.presets.find((preset) => preset.id === initial.id)
-      const owned = new Set<string>()
-      if (current) issue(keyboard, owned, `✓ ${current.name}`, (next) => choose(next, current), true)
-      issue(keyboard, owned, '↻ Refresh', async (next) => { await refresh(); await list(next) })
+      const own = new Set<string>()
+      if (current) issue(keyboard, own, `✓ ${current.name}`, (next) => choose(next, current), true)
+      issue(keyboard, own, '↻ Refresh', async (next) => { await refresh(); await list(next) })
       await show(ctx, `Choose AI\nCurrent: ${presetLabel(selected)}\n${notice ? `${notice}\n` : ''}No client catalog available. Showing the current client setup only.`, keyboard)
       return
     }
     // Start on the current choice; a saved choice outside the catalog starts on the first entry.
     const match = models.find((model) => matchesModel(selected, model) && model.model === selected.model) ?? models.find((model) => matchesModel(selected, model)) ?? models[0]
     const effort = selected.effort && supportedEfforts(match).includes(selected.effort) ? selected.effort : undefined
-    await card(ctx, models, { model: match, effort, page: 0 }, undefined, notice)
+    await card(ctx, models, { model: match, effort, page: 0 }, owned, notice)
   }
   const saveSelection = async (model: ModelChoice, effort?: string, guard?: ControlGuard) => {
     const state = (await control.status()).ai

@@ -283,6 +283,33 @@ test('Choose AI is one list: a model or effort tap applies at once and engine si
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
+test('an effort tap on an older card never re-applies that card\'s model over a newer choice', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-stale-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    const initial = initialPreset('grok')
+    await store.aiState(initial)
+    await store.savePreset({ id: 'recent', name: 'Recent', cli: 'codex', model: 'fixture-model', effort: 'medium' })
+    await store.selectPreset('recent', (await store.captureChoice(initial)).sessionId, true)
+    const menu = createAiMenu(store, 'grok', async () => [
+      { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium', 'high'] },
+      { cli: 'codex', model: 'second-model', name: 'Second', efforts: ['low', 'high'] },
+    ], undefined, undefined, async (name) => name === 'codex')
+    const card = aiScreens(menu)
+    await card.open(); await card.open()
+    // The newer card switches model; the older one still shows Fixture's efforts.
+    await card.click('Second')
+    const stale = card.screens[0].buttons.find((button) => button.text === 'high')!
+    const replies: string[] = []
+    await menu.handle({ callbackQuery: { data: stale.callback_data }, answerCallbackQuery: async () => ({}),
+      reply: async (text: string) => { replies.push(text); return {} as never } } as never)
+    const state = await store.status()
+    const selected = state.ai!.presets.find((preset) => preset.id === state.ai!.selectedId)!
+    assert.equal(selected.model, 'second-model', 'the older card did not switch back to its own model')
+    assert.match(replies.at(-1)!, /Current: <code>codex · second-model/)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
 test('Choose AI shows logins as their own row under More and strips account and engine prefixes from model names', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-accounts-'))
   try {
