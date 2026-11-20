@@ -196,7 +196,7 @@ export const saveRunHandoff = async (controlDir: string, records: RunRecord[]): 
 const HANDOFF_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 // Reads and removes the record. An unreadable, corrupt or stale record adopts
-// nothing: those executors finish unobserved, like a restart without handoff.
+// nothing: the relay then asks the host to stop those executors, like a restart without handoff.
 export const takeRunHandoff = async (controlDir: string, now = Date.now()): Promise<RunRecord[]> => {
   try {
     let raw: string

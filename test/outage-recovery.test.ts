@@ -3,7 +3,7 @@
 import { ownerRun } from './helpers/owner-run.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, readFile, writeFile, rm, chmod, utimes, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm, chmod, utimes, stat, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -91,25 +91,92 @@ test('a control lock left by a killed holder is broken instead of blocking every
   await assert.rejects(control.getActiveSession(), /authority control lock/)
 })
 
-test('a dead plugin holder\'s workspace lease is reclaimed only once Docker no longer has its command container', async t => {
-  const root = await mkdtemp(path.join(tmpdir(), 'ez-plugin-lease-')), fake = path.join(root, 'bin'), home = path.join(root, 'tools')
-  await mkdir(fake); await mkdir(home)
-  await writeFile(path.join(fake, 'docker'), `#!${process.execPath}\nconst id=process.argv.at(-1);if(id.endsWith('-gone')){console.error('Error: No such object: '+id);process.exit(1)}console.log('true')`, { mode: 0o755 })
-  const path0 = process.env.PATH; process.env.PATH = fake + path.delimiter + path0
-  t.after(async () => { process.env.PATH = path0; await rm(root, { recursive: true, force: true }) })
+const fakeDocker = async (root: string, reply: string) => {
+  const fake = path.join(root, 'bin'); await mkdir(fake, { recursive: true })
+  await writeFile(path.join(fake, 'docker'), `#!${process.execPath}\n${reply}`, { mode: 0o755 })
+  const previous = process.env.PATH; process.env.PATH = fake + path.delimiter + previous
+  return () => { process.env.PATH = previous }
+}
+const deadPid = () => new Promise<number>(resolve => { const c = spawn(process.execPath, ['-e', '']); c.once('exit', () => resolve(c.pid!)) })
+
+test('a dead plugin holder\'s workspace lease is reclaimed only once Docker no longer has its command container, after the create window', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-plugin-lease-')), home = path.join(root, 'tools')
+  await mkdir(home)
+  const restore = await fakeDocker(root, `const id=process.argv.at(-1);if(id.endsWith('-gone')){console.error('Error: No such object: '+id);process.exit(1)}console.log('true')`)
+  t.after(async () => { restore(); await rm(root, { recursive: true, force: true }) })
   const { recoverNativeLease, workspaceLease } = await import('../src/plugins/workspace-lease.mjs')
-  const dead = await new Promise<number>(resolve => { const c = spawn(process.execPath, ['-e', '']); c.once('exit', () => resolve(c.pid!)) })
-  const lock = path.join(home, 'workspace-writer.lock')
+  const dead = await deadPid(), lock = path.join(home, 'workspace-writer.lock'), old = new Date(Date.now() - 120_000)
   for (const owner of [{ pid: dead, kind: 'plugin', container: 'agent-call-live' }, { pid: dead, kind: 'plugin' }]) {
-    await writeFile(lock, JSON.stringify(owner))
+    await writeFile(lock, JSON.stringify(owner)); await utimes(lock, old, old)
     await assert.rejects(recoverNativeLease(home), /Stale plugin workspace-writer.lock/, 'a running or unnamed container may still write the workspace')
   }
-  await writeFile(lock, JSON.stringify({ pid: dead, kind: 'plugin', container: 'agent-call-gone' }))
+  // Right after the holder died its orphaned compose run may still create the container: the lease stays and is busy.
+  const gone = { pid: dead, kind: 'plugin', container: 'agent-call-gone' }
+  await writeFile(lock, JSON.stringify(gone))
+  await recoverNativeLease(home); assert.ok(!await gone_(lock))
+  assert.equal(await workspaceLease(home, { kind: 'native', runId: 'r_next' }), undefined)
+  // Past the window, with Docker reporting no such container, startup and the next native claim both reclaim it.
+  await utimes(lock, old, old)
   await recoverNativeLease(home)
-  assert.ok(await gone(lock))
-  // A native claim takes over the same stale lease instead of failing every pass.
-  await writeFile(lock, JSON.stringify({ pid: dead, kind: 'plugin', container: 'agent-call-gone' }))
+  assert.ok(await gone_(lock))
+  await writeFile(lock, JSON.stringify(gone)); await utimes(lock, old, old)
   const release = await workspaceLease(home, { kind: 'native', runId: 'r_next' })
   assert.equal(JSON.parse(await readFile(lock, 'utf8')).runId, 'r_next')
   await release!()
+})
+const gone_ = (file: string) => stat(file).then(() => false, () => true)
+
+test('a persistently failing claim pass exits the host executor instead of hanging with a live heartbeat', { timeout: 30000 }, async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-claim-wedge-'))
+  const workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), toolsHome = path.join(root, 'tools'), directory = path.join(controlDir, 'host-executor')
+  await mkdir(workspace); await mkdir(toolsHome); await mkdir(controlDir)
+  await writeFile(path.join(toolsHome, 'config.json'), JSON.stringify({ schemaVersion: 1, workspace: await realpath(workspace) }))
+  const restore = await fakeDocker(root, `console.log('true')`)
+  const abort = new AbortController()
+  const server = serveHostExecutor({ cli: 'grok', agents: [{ name: 'test', workspace, controlDir, toolsHome, binDir: root }] }, abort.signal, undefined, async () => [])
+  const outcome = server.then(() => 'returned', (error: Error) => error.message)
+  t.after(async () => { restore(); abort.abort(); await outcome; await rm(root, { recursive: true, force: true }) })
+  await waitFor(async () => Boolean(await readFile(path.join(directory, 'heartbeat.json'))))
+  // A plugin holder died with its command container still running: every claim pass hits the stale lease.
+  const lock = path.join(toolsHome, 'workspace-writer.lock'), old = new Date(Date.now() - 120_000)
+  await writeFile(lock, JSON.stringify({ pid: await deadPid(), kind: 'plugin', container: 'agent-call-live' })); await utimes(lock, old, old)
+  await ownerRun(controlDir, 'r_wedged')
+  await writeFile(path.join(directory, 'r_wedged.request.json'), JSON.stringify({ texts: ['a'], options: { cli: 'grok' } }))
+  assert.match(await outcome, /Stale workspace-writer.lock/)
+})
+
+test('a failed cleanup removal does not leak the foreground lane or the claim', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-cleanup-leak-'))
+  const workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), directory = path.join(controlDir, 'host-executor')
+  await mkdir(workspace); await mkdir(controlDir)
+  const abort = new AbortController()
+  const launch = async () => {
+    const child = spawn(process.execPath, ['-e', 'console.log("ok")'], { stdio: ['pipe', 'pipe', 'pipe'] })
+    return { child, cleanup: async () => {}, stdout: '' }
+  }
+  const server = serveHostExecutor({ cli: 'grok', agents: [{ name: 'test', workspace, controlDir, binDir: root }] }, abort.signal, launch as never, async () => [])
+  t.after(async () => { abort.abort(); await server; await rm(root, { recursive: true, force: true }) })
+  await waitFor(async () => Boolean(await readFile(path.join(directory, 'heartbeat.json'))))
+  // A directory where the cancel marker belongs: reading it fails, and so does the cleanup removal.
+  await mkdir(path.join(directory, 'r_leak.cancel'))
+  await ownerRun(controlDir, 'r_leak')
+  await writeFile(path.join(directory, 'r_leak.request.json'), JSON.stringify({ texts: ['a'], options: { cli: 'grok' } }))
+  await waitFor(async () => (await readFile(path.join(directory, 'r_leak.events'), 'utf8')).includes('"stream":"exit","code":1') && await gone_(path.join(directory, 'r_leak.running.json')))
+  await ownerRun(controlDir, 'r_next')
+  await writeFile(path.join(directory, 'r_next.request.json'), JSON.stringify({ texts: ['b'], options: { cli: 'grok' } }))
+  await waitFor(async () => (await readFile(path.join(directory, 'r_next.events'), 'utf8')).includes('"stream":"exit","code":0'))
+})
+
+test('idle treats only a definite "no such container" as gone: a Docker failure keeps the claim live', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-idle-docker-')), dir = path.join(root, 'host-executor')
+  await mkdir(dir)
+  const state = path.join(root, 'docker-state')
+  const restore = await fakeDocker(root, `const f=require('fs').readFileSync(${JSON.stringify(state)},'utf8');if(f==='gone'){console.error('Error: No such object: '+process.argv.at(-1));process.exit(1)}if(f==='blip'){console.error('Cannot connect to the Docker daemon');process.exit(1)}console.log(f==='stopped'?'false':'true')`)
+  t.after(async () => { restore(); await rm(root, { recursive: true, force: true }) })
+  const { idle } = (await import('../src/updates/supervisor.mjs' as string)) as { idle: (control: string, options: { pendingRequests: boolean }) => Promise<boolean> }
+  await writeFile(path.join(dir, 'dead.running.json'), '{}')
+  await writeFile(path.join(dir, 'dead.process.json'), JSON.stringify({ hostPid: 7, containerId: 'c207b1800089' }))
+  const verdicts: Record<string, boolean> = {}
+  for (const answer of ['gone', 'stopped', 'blip', 'running']) { await writeFile(state, answer); verdicts[answer] = await idle(root, { pendingRequests: false }) }
+  assert.deepEqual(verdicts, { gone: true, stopped: true, blip: false, running: false })
 })

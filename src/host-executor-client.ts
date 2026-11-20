@@ -66,7 +66,8 @@ try {
     await new Promise(resolve => setTimeout(resolve,150))
   }
 } catch (error) {
-  await writeFile(base+'.cancel','',{mode:0o600})
+  // A run with neither request nor claim has nothing left to cancel.
+  if (!settled) await writeFile(base+'.cancel','',{mode:0o600})
   console.error((error as Error).message)
   process.exitCode=1
 }

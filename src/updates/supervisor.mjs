@@ -33,7 +33,14 @@ export async function waitForHostHeartbeat(controlDir,child,failure,{attempts=30
 // Locks are linked from complete files; an unreadable one (a write cut by a full
 // disk or a kill) never had an owner and must not block every later start.
 const readLock=file=>read(file).catch(error=>error instanceof SyntaxError?{}:missing(error));
-const containerIsRunning=id=>execute('docker',['inspect','--format','{{.State.Running}}',id],{stdoutOnly:true}).then(o=>o.trim()==='true',()=>false);
+// Only a definite answer counts. A Docker failure that is not "no such container" (a daemon or CLI blip) says
+// nothing about the container: it must never read as "gone", or a live worker would lose its lock.
+async function containerState(id) {
+  try {return (await execute('docker',['inspect','--format','{{.State.Running}}',id],{stdoutOnly:true})).trim()==='true'?'running':'stopped';}
+  catch(error) {if(/No such (?:object|container)/i.test(error.message))return 'gone';throw error;}
+}
+// An unanswered question keeps the claim live: waiting is safe, relaunching beside a live worker is not.
+const containerIsRunning=id=>containerState(id).then(state=>state==='running',()=>true);
 export async function idle(control,{pendingRequests=true,relayRequired=false,containerRunning=containerIsRunning}={}) {
   const dir=path.join(control,'host-executor');
   const host=await fs.readdir(dir).catch(e=>{if(e.code==='ENOENT')return [];throw e;});
@@ -160,8 +167,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
       const prior=await readLock(lock);
       if(prior?.containerId){
         if(!/^[a-f0-9]{12,64}$/.test(prior.containerId))throw Error('Invalid previous isolated worker identity');
-        const running=await execute('docker',['inspect','--format','{{.State.Running}}',prior.containerId],{stdoutOnly:true}).catch(()=>null);
-        if(running?.trim()==='true')throw Error('Previous isolated worker is still running');
+        if(await containerState(prior.containerId)==='running')throw Error('Previous isolated worker is still running');
         // Only the supervisor can prove a foreign container stopped.
         if(JSON.stringify(await read(lock))!==JSON.stringify(prior))throw Error('Worker lock changed during recovery');
         await fs.rm(lock);
@@ -251,7 +257,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     const workerOwner=await readLock(path.join(agent.controlDir,'host-executor/worker.lock'));
     if(host.isolation==='isolated'&&workerOwner?.containerId){
       if(!/^[a-f0-9]{12,64}$/.test(workerOwner.containerId))throw Error('Invalid isolated worker identity');
-      if((await execute('docker',['inspect','--format','{{.State.Running}}',workerOwner.containerId],{stdoutOnly:true}).catch(()=>''))?.trim()==='true'){container=workerOwner.containerId;proven=true;}
+      if(await containerState(workerOwner.containerId)==='running'){container=workerOwner.containerId;proven=true;}
     }
     // A reloading predecessor hands its executor generations over running:
     // keep the claiming worker and reap retiring ones after their work ends.

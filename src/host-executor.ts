@@ -113,7 +113,8 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
         if (prior.started && await processStart(prior.pid)===prior.started) terminateJob({pid:prior.pid,exitCode:null,signalCode:null} as ChildProcess)
       }
       await appendFile(base+'.events',JSON.stringify({stream:'exit',code:1})+'\n',{mode:0o600})
-      await rm(base+'.process.json',{force:true});await rm(base+'.running.json',{force:true})
+      // The claim goes first: a kill between the two leaves a harmless process record, not a claim without one.
+      await rm(base+'.running.json',{force:true});await rm(base+'.process.json',{force:true})
     }
   }
   // Result and control files outlive runs whose client never read the exit
@@ -175,6 +176,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     }
     let catalogAt=Date.now()
     const catalogSeen=new Map<HostBinding,string>()
+    const failedPasses=new Map<HostBinding,number>()
     while (!signal.aborted) {
       const parent=Number(process.env.EZ_HOST_SUPERVISOR_PID)
       if(parent && !retiring) { try { process.kill(parent,0) } catch { break } }
@@ -357,21 +359,28 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
             finally {
               if(cancellation)clearInterval(cancellation)
               await job?.cleanup().catch(() => {})
-              await writes
-              await rm(base+'.running.json',{force:true})
-              await rm(base+'.process.json',{force:true})
-              await rm(base+'.cancel',{force:true})
-              active.delete(base)
-              await releaseWorkspace()
-              claimed.delete(base)
+              try {
+                await writes
+                await rm(base+'.running.json',{force:true})
+                await rm(base+'.process.json',{force:true})
+                await rm(base+'.cancel',{force:true})
+              } finally {
+                // A failed removal (EIO, EROFS) must not leak the lane or the claim: both always release.
+                active.delete(base)
+                try { await releaseWorkspace() } finally { claimed.delete(base) }
+              }
             }
           })()
           tasks.add(task); void task.catch(error=>console.error('Host run cleanup failed',id,message(error))).finally(()=>tasks.delete(task))
         }
+        failedPasses.delete(agent)
       } catch (error) {
-        // One agent's failed claim pass (I/O, a busy lease) must not stop the
-        // transport or the runs already executing; the next pass looks again.
-        console.error('Host claim pass failed',agent.name,message(error))
+        // A failed claim pass (an I/O blip, a busy lease) must not stop the transport or the runs
+        // already executing: the next pass looks again. About five seconds of consecutive failures
+        // is not a blip: exit, so clients see the host offline and the supervisor restarts it.
+        const failures=(failedPasses.get(agent)??0)+1;failedPasses.set(agent,failures)
+        if(failures===1||failures%20===0)console.error('Host claim pass failed',agent.name,message(error))
+        if(failures>=20)throw error
       }
       await new Promise(resolve=>setTimeout(resolve,250))
     }

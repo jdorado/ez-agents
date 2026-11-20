@@ -1509,6 +1509,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       }
       await watchRun(run, run.texts, owner, true)
     }).catch(error => console.error('Run adoption failed', run.id, safeError(error)))
+    // Host work no relay watches (a crashed predecessor's, with no handoff) would hold the foreground
+    // lane and a schedule's slot, unreachable by /stop: ask the host to stop it.
+    for (const file of await readdir(join(config.controlDir, 'host-executor')).catch(() => [] as string[])) {
+      const id = /^(.+)\.(?:request|running)\.json$/.exec(file)?.[1]
+      if (id && isHostRunId(id) && (await runs.get(id))?.status !== 'running') await cancelUnobservedHostRun(id).catch(() => {})
+    }
   }
 
   let stopWork: Promise<void> | undefined
@@ -1572,14 +1578,8 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         beforeClose:async()=>{if(drainingHandoff){await outboxWork?.catch(()=>{});await drainOutbox(undefined,true)}},
         ...(Number.isSafeInteger(deliveryTcpPort) && deliveryTcpPort >= 1024 && deliveryTcpPort <= 65535 ? { tcpPort: deliveryTcpPort } : {}),
       })
-      // Adopt handed-off runs before any intake can launch work, then stop host
-      // work no relay watches: a crashed predecessor's runs would otherwise hold
-      // the foreground lane and a schedule's slot, unreachable by /stop.
+      // Adopt handed-off runs before any intake can launch work; adoption also stops host work no relay watches.
       await adoptHandoff()
-      if (await hostTransport()) for (const file of await readdir(join(config.controlDir, 'host-executor')).catch(() => [] as string[])) {
-        const id = /^(.+)\.(?:request|running)\.json$/.exec(file)?.[1]
-        if (id && isHostRunId(id) && (await runs.get(id))?.status !== 'running') await cancelUnobservedHostRun(id).catch(() => {})
-      }
       if (config.applicationPort) await applicationChannel.listen(config.applicationPort, config.applicationHost)
       runtimeStarted = true
       const owner = (await control.status()).owner
