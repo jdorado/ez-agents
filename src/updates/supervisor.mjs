@@ -131,6 +131,8 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   await fs.writeFile(staged,JSON.stringify({pid:process.pid}),{mode:0o600});
   try {await fs.link(staged,lock);} finally {await fs.rm(staged,{force:true});}
   let child,container;
+  // The current container worker answered its heartbeat (or was adopted running).
+  let proven=false;
   let retirements=[];
   let reloadPending;
   let reloadReady=false;
@@ -151,6 +153,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   };
   const startHost=async root=>{
     if(host.isolation==='isolated') {
+      proven=false;
       const pkg=await read(path.join(root,'package.json'));
       if(pkg.ezRelease?.containerExecutor!==1)return;
       const lock=path.join(agent.controlDir,'host-executor/worker.lock');
@@ -196,7 +199,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
         const running=await execute('docker',['inspect','--format','{{.State.Running}}',container],{stdoutOnly:true});
         if(running.trim()!=='true')throw Error('Isolated executor exited during startup');
         const heartbeat=await read(path.join(agent.controlDir,'host-executor/heartbeat.json')).catch(missing);
-        if(heartbeat?.containerExecutor===true&&container.startsWith(heartbeat.containerId||'missing')&&Date.now()-heartbeat.at<1000)return;
+        if(heartbeat?.containerExecutor===true&&container.startsWith(heartbeat.containerId||'missing')&&Date.now()-heartbeat.at<1000){proven=true;return;}
         await sleep(100);
       }
       throw Error('Isolated executor heartbeat timeout');
@@ -248,7 +251,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     const workerOwner=await readLock(path.join(agent.controlDir,'host-executor/worker.lock'));
     if(host.isolation==='isolated'&&workerOwner?.containerId){
       if(!/^[a-f0-9]{12,64}$/.test(workerOwner.containerId))throw Error('Invalid isolated worker identity');
-      if((await execute('docker',['inspect','--format','{{.State.Running}}',workerOwner.containerId],{stdoutOnly:true}).catch(()=>''))?.trim()==='true')container=workerOwner.containerId;
+      if((await execute('docker',['inspect','--format','{{.State.Running}}',workerOwner.containerId],{stdoutOnly:true}).catch(()=>''))?.trim()==='true'){container=workerOwner.containerId;proven=true;}
     }
     // A reloading predecessor hands its executor generations over running:
     // keep the claiming worker and reap retiring ones after their work ends.
@@ -285,7 +288,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
     while(!signal.aborted) {
       if(!isolated && child?.exitCode!==null&&child?.exitCode!==undefined)throw Error('Host transport exited; supervisor service should restart');
       await initializeIsolated();
-      if(container&&(await execute('docker',['inspect','--format','{{.State.Running}}',container],{stdoutOnly:true})).trim()!=='true')throw Error('Isolated executor exited; supervisor service should restart');
+      if(container&&(await execute('docker',['inspect','--format','{{.State.Running}}',container],{stdoutOnly:true})).trim()!=='true'){proven=false;throw Error('Isolated executor exited; supervisor service should restart');}
       // Reopen only after the successor worker is ready. The relay and its
       // unclaimed requests remain running throughout this supervisor restart.
       if(!admissionReady&&!reloadPending&&(!isolated||container)){await fs.rm(pause,{force:true});admissionReady=true;}
@@ -352,8 +355,14 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   }finally {
     clearInterval(beat);
     if(!handoff){
+      // An unexpected supervisor failure (a Docker CLI blip, a read error) must not
+      // kill the turns of a proven container worker: like a reload, the successor
+      // adopts it through worker.lock and reaps retiring generations. A stop, a
+      // confirmed exit or an unproven start still stops it.
+      const adoptable=proven&&container&&!signal.aborted;
+      if(adoptable){console.error('Supervisor failed; leaving the running executor for the successor to adopt');container=undefined;}
       await stopHost();
-      for(const item of retirements){if(item.container){await execute('docker',['stop','--time','10',item.container]);await removeContainer(item.container);}else if(item.child.exitCode===null)item.child.kill('SIGTERM');}
+      for(const item of retirements){if(item.container){if(adoptable)continue;await execute('docker',['stop','--time','10',item.container]);await removeContainer(item.container);}else if(item.child.exitCode===null)item.child.kill('SIGTERM');}
     }
     await fs.rm(lock,{force:true});
     if(!reloadReady) {

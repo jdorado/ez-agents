@@ -51,3 +51,20 @@ test('manual preflight before the first tick preserves future recurrence',async 
  await scheduler.tick(owner,runs,next!)
  assert.equal((await runs.list()).length,2)
 })
+
+test('a transient preflight failure keeps its occurrence due for a few minutes, then skips it',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'schedule-preflight-retry-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ let failed=true,calls=0
+ const scheduler=new Scheduler(dir,async()=>{calls++;if(failed)throw Error('Broker unavailable');return packet(true,randomUUID().replaceAll('-','').padEnd(64,'0'))}),runs=new RunStore(dir)
+ const owner={telegramUserId:42,telegramChatId:42,pairedAt:new Date().toISOString()},start=Date.now()+10000
+ const input={id:'daily',name:'Daily',text:'Do role work',enabled:true,owner,execution:{sessionId:randomUUID(),preset:{id:'test',name:'test',cli:'codex',model:'fixture-model'}},trigger:{everySeconds:86400,start:new Date(start).toISOString()},preflight:{on:'eligible' as const,checks:[{alias:'provider-work',args:[]}]}}
+ const s=await scheduler.save(input)
+ await scheduler.tick(owner,runs,start);assert.equal(calls,1);assert.equal(await scheduler.pendingOccurrence(s),start,'the day is kept')
+ await scheduler.tick(owner,runs,start+30000);assert.equal(calls,1,'no retry before its minute')
+ failed=false;await scheduler.tick(owner,runs,start+60000)
+ const [run]=await runs.list();assert.equal(run?.scheduled?.dueAt,new Date(start).toISOString(),'the recovered preflight runs the kept occurrence')
+ // A failure that outlasts the window skips that occurrence as before.
+ await runs.patch(run.id,{status:'completed'});failed=true;const next=start+86400000
+ for(const offset of [0,60000,120000,180000,240000,300000])await scheduler.tick(owner,runs,next+offset)
+ assert.equal(await scheduler.pendingOccurrence(s),next+86400000);assert.equal((await runs.list()).length,1)
+})

@@ -90,3 +90,26 @@ test('a control lock left by a killed holder is broken instead of blocking every
   await writeFile(lock, 'live-holder')
   await assert.rejects(control.getActiveSession(), /authority control lock/)
 })
+
+test('a dead plugin holder\'s workspace lease is reclaimed only once Docker no longer has its command container', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-plugin-lease-')), fake = path.join(root, 'bin'), home = path.join(root, 'tools')
+  await mkdir(fake); await mkdir(home)
+  await writeFile(path.join(fake, 'docker'), `#!${process.execPath}\nconst id=process.argv.at(-1);if(id.endsWith('-gone')){console.error('Error: No such object: '+id);process.exit(1)}console.log('true')`, { mode: 0o755 })
+  const path0 = process.env.PATH; process.env.PATH = fake + path.delimiter + path0
+  t.after(async () => { process.env.PATH = path0; await rm(root, { recursive: true, force: true }) })
+  const { recoverNativeLease, workspaceLease } = await import('../src/plugins/workspace-lease.mjs')
+  const dead = await new Promise<number>(resolve => { const c = spawn(process.execPath, ['-e', '']); c.once('exit', () => resolve(c.pid!)) })
+  const lock = path.join(home, 'workspace-writer.lock')
+  for (const owner of [{ pid: dead, kind: 'plugin', container: 'agent-call-live' }, { pid: dead, kind: 'plugin' }]) {
+    await writeFile(lock, JSON.stringify(owner))
+    await assert.rejects(recoverNativeLease(home), /Stale plugin workspace-writer.lock/, 'a running or unnamed container may still write the workspace')
+  }
+  await writeFile(lock, JSON.stringify({ pid: dead, kind: 'plugin', container: 'agent-call-gone' }))
+  await recoverNativeLease(home)
+  assert.ok(await gone(lock))
+  // A native claim takes over the same stale lease instead of failing every pass.
+  await writeFile(lock, JSON.stringify({ pid: dead, kind: 'plugin', container: 'agent-call-gone' }))
+  const release = await workspaceLease(home, { kind: 'native', runId: 'r_next' })
+  assert.equal(JSON.parse(await readFile(lock, 'utf8')).runId, 'r_next')
+  await release!()
+})

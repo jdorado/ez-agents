@@ -733,7 +733,7 @@ test('isolated supervisor reload hands live executors to its successor without h
  await atomic(path.join(f.config.deploymentDir,'host-executor.json'),{cli:'grok',isolation:'isolated',agents:[f.agent]});
  const pkg=await read(path.join(f.old,'package.json'));pkg.ezRelease={...pkg.ezRelease,runHandoff:1,containerExecutor:1};await atomic(path.join(f.old,'package.json'),pkg);
  // Synthetic Docker: one record per container. The retiring generation runs long native work.
- const store=path.join(f.root,'docker.json'),log=path.join(f.root,'docker.jsonl'),retiring='a'.repeat(64),retiringFile=path.join(f.home,'updates','ez-executor-old-1.json');
+ const store=path.join(f.root,'docker.json'),log=path.join(f.root,'docker.jsonl'),blip=path.join(f.root,'docker-blip'),retiring='a'.repeat(64),retiringFile=path.join(f.home,'updates','ez-executor-old-1.json');
  await atomic(store,{[retiring]:{project:'ez-executor-old-1',running:true}});await atomic(retiringFile,{services:{}});
  await atomic(path.join(host,'worker.lock'),{containerId:retiring.slice(0,12)});
  const active=path.join(host,'r_long.running.json');await fs.writeFile(active,'{}');
@@ -742,6 +742,7 @@ test('isolated supervisor reload hands live executors to its successor without h
  await fs.writeFile(path.join(fake,'docker'),`#!${process.execPath}
 const fs=require('fs'),a=process.argv.slice(2),file=${JSON.stringify(store)},s=JSON.parse(fs.readFileSync(file)),host=${JSON.stringify(host)};
 fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');
+if(a[0]==='inspect'&&fs.existsSync(${JSON.stringify(blip)})){fs.rmSync(${JSON.stringify(blip)});console.error('Cannot connect to the Docker daemon');process.exit(1);}
 const save=()=>fs.writeFileSync(file,JSON.stringify(s)),find=x=>Object.keys(s).find(id=>id.startsWith(x)),p=a[a.indexOf('--project-name')+1];
 if(a.includes('config'))console.log(JSON.stringify({services:{relay:{image:'relay',volumes:[],environment:{}}}}));
 else if(a.includes('create')){s[require('crypto').randomBytes(32).toString('hex')]={project:p,running:false};save();}
@@ -767,7 +768,9 @@ else if(a[0]==='cp')fs.readFileSync(0);
  assert.deepEqual(Object.values(containers).map(c=>c.running),[true,true],'both generations keep running');
  assert.deepEqual(stops(await calls()),[],'reload stops no executor');
  assert.equal(await fs.readFile(active,'utf8'),'{}');
- // The successor adopts the claiming worker and reaps the retiring generation only after it exits.
+ // The successor adopts the claiming worker and reaps the retiring generation only after it exits,
+ // even over a supervisor.lock a full disk left empty.
+ await fs.writeFile(path.join(f.home,'updates','supervisor.lock'),'');
  const before=(await calls()).length,second=start();t.after(()=>second.p.kill('SIGTERM'));
  await wait(async()=>(await calls()).slice(before).some(a=>a[0]==='inspect'&&a.at(-1)===retiring));
  assert.equal((await read(store))[retiring].running,true);
@@ -778,8 +781,17 @@ else if(a[0]==='cp')fs.readFileSync(0);
  assert.deepEqual(stops(successor).map(a=>a[a.indexOf('--project-name')+1]),['ez-executor-old-1']);
  assert.deepEqual(Object.keys(await read(store)),[replacement]);
  assert.equal(second.p.exitCode,null,second.output());
+ // A Docker CLI blip fails the supervisor but leaves the proven worker and its turns running.
+ const blipped=(await calls()).length;await fs.writeFile(blip,'');
+ assert.notEqual(await second.closed,0,second.output());
+ assert.deepEqual(stops((await calls()).slice(blipped)),[],'a supervisor failure stops no executor');
+ assert.equal((await read(store))[replacement].running,true);
+ const restarted=(await calls()).length,third=start();t.after(()=>third.p.kill('SIGTERM'));
+ await wait(async()=>(await calls()).slice(restarted).some(a=>a[0]==='inspect'&&a.at(-1)===replacement.slice(0,12)));
+ await new Promise(r=>setTimeout(r,1500));
+ assert.deepEqual((await calls()).slice(restarted).filter(a=>a.includes('create')||a[0]==='start'),[],'the restarted supervisor adopts it');
  // The adopted worker is tracked by its full ID and generation on shutdown.
- const shutdown=(await calls()).length;second.p.kill('SIGTERM');assert.equal(await second.closed,0,second.output());
+ const shutdown=(await calls()).length;third.p.kill('SIGTERM');assert.equal(await third.closed,0,third.output());
  const final=(await calls()).slice(shutdown);
  assert.deepEqual(stops(final).filter(a=>a[0]!=='stop').map(a=>a[0]==='rm'?'rm':a[a.indexOf('--project-name')+1]),[containers[replacement].project]);
 });
