@@ -165,6 +165,25 @@ test('a failed cleanup removal does not leak the foreground lane or the claim', 
   await ownerRun(controlDir, 'r_next')
   await writeFile(path.join(directory, 'r_next.request.json'), JSON.stringify({ texts: ['b'], options: { cli: 'grok' } }))
   await waitFor(async () => (await readFile(path.join(directory, 'r_next.events'), 'utf8')).includes('"stream":"exit","code":0'))
+  // The claim is released too: the same run id (a fallback attempt reuses it) is claimed again.
+  await rm(path.join(directory, 'r_leak.cancel'), { recursive: true })
+  await writeFile(path.join(directory, 'r_leak.request.json'), JSON.stringify({ texts: ['c'], options: { cli: 'grok' } }))
+  await waitFor(async () => (await readFile(path.join(directory, 'r_leak.events'), 'utf8')).includes('"stream":"exit","code":0'))
+})
+
+test('a process record stranded by a kill is swept after a day, a recent one is kept', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'ez-sweep-'))
+  const workspace = path.join(root, 'mind'), controlDir = path.join(root, 'control'), directory = path.join(controlDir, 'host-executor')
+  await mkdir(workspace); await mkdir(directory, { recursive: true })
+  const old = new Date(Date.now() - 2 * 86_400_000)
+  await writeFile(path.join(directory, 'r_stranded.process.json'), '{}'); await utimes(path.join(directory, 'r_stranded.process.json'), old, old)
+  await writeFile(path.join(directory, 'r_recent.process.json'), '{}')
+  const abort = new AbortController()
+  const server = serveHostExecutor({ cli: 'grok', agents: [{ name: 'test', workspace, controlDir, binDir: root }] }, abort.signal, undefined, async () => [])
+  t.after(async () => { abort.abort(); await server; await rm(root, { recursive: true, force: true }) })
+  await waitFor(async () => Boolean(await readFile(path.join(directory, 'heartbeat.json'))))
+  assert.ok(await gone_(path.join(directory, 'r_stranded.process.json')))
+  assert.ok(!await gone_(path.join(directory, 'r_recent.process.json')))
 })
 
 test('idle treats only a definite "no such container" as gone: a Docker failure keeps the claim live', async t => {

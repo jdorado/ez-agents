@@ -310,6 +310,34 @@ test('an effort tap on an older card never re-applies that card\'s model over a 
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
+test('a late tap on a button a redraw replaced redraws the card instead of saying the menu expired', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-late-'))
+  try {
+    const store = new ControlStore(dir, 1000)
+    const initial = initialPreset('grok')
+    await store.aiState(initial)
+    await store.savePreset({ id: 'recent', name: 'Recent', cli: 'codex', model: 'fixture-model', effort: 'medium' })
+    await store.selectPreset('recent', (await store.captureChoice(initial)).sessionId, true)
+    const menu = createAiMenu(store, 'grok', async () => [
+      { cli: 'codex', model: 'fixture-model', name: 'Fixture', efforts: ['medium', 'high'] },
+      { cli: 'codex', model: 'second-model', name: 'Second', efforts: ['low', 'high'] },
+    ], undefined, undefined, async (name) => name === 'codex')
+    const card = aiScreens(menu)
+    await card.open()
+    const late = card.screens[0].buttons.find((button) => button.text === 'high')!
+    await card.click('Second')
+    const screens = card.screens.length
+    // The tap meant for the card as it was: its button was replaced by the redraw above.
+    await menu.handle({ callbackQuery: { data: late.callback_data }, answerCallbackQuery: async () => ({}),
+      reply: async (text: string, options?: { reply_markup?: { inline_keyboard?: unknown[] } }) => { card.screens.push({ text, buttons: [] }); void options; return {} as never } } as never)
+    assert.equal(card.screens.length, screens + 1)
+    assert.match(card.screens.at(-1)!.text, /Choose AI[\s\S]*second-model/)
+    assert.doesNotMatch(card.screens.at(-1)!.text, /Menu expired/)
+    const state = await store.status()
+    assert.equal(state.ai!.presets.find((preset) => preset.id === state.ai!.selectedId)!.model, 'second-model', 'a late tap applies nothing')
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
 test('Choose AI shows logins as their own row under More and strips account and engine prefixes from model names', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-accounts-'))
   try {
@@ -373,6 +401,10 @@ test('Choose AI edits its own message in place, shows the first models and opens
     // Tapping a model from the full list saves it; the short list then keeps it in view with its tick.
     await menu.handle(context(edited.at(-1)!.buttons.find((button) => button.text === 'Model 15')!.callback_data) as never)
     assert.deepEqual(names(edited.at(-1)!.buttons), ['Model 0', 'Model 1', 'Model 2', 'Model 3', 'Model 4', 'Model 5', '✓ Model 15'])
+    // Opening the rest lands on the page that holds the model in use.
+    await menu.handle(context(edited.at(-1)!.buttons.find((button) => button.text === 'More models (13) ▸')!.callback_data) as never)
+    assert.ok(edited.at(-1)!.buttons.some((button) => button.text === '2/2 ›'))
+    assert.ok(names(edited.at(-1)!.buttons).includes('✓ Model 15'))
     assert.equal(sent.length, 0)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })

@@ -124,7 +124,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
     const directory=path.join(agent.controlDir,'host-executor'),files=await readdir(directory)
     const open=new Set(files.filter(f=>f.endsWith('.request.json')||f.endsWith('.running.json')).map(f=>f.slice(0,-13)))
     for (const file of files) {
-      const id=/^(.+?)\.(?:events|cancel|steer-.+)$/.exec(file)?.[1]
+      const id=/^(.+?)\.(?:events|cancel|steer-.+|process\.json)$/.exec(file)?.[1]
       if (!id || !isHostRunId(id) || open.has(id)) continue
       const modified=await stat(path.join(directory,file)).then(s=>s.mtimeMs,()=>Date.now())
       if (Date.now()-modified>86400000) await rm(path.join(directory,file),{force:true})
@@ -375,9 +375,11 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
         }
         failedPasses.delete(agent)
       } catch (error) {
-        // A failed claim pass (an I/O blip, a busy lease) must not stop the transport or the runs
-        // already executing: the next pass looks again. About five seconds of consecutive failures
-        // is not a blip: exit, so clients see the host offline and the supervisor restarts it.
+        // A failed claim pass (an I/O error, a stale lease) must not stop the transport or the runs
+        // already executing: the next pass looks again. A busy lease is not a failure (it returns
+        // undefined). About five seconds of consecutive failures is not a blip: exit, as every throw
+        // did before, so clients see the host offline and the supervisor restarts it. That ends the
+        // whole executor; installs bind one agent, where no other agent's turns are affected.
         const failures=(failedPasses.get(agent)??0)+1;failedPasses.set(agent,failures)
         if(failures===1||failures%20===0)console.error('Host claim pass failed',agent.name,message(error))
         if(failures>=20)throw error

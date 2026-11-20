@@ -14,7 +14,7 @@ async function leaseOwner(file) {
 // the container still writes the workspace, so the lease is stale only once
 // Docker no longer knows that container (`run --rm` removes it on exit), and
 // only after the window in which an orphaned `compose run` may still create it.
-const createWindowMs=60000;
+const createWindowMs=20000;
 async function pluginContainerGone(owner,file) {
   if(owner.kind!=='plugin'||typeof owner.container!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(owner.container))return false;
   const info=await fs.stat(file).catch(()=>null);
