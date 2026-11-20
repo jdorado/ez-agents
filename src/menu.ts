@@ -46,12 +46,15 @@ const keepOrDefaultEffort = (model: ModelChoice, wanted?: string) => {
 const chunks = <T,>(items: T[], size: number) => Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, index * size + size))
 // Rows of at most `max` buttons, split evenly (5 → 3+2) instead of leaving a lone button.
 const balanced = <T,>(items: T[], max: number) => chunks(items, Math.ceil(items.length / Math.ceil(items.length / max) || 1))
-const MODELS_PER_PAGE = 9
+// Catalogs list newest first, and a long tail of look-alike names costs a phone screen. A list of
+// more than FEATURED + 2 shows its first FEATURED (plus the one in use) and opens fully on request.
+const FEATURED = 6
+const MODELS_PER_PAGE = 12
 
 // What the card is showing: a catalog entry plus an effort. Engine, account and page
 // only move this view; a model or effort tap applies at once. `more` opens the engine
 // and account rows, which most switches never need.
-type Draft = { model: ModelChoice; effort?: string; page: number; more?: boolean }
+type Draft = { model: ModelChoice; effort?: string; page: number; more?: boolean; all?: boolean }
 
 // Short-lived opaque button IDs: no model names or executable arguments from callbacks.
 // These are operational settings, not a second conversational/agent loop.
@@ -121,7 +124,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const logins = [...new Set(models.filter(model => model.cli === cli).map(model => model.authProfile))]
     return [...logins.filter(login => login === undefined), ...logins.filter(login => login !== undefined)]
   }
-  const pick = (draft: Draft, model: ModelChoice): Draft => ({ model, page: 0, effort: keepOrDefaultEffort(model, draft.effort) })
+  const pick = (draft: Draft, model: ModelChoice): Draft => ({ model, page: 0, all: false, effort: keepOrDefaultEffort(model, draft.effort) })
   const toAccount = (models: ModelChoice[], draft: Draft, cli: string, authProfile?: string): Draft => {
     const list = models.filter(model => sameEngine(model, { cli, authProfile }))
     return pick(draft, list.find(model => sameModel(model, draft.model)) ?? list[0])
@@ -139,7 +142,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     const selected = state.presets.find((preset) => preset.id === state.selectedId)!
     const isCurrent = (model: ModelChoice) => sameEngine(model, selected) && model.model === selected.model && model.provider === selected.provider
     const keyboard = new InlineKeyboard()
-    const redraw = (next: Draft) => (again: Context) => card(again, models, { ...next, more: draft.more }, owned)
+    const redraw = (next: Draft) => (again: Context) => card(again, models, { ...next, more: draft.more, all: next.all ?? draft.all }, owned)
     const recent = (state.recentIds ?? [])
       .map((id) => state.presets.find((preset) => preset.id === id))
       .filter((preset): preset is AiPreset => Boolean(preset))
@@ -162,8 +165,10 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       }
     }
     const listed = models.filter((model) => sameEngine(model, draft.model))
-    const pages = Math.ceil(listed.length / MODELS_PER_PAGE), page = Math.min(draft.page, Math.max(0, pages - 1))
-    const visible = listed.slice(page * MODELS_PER_PAGE, (page + 1) * MODELS_PER_PAGE)
+    const collapsed = !draft.all && listed.length > FEATURED + 2
+    const shown = collapsed ? [...listed.slice(0, FEATURED), ...listed.slice(FEATURED).filter(isCurrent)] : listed
+    const pages = Math.ceil(shown.length / MODELS_PER_PAGE), page = Math.min(draft.page, Math.max(0, pages - 1))
+    const visible = shown.slice(page * MODELS_PER_PAGE, (page + 1) * MODELS_PER_PAGE)
     // Long names get two buttons per row so a phone does not cut them off.
     for (const row of chunks(visible, visible.some((model) => modelName(model).length > 11) ? 2 : 3)) {
       for (const model of row) issue(keyboard, owned, `${isCurrent(model) ? '✓ ' : ''}${modelName(model)}`,
@@ -174,6 +179,8 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       issue(keyboard, owned, '‹ Models', redraw({ ...draft, page: (page + pages - 1) % pages }))
       issue(keyboard, owned, `${page + 1}/${pages} ›`, redraw({ ...draft, page: (page + 1) % pages }), true)
     }
+    if (collapsed) issue(keyboard, owned, `More models (${listed.length - shown.length}) ▸`, redraw({ ...draft, page: 0, all: true }), true)
+    else if (draft.all && listed.length > FEATURED + 2) issue(keyboard, owned, '▴ Fewer models', redraw({ ...draft, page: 0, all: false }), true)
     // Effort belongs to the model in use; another engine's models start from their own default.
     const efforts = isCurrent(draft.model) ? supportedEfforts(draft.model) : []
     for (const row of balanced(efforts, 4)) {
@@ -207,8 +214,7 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     // Start on the current choice; a saved choice outside the catalog starts on the first entry.
     const match = models.find((model) => matchesModel(selected, model) && model.model === selected.model) ?? models.find((model) => matchesModel(selected, model)) ?? models[0]
     const effort = selected.effort && supportedEfforts(match).includes(selected.effort) ? selected.effort : undefined
-    const index = models.filter((model) => sameEngine(model, match)).indexOf(match)
-    await card(ctx, models, { model: match, effort, page: Math.floor(index / MODELS_PER_PAGE) }, undefined, notice)
+    await card(ctx, models, { model: match, effort, page: 0 }, undefined, notice)
   }
   const saveSelection = async (model: ModelChoice, effort?: string, guard?: ControlGuard) => {
     const state = (await control.status()).ai

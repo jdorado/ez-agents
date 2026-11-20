@@ -317,12 +317,12 @@ test('Choose AI shows logins as their own row under More and strips account and 
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
-test('Choose AI edits its own message in place and pages long model lists', async () => {
+test('Choose AI edits its own message in place, shows the first models and opens the rest on request', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ez-ai-menu-edit-'))
   try {
     const store = new ControlStore(dir, 1000)
     await store.aiState(initialPreset('codex'))
-    const models = Array.from({ length: 11 }, (_, index) => ({ cli: 'codex', model: `model-${index}`, name: `Model ${index}`, efforts: [] as string[] }))
+    const models = Array.from({ length: 20 }, (_, index) => ({ cli: 'codex', model: `model-${index}`, name: `Model ${index}`, efforts: [] as string[] }))
     const menu = createAiMenu(store, 'codex', async () => models, undefined, undefined, async () => true)
     const sent: string[] = [], edited: Array<{ text: string; buttons: Array<{ text: string; callback_data: string }> }> = []
     const context = (data?: string) => ({
@@ -335,11 +335,18 @@ test('Choose AI edits its own message in place and pages long model lists', asyn
     })
     const opened: Array<Array<{ text: string; callback_data: string }>> = []
     await menu.list({ ...context(), callbackQuery: undefined, reply: async (_text: string, options?: { reply_markup?: { inline_keyboard?: Array<Array<{ text: string; callback_data: string }>> } }) => { opened.push(options!.reply_markup!.inline_keyboard!.flat()); return {} as never } } as never)
-    assert.equal(opened[0].filter((button) => /Model \d+/.test(button.text)).length, 9)
-    await menu.handle(context(opened[0].find((button) => button.text.endsWith('/2 ›') || button.text === '1/2 ›')!.callback_data) as never)
-    assert.deepEqual(edited.at(-1)!.buttons.filter((button) => /Model \d+/.test(button.text)).map((button) => button.text), ['Model 9', 'Model 10'])
+    const names = (buttons: Array<{ text: string }>) => buttons.map((button) => button.text).filter((text) => /Model \d+/.test(text) && !text.startsWith('More'))
+    // Six models and a button for the rest: no page of one, no wall of look-alike names.
+    assert.deepEqual(names(opened[0]), ['Model 0', 'Model 1', 'Model 2', 'Model 3', 'Model 4', 'Model 5'])
+    await menu.handle(context(opened[0].find((button) => button.text === 'More models (14) ▸')!.callback_data) as never)
+    assert.equal(names(edited.at(-1)!.buttons).length, 12)
+    assert.ok(edited.at(-1)!.buttons.some((button) => button.text === '1/2 ›'))
+    await menu.handle(context(edited.at(-1)!.buttons.find((button) => button.text === '1/2 ›')!.callback_data) as never)
+    assert.deepEqual(names(edited.at(-1)!.buttons), ['Model 12', 'Model 13', 'Model 14', 'Model 15', 'Model 16', 'Model 17', 'Model 18', 'Model 19'])
+    // Tapping a model from the full list saves it; the short list then keeps it in view with its tick.
+    await menu.handle(context(edited.at(-1)!.buttons.find((button) => button.text === 'Model 15')!.callback_data) as never)
+    assert.deepEqual(names(edited.at(-1)!.buttons), ['Model 0', 'Model 1', 'Model 2', 'Model 3', 'Model 4', 'Model 5', '✓ Model 15'])
     assert.equal(sent.length, 0)
-    assert.equal(edited.length, 1)
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
 
