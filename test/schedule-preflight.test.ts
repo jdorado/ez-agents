@@ -4,7 +4,7 @@ import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {randomUUID} from 'node:crypto'
-import {Scheduler} from '../src/scheduler.js'
+import {Scheduler,type Schedule} from '../src/scheduler.js'
 import {RunStore} from '../src/runs.js'
 import {validPreflight,combinePreflight} from '../src/schedule-preflight.js'
 const packet=(eligible:boolean,fingerprint='a'.repeat(64))=>({eligible,fingerprint,count:eligible?1:0,observedAt:new Date().toISOString()})
@@ -33,7 +33,7 @@ test('every preflight of one tick receives that tick\'s start; a manual trigger 
  const seen:[string,number][]=[]
  const scheduler=new Scheduler(dir,async(id,_revision,since)=>{seen.push([id,since]);return packet(id==='lane-b','b'.repeat(64))}),runs=new RunStore(dir)
  const owner={telegramUserId:42,telegramChatId:42,pairedAt:new Date().toISOString()},start=Date.now()+10000
- const saved=[]
+ const saved:Schedule[]=[]
  for(const id of ['lane-a','lane-b','lane-c']) saved.push(await scheduler.save({id,name:id,text:'Do role work',enabled:true,owner,execution:{sessionId:randomUUID(),preset:{id:'test',name:'test',cli:'codex',model:'fixture-model'}},trigger:{everySeconds:900,start:new Date(start).toISOString()},preflight:{on:'eligible' as const,checks:[{alias:'provider-work',args:['--field',`Lane=${id}`]}]}}))
  await scheduler.tick(owner,runs,start)
  assert.deepEqual(seen.map(([id])=>id).sort(),['lane-a','lane-b','lane-c']);assert.deepEqual(seen.map(([,since])=>since),[start,start,start])
