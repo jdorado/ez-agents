@@ -532,7 +532,7 @@ export async function publishBrokerPlugins(home,controlDir) {
   await stewardOwned(file);
 }
 // The lock protects admission and compose refresh, never a persistent connection.
-export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false,environment=process.env,signal,taskContext}={}) {
+export async function prepareCommand(home,alias,args,{revision,exclude,publish,invocation=false,environment=process.env,signal,taskContext,serviceEnvironment={}}={}) {
   strings(args);
   return locked(home,async()=>{
     const config=await json(path.join(home,'config.json')),r=await registry(home);
@@ -550,14 +550,15 @@ export async function prepareCommand(home,alias,args,{revision,exclude,publish,i
     // directly and keeps the value out of the process argument list.
     // The broker passes a relay-resolved task context; host task calls resolve their lease here.
     const context=taskContext!==undefined?JSON.stringify(taskContext):environment.EZ_TASK_CAPABILITY!==undefined?await taskPluginContext(alias,args,environment):await applicationPluginContext(record.manifest.id,environment);
+    const variables={...serviceEnvironment,...(context!==undefined?{EZ_PLUGIN_CONTEXT:context}:{})};
     let contextFile;
-    if(context!==undefined){
+    if(Object.keys(variables).length){
       await privateDir(path.join(home,'plugin-context'));
       contextFile=path.join(home,'plugin-context',`${randomUUID()}.json`);
       // Compose interpolates every file it loads, including this override, so
       // an opaque `$` in the context must be escaped as `$$` to reach the
       // container byte-for-byte.
-      const override={services:{[binding.service]:{environment:{EZ_PLUGIN_CONTEXT:context.replaceAll('$',()=> '$$')}}}};
+      const override={services:{[binding.service]:{environment:Object.fromEntries(Object.entries(variables).map(([name,value])=>[name,value.replaceAll('$',()=> '$$')]))}}};
       await fs.writeFile(contextFile,JSON.stringify(override,null,2)+'\n',{mode:0o600,flag:'wx'});
     }
     const invocationRelease=invocation?await invocationLease(home,container):undefined;

@@ -239,6 +239,13 @@ test('scheduled preflight uses authoritative configuration and rejects writes or
     registry.plugins.sample.manifest.commands.sample.exposure={receivesExternalContent:true,changesRecords:false,sendsExternally:false,requiresReview:false};
     await fs.writeFile(file,JSON.stringify(registry));
     const accepted=await request(f.socket,payload);assert.equal(accepted.ok,true);assert.equal(accepted.result.eligible,true);
+    // The tick's start reaches the check's container environment; a malformed instant never does.
+    const seen=path.join(f.fake,'seen-since'),since=new Date().toISOString();
+    await fs.writeFile(path.join(f.fake,'docker'), `#!${process.execPath}\nconst fs=require('node:fs'),a=process.argv;let since='none';for(let i=0;i<a.length;i++)if(a[i]==='--file'){try{since=Object.values(JSON.parse(fs.readFileSync(a[i+1],'utf8')).services).map(s=>s.environment?.EZ_PREFLIGHT_SINCE).find(Boolean)??since}catch{}}\nif(a.includes('run'))fs.writeFileSync(${JSON.stringify(seen)},since);process.stdout.write(JSON.stringify({schemaVersion:1,eligible:true,count:1,fingerprint:'a'.repeat(64),observedAt:new Date().toISOString()}));\n`, {mode:0o700});
+    assert.equal((await request(f.socket,{...payload,since})).ok,true);assert.equal(await fs.readFile(seen,'utf8'),since);
+    assert.equal((await request(f.socket,payload)).ok,true);assert.equal(await fs.readFile(seen,'utf8'),'none');
+    await fs.rm(seen);const malformed=await request(f.socket,{...payload,since:'2026-11-22T00:00:00Z"\nX'});
+    assert.equal(malformed.ok,false);await assert.rejects(()=>fs.readFile(seen),/ENOENT/);
     await fs.writeFile(path.join(f.fake,'docker'), `#!${process.execPath}\nprocess.stdout.write('SECRET-token-xyz');\n`, {mode:0o700});
     const invalid=await request(f.socket,payload);assert.equal(invalid.ok,false);
     assert.equal(invalid.error,'Scheduled plugin preflight returned invalid output');assert(!JSON.stringify(invalid).includes('SECRET-token-xyz'));

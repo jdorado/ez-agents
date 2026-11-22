@@ -262,6 +262,8 @@ const invokePlugin = async (binding, request, signal, scheduledPreflight = false
       signal,
       environment: { EZ_CONTROL_DIR: binding.controlDir, ...(scheduledPreflight ? {} : {EZ_RUN_ID: request.runId}), EZ_DELIVERY_SOCKET: process.env.EZ_DELIVERY_SOCKET ?? deliverySocketPath(binding.controlDir) },
       taskContext: request.pluginContext,
+      // The checks of one scheduler tick may share a provider read made at or after its start.
+      ...(scheduledPreflight && request.since ? {serviceEnvironment: {EZ_PREFLIGHT_SINCE: request.since}} : {}),
     });
     try {
       result = await dockerRun(command.argv, {
@@ -311,7 +313,8 @@ export async function validateBrokerRequest(request, workspace) {
   if (!request || typeof request !== 'object' || request.version !== 1 || !REQUEST_ID.test(request.id)) throw Error('Invalid plugin broker request');
   if(request.operation === 'preflight') {
     validId(request.scheduleId,RUN_ID,'schedule ID'); validId(request.revision,/^[a-f0-9-]{36}$/,'schedule revision');
-    if(Object.keys(request).some(k=>!['version','id','operation','scheduleId','revision'].includes(k))) throw Error('Unexpected schedule preflight field');
+    if(request.since!==undefined && (typeof request.since!=='string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(request.since) || !Number.isFinite(Date.parse(request.since)))) throw Error('Invalid schedule preflight instant');
+    if(Object.keys(request).some(k=>!['version','id','operation','scheduleId','revision','since'].includes(k))) throw Error('Unexpected schedule preflight field');
     return request;
   }
   if (!['resolve', 'invoke', 'manager','task-launch','task-capability'].includes(request.operation)) throw Error('Unknown plugin broker operation');
@@ -373,7 +376,7 @@ export async function servePluginBroker(binding, signal = new AbortController().
             const values=[];
             for(const check of condition.checks) {
               const selected=recordForAlias(await registry(binding.home),check.alias);
-              const result=await invokePlugin(binding,{alias:check.alias,args:check.args,revision:selected.record.revision,runId:`preflight_${request.scheduleId}`,id:randomUUID()},abort.signal,true);
+              const result=await invokePlugin(binding,{alias:check.alias,args:check.args,revision:selected.record.revision,runId:`preflight_${request.scheduleId}`,id:randomUUID(),since:request.since},abort.signal,true);
               if(!result.ok || result.code!==0) throw Error('Scheduled plugin preflight unavailable');
               try { values.push(JSON.parse(result.stdout)); } catch { throw Error('Scheduled plugin preflight returned invalid output'); }
             }
