@@ -4,7 +4,7 @@ import {mkdtemp,rm,readFile,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {randomUUID} from 'node:crypto'
-import {Scheduler} from '../src/scheduler.js'
+import {Scheduler,type Schedule} from '../src/scheduler.js'
 import {RunStore} from '../src/runs.js'
 import {validPreflight,combinePreflight} from '../src/schedule-preflight.js'
 const packet=(eligible:boolean,fingerprint='a'.repeat(64))=>({eligible,fingerprint,count:eligible?1:0,observedAt:new Date().toISOString()})
@@ -27,6 +27,22 @@ test('preflight skips empty/unchanged work, admits saved worker once, and fails 
  await runs.patch((await runs.list()).find(r=>r.status!=='completed')!.id,{status:'completed'})
  failed=true;await writeFile(join(dir,'upgrade-pause.json'),'{}');await scheduler.tick(owner,runs,start+360000);assert.equal((await runs.list()).length,2)
  failed=false;result=packet(true,'d'.repeat(64));await rm(join(dir,'upgrade-pause.json'));await scheduler.tick(owner,runs,start+361000);assert.equal((await runs.list()).length,3)
+})
+test('every preflight of one tick receives that tick\'s start; a manual trigger receives its own',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'schedule-preflight-since-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const seen:[string,number][]=[]
+ const scheduler=new Scheduler(dir,async(id,_revision,since)=>{seen.push([id,since]);return packet(id==='lane-b','b'.repeat(64))}),runs=new RunStore(dir)
+ const owner={telegramUserId:42,telegramChatId:42,pairedAt:new Date().toISOString()},start=Date.now()+10000
+ const saved:Schedule[]=[]
+ for(const id of ['lane-a','lane-b','lane-c']) saved.push(await scheduler.save({id,name:id,text:'Do role work',enabled:true,owner,execution:{sessionId:randomUUID(),preset:{id:'test',name:'test',cli:'codex',model:'fixture-model'}},trigger:{everySeconds:900,start:new Date(start).toISOString()},preflight:{on:'eligible' as const,checks:[{alias:'provider-work',args:['--field',`Lane=${id}`]}]}}))
+ await scheduler.tick(owner,runs,start)
+ assert.deepEqual(seen.map(([id])=>id).sort(),['lane-a','lane-b','lane-c']);assert.deepEqual(seen.map(([,since])=>since),[start,start,start])
+ // Each schedule keeps its own receipt and admission.
+ assert.deepEqual((await runs.list()).map(r=>r.scheduled?.id),['lane-b'])
+ for(const s of saved) assert.equal((await scheduler.preflightReceipt(s)).eligible,s.id==='lane-b')
+ seen.length=0;const before=Date.now()
+ await assert.rejects(()=>scheduler.trigger('lane-a',saved[0].revision,'manual',owner,runs),/no eligible/)
+ assert.ok(seen[0][1]>=before && seen[0][1]<=Date.now(),'a manual trigger never accepts an observation from before it was asked')
 })
 test('only bounded literal commands and fresh typed packets enter admission',()=>{
  assert.equal(validPreflight({on:'eligible',checks:[{alias:'queue',args:['x']}] }),true)

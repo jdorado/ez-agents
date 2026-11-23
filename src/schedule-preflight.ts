@@ -16,8 +16,8 @@ export function combinePreflight(results: unknown[]): PreflightReceipt {
  return {eligible:values.some(v=>v.eligible),fingerprint:createHash('sha256').update(JSON.stringify(values.map(v=>v.fingerprint))).digest('hex'),
  observedAt:new Date().toISOString(),count:values.reduce((n,v)=>n+v.count,0)}
 }
-export async function installedPreflight(scheduleId:string, revision:string): Promise<PreflightReceipt> {
+export async function installedPreflight(scheduleId:string, revision:string, since:number): Promise<PreflightReceipt> {
  const socket=process.env.EZ_PLUGIN_BROKER_SOCKET
  if(!socket) throw Error('Scheduled preflight requires the bound plugin broker')
- return await callLocalSocket(socket,{version:1,id:randomUUID(),operation:'preflight',scheduleId,revision},120000) as PreflightReceipt
+ return await callLocalSocket(socket,{version:1,id:randomUUID(),operation:'preflight',scheduleId,revision,since:new Date(since).toISOString()},120000) as PreflightReceipt
 }

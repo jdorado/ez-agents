@@ -212,10 +212,12 @@ export class Scheduler {
     await atomic(join(this.dir,s.id+'.json'),s,exclusive)
     return s
   }
-  async preflight(id:string, revision:string) {
+  // `since` is when the caller began (a tick's start): its checks may share one provider
+  // observation made at or after that instant, never an older one.
+  async preflight(id:string, revision:string, since=Date.now()) {
     const s=await this.get(id)
     if(s.revision!==revision || !s.enabled || !s.preflight) throw Error('Schedule preflight is unavailable')
-    const receipt=await this.checkPreflight(id,revision)
+    const receipt=await this.checkPreflight(id,revision,since)
     const cursor=join(this.dir,`${s.id}.${s.revision}.cursor`)
     const previous=await readFile(cursor,'utf8').then(v=>JSON.parse(v)).catch(async e=>{if(e.code==='ENOENT')return {next:await this.pendingOccurrence(s)};throw e})
     const admitted=receipt.eligible && (s.preflight.on!=='changed' || previous.preflight?.fingerprint!==receipt.fingerprint)
@@ -372,7 +374,7 @@ export class Scheduler {
           const retryAt = await readFile(cursor,'utf8').then(v => JSON.parse(v).retryAt, () => undefined)
           if (Number.isFinite(retryAt) && retryAt > now) continue
           try {
-            const checked=await this.preflight(s.id,s.revision)
+            const checked=await this.preflight(s.id,s.revision,now)
             preflight=checked.receipt
             if(!checked.admitted) {await atomic(cursor,{next:future,preflight});continue}
             // An overlapping occurrence starts only for work the running ones have not taken. Keep the
