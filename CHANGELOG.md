@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.80.0
+
+- Tell scheduled preflight checks when their tick began (#377). Each check of a scheduler tick now receives the tick's start as `EZ_PREFLIGHT_SINCE` (ISO 8601) in its command container; a manual `schedule trigger` passes its own request time. A plugin may let the checks of one tick share one provider observation made at or after that instant, never an older one. Core still reads and caches nothing; schedule receipts and the `changed` fingerprint are unchanged. With GitHub plugin `0.1.0-beta.9` the checks of one tick on the same Project read it once (container QA on the Stocks board: six checks went from six reads in 34.7 s to one in 7.5 s). Plugins that ignore the variable behave as before.
+
 ## 0.79.0
 
 - Follow-ups from the 0.78.0 reviews. A plugin workspace lease held by a dead plugin call is reclaimed 35 s after its last write instead of 60 s (a plugin call's own timeout plus its kill is about 32 s), so an owner's next message waits less after a killed call; a live holder is still never reclaimed. A tap on a different `/ai` button after a redraw replaced it redraws the card instead of saying the menu expired; a double tap on the same button, unknown buttons and forged buttons still read as expired. A process record stranded by a kill between the two removals of a recovered claim is swept after a day with the other settled run files. The host executor's persistent-failure exit is documented as ending the whole executor, as every throw did before 0.78.0. Tests now cover the "More models" page, a same-run-id claim after a failed cleanup, the late-tap redraw, the lease window boundary and the stranded-record sweep.
