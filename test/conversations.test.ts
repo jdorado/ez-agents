@@ -99,7 +99,7 @@ test('validate reads without writing and rejects state this release cannot run',
   await store.validate()
   assert.equal(await readFile(file, 'utf8'), before)
   const state = JSON.parse(before)
-  state.ai.presets[0].cli = 'agy'
+  state.ai.presets[0].cli = 'unreal-agent'
   const retired = JSON.stringify(state)
   await writeFile(file, retired)
   await assert.rejects(store.validate(), /unsupported shape/)
