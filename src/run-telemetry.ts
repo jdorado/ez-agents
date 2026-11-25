@@ -56,6 +56,10 @@ const codexCounts = (usage: any): TokenCounts => {
 }
 const claudeCounts = (usage: any): TokenCounts => ({ input: count(usage?.input_tokens), output: count(usage?.output_tokens),
   cacheRead: count(usage?.cache_read_input_tokens), cacheWrite: count(usage?.cache_creation_input_tokens) })
+// Antigravity reports uncached input_tokens separately from cache_read_tokens,
+// and output_tokens already includes thinking_tokens.
+const agyCounts = (usage: any): TokenCounts => ({ input: count(usage?.input_tokens), output: count(usage?.output_tokens),
+  cacheRead: count(usage?.cache_read_tokens), cacheWrite: 0 })
 const codexTools: Record<string, string> = { command_execution: 'command', file_change: 'file_change', web_search: 'web_search', mcp_tool_call: 'mcp' }
 
 // Repeated and cumulative events are deduplicated: Claude repeats one
@@ -67,18 +71,19 @@ export const telemetryObserver = (options: { cumulativeSession?: boolean } = {},
   let buffer = '', observed = false, model: string | undefined, total: TokenCounts | undefined
   let forwarded: AttemptTelemetry | undefined
   const messages = new Map<string, TokenCounts>()
-  const tools = new Map<string, { name: string; startedAt?: number; endedAt?: number; error: boolean }>()
+  const tools = new Map<string, { name: string; startedAt?: number; endedAt?: number; durationMs?: number; error: boolean }>()
   const errors = new Set<string>()
   const start = (id: unknown, name: string) => {
     const key = code(id)
     if (key && !tools.has(key)) tools.set(key, { name, startedAt: now(), error: false })
   }
-  const end = (id: unknown, name: string, error: boolean) => {
+  const end = (id: unknown, name: string, error: boolean, durationMs?: number) => {
     const key = code(id)
     if (!key) return
     const tool = tools.get(key) ?? { name, error: false }
     if (tool.endedAt !== undefined) return
-    tools.set(key, { ...tool, endedAt: now(), error })
+    const cleanDuration = typeof durationMs === 'number' && Number.isSafeInteger(durationMs) && durationMs >= 0 ? durationMs : undefined
+    tools.set(key, { ...tool, endedAt: now(), ...(cleanDuration !== undefined ? { durationMs: cleanDuration } : {}), error })
   }
   const line = (text: string) => {
     if (!text.trim()) return
@@ -114,6 +119,29 @@ export const telemetryObserver = (options: { cumulativeSession?: boolean } = {},
     } else if (event.type === 'turn.completed' && event.usage) total = codexCounts(event.usage)
     else if (event.type === 'turn.failed') errors.add('turn-failed')
     else if (event.type === 'error') errors.add('native-error')
+    // Antigravity (agy) --output-format stream-json.
+    else if (event.event === 'init') {
+      model = code(event.init?.model) ?? model
+    } else if (event.event === 'step_update' && event.step_update && typeof event.step_update === 'object') {
+      const step = event.step_update
+      const stepId = Number.isSafeInteger(step.step_index) && step.step_index >= 0 ? `agy:${step.step_index}` : undefined
+      if (step.step_type === 'agent_response' && stepId && step.usage) {
+        messages.set(stepId, agyCounts(step.usage))
+      } else if (step.step_type === 'tool' && stepId) {
+        const name = toolName(step.tool_name ?? step.tool_info?.name)
+        if (step.state === 'ACTIVE') start(stepId, name)
+        else if (['DONE', 'ERROR', 'FAILED', 'CANCELLED'].includes(step.state)) {
+          const durationMs = typeof step.duration_seconds === 'number' && Number.isFinite(step.duration_seconds) && step.duration_seconds >= 0
+            ? Math.round(step.duration_seconds * 1000) : undefined
+          end(stepId, name, step.state !== 'DONE' || Boolean(step.error), durationMs)
+        }
+      }
+    } else if (event.event === 'result' && event.result && typeof event.result === 'object') {
+      if (event.result.usage) total = agyCounts(event.result.usage)
+      if (event.result.status && event.result.status !== 'SUCCESS') {
+        errors.add(code(event.result.finished_reason) ?? code(String(event.result.status).toLowerCase()) ?? 'result-error')
+      }
+    }
   }
   const result = (): AttemptTelemetry => {
     if (forwarded) return forwarded
@@ -135,8 +163,10 @@ export const telemetryObserver = (options: { cumulativeSession?: boolean } = {},
       const name = byName[tool.name] || Object.keys(byName).length < MAX_NAMES ? tool.name : 'other'
       const stats = byName[name] ??= { calls: 0, completed: 0, errors: 0, durationMs: 0 }
       const done = tool.endedAt !== undefined
-      const duration = done && tool.startedAt !== undefined ? Math.max(0, tool.endedAt! - tool.startedAt) : 0
-      if (done && tool.startedAt === undefined) unmeasured = true
+      const duration = done
+        ? (tool.durationMs !== undefined ? tool.durationMs : tool.startedAt !== undefined ? Math.max(0, tool.endedAt! - tool.startedAt) : 0)
+        : 0
+      if (done && tool.durationMs === undefined && tool.startedAt === undefined) unmeasured = true
       for (const target of [stats, totals]) {
         target.calls++
         if (done) target.completed++

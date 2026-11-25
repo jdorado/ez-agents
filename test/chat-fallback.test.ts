@@ -339,6 +339,54 @@ test('telemetry deduplicates repeated and cumulative events and keeps only count
   assert.equal(validTelemetry({ ...claude, model: secret + ' with spaces' }), undefined)
   assert.equal(validTelemetry({ ...claude, tokens: { ...claude.tokens, input: -1 } }), undefined)
   assert.equal(telemetryObserver().result().coverage, 'none')
+
+  // Antigravity (agy) stream-json: init model, step_update tool/usage, and result native total.
+  const agyEvents = [
+    { event: 'init', conversation_id: 'c1', init: { model: 'gemini-4-neon-high', cwd: '/w' } },
+    { event: 'step_update', step_update: { step_index: 1, state: 'DONE', step_type: 'agent_response',
+      usage: { input_tokens: 14950, output_tokens: 36, thinking_tokens: 20, cache_read_tokens: 0, total_tokens: 14986 } } },
+    { event: 'step_update', step_update: { step_index: 2, state: 'ACTIVE', step_type: 'tool', tool_name: 'run_command',
+      tool_info: { name: 'run_command', parameters: { CommandLine: secret } } } },
+    { event: 'step_update', step_update: { step_index: 2, state: 'DONE', step_type: 'tool', tool_name: 'run_command',
+      duration_seconds: 0.42, tool_info: { name: 'run_command', output: secret } } },
+    { event: 'step_update', step_update: { step_index: 3, state: 'ERROR', step_type: 'tool', tool_name: 'read_file',
+      duration_seconds: 0.05, error: secret } },
+    { event: 'step_update', step_update: { step_index: 4, state: 'DONE', step_type: 'agent_response',
+      usage: { input_tokens: 2173, output_tokens: 102, thinking_tokens: 99, cache_read_tokens: 12900, total_tokens: 2275 } } },
+    { event: 'result', result: { conversation_id: 'c1', status: 'SUCCESS', response: secret,
+      usage: { input_tokens: 17123, output_tokens: 138, thinking_tokens: 119, cache_read_tokens: 12900, total_tokens: 17261 } } },
+  ]
+  const agyObserver = telemetryObserver()
+  agyObserver.write(agyEvents.map(e => JSON.stringify(e)).join('\n') + '\n')
+  const agyResult = agyObserver.result()
+  assert.deepEqual(agyResult, {
+    coverage: 'complete',
+    model: 'gemini-4-neon-high',
+    tokens: { input: 17123, output: 138, cacheRead: 12900, cacheWrite: 0, source: 'native-total' },
+    tools: {
+      calls: 2, completed: 2, errors: 1, durationMs: 470,
+      byName: {
+        run_command: { calls: 1, completed: 1, errors: 0, durationMs: 420 },
+        read_file: { calls: 1, completed: 1, errors: 1, durationMs: 50 },
+      },
+    },
+  })
+  assert.ok(!JSON.stringify(agyResult).includes('SECRET'))
+  // Partial AGY stream without final result sums per-step agent_response usage.
+  const agyPartial = telemetryObserver()
+  agyPartial.write(agyEvents.slice(0, 3).map(e => JSON.stringify(e)).join('\n') + '\n')
+  assert.deepEqual(agyPartial.result(), {
+    coverage: 'partial',
+    gaps: ['tokens-without-native-total', 'tools-incomplete'],
+    model: 'gemini-4-neon-high',
+    tokens: { input: 14950, output: 36, cacheRead: 0, cacheWrite: 0, source: 'message-sum' },
+    tools: { calls: 1, completed: 0, errors: 0, durationMs: 0, byName: { run_command: { calls: 1, completed: 0, errors: 0, durationMs: 0 } } },
+  })
+  // Failed AGY result records error category without leaking error text.
+  const agyErr = telemetryObserver()
+  agyErr.write(JSON.stringify({ event: 'result', result: { status: 'ERROR', error: secret, finished_reason: 'quota', usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 } } }) + '\n')
+  assert.deepEqual(agyErr.result().errors, ['quota'])
+  assert.ok(!JSON.stringify(agyErr.result()).includes('SECRET'))
 })
 
 test('opt-in run telemetry records each attempt without prompts, tool data or costs; default off', async () => {
