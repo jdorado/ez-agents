@@ -15,7 +15,7 @@ import type { RunRecord } from './runs.js'
 const usage='Usage: ezenciel-agents-ai list | select --cli <installed-cli> [--auth-profile <name>] [--provider <provider>] [--model <model>] [--effort <effort>] | default | profiles | profile add --cli codex|claude [--auth-profile <name>] | fallbacks [--fallback cli=CLI[,auth-profile=NAME][,provider=ID][,model=MODEL][,effort=EFFORT] ... | --clear] | telemetry [on|off]'
 const {values,positionals}=parseArgs({allowPositionals:true,options:{help:{type:'boolean'},cli:{type:'string'},'auth-profile':{type:'string'},provider:{type:'string'},model:{type:'string'},effort:{type:'string'},fallback:{type:'string',multiple:true},clear:{type:'boolean'}}})
 if(values.help){
-  console.log(`${usage}\nChoose only values returned by list. Run inside a turn, select changes the AI of that turn's conversation (the Telegram chat, or the Slack/application channel or thread it came from) from the next message on; changing client, login or provider starts a new conversation there (files kept). Run by the owner outside a turn, it changes the Telegram chat. default makes the selected AI the choice for new conversations. Queued work is unchanged.\nAuth profiles are separate owner-provisioned Codex/Claude logins with their own configuration and sessions; changing profile starts a new conversation. profile add appends an account to its client pool and prints the native login command; profiles reports read-only login status without secrets.\nfallbacks sets the ordered chain tried after the selected AI for chat and application turns, captured when work is queued. An entry for the selected AI's CLI without provider, model or effort keeps the turn's own model and effort. Core advances only when a setup is unavailable or rejected before work, or stopped at its usage limit (a Codex chat setup advances only when its CLI is unavailable); a fallback Claude login resumes the conversation's Claude session; another client or Codex login resumes its own native session for that conversation. Without options it shows the chain.\ntelemetry on records per-attempt model, token, tool and error-category counts in run records (ezenciel-agents-schedule run RUN_ID); off by default; never prompts, tool arguments/results or costs.`)
+  console.log(`${usage}\nChoose only values returned by list. Run inside a turn, select changes the AI of that turn's conversation (the Telegram chat, or the Slack/application channel or thread it came from) from the next message on; changing client, login or provider starts a new conversation there (files kept; the old conversation gets no closing turn). Run by the owner outside a turn, it changes the Telegram chat. default makes the selected AI the choice for new conversations. Queued work is unchanged.\nAuth profiles are separate owner-provisioned Codex/Claude logins with their own configuration and sessions; changing profile starts a new conversation. profile add appends an account to its client pool and prints the native login command; profiles reports read-only login status without secrets.\nfallbacks sets the ordered chain tried after the selected AI for chat and application turns, captured when work is queued. An entry for the selected AI's CLI without provider, model or effort keeps the turn's own model and effort. Core advances only when a setup is unavailable or rejected before work, or stopped at its usage limit (a Codex chat setup advances only when its CLI is unavailable); a fallback Claude login resumes the conversation's Claude session; another client or Codex login resumes its own native session for that conversation. Without options it shows the chain.\ntelemetry on records per-attempt model, token, tool and error-category counts in run records (ezenciel-agents-schedule run RUN_ID); off by default; never prompts, tool arguments/results or costs.`)
   process.exit(0)
 }
 if (!process.env.EZ_CONTROL_DIR) throw new Error('Use this agent’s bound control directory')
@@ -93,24 +93,26 @@ else if(positionals[0]==='select'){
   const runId=process.env.EZ_RUN_ID
   const caller=runId ? await callDeliverySocket(socketPathFor(controlDir),{op:'get',payload:{runId}}) as RunRecord : null
   if(caller){
-    if(caller.status!=='running' || caller.external || caller.taskId || !ownsRun(state.owner,caller))throw new Error('AI selection requires an active owner-authorized turn')
+    if(caller.status!=='running' || caller.external || caller.taskId || caller.replyOnly || !ownsRun(state.owner,caller) ||
+      (caller.scheduled && caller.scheduled.pairedAt!==state.owner?.pairedAt))throw new Error('AI selection requires an active owner-authorized turn')
     if(caller.application || caller.delivery)await new ApplicationBindings(controlDir).authorize(caller)
   }
   const sessionId=caller?.execution?.sessionId
   const session=sessionId ? [state.activeSession,...(state.sessions??[])].find(s=>s?.sessionId===sessionId) : undefined
   if(caller && !session)throw new Error('This turn has no conversation to change')
+  const existing=state.ai.presets.find(p=>sameChoice(p,preset))
+  const selected=existing||preset
   if(session?.applicationScope && !session.telegramShared && session!==state.activeSession){
-    const existing=state.ai.presets.find(p=>sameChoice(p,preset))
-    const next=await control.changeApplicationSession(session.applicationScope,{owner:state.owner!,applicationScope:session.applicationScope,expectedSession:session.sessionId,authorize:async()=>{}},existing||preset)
-    console.log(JSON.stringify({selected:existing||preset,conversation:next.sessionId===session.sessionId ? 'kept' : 'new',applies:'next message in this channel or thread; this turn and queued work keep their captured choice'}))
+    // The scope's current conversation: a switch earlier in this turn may have replaced it.
+    const scope=session.applicationScope, current=await control.applicationSession(scope)
+    const next=await control.changeApplicationSession(scope,{owner:state.owner!,applicationScope:scope,expectedSession:current?.sessionId ?? null,authorize:async()=>{}},selected)
+    console.log(JSON.stringify({selected,conversation:next.sessionId===current?.sessionId ? 'kept' : 'new',applies:'next message in this channel or thread; this turn and queued work keep their captured choice'}))
   }else{
-    if(session && session!==state.activeSession)throw new Error('This turn\'s conversation is no longer the active chat; the owner switched conversations')
-    const existing=state.ai.presets.find(p=>sameChoice(p,preset))
-    const selected=existing||preset
+    // The owner chat: whatever conversation is current in it now.
     if(!existing)await control.savePreset(selected)
     const current=state.ai.presets.find(p=>p.id===state.ai!.selectedId)!
     const fresh=!sameEngine(current,selected)||presetProvider(current)!==presetProvider(selected)||Boolean(state.activeSession&&!state.activeSession.cli)
-    await control.selectPreset(selected.id,state.activeSession?.sessionId??null,fresh)
+    if(!await control.selectPreset(selected.id,state.activeSession?.sessionId??null,fresh))throw new Error('The AI changed meanwhile; read it again before selecting')
     console.log(JSON.stringify({selected,conversation:fresh ? 'new' : 'kept',defaultUnchanged:true,applies:'next message; this turn and queued work keep their captured choice'}))
   }
 }else throw new Error(usage)

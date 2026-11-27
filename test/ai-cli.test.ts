@@ -128,3 +128,34 @@ test('inside a Slack channel turn the agent switches that channel only, from its
  await runs.patch(run.id,{status:'completed'})
  assert.notEqual((await run$('low')).status,0)
 })
+
+test('inside a Telegram turn the agent switches the owner chat, twice in one turn, and a reply-only turn cannot',async t=>{
+ const root=await mkdtemp(path.join(tmpdir(),'ez-ai-self-switch-tg-'))
+ t.after(()=>rm(root,{recursive:true,force:true}))
+ const controlDir=path.join(root,'control'),binDir=path.join(root,'bin')
+ await mkdir(path.join(controlDir,'host-executor'),{recursive:true});await mkdir(binDir)
+ for(const cli of ['codex','claude'])await writeFile(path.join(binDir,cli),'#!/bin/sh\nexit 0\n',{mode:0o700})
+ await writeFile(path.join(controlDir,'host-executor','models.json'),JSON.stringify([
+  {cli:'codex',model:'fixture-model',name:'Fixture',efforts:['low','high']},{cli:'claude',model:'sonnet',name:'Sonnet',efforts:['high']}]))
+ const control=new ControlStore(controlDir,1000)
+ await control.requestPairing(101,101);await control.approveOwner(101)
+ const execution=await control.captureChoice(initialPreset('codex'))
+ const runs=new RunStore(controlDir)
+ await runs.create({id:'tg_switch',chatId:101,telegramUserId:101,texts:['switch'],execution});await runs.patch('tg_switch',{status:'running'})
+ const relay=await serveDeliverySocket(controlDir,async op=>op.op==='get' ? runs.get(op.payload.runId) : null)
+ t.after(()=>relay.stop())
+ const bin=fileURLToPath(new URL('../bin/ezenciel-agents-ai.mjs',import.meta.url))
+ const env={...process.env,HOME:root,PATH:binDir,EZ_CONTROL_DIR:controlDir,EZ_AI_CATALOG:'host',EZ_RUN_ID:'tg_switch'}
+ const select=(...args:string[])=>new Promise<{status:number|null;stdout:string;stderr:string}>(resolve=>{
+  const child=spawn(process.execPath,[bin,'select',...args],{env});let stdout='',stderr=''
+  child.stdout.on('data',d=>stdout+=d);child.stderr.on('data',d=>stderr+=d);child.on('close',status=>resolve({status,stdout,stderr}))})
+ const kept=await select('--cli','codex','--model','fixture-model','--effort','high');assert.equal(kept.status,0,kept.stderr)
+ assert.equal(JSON.parse(kept.stdout).conversation,'kept')
+ assert.equal((await control.getActiveSession())?.sessionId,execution.sessionId)
+ const again=await select('--cli','claude','--model','sonnet','--effort','high');assert.equal(again.status,0,again.stderr)
+ assert.equal(JSON.parse(again.stdout).conversation,'new')
+ const active=await control.getActiveSession()
+ assert.notEqual(active?.sessionId,execution.sessionId);assert.equal(active?.cli,'claude');assert.equal(active?.preset?.model,'sonnet')
+ await runs.patch('tg_switch',{replyOnly:true})
+ assert.match((await select('--cli','codex','--model','fixture-model')).stderr,/active owner-authorized turn/)
+})
