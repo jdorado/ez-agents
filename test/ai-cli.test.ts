@@ -107,7 +107,9 @@ test('inside a Slack channel turn the agent switches that channel only, from its
  const relay=await serveDeliverySocket(controlDir,async op=>op.op==='get' ? runs.get(op.payload.runId) : null)
  t.after(()=>relay.stop())
  const bin=fileURLToPath(new URL('../bin/ezenciel-agents-ai.mjs',import.meta.url))
- const env={...process.env,HOME:root,EZ_CONTROL_DIR:controlDir,EZ_AI_CATALOG:'host',EZ_RUN_ID:run.id}
+ const binDir=path.join(root,'bin');await mkdir(binDir)
+ await writeFile(path.join(binDir,'codex'),'#!/bin/sh\nexit 0\n',{mode:0o700})
+ const env={...process.env,HOME:root,PATH:binDir,EZ_CONTROL_DIR:controlDir,EZ_AI_CATALOG:'host',EZ_RUN_ID:run.id}
  // The stub relay lives in this process, so the CLI must not block its event loop.
  const run$=(effort:string)=>new Promise<{status:number|null;stdout:string;stderr:string}>(resolve=>{
   const child=spawn(process.execPath,[bin,'select','--cli','codex','--model','fixture-model','--effort',effort],{env});let stdout='',stderr=''
