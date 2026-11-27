@@ -40,6 +40,11 @@ RUN pnpm add --global --ignore-scripts @earendil-works/pi-coding-agent@${PI_CLI_
 # CLAUDE_CONFIG_DIR login (control/cli/claude). Pin the reviewed CLI.
 ARG CLAUDE_CLI_VERSION=2.1.322
 RUN pnpm add --global --allow-build=@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION} @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION} && command -v claude && claude --version
+# Isolated agents select Antigravity from the relay menu with an agent-bound
+# HOME login (control/cli/agy). Pin the reviewed release; runs never self-update.
+ARG AGY_CLI_URL=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.16-5250855658717184/linux-x64/cli_linux_x64.tar.gz
+ADD --checksum=sha256:9bdab234d06bad1a61be2321072652eb06be78baff1acbfae47331da5a090abc ${AGY_CLI_URL} /tmp/agy.tar.gz
+RUN tar -xzf /tmp/agy.tar.gz -C /tmp antigravity && install -m 0755 /tmp/antigravity /usr/local/bin/agy && rm /tmp/agy.tar.gz /tmp/antigravity && AGY_CLI_DISABLE_AUTO_UPDATE=true HOME=/tmp agy --version
 RUN chmod +x docker/entrypoint.sh bin/ez bin/ezenciel-agents* && mkdir -p /state/control /state/home /workspace && chown node:node /state/control /state/home /workspace
 RUN node -e 'for (const [name, target] of Object.entries(require("./package.json").bin)) require("node:fs").symlinkSync("/app/" + target, "/usr/local/bin/" + name); require("node:fs").symlinkSync("/app/bin/ez", "/usr/local/bin/ez")'
 # Build identity for relay status (package version stays release-owned).

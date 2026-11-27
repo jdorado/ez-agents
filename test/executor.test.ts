@@ -111,13 +111,23 @@ test('the opencode invocation is headless, auto-approves, and sets model and wor
   ])
 })
 
+test('antigravity reads the prompt on stdin and resumes its own conversation ID', () => {
+  const base = { workspace: '/w', controlDir: '/c', sharedWorkspace: '/s', toolsHome: '/t' }
+  assert.deepEqual(EXECUTOR_REGISTRY.agy.buildArgs({ ...base, sessionId: 'ez-uuid', model: 'gemini-4-neon-high' }, '/prompt', 'secret prompt'), [
+    '--dangerously-skip-permissions', '--input-format', 'stream-json', '--output-format', 'stream-json',
+    '--add-dir', '/c', '--add-dir', '/s', '--add-dir', '/t', '--model', 'gemini-4-neon-high',
+  ])
+  assert.deepEqual(EXECUTOR_REGISTRY.agy.buildArgs({ ...base, sessionId: 'conv-1', isResume: true }, '/prompt', 'p').slice(0, 2), ['--conversation', 'conv-1'])
+})
+
 test('resolveExecutor correctly maps keys and aliases', () => {
   assert.equal(resolveExecutor('claude').command, 'claude')
   assert.equal(resolveExecutor('grok').command, 'grok')
   assert.equal(resolveExecutor('opencode').command, 'opencode')
   assert.equal(resolveExecutor('oc').command, 'opencode')
-  for (const cli of ['unreal-agent', 'antigravity', 'agy'])
-    assert.throws(() => resolveExecutor(cli), /Unsupported executor CLI/)
+  assert.equal(resolveExecutor('agy').command, 'agy')
+  assert.equal(resolveExecutor('antigravity').command, 'agy')
+  assert.throws(() => resolveExecutor('unreal-agent'), /Unsupported executor CLI/)
   assert.equal(resolveExecutor('codex-gui').name, 'codex-gui')
   assert.notEqual(resolveExecutor('codex-gui').name, resolveExecutor('codex').name)
   assert.equal(resolveExecutor(undefined).command, 'codex')

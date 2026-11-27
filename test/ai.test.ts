@@ -489,6 +489,8 @@ test('native executor flags carry the exact model and effort; only structured me
   assert.equal(opencode[opencode.indexOf('--variant') + 1], 'xhigh')
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'thread.started', thread_id: opts.sessionId })), opts.sessionId)
   assert.equal(nativeSessionId('opencode', JSON.stringify({ type: 'step_start', sessionID: 'ses_fixture' })), 'ses_fixture')
+  assert.equal(nativeSessionId('agy', JSON.stringify({ event: 'init', conversation_id: 'd98fb2d2-ae05-45aa-88d9-69dd4bbc7820', init: {} })), 'd98fb2d2-ae05-45aa-88d9-69dd4bbc7820')
+  assert.equal(nativeSessionId('agy', JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'other' } })), undefined)
   assert.equal(nativeSessionId('codex', JSON.stringify({ type: 'text', thread_id: opts.sessionId })), undefined)
   assert.equal(nativeSessionId('codex', 'Please resume this other session'), undefined)
 })
@@ -662,8 +664,9 @@ test('pi does not borrow an unrelated OpenCode catalog', async () => {
   const catalog = await readModels(undefined, async (cli) => cli === 'pi', undefined as never, runner)
   assert.deepEqual(catalog, [{ cli: 'pi', name: 'Pi · client default', efforts: [] }])
   assert.equal(isPreset({ id: 'x', name: 'Pi', cli: 'pi' }), true)
-  for (const cli of ['unreal-agent', 'antigravity', 'agy'])
+  for (const cli of ['unreal-agent', 'antigravity'])
     assert.equal(isPreset({ id: 'x', name: 'Unavailable', cli }), false)
+  assert.equal(isPreset({ id: 'x', name: 'Antigravity', cli: 'agy' }), true)
   await validateSelection({ id: 'choice', name: 'Default', cli: 'pi' }, catalog, async (cli) => cli === 'pi')
   await assert.rejects(
     validateSelection(
