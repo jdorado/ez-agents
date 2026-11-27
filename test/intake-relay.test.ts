@@ -267,7 +267,7 @@ test('conversation menu has no AI picker; the agent switches its own AI', async 
   try {
     await f.relay.bot.handleUpdate(message(1, '/menu'))
     assert.deepEqual(f.keyboards.at(-1)!.flat().map((b) => b.text),
-      ['New conversation', 'Conversations', 'Work status', 'Scheduled tasks'])
+      ['New conversation', 'Work status', 'Scheduled tasks'])
     const keyboards = f.keyboards.length
     await f.relay.bot.handleUpdate(message(2, '/ai'))
     assert.match(f.replies.at(-1)!, /^AI: .+\nTo change it, ask me/)
@@ -288,11 +288,11 @@ test('application-backed channels keep conversation controls in the application'
     const store = new ControlStore(f.dir, 1000)
     const before = await store.status()
     let id = 1
-    for (const text of ['/new', '/chats', '/rename Example']) {
+    for (const text of ['/new', '/ai']) {
       await f.relay.bot.handleUpdate(message(id++, text))
       assert.match(f.replies.at(-1)!, /managed in the connected application/)
     }
-    for (const data of ['menu:new', 'menu:chats', 'chat:list:0:0', 'chat:open:invalid']) {
+    for (const data of ['menu:new']) {
       await f.relay.bot.handleUpdate({ update_id: id, callback_query: {
         id: String(id), chat_instance: 'fixture', data,
         from: { id: 101, first_name: 'Fixture', is_bot: false }, message: message(id++).message!,
@@ -596,110 +596,6 @@ test('approved family messages enter restricted task runs, never the owner sessi
 })
 
 
-test('Telegram named conversation buttons switch and archive without rerouting accepted messages', async () => {
-  const f = await fixture()
-  try {
-    let id = 1
-    const send = (text: string) => f.relay.bot.handleUpdate(message(id++, text))
-    const click = async (data: string, user = 101) => f.relay.bot.handleUpdate({ update_id: id, callback_query: {
-      id: String(id), chat_instance: 'fixture', data,
-      from: { id: user, first_name: 'Fixture', is_bot: false }, message: message(id++).message!,
-    } })
-    const store = new ControlStore(f.dir, 1000)
-    await send('Client launch')
-    const first = (await store.getActiveSession())!.sessionId
-    await send('/new')
-    await send('Holiday planning')
-    const second = (await store.getActiveSession())!.sessionId
-    await send('/chats')
-    assert.ok(f.keyboards.at(-1)!.flat().some(b => b.text === 'Client launch'))
-    assert.ok(!f.keyboards.at(-1)!.flat().some(b => b.callback_data.startsWith('chat:archive:')))
-    assert.ok(f.keyboards.at(-1)!.every(row => row.filter(b => b.callback_data.startsWith('chat:open:')).length === 0 || row.length === 1))
-    const before = await store.status()
-    await click(`chat:open:${first}`, 202)
-    await click(`chat:archive:${second}`, 202)
-    assert.deepEqual(await store.status(), before)
-    await click(`chat:open:${first}`)
-    assert.equal((await store.getActiveSession())!.sessionId, first)
-    assert.deepEqual(f.keyboards.at(-1)!.flat().filter(b => b.callback_data.startsWith('chat:archive:')), [{text: 'Archive this conversation', callback_data: `chat:archive:${first}`}])
-    await send('/rename@fixture_bot <Client & launch>')
-    assert.equal((await store.getActiveSession())!.title, '<Client & launch>')
-    await click(`chat:archive:${first}`)
-    assert.equal(await store.getActiveSession(), null)
-    await click('chat:list:0:0')
-    assert.ok(!f.keyboards.at(-1)!.flat().some(b => b.callback_data === `chat:open:${first}`))
-    await click('chat:list:1:0')
-    assert.ok(f.keyboards.at(-1)!.flat().some(b => b.text === '<Client & launch>'))
-    await f.restart()
-    await click(`chat:restore:${first}`)
-    await click(`chat:open:${first}`)
-    await send('Continue launch')
-    for (let n = 0; n < 3; n++) await f.relay.drainInbox(true)
-    const runs = await new RunStore(f.dir).list()
-    assert.equal(runs.find(r => r.texts.includes('Holiday planning'))!.execution!.sessionId, second)
-    assert.equal(runs.find(r => r.texts.includes('Continue launch'))!.execution!.sessionId, first)
-    assert.ok(!runs.some(r => r.texts.some(t => t.startsWith('/rename'))))
-    await click('chat:open:../../escape')
-    assert.match(f.replies.at(-1)!, /unavailable/)
-  } finally { await f.close() }
-})
-
-test('conversation menu paginates and stale pages remain usable after archiving', async () => {
-  const f = await fixture()
-  try {
-    const store = new ControlStore(f.dir, 1000)
-    for (let n = 0; n < 10; n++) {
-      await store.captureChoice({ id: 'fixture', name: 'Grok', cli: 'grok' }, `Topic ${n}`)
-      if (n < 9) await store.resetSession()
-    }
-    let id = 1
-    const click = (data: string) => f.relay.bot.handleUpdate({ update_id: id, callback_query: {
-      id: String(id), chat_instance: 'fixture', data,
-      from: { id: 101, first_name: 'Fixture', is_bot: false }, message: message(id++).message!,
-    } })
-    await click('chat:list:0:0')
-    assert.equal(f.keyboards.at(-1)!.flat().filter(b => b.callback_data.startsWith('chat:open:')).length, 8)
-    assert.ok(f.keyboards.at(-1)!.flat().some(b => b.text === 'Next'))
-    await click('chat:list:0:1')
-    assert.equal(f.keyboards.at(-1)!.flat().filter(b => b.callback_data.startsWith('chat:open:')).length, 2)
-    for (const session of await store.listSessions()) await store.archiveSession(session.sessionId, true)
-    await click('chat:list:0:1')
-    assert.equal(f.keyboards.at(-1)!.flat().filter(b => b.callback_data.startsWith('chat:open:')).length, 0)
-  } finally { await f.close() }
-})
-
-
-test('conversation names never read run history and detail keeps archive available when resume fails', async () => {
-  const f = await fixture()
-  try {
-    const store = new ControlStore(f.dir, 1000)
-    const old = await store.ensureActiveSession()
-    await store.markSessionStarted(old.sessionId)
-    const execution = await store.captureChoice({ id: 'grok', name: 'Grok', cli: 'grok' })
-    const runs = new RunStore(f.dir)
-    await runs.create({ chatId: 101, telegramUserId: 101, texts: ['Internal update event'], execution })
-    await runs.create({ chatId: 101, telegramUserId: 101, messageId: 9, texts: [JSON.stringify({event: 'approval_decision', decision: 'approve'})], execution })
-    await runs.create({ chatId: 101, telegramUserId: 101, messageId: 10, texts: ['/start'], execution })
-    await runs.create({ chatId: 101, telegramUserId: 101, messageId: 11, texts: ['Client launch checklist'], execution })
-    await store.captureChoice({ id: 'grok', name: 'Grok', cli: 'grok' }, 'A later message must not relabel old history')
-    assert.equal((await store.getActiveSession())!.title, undefined)
-    await store.resetSession()
-    await f.relay.bot.handleUpdate(message(1, '/chats'))
-    const rows = f.keyboards.at(-1)!
-    assert.ok(rows.flat().some(b => b.text.startsWith('Untitled conversation')))
-    assert.ok(!rows.flat().some(b => b.text.includes('Client launch checklist')))
-    assert.ok(!rows.flat().some(b => b.text === '✓ New conversation'))
-    assert.ok(!rows.flat().some(b => b.text.includes(old.sessionId.slice(0, 8))))
-    assert.ok(!rows.flat().some(b => b.callback_data.startsWith('chat:archive:')))
-    await f.relay.bot.handleUpdate({ update_id: 2, callback_query: {
-      id: '2', chat_instance: 'fixture', data: `chat:open:${old.sessionId}`,
-      from: { id: 101, first_name: 'Fixture', is_bot: false }, message: message(2).message!,
-    } })
-    assert.match(f.replies.at(-1)!, /Untitled conversation \d+[\s\S]*binding/)
-    assert.deepEqual(f.keyboards.at(-1)![0], [{text: 'Archive this conversation', callback_data: `chat:archive:${old.sessionId}`}])
-  } finally { await f.close() }
-})
-
 test('Telegram and application image/PDF/text use identical native attachment metadata and owner session', async () => {
   const f=await fixture()
   const originalFetch=globalThis.fetch
@@ -737,7 +633,7 @@ test('web launcher is private-owner-only and bypasses native intake without repl
     await f.relay.bot.handleUpdate(message(2,'/voice'))
     assert.deepEqual(f.keyboards.at(-1),[[{text:'Voice',web_app:{url:'https://voice.example/'}}]])
     await f.relay.bot.handleUpdate(message(3,'/menu'))
-    assert.deepEqual(f.keyboards.at(-1)!.flat().map(b=>b.text),['New conversation','Conversations','Work status','Scheduled tasks','Voice'])
+    assert.deepEqual(f.keyboards.at(-1)!.flat().map(b=>b.text),['New conversation','Work status','Scheduled tasks','Voice'])
     await f.relay.drainInbox(true);assert.equal(f.launched.length,0)
     await new ControlStore(f.dir,1000).revokeOwner()
     const before=f.keyboards.length;await f.relay.bot.handleUpdate(message(4,'/voice'));assert.equal(f.keyboards.length,before)

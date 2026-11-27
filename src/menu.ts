@@ -10,8 +10,6 @@ import { claudeConfigHome } from './executor.js'
 
 export const mainCommands = [
   { command: 'new', description: 'New conversation' },
-  { command: 'chats', description: 'Conversations' },
-  { command: 'rename', description: 'Rename current conversation' },
   { command: 'ai', description: 'Current AI' },
   { command: 'status', description: 'Work status' },
   { command: 'usage', description: 'Account limits and reset times' },
@@ -19,7 +17,7 @@ export const mainCommands = [
 ]
 
 export const mainKeyboard = () => new InlineKeyboard()
-  .text('New conversation', 'menu:new').text('Conversations', 'menu:chats').row()
+  .text('New conversation', 'menu:new').row()
   .text('Work status', 'menu:status').text('Scheduled tasks', 'menu:scheduled-tasks')
 
 // AI catalog and selection shared by application controls. The agent switches its own

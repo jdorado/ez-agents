@@ -37,7 +37,7 @@ control of the same active state Telegram uses when enabled; it is not a
 scope-only permission. Ordinary application bindings cannot read or change it.
 
 `GET /v1/control` returns the existing Ez AI presets, installed native model
-catalog, active control-session ID and conversations visible through `/chats`.
+catalog, active control-session ID and conversations visible to the owner.
 Native engine session IDs and private application scopes are omitted. The token
 stays in the authenticated application backend, never in browser code.
 
@@ -47,7 +47,7 @@ last read (null before a conversation exists):
 | Action | Additional fields | Existing Ez operation |
 | --- | --- | --- |
 | `new` | None | `/new`, using the default AI |
-| `switch` | `sessionId` from the visible conversation list | `/chats` selection |
+| `switch` | `sessionId` from the visible conversation list | Resume a visible conversation |
 | `select` | `presetId` from `ai.presets` | Select a saved AI |
 | `model` | `cli`, optional `model` and `effort`, from `models` | Save/select a native choice from the catalog |
 
@@ -70,7 +70,7 @@ must use `/v1/control` instead.
 
 A scope reset uses the configured default AI. A client change starts a fresh
 private conversation; a model change within the same client retains it. Retired
-private conversations stay hidden from `/chats`; admitted work can finish in its
+private conversations stay hidden from the shared list; admitted work can finish in its
 original native session. Neither operation changes the shared active selection.
 Control mutations are never marked retryable by the public client: read back
 after uncertainty before deciding on another change.
@@ -361,14 +361,14 @@ For an application using the ordinary agent's Telegram channel, the administrato
 may register its grant with `--share-telegram`. An ordinary application turn can
 then send `activateTelegram:true`: its scoped session becomes the owner's current
 Telegram conversation. Both inputs resume the same native history. Shared scopes
-appear in the existing `/chats` selector. Omit activation for temporary selection,
+appear in the shared conversation list. Omit activation for temporary selection,
 extraction, and delegated work; those must not switch the personal conversation.
 Without the administrator's flag, application requests cannot switch Telegram.
 
 For a main chat that should follow the owner's current Telegram conversation,
 submit `followTelegram:true` under the same administrator-approved sharing grant.
 This uses the normal selected conversation and AI at admission, including after
-`/new`, `/chats`, or an agent AI switch. Do not also send `activateTelegram`, `ai`, or a native
+`/new` or an agent AI switch. Do not also send `activateTelegram`, `ai`, or a native
 session assertion. Retries remain pinned to their originally admitted run even
 if the owner has since switched conversations. Keep exercise/detail scopes on
 the ordinary scoped path by omitting this flag.

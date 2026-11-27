@@ -14,8 +14,7 @@ unavailable, and editing a scheduled task does not change the chat selection.
 At intake each journal entry receives an immutable preset and conversation ID.
 Batches cannot cross that boundary. The run copies that choice and invokes the
 native adapter with its exact model/effort. A later menu change cannot reroute it.
-Each named conversation saves its model and reasoning level. Switching back through
-`/chats` restores that choice and the exact native session, including after restart.
+Each conversation saves its model and reasoning level, including after restart.
 The agent changes its own AI when asked: inside a turn, `ezenciel-agents-ai list`
 then `select` applies to that turn's conversation (the Telegram chat, or the
 Slack/application channel or thread it came from) from its next message; this turn

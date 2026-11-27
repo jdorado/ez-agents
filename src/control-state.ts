@@ -639,35 +639,6 @@ export class ControlStore {
     })
   }
 
-  async archiveSession(sessionId: string, archived: boolean): Promise<void> {
-    await this.withLock(async () => {
-      const state = await this.readState()
-      const session = state.activeSession?.sessionId === sessionId ? state.activeSession
-        : state.sessions?.find(s => s.sessionId === sessionId)
-      if (!session) throw new Error('Conversation unavailable. Open /chats again.')
-      if (archived && state.activeSession === session) {
-        rememberPreset(state)
-        state.sessions ??= []
-        state.sessions.push(session)
-        state.activeSession = null
-        if (state.ai) state.ai.selectedId = state.ai.defaultId
-      }
-      session.archived = archived
-      await this.writeState(state)
-    })
-  }
-
-  async renameSession(title: string): Promise<void> {
-    title = title.replace(/\s+/g, ' ').trim()
-    if (!title || title.length > 80) throw new Error('Use /rename followed by a name of 1–80 characters.')
-    await this.withLock(async () => {
-      const state = await this.readState()
-      if (!state.activeSession) throw new Error('Open a conversation first with /chats or /new.')
-      state.activeSession.title = title
-      await this.writeState(state)
-    })
-  }
-
   async resetSession(expectedSession?: string | null, guard?: ControlGuard): Promise<SessionState> {
     return this.withLock(async () => {
       const state = await this.readState()

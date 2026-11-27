@@ -40,7 +40,6 @@ import { sanitizeFileName, stageChatAttachment, workspaceFile } from './files.js
 import { transcribeAudio, synthesizeSpeech } from './audio.js'
 import { normalizeReactionEmoji } from './reaction.js'
 import { downloadTelegramFile } from './read-request.js'
-import { createConversationMenu } from './conversation-menu.js'
 import { queueSessionClose } from './session-close.js'
 import { queueTaskWake } from './task-wake.js'
 import { createAiMenu, mainCommands, mainKeyboard } from './menu.js'
@@ -87,7 +86,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let taskTimer: ReturnType<typeof setInterval> | undefined
   let drainTimer: ReturnType<typeof setInterval> | undefined
   const codexHome = join(config.controlDir, 'cli', 'codex')
-  const conversationMenu = createConversationMenu(control)
   const aiMenu = createAiMenu(control, config.executorCli, undefined, config.workspace, codexHome,
     undefined, opencodeDataHome(config.controlDir), (session) => closeSession(session))
   const durableWorkerChoice = () => control.captureChoice(aiMenu.initial)
@@ -1003,12 +1001,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     { command: 'retry', description: 'Retry the latest failed incoming batch' },
     { command: 'new', description: 'New conversation; keep workspace files' },
   ]
-  // Keep the retired command from becoming an agent prompt while old clients catch up.
-  const retiredCommands = ['/settings']
   const launcher = config.webLauncher
   const commands = [...mainCommands, ...(launcher ? [{ command: launcher.command, description: launcher.label }] : [])]
-  const controlCommand = (text?: string) => /^\/rename(?:@[a-zA-Z0-9_]+)?(?:\s|$)/.test(text?.trim() ?? '')
-    ? '/rename' : text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
+  const controlCommand = (text?: string) => text?.trim().replace(/@[a-zA-Z0-9_]+$/, '')
   const tasksCommand = (text?: string): number | undefined | null => {
     const match = text?.trim().match(/^\/tasks(?:@[a-zA-Z0-9_]+)?(?:\s+([1-9]\d*))?$/)
     return match ? (match[1] ? Number(match[1]) : undefined) : null
@@ -1134,7 +1129,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     }
     const message = ctx.message
     const command = controlCommand(message?.text)
-    if ((command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu', ...retiredCommands).includes(command)) || tasksCommand(message?.text) !== null || isTasksCommand(message?.text)) return next()
+    if ((command && [...commands, ...aliases].map((c) => `/${c.command}`).concat('/menu').includes(command)) || tasksCommand(message?.text) !== null || isTasksCommand(message?.text)) return next()
     const ordinary = message && (message.text || message.photo || message.document || message.voice)
     const approval = ctx.callbackQuery?.data?.startsWith('approval:')
     if (!ordinary && !approval) return next()
@@ -1147,7 +1142,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
 
     const text = controlCommand(ctx.message.text)
 
-    if (config.channelBackendUrl && ['/new', '/chats', '/rename', '/ai', '/settings'].includes(text ?? '')) {
+    if (config.channelBackendUrl && ['/new', '/ai'].includes(text ?? '')) {
       await ctx.reply('Conversation and model settings are managed in the connected application.')
       return
     }
@@ -1158,17 +1153,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
 
-    if (text === '/chats') {
-      await conversationMenu.list(ctx)
-      return
-    }
-    if (text === '/rename') {
-      try {
-        await control.renameSession(ctx.message.text.trim().replace(/^\/rename(?:@[a-zA-Z0-9_]+)?(?:\s+|$)/, ''))
-        await ctx.reply('Conversation renamed.')
-      } catch (error) { await ctx.reply(error instanceof Error ? error.message : 'Rename failed.') }
-      return
-    }
 
     const taskNumber = tasksCommand(ctx.message.text)
     if (taskNumber !== null) {
@@ -1415,17 +1399,12 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         })
         console.info('Approval decision recorded', { actionId, decision: isApproved ? 'approved' : 'denied' })
       }
-    } else if (config.channelBackendUrl && (['menu:new', 'menu:chats'].includes(data) || data.startsWith('chat:'))) {
+    } else if (config.channelBackendUrl && data === 'menu:new') {
       await ctx.answerCallbackQuery()
       await ctx.reply('Conversation and model settings are managed in the connected application.')
-    } else if (await conversationMenu.handle(ctx)) {
-      return
     } else if (data.startsWith('menu:')) {
       const action = data.slice(5)
-      if (action === 'chats') {
-        await ctx.answerCallbackQuery()
-        await conversationMenu.list(ctx)
-      } else if (action === 'retry') {
+      if (action === 'retry') {
         await ctx.answerCallbackQuery()
         const id = await inbox.retryLatest(ctx.from.id, ctx.chat!.id, (await control.status()).owner)
         if (id) scheduleIntake()
