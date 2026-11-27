@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.82.0
+
+- Old update backups are pruned again (#382). Each completed update already kept only the newest completed job's backup per target, but on a long-running agent every cleanup stopped at its first error: an early main update had copied the agent workspace into its backup, the agent had made some of those directories read-only, and removing them failed with `EACCES`, so no later backup was ever removed (one agent had kept about 90 GB of superseded plugin volume backups). Cleanup now restores owner write on a backup's own directories before removing it, and a backup it still cannot remove is reported per job in the update's `cleanup.failed` (and logged by the supervisor at start) instead of stopping the rest. A failed or rolled-back job newer than its target's newest completed job now keeps its backup; job records are never removed.
+
 ## 0.81.0
 
 - The agent changes its own AI when asked (#380). Inside a turn, `ezenciel-agents-ai select` switches the AI of that turn's conversation from its next message: the owner's Telegram chat, or the private Slack/application channel or thread the turn came from. Same client and provider keep the conversation's history; another client, login or provider starts a new conversation there (files kept, no closing turn for the old one). Several switches in one turn work; reply-only, external, task and foreign-epoch turns are refused. `ez --help` lists `ai` among the native commands so the agent finds it.
