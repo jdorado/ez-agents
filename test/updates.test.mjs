@@ -435,6 +435,14 @@ test('update cleanup keeps the newest backup per target, unfinished jobs and job
  for(const job of [older,olderFailed])await assert.rejects(fs.access(path.join(jobPath(f.home,job),'backup')));
  for(const job of [latest,queued,newerRolledBack,otherFailed])await fs.access(path.join(jobPath(f.home,job),'backup','marker'));
  for(const job of [older,olderFailed])await fs.access(path.join(jobPath(f.home,job),'job.json'));
+ // One backup that cannot be removed leaves the others to be removed (root bypasses the denial).
+ if(process.getuid?.()===0)return;
+ const [stuck,next,newest]=['7','8','9'].map(id);
+ await seed(stuck,'main','completed','2026-01-02T01:00:00.000Z');await seed(next,'main','completed','2026-01-02T02:00:00.000Z');await seed(newest,'main','completed','2026-01-02T03:00:00.000Z');
+ await fs.chmod(jobPath(f.home,stuck),0o500);
+ const partial=await cleanupStaleBackups(f.home);await fs.chmod(jobPath(f.home,stuck),0o700);
+ assert.deepEqual(partial.failed.map(item=>item.id),[stuck]);assert.match(partial.failed[0].error,/EACCES|EPERM/);
+ assert.ok(partial.removed.includes(latest)&&partial.removed.includes(next));await fs.access(path.join(jobPath(f.home,newest),'backup','marker'));
 });
 test('a completed plugin update removes older backups even when one holds read-only directories',async t=>{
  const f=await fixture(t,'plugin'),id=n=>n.repeat(8)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(12);
