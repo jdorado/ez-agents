@@ -6,6 +6,7 @@ import {authorizeDeliveryContext,currentDeliveryOwner} from '../delivery-context
 
 export const nativeCommands=()=>[
   {command:'schedule',description:'Standard native agent task scheduling and status. Read --help.'},
+  {command:'ai',description:"Read or change your own AI (client, model, effort) for this conversation from its next message: list, then select. Read --help."},
   {command:'message',description:"Send text, voice or a workspace document to the paired owner's Telegram chat and wait for its Telegram delivery receipt. Read --help.",limitations:['History requires a native run; inline text only.']},
 ];
 

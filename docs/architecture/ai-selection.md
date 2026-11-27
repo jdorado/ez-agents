@@ -16,7 +16,10 @@ Batches cannot cross that boundary. The run copies that choice and invokes the
 native adapter with its exact model/effort. A later menu change cannot reroute it.
 Each named conversation saves its model and reasoning level. Switching back through
 `/chats` restores that choice and the exact native session, including after restart.
-`/ai` shows the current choice; one tap on a model or reasoning level saves it. Changing model or
+The agent changes its own AI when asked: inside a turn, `ezenciel-agents-ai list`
+then `select` applies to that turn's conversation (the Telegram chat, or the
+Slack/application channel or thread it came from) from its next message; this turn
+and queued work keep their captured choice. There is no Telegram or Slack picker. Changing model or
 reasoning level on the same client and provider preserves the conversation's name
 and native history; subsequent turns pass the new settings to the native engine.
 Changing client, provider or auth profile starts a separate native conversation.
@@ -83,17 +86,7 @@ catalogs, refresh by opening the native client;
 the relay does not install models, manage subscriptions or guess aliases.
 
 Setup initialization and relay startup seed one default choice per installed client.
-Choose AI is one card that edits itself: the current choice, up to three other
-recent valid choices, then the models of the current client and login and the
-reasoning levels of the model in use. One tap on any of them saves it through the
-same validation as before and the card shows again on the new choice with a receipt
-line saying whether the history was kept or a new conversation started. Engine and
-account (only when the client has several logins) sit behind "Engine and account";
-browsing them changes nothing until a model is tapped. Account and engine prefixes
-the catalog puts in model names are shown as their own rows. More than nine models
-of one login page within the model list. The retired Settings control points to
-Choose AI; application-backed channels keep these controls in their application.
-Refresh repeats default discovery. Active/default
+Relay startup refreshes default discovery. Active/default
 presets and queued snapshots are preserved; discovery only refreshes unused
 detected entries.
 Codex uses its native `config/read` interface; Grok reads its documented user

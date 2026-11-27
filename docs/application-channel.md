@@ -49,7 +49,7 @@ last read (null before a conversation exists):
 | `new` | None | `/new`, using the default AI |
 | `switch` | `sessionId` from the visible conversation list | `/chats` selection |
 | `select` | `presetId` from `ai.presets` | Select a saved AI |
-| `model` | `cli`, optional `model` and `effort`, from `models` | Save/select the same native choice as `/ai` |
+| `model` | `cli`, optional `model` and `effort`, from `models` | Save/select a native choice from the catalog |
 
 Engine changes start a fresh conversation through the same selection operation
 as Telegram. A changed active conversation rejects a stale mutation; refresh
@@ -368,7 +368,7 @@ Without the administrator's flag, application requests cannot switch Telegram.
 For a main chat that should follow the owner's current Telegram conversation,
 submit `followTelegram:true` under the same administrator-approved sharing grant.
 This uses the normal selected conversation and AI at admission, including after
-`/new`, `/chats`, or `/ai`. Do not also send `activateTelegram`, `ai`, or a native
+`/new`, `/chats`, or an agent AI switch. Do not also send `activateTelegram`, `ai`, or a native
 session assertion. Retries remain pinned to their originally admitted run even
 if the owner has since switched conversations. Keep exercise/detail scopes on
 the ordinary scoped path by omitting this flag.

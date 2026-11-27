@@ -1169,14 +1169,6 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       } catch (error) { await ctx.reply(error instanceof Error ? error.message : 'Rename failed.') }
       return
     }
-    if (text === '/ai') {
-      await aiMenu.list(ctx)
-      return
-    }
-    if (text === '/settings') {
-      await ctx.reply('Settings was removed. Use /ai to choose the client, model, and reasoning level.')
-      return
-    }
 
     const taskNumber = tasksCommand(ctx.message.text)
     if (taskNumber !== null) {
@@ -1414,24 +1406,16 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
         })
         console.info('Approval decision recorded', { actionId, decision: isApproved ? 'approved' : 'denied' })
       }
-    } else if (config.channelBackendUrl && (['menu:new', 'menu:chats', 'menu:ai', 'menu:settings'].includes(data) || data.startsWith('ai:') || data.startsWith('chat:'))) {
+    } else if (config.channelBackendUrl && (['menu:new', 'menu:chats'].includes(data) || data.startsWith('chat:'))) {
       await ctx.answerCallbackQuery()
       await ctx.reply('Conversation and model settings are managed in the connected application.')
     } else if (await conversationMenu.handle(ctx)) {
-      return
-    } else if (await aiMenu.handle(ctx)) {
       return
     } else if (data.startsWith('menu:')) {
       const action = data.slice(5)
       if (action === 'chats') {
         await ctx.answerCallbackQuery()
         await conversationMenu.list(ctx)
-      } else if (action === 'ai') {
-        await ctx.answerCallbackQuery()
-        await aiMenu.list(ctx)
-      } else if (action === 'settings') {
-        await ctx.answerCallbackQuery({ text: 'Settings was removed; use Choose AI.' })
-        await aiMenu.list(ctx)
       } else if (action === 'retry') {
         await ctx.answerCallbackQuery()
         const id = await inbox.retryLatest(ctx.from.id, ctx.chat!.id, (await control.status()).owner)

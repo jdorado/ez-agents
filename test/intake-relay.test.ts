@@ -262,36 +262,12 @@ test('a full public Telegram buffer cannot reroute an addressed owner message to
   } finally { await f.close() }
 })
 
-test('conversation menu is owner-only and removes the retired settings control', async () => {
+test('conversation menu has no AI picker; the agent switches its own AI', async () => {
   const f = await fixture()
-  const callback = (id: number, data: string, user = 101): Update => ({
-    update_id: id,
-    callback_query: { id: String(id), chat_instance: 'fixture', data,
-      from: { id: user, first_name: 'Fixture', is_bot: false }, message: message(id).message! },
-  })
   try {
     await f.relay.bot.handleUpdate(message(1, '/menu'))
     assert.deepEqual(f.keyboards.at(-1)!.flat().map((b) => b.text),
-      ['New conversation', 'Conversations', 'Choose AI', 'Work status', 'Scheduled tasks'])
-    await f.relay.bot.handleUpdate(message(2, '/settings'))
-    assert.match(f.replies.at(-1)!, /Settings was removed.*Use \/ai/)
-    await f.relay.bot.handleUpdate(message(3, '/ai'))
-    const pick = f.keyboards.at(-1)!.flat().find((button) => button.text === '↻ Refresh')!.callback_data
-    const store = new ControlStore(f.dir, 1000)
-    const before = await store.status()
-    const keyboardCount = f.keyboards.length
-    await f.relay.bot.handleUpdate(callback(4, pick, 202))
-    assert.equal(f.keyboards.length, keyboardCount)
-    assert.deepEqual(await store.status(), before)
-    await f.relay.bot.handleUpdate(callback(5, 'ai:forged'))
-    assert.match(f.replies.at(-1)!, /Menu expired/)
-    assert.deepEqual(await store.status(), before)
-    await f.relay.bot.handleUpdate(callback(6, pick))
-    assert.equal(f.keyboards.length, keyboardCount + 1)
-    const refreshed = await store.status()
-    await f.relay.bot.handleUpdate(callback(7, pick))
-    assert.match(f.replies.at(-1)!, /Menu expired/)
-    assert.deepEqual(await store.status(), refreshed)
+      ['New conversation', 'Conversations', 'Work status', 'Scheduled tasks'])
     await f.relay.bot.handleUpdate(message(8, '/status'))
     assert.ok(!f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
     await f.relay.bot.handleUpdate(message(9, '/tasks'))
@@ -302,17 +278,17 @@ test('conversation menu is owner-only and removes the retired settings control',
   } finally { await f.close() }
 })
 
-test('application-backed channels keep AI and retired settings controls in the application', async () => {
+test('application-backed channels keep conversation controls in the application', async () => {
   const f = await fixture({ channelBackendUrl: 'http://127.0.0.1:1', channelBackendToken: 'fixture' })
   try {
     const store = new ControlStore(f.dir, 1000)
     const before = await store.status()
     let id = 1
-    for (const text of ['/ai', '/settings', '/new', '/chats', '/rename Example']) {
+    for (const text of ['/new', '/chats', '/rename Example']) {
       await f.relay.bot.handleUpdate(message(id++, text))
       assert.match(f.replies.at(-1)!, /managed in the connected application/)
     }
-    for (const data of ['menu:ai', 'menu:settings', 'menu:new', 'menu:chats', 'chat:list:0:0', 'chat:open:invalid', 'ai:old-button']) {
+    for (const data of ['menu:new', 'menu:chats', 'chat:list:0:0', 'chat:open:invalid']) {
       await f.relay.bot.handleUpdate({ update_id: id, callback_query: {
         id: String(id), chat_instance: 'fixture', data,
         from: { id: 101, first_name: 'Fixture', is_bot: false }, message: message(id++).message!,
@@ -757,7 +733,7 @@ test('web launcher is private-owner-only and bypasses native intake without repl
     await f.relay.bot.handleUpdate(message(2,'/voice'))
     assert.deepEqual(f.keyboards.at(-1),[[{text:'Voice',web_app:{url:'https://voice.example/'}}]])
     await f.relay.bot.handleUpdate(message(3,'/menu'))
-    assert.deepEqual(f.keyboards.at(-1)!.flat().map(b=>b.text),['New conversation','Conversations','Choose AI','Work status','Scheduled tasks','Voice'])
+    assert.deepEqual(f.keyboards.at(-1)!.flat().map(b=>b.text),['New conversation','Conversations','Work status','Scheduled tasks','Voice'])
     await f.relay.drainInbox(true);assert.equal(f.launched.length,0)
     await new ControlStore(f.dir,1000).revokeOwner()
     const before=f.keyboards.length;await f.relay.bot.handleUpdate(message(4,'/voice'));assert.equal(f.keyboards.length,before)
