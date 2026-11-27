@@ -308,6 +308,7 @@ without authorization. Local registry rehearsal uses `pnpm publish:local`.
 - [Setup and troubleshooting](docs/setup.md)
 - [Architecture and run semantics](docs/architecture/telegram-intake.md)
 - [Saved AI choices](docs/architecture/ai-selection.md)
+- [Isolated desk agent woken by events, and the admin fault channel](docs/event-woken-desk-agent.md)
 - [Development and verification](docs/development-and-testing.md)
 - [Authority boundaries](docs/architecture/authority-boundaries.md)
 - [Security scope](SECURITY.md)

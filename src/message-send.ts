@@ -6,6 +6,7 @@ export type MessageCliArgs = {
   replyTo?: number
   document?: string
   voice?: string
+  admin?: boolean
 }
 
 export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
@@ -15,6 +16,7 @@ export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
   let replyTo: number | undefined
   let document: string | undefined
   let voice: string | undefined
+  let admin = false
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--text-file' && args[i + 1]) {
@@ -26,6 +28,8 @@ export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
       if (!Number.isNaN(parsed)) replyTo = parsed
     } else if ((args[i] === '--document' || args[i] === '--file') && args[i + 1]) {
       document = args[++i]
+    } else if (args[i] === '--admin') {
+      admin = true
     } else if (args[i] === '--voice' && args[i + 1]) {
       voice = args[++i]
     }
@@ -35,6 +39,7 @@ export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
   if (replyTo !== undefined) result.replyTo = replyTo
   if (document !== undefined) result.document = document
   if (voice !== undefined) result.voice = voice
+  if (admin) result.admin = true
   return result
 }
 

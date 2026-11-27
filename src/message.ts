@@ -13,6 +13,7 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
   console.log(
     'Usage: ezenciel-agents-message [--text-file <path> | --text <text>] [--document <path>] [--voice <text>] [--reply-to <id>]',
   )
+  console.log('Admin fault: ezenciel-agents-message --admin (--text <text> | --text-file <path>) reports a tool or runtime fault to the operator-configured admin channel, prefixed with this agent\'s name. Text only; the operator sets the recipient and the command fails when none is configured; it never falls back to the owner chat.')
   console.log('History: ezenciel-agents-message history [--limit 1..50] [--message-id ID] (read-only; current application binding and scope, or bound Telegram chat). --message-id is Telegram-only.')
   console.log('Authenticated run: sends use its bound channel (application inbox or paired Telegram chat). Delivery receipts confirm that destination; uncertain sends must not be retried without readback.')
   console.log('Text: --text decodes \\n as a newline and \\\\ as a literal backslash; --text-file preserves file content.')
@@ -53,6 +54,20 @@ if (!runId && !deliveryContext) {
 }
 
 let textContent = args.text?.trim()
+if (args.admin) {
+  try {
+    if (!runId) throw new Error('EZ_RUN_ID is required')
+    if (args.document || args.voice || args.replyTo !== undefined) throw new Error('--admin sends text only')
+    if (args.textFile) textContent = (await readFile(args.textFile, 'utf8')).trim()
+    if (!textContent) throw new Error('Message content is required')
+    const result = await callDeliverySocket(socketPath, { op: 'adminFault', payload: { runId, text: textContent } }, 30000)
+    console.log(JSON.stringify({ ok: true, status: 'delivered', run: runId, channel: 'admin', receipt: result }))
+  } catch (error) {
+    console.error(JSON.stringify({ ok: false, channel: 'admin', error: error instanceof Error ? error.message : String(error) }))
+    process.exit(1)
+  }
+  process.exit(0)
+}
 if (args.textFile) {
   if(deliveryContext)throw new Error('Channel delivery requires inline text, not host file input')
   try {

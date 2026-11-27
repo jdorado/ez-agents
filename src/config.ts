@@ -1,5 +1,6 @@
 import { parseWebLauncher, type WebLauncher } from './web-launcher.js'
 import { repairEnabled } from './repair-policy.js'
+import { adminChannel, type AdminChannel } from './admin-fault.js'
 import { isolationTransport, resolveIsolation, type IsolationClass } from './isolation.js'
 import path from 'node:path'
 import { homedir } from 'node:os'
@@ -15,6 +16,7 @@ export type Config = ControlConfig & {
   telegramEnabled?: boolean
   webLauncher?: WebLauncher
   telegramBotToken: string
+  admin?: AdminChannel
   workspace: string
   executorTimeoutMs: number
   isolation?: IsolationClass
@@ -91,6 +93,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     telegramEnabled,
     webLauncher: parseWebLauncher(env.EZ_TELEGRAM_WEB_APP),
     telegramBotToken,
+    admin: adminChannel(env),
     repairEnabled: repairEnabled(env.EZ_REPAIR_ENABLED),
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
     executorTimeoutMs: 0,
