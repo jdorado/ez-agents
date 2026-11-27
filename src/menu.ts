@@ -1,63 +1,27 @@
-import { assertEffort, allowedEffort } from './model-policy.js'
+import { assertEffort } from './model-policy.js'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { InlineKeyboard, type Context } from 'grammy'
+import { InlineKeyboard } from 'grammy'
 import { ControlStore, type ControlGuard, type SessionState } from './control-state.js'
-import { chatPreset, installed, persistedPreset, presetLabel, presetProvider, readModels, sameChoice, sameEngine, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
+import { chatPreset, installed, persistedPreset, presetProvider, readModels, sameChoice, sameEngine, validateSelection, type AiPreset, type ModelChoice } from './ai.js'
 import { discoverDefaults } from './client-defaults.js'
 import { claudeConfigHome } from './executor.js'
-import { escapeHtml } from './format.js'
 
 export const mainCommands = [
   { command: 'new', description: 'New conversation' },
-  { command: 'chats', description: 'Conversations' },
-  { command: 'rename', description: 'Rename current conversation' },
-  { command: 'ai', description: 'Choose AI' },
+  { command: 'ai', description: 'Current AI' },
   { command: 'status', description: 'Work status' },
   { command: 'usage', description: 'Account limits and reset times' },
   { command: 'tasks', description: 'Scheduled tasks' },
 ]
 
 export const mainKeyboard = () => new InlineKeyboard()
-  .text('New conversation', 'menu:new').text('Conversations', 'menu:chats').row()
-  .text('Choose AI', 'menu:ai').row()
+  .text('New conversation', 'menu:new').row()
   .text('Work status', 'menu:status').text('Scheduled tasks', 'menu:scheduled-tasks')
 
-const clientLabel = (cli: string) => cli === 'codex-gui' ? 'codex-gui (desktop)' : cli
-
-const matchesModel = (preset: AiPreset, model: ModelChoice) =>
-  sameEngine(model, preset) && model.provider === preset.provider && (preset.model === undefined || model.model === preset.model) &&
-  (preset.effort === undefined || model.efforts.includes(preset.effort))
-
-// The catalog prefixes account and engine into model names (`claude3 · claude · opus`);
-// the card shows them as their own rows, so only the model part is displayed.
-const modelName = (model: ModelChoice) => {
-  let name = model.name
-  for (const prefix of [model.authProfile, model.cli]) if (prefix && name.startsWith(`${prefix} · `)) name = name.slice(prefix.length + 3)
-  return name === 'client default' ? 'Default' : name
-}
-const supportedEfforts = (model: ModelChoice) => model.efforts.filter(effort => allowedEffort(effort, model.model, model.cli))
-const sameModel = (a: ModelChoice, b: ModelChoice) => a.model === b.model && a.provider === b.provider
-const keepOrDefaultEffort = (model: ModelChoice, wanted?: string) => {
-  const supported = supportedEfforts(model)
-  return wanted && supported.includes(wanted) ? wanted : supported.includes('high') ? 'high' : supported[0]
-}
-const chunks = <T,>(items: T[], size: number) => Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, index * size + size))
-// Rows of at most `max` buttons, split evenly (5 → 3+2) instead of leaving a lone button.
-const balanced = <T,>(items: T[], max: number) => chunks(items, Math.ceil(items.length / Math.ceil(items.length / max) || 1))
-// Catalogs list newest first, and a long tail of look-alike names costs a phone screen. A list of
-// more than FEATURED + 2 shows its first FEATURED (plus the one in use) and opens fully on request.
-const FEATURED = 6
-const MODELS_PER_PAGE = 12
-
-// What the card is showing: a catalog entry plus an effort. Engine, account and page
-// only move this view; a model or effort tap applies at once. `more` opens the engine
-// and account rows, which most switches never need.
-type Draft = { model: ModelChoice; effort?: string; page: number; more?: boolean; all?: boolean }
-
-// Short-lived opaque button IDs: no model names or executable arguments from callbacks.
-// These are operational settings, not a second conversational/agent loop.
+// AI catalog and selection shared by application controls. The agent switches its own
+// AI with ezenciel-agents-ai; there is no Telegram picker.
 export const createAiMenu = (control: ControlStore, cli: string, catalog = readModels, workspace = process.cwd(), codexHome?: string,
   isInstalled = installed, opencodeDataHome?: string, closeSession?: (session: SessionState | null) => Promise<void>) => {
   const initial = chatPreset(cli)
@@ -76,24 +40,9 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
       if (host) await validateSelection(preset, await catalog(), async name => (await catalog()).some(model => model.cli === name))
       else {
         const detected = await discoverDefaults(workspace, { codexHome, claudeHome })
-        if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. Tap ↻ Refresh in Choose AI and select the updated choice.')
+        if (!detected.some((p) => p.id === preset.id)) throw new Error('Client settings changed. List the AI catalog again and select the updated choice.')
       }
     } else await validateSelection(preset, await catalog(), host ? async name => (await catalog()).some(model => model.cli === name) : isInstalled)
-  }
-  const buttons = new Map<string, { expires: number; action: (ctx: Context) => Promise<void> }>()
-  // Ids a redraw replaced: a late tap on one (two quick taps on one card) redraws the card instead of
-  // saying the menu expired. Unknown ids, and the id being handled, still read as expired.
-  const released = new Set<string>()
-  let handling: string | undefined
-  // Buttons of one rendered card; a re-render releases them so edits never leak entries.
-  const issue = (keyboard: InlineKeyboard, owned: Set<string>, label: string, action: (ctx: Context) => Promise<void>, row = false) => {
-    for (const [id, b] of buttons) if (b.expires < Date.now()) buttons.delete(id)
-    if (buttons.size >= 300) buttons.delete(buttons.keys().next().value!)
-    const id = randomBytes(8).toString('hex')
-    buttons.set(id, { expires: Date.now() + 15 * 60_000, action })
-    owned.add(id)
-    keyboard.text(label.slice(0, 64), `ai:${id}`)
-    if (row) keyboard.row()
   }
   const select = async (preset: AiPreset, expectedSession: string | null, guard?: ControlGuard) => {
     await validate(preset)
@@ -102,134 +51,9 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     if (!state) throw new Error('AI settings not initialized')
     const current = state.presets.find((p) => p.id === state.selectedId)!
     const fresh = !sameEngine(current, preset) || presetProvider(current) !== presetProvider(preset) || Boolean(session && !session.cli)
-    if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Tap ↻ Refresh in Choose AI before trying again.')
+    if (!await control.selectPreset(preset.id, expectedSession, fresh, guard)) throw new Error('AI binding changed. Read the current AI before trying again.')
     if (fresh) await closeSession?.(session)
     return { preset, fresh }
-  }
-  // The card edits itself in place when it was opened from a button; otherwise it is a new message.
-  const show = async (ctx: Context, text: string, keyboard?: InlineKeyboard, html = false) => {
-    const options = { ...(html ? { parse_mode: 'HTML' as const } : {}), ...(keyboard ? { reply_markup: keyboard } : {}) }
-    if (!ctx.callbackQuery?.message) { await ctx.reply(text, options); return }
-    try { await ctx.editMessageText(text, options) }
-    catch (error) {
-      if (!String((error as { description?: string })?.description).includes('message is not modified')) await ctx.reply(text, options)
-    }
-  }
-  // Applies a choice and shows the card again on it, so a follow-up tap (effort, another model) needs no reopening.
-  const choose = async (ctx: Context, preset: AiPreset, owned?: Set<string>) => {
-    const session = await control.getActiveSession()
-    const { fresh } = await select(preset, session?.sessionId ?? null)
-    // The card being replaced hands over its button entries, so repeated taps strand none.
-    await list(ctx, fresh
-      ? 'Client or provider changed: fresh conversation. Files kept; queued work unchanged.'
-      : 'Saved for this conversation. History kept; queued work unchanged.', owned)
-  }
-  // The default login first, then named logins in catalog order (sort() would push undefined last).
-  const accountsOf = (models: ModelChoice[], cli: string) => {
-    const logins = [...new Set(models.filter(model => model.cli === cli).map(model => model.authProfile))]
-    return [...logins.filter(login => login === undefined), ...logins.filter(login => login !== undefined)]
-  }
-  const pick = (draft: Draft, model: ModelChoice): Draft => ({ model, page: 0, all: false, effort: keepOrDefaultEffort(model, draft.effort) })
-  const toAccount = (models: ModelChoice[], draft: Draft, cli: string, authProfile?: string): Draft => {
-    const list = models.filter(model => sameEngine(model, { cli, authProfile }))
-    return pick(draft, list.find(model => sameModel(model, draft.model)) ?? list[0])
-  }
-  const toEngine = (models: ModelChoice[], draft: Draft, cli: string): Draft => {
-    const accounts = accountsOf(models, cli)
-    return toAccount(models, draft, cli, accounts.includes(draft.model.authProfile) ? draft.model.authProfile : accounts[0])
-  }
-  // One card: the current choice, its models and efforts. A model or effort tap saves through the
-  // same select/save path as before; engine and account sit behind "More".
-  const card = async (ctx: Context, models: ModelChoice[], draft: Draft, owned = new Set<string>(), notice?: string): Promise<void> => {
-    for (const id of owned) {
-      buttons.delete(id)
-      if (id === handling) continue
-      released.add(id)
-      if (released.size > 300) released.delete(released.values().next().value!)
-    }
-    owned.clear()
-    const state = await control.aiState(initial)
-    const selected = state.presets.find((preset) => preset.id === state.selectedId)!
-    const isCurrent = (model: ModelChoice) => sameEngine(model, selected) && model.model === selected.model && model.provider === selected.provider
-    const keyboard = new InlineKeyboard()
-    const redraw = (next: Draft) => (again: Context) => card(again, models, { ...next, more: draft.more, all: next.all ?? draft.all }, owned)
-    const recent = (state.recentIds ?? [])
-      .map((id) => state.presets.find((preset) => preset.id === id))
-      .filter((preset): preset is AiPreset => Boolean(preset))
-      .filter((preset) => preset.id !== state.selectedId && models.some((model) => matchesModel(preset, model)))
-      .slice(0, 3)
-    for (const preset of recent) issue(keyboard, owned,
-      `⏱ ${clientLabel(preset.cli)}${preset.authProfile ? `@${preset.authProfile}` : ''} · ${preset.model ?? 'default'}${preset.effort ? ` · ${preset.effort}` : ''}`,
-      (next) => choose(next, preset, owned), true)
-    const accounts = accountsOf(models, draft.model.cli)
-    if (draft.more) {
-      const engines = [...new Set(models.map((model) => model.cli))].sort((a, b) => clientLabel(a).localeCompare(clientLabel(b)))
-      for (const row of balanced(engines, 3)) {
-        for (const cli of row) issue(keyboard, owned, `${cli === draft.model.cli ? '✓ ' : ''}${clientLabel(cli)}`, redraw(toEngine(models, draft, cli)))
-        keyboard.row()
-      }
-      if (accounts.length > 1) for (const row of balanced(accounts, 4)) {
-        for (const account of row) issue(keyboard, owned, `${account === draft.model.authProfile ? '✓ ' : ''}${account ?? 'default'}`,
-          redraw(toAccount(models, draft, draft.model.cli, account)))
-        keyboard.row()
-      }
-    }
-    const listed = models.filter((model) => sameEngine(model, draft.model))
-    const collapsed = !draft.all && listed.length > FEATURED + 2
-    const shown = collapsed ? [...listed.slice(0, FEATURED), ...listed.slice(FEATURED).filter(isCurrent)] : listed
-    const pages = Math.ceil(shown.length / MODELS_PER_PAGE), page = Math.min(draft.page, Math.max(0, pages - 1))
-    const visible = shown.slice(page * MODELS_PER_PAGE, (page + 1) * MODELS_PER_PAGE)
-    // Long names get two buttons per row so a phone does not cut them off.
-    for (const row of chunks(visible, visible.some((model) => modelName(model).length > 11) ? 2 : 3)) {
-      for (const model of row) issue(keyboard, owned, `${isCurrent(model) ? '✓ ' : ''}${modelName(model)}`,
-        async (next) => choose(next, await saveSelection(model, keepOrDefaultEffort(model, draft.effort)), owned))
-      keyboard.row()
-    }
-    if (pages > 1) {
-      issue(keyboard, owned, '‹ Models', redraw({ ...draft, page: (page + pages - 1) % pages }))
-      issue(keyboard, owned, `${page + 1}/${pages} ›`, redraw({ ...draft, page: (page + 1) % pages }), true)
-    }
-    if (collapsed) issue(keyboard, owned, `More models (${listed.length - shown.length}) ▸`, redraw({ ...draft, page: Math.max(0, Math.floor(listed.findIndex(isCurrent) / MODELS_PER_PAGE)), all: true }), true)
-    else if (draft.all && listed.length > FEATURED + 2) issue(keyboard, owned, '▴ Fewer models', redraw({ ...draft, page: 0, all: false }), true)
-    // Effort belongs to the model in use; another engine's models start from their own default.
-    const efforts = isCurrent(draft.model) ? supportedEfforts(draft.model) : []
-    for (const row of balanced(efforts, 4)) {
-      for (const effort of row) issue(keyboard, owned, `${effort === selected.effort ? '✓ ' : ''}${effort}`,
-        async (next) => {
-          // An older card (a second /ai message) must not re-apply its own model over a newer choice.
-          const live = await control.aiState(initial), now = live.presets.find((preset) => preset.id === live.selectedId)!
-          if (!(sameEngine(draft.model, now) && draft.model.model === now.model && draft.model.provider === now.provider)) { await list(next, undefined, owned); return }
-          await choose(next, await saveSelection(draft.model, effort), owned)
-        })
-      keyboard.row()
-    }
-    issue(keyboard, owned, draft.more ? '▴ Fewer options' : '▾ Engine and account',
-      (again) => card(again, models, { ...draft, more: !draft.more }, owned), true)
-    issue(keyboard, owned, '↻ Refresh', async (next) => { await refresh(); await list(next, undefined, owned) })
-    await show(ctx, [
-      '<b>🤖 Choose AI</b>',
-      `Current: <code>${escapeHtml(presetLabel(selected))}</code>`,
-      ...(notice ? [`✅ ${escapeHtml(notice)}`] : []),
-      '<i>Tap a model or effort to switch · same engine and provider keeps history; otherwise a new conversation starts (files kept)</i>',
-    ].join('\n'), keyboard, true)
-  }
-  const list = async (ctx: Context, notice?: string, owned?: Set<string>) => {
-    const models = await catalog()
-    const state = await control.aiState(initial)
-    const selected = state.presets.find((preset) => preset.id === state.selectedId)!
-    if (!models.length) {
-      const keyboard = new InlineKeyboard()
-      const current = state.presets.find((preset) => preset.id === initial.id)
-      const own = new Set<string>()
-      if (current) issue(keyboard, own, `✓ ${current.name}`, (next) => choose(next, current), true)
-      issue(keyboard, own, '↻ Refresh', async (next) => { await refresh(); await list(next) })
-      await show(ctx, `Choose AI\nCurrent: ${presetLabel(selected)}\n${notice ? `${notice}\n` : ''}No client catalog available. Showing the current client setup only.`, keyboard)
-      return
-    }
-    // Start on the current choice; a saved choice outside the catalog starts on the first entry.
-    const match = models.find((model) => matchesModel(selected, model) && model.model === selected.model) ?? models.find((model) => matchesModel(selected, model)) ?? models[0]
-    const effort = selected.effort && supportedEfforts(match).includes(selected.effort) ? selected.effort : undefined
-    await card(ctx, models, { model: match, effort, page: 0 }, owned, notice)
   }
   const saveSelection = async (model: ModelChoice, effort?: string, guard?: ControlGuard) => {
     const state = (await control.status()).ai
@@ -251,23 +75,5 @@ export const createAiMenu = (control: ControlStore, cli: string, catalog = readM
     catalog: () => catalog(),
     select,
     saveSelection,
-    list,
-    async handle(ctx: Context): Promise<boolean> {
-      const data = ctx.callbackQuery?.data
-      if (!data?.startsWith('ai:')) return false
-      const id = data.slice(3), entry = buttons.get(id)
-      await ctx.answerCallbackQuery().catch(() => {})
-      if (!entry || entry.expires < Date.now()) {
-        if (!released.has(id)) await ctx.reply('Menu expired. Open /ai again.')
-        else try { await list(ctx) } catch (error) { await ctx.reply(error instanceof Error ? error.message : 'AI selection failed.') }
-      } else {
-        buttons.delete(id)
-        handling = id
-        try { await entry.action(ctx) }
-        catch (error) { await ctx.reply(error instanceof Error ? error.message : 'AI selection failed.') }
-        finally { handling = undefined }
-      }
-      return true
-    },
   }
 }

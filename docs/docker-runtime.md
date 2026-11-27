@@ -379,7 +379,7 @@ answers no other message until the reply is built, up to 20 seconds when a
 client hangs. The report is generated on demand.
 
 Select a profile with `ezenciel-agents-ai select --cli claude --auth-profile work`,
-or the profile entries in Choose AI for a chat. A conversation is bound to its
+or ask the agent to switch its own conversation. A conversation is bound to its
 CLI and profile; changing
 profile starts a new native conversation, and a run whose request names another
 profile than its captured choice is rejected before launch.

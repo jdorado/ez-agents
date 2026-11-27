@@ -278,14 +278,10 @@ Credentials and control state stay outside the mind. Isolated agents use relay
 mounts as the filesystem boundary. Host-capable file separation is not OS
 isolation against a process running as the same user.
 
-In Telegram, **Conversations** (or `/chats`) lists this agent's saved Ez
-conversations by name. Tap a name to continue its native engine session and
-restore its AI choice. Names start with the first message; `/rename Client launch`
-sets a custom name for the current conversation. **New conversation** keeps the
-old one available. **Archive this conversation**, shown after selecting a name, hides a conversation without deleting its engine
-history; **Archived conversations → select a name → Restore conversation** brings it back. Archiving the current conversation
-leaves the next message to start a fresh one. Running and queued work stays bound
-to its original conversation; archive does not cancel work.
+In Telegram there is one current conversation. **New conversation** (or `/new`)
+starts a fresh native session; earlier ones are not listed in Telegram. Running
+and queued work stays bound to its original conversation. `/ai` shows the current
+AI; to change it, ask the agent. Shared workspace files persist across conversations.
 
 Agents can inspect what was sent to the bound Telegram chat across conversations
 with `ezenciel-agents-message history` (latest 8 deliveries), `--limit N` (1–50),
@@ -296,13 +292,7 @@ It does not change the selected conversation or inject history into prompts.
 Only retained receipts from the current owner binding are available; Telegram
 edits/deletions and attachment contents are not fetched.
 
-Existing conversations without a title show their first saved message and date when
-available. Empty routing placeholders are omitted from history; + New conversation
-is the create action. Back updates the current menu without creating a conversation. Use /rename for a custom name. Older
-records without a saved model reuse a known choice for their original CLI.
-The list covers sessions already tracked by this Ez agent; it does not import
-unrelated GUI/CLI history. Application-backed channels keep session controls in
-the connected application. Shared workspace files still persist across topics.
+Application-backed channels keep session controls in the connected application.
 
 
 Telegram intake is owner-gated. The executor sends replies with the messaging

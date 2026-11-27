@@ -179,7 +179,7 @@ export class ApplicationChannel {
     }
     if (value.action === 'switch') {
       if (typeof value.sessionId !== 'string') throw new Error('Invalid application conversation')
-      // switchSession enforces the same visibility/engine restrictions as /chats.
+      // switchSession enforces the shared list's visibility/engine restrictions.
       await control.switchSession(value.sessionId, expected, guard)
     }
     if (value.action === 'select') {

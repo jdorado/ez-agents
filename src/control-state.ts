@@ -618,7 +618,7 @@ export class ControlStore {
       if (expectedSession !== undefined && (state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Conversation changed. Refresh controls before trying again.')
       if (state.activeSession?.sessionId === sessionId) return state.activeSession
       const session = state.sessions?.find(s => s.sessionId === sessionId)
-      if (!session || session.archived || (session.applicationScope && !session.telegramShared)) throw new Error('Conversation unavailable. Open /chats again.')
+      if (!session || session.archived || (session.applicationScope && !session.telegramShared)) throw new Error('Conversation unavailable.')
       const ai = state.ai
       // Older sessions did not record their model. Reuse a known preset for the
       // same CLI; never resume an engine ID through a different client.
@@ -636,35 +636,6 @@ export class ControlStore {
       ai.selectedId = preset.id
       await this.writeState(state)
       return session
-    })
-  }
-
-  async archiveSession(sessionId: string, archived: boolean): Promise<void> {
-    await this.withLock(async () => {
-      const state = await this.readState()
-      const session = state.activeSession?.sessionId === sessionId ? state.activeSession
-        : state.sessions?.find(s => s.sessionId === sessionId)
-      if (!session) throw new Error('Conversation unavailable. Open /chats again.')
-      if (archived && state.activeSession === session) {
-        rememberPreset(state)
-        state.sessions ??= []
-        state.sessions.push(session)
-        state.activeSession = null
-        if (state.ai) state.ai.selectedId = state.ai.defaultId
-      }
-      session.archived = archived
-      await this.writeState(state)
-    })
-  }
-
-  async renameSession(title: string): Promise<void> {
-    title = title.replace(/\s+/g, ' ').trim()
-    if (!title || title.length > 80) throw new Error('Use /rename followed by a name of 1–80 characters.')
-    await this.withLock(async () => {
-      const state = await this.readState()
-      if (!state.activeSession) throw new Error('Open a conversation first with /chats or /new.')
-      state.activeSession.title = title
-      await this.writeState(state)
     })
   }
 
@@ -850,7 +821,7 @@ export class ControlStore {
         return previous
       }
       // Retire the binding, not its native session. Admitted work still resolves
-      // the old immutable session ID; private history stays absent from /chats.
+      // the old immutable session ID; private history stays out of the shared list.
       if (previous) previous.archived = true
       const next: SessionState = {sessionId:crypto.randomUUID(), hasStarted:false,
         ...engineOf(nextPreset), preset:persistedPreset(nextPreset), applicationScope:scope}
@@ -998,7 +969,7 @@ export class ControlStore {
       const preset = ai?.presets.find((p) => p.id === id)
       if (!ai || !preset) throw new Error('Saved AI no longer exists')
       assertEffort(preset.effort, preset.model, preset.cli)
-      if ((state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Menu expired. Open Choose AI again.')
+      if ((state.activeSession?.sessionId ?? null) !== expectedSession) throw new Error('Conversation changed. Read the current AI before trying again.')
       const current = ai.presets.find((p) => p.id === ai.selectedId)!
       if (state.activeSession && (!sameEngine(current, preset) || presetProvider(current) !== presetProvider(preset) || !state.activeSession.cli) && !fresh) return false
       if (fresh || !state.activeSession) {
