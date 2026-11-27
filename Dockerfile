@@ -1,3 +1,10 @@
+# Antigravity publishes its CLI for linux-x64 only, so arm64 images (an Apple
+# silicon host) ship without agy; there it is not selectable in the relay.
+ARG TARGETARCH
+FROM scratch AS agy-amd64
+ADD --checksum=sha256:9bdab234d06bad1a61be2321072652eb06be78baff1acbfae47331da5a090abc https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.16-5250855658717184/linux-x64/cli_linux_x64.tar.gz /agy.tar.gz
+FROM scratch AS agy-arm64
+FROM agy-${TARGETARCH} AS agy
 FROM docker/compose-bin:v5.5.1@sha256:14162382692aae43977f79effa64a499d61de19d4645461881daaf88773f7e74 AS compose-bin
 FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS dependencies
 WORKDIR /app
@@ -42,9 +49,7 @@ ARG CLAUDE_CLI_VERSION=2.1.322
 RUN pnpm add --global --allow-build=@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION} @anthropic-ai/claude-code@${CLAUDE_CLI_VERSION} && command -v claude && claude --version
 # Isolated agents select Antigravity from the relay menu with an agent-bound
 # HOME login (control/cli/agy). Pin the reviewed release; runs never self-update.
-ARG AGY_CLI_URL=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.16-5250855658717184/linux-x64/cli_linux_x64.tar.gz
-ADD --checksum=sha256:9bdab234d06bad1a61be2321072652eb06be78baff1acbfae47331da5a090abc ${AGY_CLI_URL} /tmp/agy.tar.gz
-RUN tar -xzf /tmp/agy.tar.gz -C /tmp antigravity && install -m 0755 /tmp/antigravity /usr/local/bin/agy && rm /tmp/agy.tar.gz /tmp/antigravity && AGY_CLI_DISABLE_AUTO_UPDATE=true HOME=/tmp agy --version
+RUN --mount=type=bind,from=agy,target=/tmp/agy if [ -f /tmp/agy/agy.tar.gz ]; then tar -xzf /tmp/agy/agy.tar.gz -C /tmp antigravity && install -m 0755 /tmp/antigravity /usr/local/bin/agy && rm /tmp/antigravity && AGY_CLI_DISABLE_AUTO_UPDATE=true HOME=/tmp agy --version; fi
 RUN chmod +x docker/entrypoint.sh bin/ez bin/ezenciel-agents* && mkdir -p /state/control /state/home /workspace && chown node:node /state/control /state/home /workspace
 RUN node -e 'for (const [name, target] of Object.entries(require("./package.json").bin)) require("node:fs").symlinkSync("/app/" + target, "/usr/local/bin/" + name); require("node:fs").symlinkSync("/app/bin/ez", "/usr/local/bin/ez")'
 # Build identity for relay status (package version stays release-owned).
