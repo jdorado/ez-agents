@@ -440,7 +440,7 @@ test('update cleanup keeps the newest backup per target, unfinished jobs and job
  const [stuck,next,newest]=['7','8','9'].map(id);
  await seed(stuck,'main','completed','2026-01-02T01:00:00.000Z');await seed(next,'main','completed','2026-01-02T02:00:00.000Z');await seed(newest,'main','completed','2026-01-02T03:00:00.000Z');
  await fs.chmod(jobPath(f.home,stuck),0o500);
- const partial=await cleanupStaleBackups(f.home);await fs.chmod(jobPath(f.home,stuck),0o700);
+ let partial;try{partial=await cleanupStaleBackups(f.home);}finally{await fs.chmod(jobPath(f.home,stuck),0o700);}
  assert.deepEqual(partial.failed.map(item=>item.id),[stuck]);assert.match(partial.failed[0].error,/EACCES|EPERM/);
  assert.ok(partial.removed.includes(latest)&&partial.removed.includes(next));await fs.access(path.join(jobPath(f.home,newest),'backup','marker'));
 });
