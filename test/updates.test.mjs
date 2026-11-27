@@ -425,12 +425,30 @@ test('latest overrides stale deployment pins and changing latest changes image b
  }
  assert.equal(hashes[0],hashes[1]);assert.notEqual(tags[0],tags[1]);
 });
-test('update cleanup keeps the newest backup per target and ignores unfinished jobs',async t=>{
- const f=await fixture(t),older='11111111-1111-1111-1111-111111111111',latest='22222222-2222-2222-2222-222222222222',queued='33333333-3333-3333-3333-333333333333',rolledBack='44444444-4444-4444-4444-444444444444';
+test('update cleanup keeps the newest backup per target, unfinished jobs and jobs newer than it',async t=>{
+ const f=await fixture(t),id=n=>n.repeat(8)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(12);
+ const [older,latest,queued,newerRolledBack,olderFailed,otherFailed]=['1','2','3','4','5','6'].map(id);
  const seed=async(id,target,status,endedAt)=>{const dir=jobPath(f.home,id);await fs.mkdir(path.join(dir,'backup'),{recursive:true});await fs.writeFile(path.join(dir,'backup','marker'),'private');await atomic(path.join(dir,'job.json'),{id,target,status,createdAt:endedAt,endedAt});};
- await seed(older,'main','completed','2026-01-01T00:00:00.000Z');await seed(latest,'main','completed','2026-01-02T00:00:00.000Z');await seed(queued,'sample','queued','2026-01-03T00:00:00.000Z');await seed(rolledBack,'main','rolled-back','2026-01-03T00:00:00.000Z');
- const result=await cleanupStaleBackups(f.home);assert.deepEqual(result.kept,[latest]);assert.deepEqual(result.removed.sort(),[older,rolledBack].sort());
- await assert.rejects(fs.access(path.join(jobPath(f.home,older),'backup')));await fs.access(path.join(jobPath(f.home,latest),'backup'));await fs.access(path.join(jobPath(f.home,queued),'backup'));await assert.rejects(fs.access(path.join(jobPath(f.home,rolledBack),'backup')));
+ await seed(older,'main','completed','2026-01-01T00:00:00.000Z');await seed(latest,'main','completed','2026-01-02T00:00:00.000Z');await seed(queued,'sample','queued','2026-01-03T00:00:00.000Z');
+ await seed(newerRolledBack,'main','rolled-back','2026-01-03T00:00:00.000Z');await seed(olderFailed,'main','failed','2026-01-01T12:00:00.000Z');await seed(otherFailed,'sample','failed','2026-01-01T00:00:00.000Z');
+ const result=await cleanupStaleBackups(f.home);assert.deepEqual(result.kept,[latest]);assert.deepEqual(result.removed.sort(),[older,olderFailed].sort());assert.deepEqual(result.failed,[]);
+ for(const job of [older,olderFailed])await assert.rejects(fs.access(path.join(jobPath(f.home,job),'backup')));
+ for(const job of [latest,queued,newerRolledBack,otherFailed])await fs.access(path.join(jobPath(f.home,job),'backup','marker'));
+ for(const job of [older,olderFailed])await fs.access(path.join(jobPath(f.home,job),'job.json'));
+});
+test('a completed plugin update removes older backups even when one holds read-only directories',async t=>{
+ const f=await fixture(t,'plugin'),id=n=>n.repeat(8)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(4)+'-'+n.repeat(12);
+ const seed=async(id,target)=>{const dir=jobPath(f.home,id);await fs.mkdir(path.join(dir,'backup'),{recursive:true});await atomic(path.join(dir,'job.json'),{id,target,status:'completed',createdAt:'2026-01-01T00:00:00.000Z',endedAt:'2026-01-01T00:00:00.000Z'});return path.join(dir,'backup');};
+ // An agent-written read-only tree, as old main backups copied from workspaces.
+ const locked=path.join(await seed(id('1'),'main'),'workspace','packet');await fs.mkdir(locked,{recursive:true});await fs.writeFile(path.join(locked,'BRIEF.md'),'x');
+ await fs.chmod(path.join(locked,'BRIEF.md'),0o440);await fs.chmod(locked,0o550);
+ await seed(id('2'),'main');await seed(id('3'),'sample');await fs.writeFile(path.join(jobPath(f.home,id('3')),'backup','profile.tar'),'volume');
+ const job=await perform(f.home,await queued(f),runtime(f));
+ assert.equal(job.status,'completed');assert.equal(job.cleanupError,undefined);
+ assert.deepEqual(job.cleanup.removed.sort(),[id('1'),id('3')]);assert.deepEqual(job.cleanup.failed,[]);
+ assert.deepEqual(job.cleanup.kept.sort(),[id('2'),job.id].sort());
+ for(const n of ['1','3'])await assert.rejects(fs.access(path.join(jobPath(f.home,id(n)),'backup')));
+ await fs.access(path.join(jobPath(f.home,id('2')),'backup'));await fs.access(path.join(jobPath(f.home,job.id),'backup'));
 });
 test('completed main update removes only this agent\'s older upgrade images and tolerates one in use',async t=>{
  const f=await fixture(t),name=n=>`ez-upgrade-${n.repeat(24)}`;
