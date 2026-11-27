@@ -3,6 +3,12 @@
 ## Unreleased
 
 - Plugin containers learn the workspace root (#390). A service that declares `workspace: true` gets `EZ_AGENT_WORKSPACE` set to the absolute path of its read-only workspace mount, in its Compose service environment, so every command container and long-running service of that service sees the variable exactly when it has the mount. A plugin that accepts a file path can resolve it and refuse anything outside that root. Services without the mount, and plugins that do not declare the key, are unchanged.
+## 0.83.0
+
+- Plugin output keeps multibyte characters intact (#386). Child output and broker frames were decoded one chunk at a time, so a character split between two pipe or socket chunks (an en dash, an accented letter, an emoji) came back as U+FFFD: in plugin command output, in plugin stdin sent through the isolated broker, and in the run request a host executor reads. Each stream is now decoded once; byte limits are unchanged.
+- Plugin size limits stay as they are (#385, owner decision). Broker stdin and command output remain capped at 1 MiB each; a plugin command that takes a larger file accepts its workspace path and reads it through its `workspace: true` read-only mount.
+- Run telemetry reads Antigravity (#387). An `agy` run now records its model, token counts (native total, or per-step sums if the run ends early), tool calls with their durations, and a failed result's category, as Claude and Codex runs do; before, it recorded no telemetry.
+- arm64 images build again (#389). Since 0.81.0 the relay image ran Antigravity's linux-x64 CLI during the build, so an image build on an arm64 Docker host (Apple silicon) failed at that step and agents there could not update past 0.80.0. Antigravity publishes no linux-arm64 CLI, so arm64 images now ship without `agy` (not selectable in an arm64 relay); amd64 images are unchanged.
 
 ## 0.82.0
 
