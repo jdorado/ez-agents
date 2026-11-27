@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.83.0
+
+- Plugin output keeps multibyte characters intact (#386). Child output and broker frames were decoded one chunk at a time, so a character split between two pipe or socket chunks (an en dash, an accented letter, an emoji) came back as U+FFFD: in plugin command output, in plugin stdin sent through the isolated broker, and in the run request a host executor reads. Each stream is now decoded once; byte limits are unchanged.
+- Plugin size limits stay as they are (#385, owner decision). Broker stdin and command output remain capped at 1 MiB each; a plugin command that takes a larger file accepts its workspace path and reads it through its `workspace: true` read-only mount.
+- Run telemetry reads Antigravity (#387). An `agy` run now records its model, token counts (native total, or per-step sums if the run ends early), tool calls with their durations, and a failed result's category, as Claude and Codex runs do; before, it recorded no telemetry.
+
 ## 0.82.0
 
 - Old update backups are pruned again (#382). Each completed update already kept only the newest completed job's backup per target, but on a long-running agent every cleanup stopped at its first error: an early main update had copied the agent workspace into its backup, the agent had made some of those directories read-only, and removing them failed with `EACCES`, so no later backup was ever removed (one agent had kept about 90 GB of superseded plugin volume backups). Cleanup now restores owner write on a backup's own directories before removing it, and a backup it still cannot remove is reported per job in the update's `cleanup.failed` (and logged by the supervisor at start) instead of stopping the rest. A failed or rolled-back job newer than its target's newest completed job now keeps its backup; job records are never removed.
