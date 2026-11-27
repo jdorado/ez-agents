@@ -315,6 +315,21 @@ Without any login, Claude turns fail closed with the native "not logged in"
 error. Host-capable agents use the same agent-bound directory but share the
 installer login in place (`CLAUDE_SECURESTORAGE_CONFIG_DIR` empty).
 
+## Antigravity auth
+
+Isolated agents run the image `agy` with `HOME` set to the agent-bound
+`control/cli/agy`, so its login, settings and conversations stay there. Sign
+the agent in once inside its relay; over a terminal without a browser `agy`
+prints a sign-in URL and asks for the returned code:
+
+```sh
+docker compose exec -it -u "${EZ_RUNTIME_UID:-1000}:${EZ_RUNTIME_GID:-1000}" relay \
+  sh -c 'mkdir -p "$EZ_CONTROL_DIR/cli/agy" && HOME="$EZ_CONTROL_DIR/cli/agy" AGY_CLI_DISABLE_AUTO_UPDATE=true agy'
+```
+
+Runs use the signed-in default model; pin specific models in
+`control/ai-models.json`. Host-capable agents keep the installer login.
+
 ## Auth profiles
 
 One agent can keep several owner-provisioned Codex or Claude logins, for example

@@ -20,7 +20,7 @@ export const sameEngine = (a: Engine, b: Engine) => a.cli === b.cli && a.authPro
 export const sameChoice = (a: Omit<AiPreset, 'id' | 'name'>, b: Omit<AiPreset, 'id' | 'name'>) =>
   sameEngine(a, b) && a.provider === b.provider && a.model === b.model && a.effort === b.effort
 const safe = (s: unknown): s is string => typeof s === 'string' && /^[a-zA-Z0-9_./:-]{1,160}$/.test(s)
-const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'opencode', 'pi']
+const knownClis = ['grok', 'codex', 'codex-gui', 'claude', 'agy', 'opencode', 'pi']
 const nativeEffort = (cli: string, effort: string) =>
   cli === 'pi' ? ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(effort) : true
 export const isPreset = (p: unknown): p is AiPreset => {
@@ -225,6 +225,8 @@ export const readModels = async (home = homedir(), available = installed, codexH
     models.push(...(desktop.length ? desktop : [{ cli: 'codex-gui', name: 'codex-gui · desktop', efforts: [] }]))
   }
   if (await available('claude')) models.push(...await claudeCatalogModels(claudeRunner))
+  // Antigravity runs its signed-in default; specific models are owner-curated.
+  if (await available('agy')) models.push({ cli: 'agy', name: 'agy · client default', efforts: [] })
   const allow = opencodeAllowlist ?? opencodeProviderAllowlist()
   if (await available('opencode')) models.push(...await opencodeCatalogModels(opencodeRunner, opencodeDataHome, allow))
   // Pi has separate provider configuration. OpenCode's catalog cannot

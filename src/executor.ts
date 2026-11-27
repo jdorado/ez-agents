@@ -29,6 +29,7 @@ const steerers = new WeakMap<ChildProcess, (text: string) => Promise<boolean>>()
 export const steerJob = (child: ChildProcess, text: string): Promise<boolean> =>
   steerers.get(child)?.(text) ?? Promise.resolve(false)
 const claudeInput = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n'
+const agyInput = (text: string) => JSON.stringify({ event: 'user', message: { content: text } }) + '\n'
 
 // File transport: the host claims a request by renaming it, then acknowledges.
 // An unclaimed request is withdrawn, so input is steered or queued, never both.
@@ -210,6 +211,24 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
       return args
     },
   },
+  agy: {
+    name: 'antigravity',
+    command: 'agy',
+    description: 'Google Antigravity CLI',
+    // The prompt arrives as one stream-json user event on stdin. Antigravity
+    // picks its own conversation ID; core records it from the init event and
+    // resumes that exact conversation.
+    buildArgs: (opts) => {
+      const args: string[] = []
+      if (opts.isResume && opts.sessionId) args.push('--conversation', opts.sessionId)
+      args.push('--dangerously-skip-permissions', '--input-format', 'stream-json', '--output-format', 'stream-json')
+      for (const directory of [opts.controlDir, opts.sharedWorkspace, ...(opts.additionalWorkspaces ?? []), opts.toolsHome])
+        if (directory) args.push('--add-dir', directory)
+      if (opts.model) args.push('--model', opts.model)
+      if (opts.effort) args.push('--effort', opts.effort)
+      return args
+    },
+  },
   grok: {
     name: 'grok',
     command: 'grok',
@@ -281,6 +300,7 @@ export const EXECUTOR_REGISTRY: Record<string, CliAdapter> = {
 }
 
 export const EXECUTOR_ALIASES: Record<string, string> = {
+  antigravity: 'agy',
   'claude-code': 'claude',
   oc: 'opencode',
 }
@@ -483,6 +503,17 @@ export const startExecutorJob = async (
     // Keep native background work alive until completion or cancellation.
     environment.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS = '0'
   }
+  if (!host && !gui && key === 'agy') {
+    // Isolated agents keep their own Antigravity login and settings in the
+    // agent-bound home; host-capable agents keep the installer login. The
+    // installed binary is release-pinned, so it never self-updates.
+    if (process.env.EZ_ISOLATION === 'isolated') {
+      const home = await provisionedHome(options.controlDir, 'agy')
+      await mkdir(home, {recursive:true,mode:0o700})
+      environment.HOME = home
+    }
+    environment.AGY_CLI_DISABLE_AUTO_UPDATE = 'true'
+  }
   if (!host && !gui && key === 'opencode') {
     // Point OpenCode at the agent-bound data home (cli/opencode/auth.json)
     // when the owner provisioned it. Host runs keep the installer login;
@@ -544,6 +575,13 @@ export const startExecutorJob = async (
     createInterface({ input: child.stdout! }).on('line', (line) => {
       try { if (JSON.parse(line).type === 'result') child.stdin!.end() } catch {}
     })
+  } else if (!host && !gui && key === 'agy') {
+    // One turn per run: close input after its result. Later owner input queues.
+    child.stdin!.on('error', () => {})
+    child.stdin!.write(agyInput(promptText))
+    createInterface({ input: child.stdout! }).on('line', (line) => {
+      try { if (JSON.parse(line).event === 'result') child.stdin!.end() } catch {}
+    })
   } else if (appServer) {
     // codex-session.ts: the launch line, then acknowledged steer lines.
     child.stdin!.on('error', () => {})
@@ -574,7 +612,7 @@ export const startExecutorJob = async (
   let stdout = ''
   let stderr = ''
   let metadataWork = Promise.resolve()
-  if (child.stdout && options.onSession && ['codex', 'codex-gui', 'opencode'].includes(key)) {
+  if (child.stdout && options.onSession && ['codex', 'codex-gui', 'opencode', 'agy'].includes(key)) {
     const lines = createInterface({ input: child.stdout })
     lines.on('line', (line) => {
       const id = nativeSessionId(key, line)
@@ -668,7 +706,8 @@ export const nativeSessionId = (cli: string, line: string): string | undefined =
   try {
     const event = JSON.parse(line)
     const id = (cli === 'codex' || cli === 'codex-gui') && event.type === 'thread.started' ? event.thread_id
-      : cli === 'opencode' && ['step_start', 'step_finish', 'text', 'tool_use'].includes(event.type) ? event.sessionID : undefined
+      : cli === 'opencode' && ['step_start', 'step_finish', 'text', 'tool_use'].includes(event.type) ? event.sessionID
+      : cli === 'agy' && event.event === 'init' ? event.conversation_id : undefined
     if (typeof id === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(id)) return id
   } catch {}
 }
