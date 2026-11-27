@@ -333,6 +333,36 @@ test('isolated client does not wait forever on an inherited open stdin socket', 
   assert.equal(invokes.at(-1).stdin, 'late');
 });
 
+// The broker response reaches the client in socket chunks; a character split
+// between two of them must print intact.
+test('isolated client decodes a broker response split inside a character', async t => {
+  const { spawn } = await import('node:child_process');
+  const { once } = await import('node:events');
+  const root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'e-')));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const socket = path.join(root, 'b.sock');
+  const broker = createServer(connection => {
+    let buffer = '';
+    connection.on('data', async chunk => {
+      buffer += chunk;
+      if (!buffer.includes('\n')) return;
+      const frame = JSON.parse(buffer);
+      if (frame.operation === 'resolve') return connection.end(JSON.stringify({ ok: true, revision, capability: 'c'.repeat(64) }) + '\n');
+      const bytes = Buffer.from(JSON.stringify({ ok: true, code: 0, stdout: 'a–b' }) + '\n'), cut = bytes.indexOf(0xe2) + 1;
+      connection.write(bytes.subarray(0, cut));
+      await new Promise(resolve => setTimeout(resolve, 100));
+      connection.end(bytes.subarray(cut));
+    });
+  });
+  await new Promise(resolve => broker.listen(socket, resolve));
+  t.after(() => broker.close());
+  const child = spawn(process.execPath, [new URL('../bin/ez', import.meta.url).pathname, 'sample', 'read'], { env: { PATH: process.env.PATH, EZ_PLUGIN_BROKER_SOCKET: socket, EZ_RUN_ID: 'r_split' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  const chunks = [];
+  child.stdout.on('data', chunk => chunks.push(chunk));
+  assert.equal((await once(child, 'close'))[0], 0);
+  assert.equal(Buffer.concat(chunks).toString('utf8'), 'a–b');
+});
+
 test('the isolated broker accepts a task capability only as a bounded lease request', async () => {
   const request = { version: 1, id: randomUUID(), operation: 'task-capability', runId: 'r_app_1', stdin: JSON.stringify({ lease: 'l', input: 'x', token: 'f'.repeat(64) }) };
   assert.equal(await validateBrokerRequest(request, '/tmp'), request);

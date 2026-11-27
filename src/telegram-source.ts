@@ -30,7 +30,7 @@ export class TelegramSource {
       await rm(this.socketPath,{force:true})
       this.server = createServer(async (req,res) => {
         try {
-          let body = ''; for await(const chunk of req) { body += chunk; if (body.length>20000) throw new Error('Request too large') }
+          req.setEncoding('utf8'); let body = ''; for await(const chunk of req) { body += chunk; if (body.length>20000) throw new Error('Request too large') }
           const {command,args={}}=JSON.parse(body)
           const work=this.serial.then(()=>this.call(command,args)); this.serial=work.catch(()=>{})
           const data=await work; res.end(JSON.stringify({ok:true,data}))

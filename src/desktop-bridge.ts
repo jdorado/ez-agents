@@ -336,6 +336,7 @@ export const runDesktopTurn = async (
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   let input = ''
+  process.stdin.setEncoding('utf8')
   for await (const chunk of process.stdin) input += chunk
   const body = JSON.parse(input) as { prompt: string; options: DesktopTurnOptions }
   const abort = new AbortController()

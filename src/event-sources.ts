@@ -31,6 +31,7 @@ export function sourceCall(socketPath: string, command: string, args = {}, maxRe
   return new Promise((resolve, reject) => {
     const req = request({ socketPath, path: '/', method: 'POST', timeout: 3000 }, res => {
       let body = ''
+      res.setEncoding('utf8')
       res.on('data', chunk => { body += chunk; if (Buffer.byteLength(body) > maxResponseBytes) req.destroy(new Error('Event-source response too large')) })
       res.on('error', () => reject(new Error('Event-source response interrupted')))
       res.on('end', () => {
