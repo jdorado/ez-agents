@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import {authorizeDeliveryContext,currentDeliveryOwner} from '../delivery-context.mjs';
 
 export const nativeCommands=()=>[
@@ -66,15 +67,15 @@ export async function nativeTasks(home,args,{signal,command='schedule',deliveryC
   const entry=fileURLToPath(new URL(`../../bin/ezenciel-agents-${command}.mjs`,import.meta.url));
   return new Promise((resolve,reject)=>{
     const child=spawn(process.execPath,[entry,...args],{...binding,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
-    let stdout='',stderr='',size=0,failure,killTimer;
+    let stdout='',stderr='',size=0,failure,killTimer;const decoders={out:new StringDecoder('utf8'),err:new StringDecoder('utf8')};
     const kill=s=>{try {if(process.platform==='win32')child.kill(s);else if(child.pid)process.kill(-child.pid,s);}catch(error){if(error.code!=='ESRCH')failure??=error;}};
     const stop=()=>{failure??=Error('Request cancelled');kill('SIGTERM');killTimer??=setTimeout(()=>kill('SIGKILL'),2000);};
     const timer=setTimeout(()=>{failure=Error('Native scheduler command timed out');stop();},30000);
-    const collect=(bytes,isError)=>{size+=bytes.length;if(size>262144){failure=Error('Native scheduler output limit exceeded');stop();return;}if(isError)stderr+=bytes;else stdout+=bytes;};
+    const collect=(bytes,isError)=>{size+=bytes.length;if(size>262144){failure=Error('Native scheduler output limit exceeded');stop();return;}if(isError)stderr+=decoders.err.write(bytes);else stdout+=decoders.out.write(bytes);};
     child.stdout.on('data',b=>collect(b,false));child.stderr.on('data',b=>collect(b,true));
     signal?.addEventListener('abort',stop,{once:true});if(signal?.aborted)stop();
     const cleanup=()=>{clearTimeout(timer);clearTimeout(killTimer);signal?.removeEventListener('abort',stop);};
     child.once('error',error=>{cleanup();reject(error);});
-    child.once('close',code=>{cleanup();if(failure&&command==='message')resolve({code:130,stdout,stderr:stderr+'\nDelivery outcome may be unknown; inspect any queued outbox ID before retrying. '+failure.message});else if(failure)reject(failure);else resolve({code:code??1,stdout,stderr});});
+    child.once('close',code=>{cleanup();stdout+=decoders.out.end();stderr+=decoders.err.end();if(failure&&command==='message')resolve({code:130,stdout,stderr:stderr+'\nDelivery outcome may be unknown; inspect any queued outbox ID before retrying. '+failure.message});else if(failure)reject(failure);else resolve({code:code??1,stdout,stderr});});
   });
 }

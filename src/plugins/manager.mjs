@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { callDeliverySocket } from '../delivery-socket-client.mjs';
 import { readFileSync, readlinkSync, realpathSync } from 'node:fs';
 
@@ -406,9 +407,9 @@ const dockerInvocation = argv => process.env.EZ_DOCKER_COMPOSE === 'standalone' 
 export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,timeoutMs=0,maxBytes=Infinity}={}) {
   return new Promise((resolve,reject)=>{
     const invocation=dockerInvocation(argv),child=spawn(invocation.command,invocation.args,{env:dockerEnv(),stdio:capture?['pipe','pipe','pipe']:['inherit','inherit','inherit']});
-    let stdout='',stderr='',cancelled=false,killTimer,bytes=0,failure;
+    let stdout='',stderr='',cancelled=false,killTimer,bytes=0,failure;const decoders={out:new StringDecoder('utf8'),err:new StringDecoder('utf8')};
     if(capture) {
-      const collect=(b,err)=>{bytes+=b.length;if(bytes>maxBytes){failure=Error('Command output limit exceeded');cancel('SIGTERM');return;}if(err)stderr+=b;else stdout+=b;};
+      const collect=(b,err)=>{bytes+=b.length;if(bytes>maxBytes){failure=Error('Command output limit exceeded');cancel('SIGTERM');return;}if(err)stderr+=decoders.err.write(b);else stdout+=decoders.out.write(b);};
       child.stdout.on('data',b=>onStdout?onStdout(b):collect(b,false));child.stderr.on('data',b=>collect(b,true));
       child.stdin.on('error',()=>{});
     }
@@ -419,7 +420,7 @@ export function run(argv,{capture=false,container,signal,stdin,onStdout,onStart,
     if(onStart)onStart(child);else if(capture)child.stdin.end(stdin);
     process.on('SIGTERM',term);process.on('SIGINT',int);
     child.once('error',error=>{clearTimeout(timeout);signal?.removeEventListener('abort',term);clearTimeout(killTimer);process.off('SIGTERM',term);process.off('SIGINT',int);reject(error);});
-    child.once('close',async(code,childSignal)=>{process.off('SIGTERM',term);process.off('SIGINT',int);
+    child.once('close',async(code,childSignal)=>{stdout+=decoders.out.end();stderr+=decoders.err.end();process.off('SIGTERM',term);process.off('SIGINT',int);
       clearTimeout(killTimer);
       clearTimeout(timeout);signal?.removeEventListener('abort',term);
       // --rm only removes a container that ran. Compose stopping between

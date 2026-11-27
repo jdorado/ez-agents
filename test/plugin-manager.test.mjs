@@ -43,6 +43,13 @@ for(const exit of ['signal','failure','success']) test(`compose exit by ${exit} 
  assert.equal(stdout.trim(),exit==='signal'?'130':exit==='failure'?'1':'0');
  assert.deepEqual((await fs.readFile(log,'utf8')).trim().split('\n').map(JSON.parse),[['run'],...(exit==='success'?[]:[['container','rm','--force','exact-test-container']])]);
 });
+// A multibyte character split across two pipe chunks must survive collection.
+test('captured output decodes a character split across chunks',async t=>{
+ const root=await fs.mkdtemp(path.join(tmpdir(),'ez-split-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ await fs.writeFile(path.join(root,'docker'),`#!${process.execPath}\nconst w=(s,b)=>new Promise(r=>setTimeout(()=>s.write(Buffer.from(b),r),100)),e=Buffer.from('a\\u2013b');(async()=>{for(const s of [process.stdout,process.stderr]){await w(s,e.subarray(0,2));await w(s,e.subarray(2))}})()\n`,{mode:0o700});
+ const {stdout}=await exec(process.execPath,['--input-type=module','-e',`import {run} from ${JSON.stringify(new URL('../src/plugins/manager.mjs',import.meta.url).href)};const r=await run(['run'],{capture:true});console.log(JSON.stringify([r.stdout,r.stderr]))`],{env:{...process.env,PATH:root+path.delimiter+process.env.PATH}});
+ assert.deepEqual(JSON.parse(stdout),['a\u2013b','a\u2013b']);
+});
 async function fixture(t) {
  const root=await fs.mkdtemp(path.join(tmpdir(),'ez-tools-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const source=path.join(root,'source'),home=path.join(root,'tools'),deploymentDir=path.join(root,'deployment'),workspace=path.join(deploymentDir,'mind'),control=path.join(deploymentDir,'control'),hostConfig=path.join(deploymentDir,'host-executor.json'),fake=path.join(root,'fake');

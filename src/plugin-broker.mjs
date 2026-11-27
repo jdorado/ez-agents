@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createServer } from 'node:net';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { prepareCommand, registry, run as dockerRun, stewardOwned, publishBrokerPlugins } from './plugins/manager.mjs';
 import { taskCommandAllowed } from './plugins/exposure.mjs';
@@ -194,6 +195,7 @@ const managerCommand = async (binding, args, signal, runId) => new Promise((reso
     detached: process.platform !== 'win32',
   });
   let stdout = '', stderr = '', bytes = 0, failure;
+  const decoders = { out: new StringDecoder('utf8'), err: new StringDecoder('utf8') };
   const collect = (chunk, error) => {
     bytes += chunk.length;
     if (bytes > MAX_MANAGER_OUTPUT_BYTES) {
@@ -201,7 +203,7 @@ const managerCommand = async (binding, args, signal, runId) => new Promise((reso
       terminate(child);
       return;
     }
-    if (error) stderr += chunk.toString(); else stdout += chunk.toString();
+    if (error) stderr += decoders.err.write(chunk); else stdout += decoders.out.write(chunk);
   };
   child.stdout.on('data', chunk => collect(chunk, false));
   child.stderr.on('data', chunk => collect(chunk, true));
@@ -214,7 +216,7 @@ const managerCommand = async (binding, args, signal, runId) => new Promise((reso
     clearTimeout(timer);
     signal.removeEventListener('abort', abort);
     if (failure) return reject(failure);
-    resolve({ code: code ?? 1, stdout, stderr });
+    resolve({ code: code ?? 1, stdout: stdout + decoders.out.end(), stderr: stderr + decoders.err.end() });
   });
 });
 

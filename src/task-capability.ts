@@ -28,7 +28,7 @@ type Grant = {lease:string;token?:string}
 function brokerCapability(runId: string, input: string, grant: Grant): Promise<{stdout:string;code:number}> {
   return new Promise((resolve,reject)=>{
     const child=spawn(process.execPath,[fileURLToPath(new URL('../bin/ez',import.meta.url)),'--task-capability'],{env:{...executorEnvironment(),EZ_RUN_ID:runId},stdio:['pipe','pipe','pipe']})
-    let stdout='';const timer=setTimeout(()=>{child.kill();reject(Error('Channel capability timed out'))},30000)
+    child.stdout.setEncoding('utf8');let stdout='';const timer=setTimeout(()=>{child.kill();reject(Error('Channel capability timed out'))},30000)
     child.stdout.on('data',chunk=>{stdout+=chunk;if(Buffer.byteLength(stdout)>MAX_OUTPUT){child.kill();reject(Error('Channel capability output is too large'))}})
     child.stderr.resume();child.on('error',reject)
     child.on('close',code=>{clearTimeout(timer);resolve({stdout,code:code??1})})
@@ -84,7 +84,7 @@ export async function launchTaskApplication(toolsHome: string | undefined, launc
   // Fixed owner-configured command; literal private stdin, never a shell or model-selected args.
   return new Promise((resolve,reject)=>{
     const child=spawn(isolated ? process.execPath : path.join(toolsHome!,'bin','ez'),isolated ? [fileURLToPath(new URL('../bin/ez',import.meta.url)),'--task-application'] : [launch.command,...launch.args],{env:{...executorEnvironment(),EZ_RUN_ID:runId},...(config ? {cwd:config.workspace} : {}),stdio:['pipe','pipe','pipe']})
-    let output='';const timer=setTimeout(()=>{child.kill();reject(Error('Application launch timed out'))},30000)
+    child.stdout.setEncoding('utf8');let output='';const timer=setTimeout(()=>{child.kill();reject(Error('Application launch timed out'))},30000)
     child.stdout.on('data',chunk=>{output+=chunk;if(Buffer.byteLength(output)>16000){child.kill();reject(Error('Application launch output too large'))}})
     child.stderr.resume();child.on('error',reject)
     child.on('close',code=>{clearTimeout(timer);try{if(code!==0)throw Error('Application launch failed');const value=JSON.parse(output);const url=new URL(value.launch?.url);if(url.protocol!=='https:' || url.username || url.password || typeof value.launch?.expiresAt!=='number')throw Error('Invalid application launch receipt');resolve(value.launch)}catch(e){reject(e)}})
