@@ -246,7 +246,7 @@ export async function supervise(deployment,signal,{discover=check}={}) {
   const beat=setInterval(()=>{void atomic(path.join(directory,'supervisor.json'),{pid:process.pid,at:Date.now()}).catch(()=>{});},1000);
   try {
     await atomic(path.join(directory,'supervisor.json'),{pid:process.pid,at:Date.now()});
-    try { await cleanupStaleBackups(home); }
+    try { for(const {id,error} of (await cleanupStaleBackups(home)).failed)console.error(`Update backup ${id} not removed: ${error}`); }
     catch(error) { console.error(`Update backup cleanup failed; host remains running: ${error.message}`); }
     // Reclaim only a lock left by this deployment's dead supervisor, including
     // a crash between queue claim and the first transaction journal write.

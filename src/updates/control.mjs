@@ -179,19 +179,35 @@ export async function jobs(home) {
 const jobTime=job=>{const value=Date.parse(job.endedAt||job.createdAt||'');return Number.isFinite(value)?value:0;};
 const laterJob=(a,b)=>jobTime(a)>jobTime(b)||(jobTime(a)===jobTime(b)&&a.id>b.id);
 const terminalStatuses=new Set(['completed','failed','rolled-back']);
+// Keep the newest completed job's backup per target. Drop a finished job's
+// backup only once a later job for its target completed; unfinished and newer
+// failed or rolled-back jobs keep theirs. One backup that cannot be removed must
+// not leave every later one in place, so each removal stands alone.
 export async function cleanupStaleBackups(home) {
   const records=await jobs(home),latest=new Map();
   for(const job of records.filter(item=>item.status==='completed')) {
     const prior=latest.get(job.target);if(!prior||laterJob(job,prior))latest.set(job.target,job);
   }
-  const removed=[];
+  const removed=[],failed=[];
   for(const job of records) {
     const current=latest.get(job.target);
-    if(!terminalStatuses.has(job.status)||!current||current.id===job.id)continue;
+    if(!terminalStatuses.has(job.status)||!current||!laterJob(current,job))continue;
     const backup=path.join(jobPath(home,job.id),'backup');
-    if(await fs.stat(backup).catch(missing)){await fs.rm(backup,{recursive:true,force:true});removed.push(job.id);}
+    if(!await fs.lstat(backup).catch(missing))continue;
+    try { await removeTree(backup);removed.push(job.id); }
+    catch(error) { failed.push({id:job.id,error:error.message}); }
   }
-  return {kept:[...latest.values()].map(job=>job.id),removed};
+  return {kept:[...latest.values()].map(job=>job.id),removed,failed};
+}
+// Older main backups copied agent workspaces, where the agent may have made
+// directories read-only. They are still ours: restore owner write, then remove.
+async function removeTree(dir) {
+  const stat=await fs.lstat(dir);
+  if(stat.isDirectory()) {
+    if((stat.mode&0o700)!==0o700)await fs.chmod(dir,stat.mode|0o700);
+    for(const entry of await fs.readdir(dir,{withFileTypes:true}))if(entry.isDirectory())await removeTree(path.join(dir,entry.name));
+  }
+  await fs.rm(dir,{recursive:true,force:true});
 }
 // Remove the relay images this agent built for its other finished updates. An
 // unresolved recovery blocks new updates, so no pending job needs one; Docker
