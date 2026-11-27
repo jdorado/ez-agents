@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.81.0
+
+- The agent changes its own AI when asked (#380). Inside a turn, `ezenciel-agents-ai select` switches the AI of that turn's conversation from its next message: the owner's Telegram chat, or the private Slack/application channel or thread the turn came from. Same client and provider keep the conversation's history; another client, login or provider starts a new conversation there (files kept, no closing turn for the old one). Several switches in one turn work; reply-only, external, task and foreign-epoch turns are refused. `ez --help` lists `ai` among the native commands so the agent finds it.
+- Telegram is simpler (#380). The menu is New conversation, Work status and Scheduled tasks. The Choose AI card, `/settings`, `/chats`, `/rename`, the conversations list and archive/restore are removed; earlier conversations keep their queued work but are no longer listed. `/ai` only shows the current AI. Slack 0.1.0-beta.9 removes its `!ez ai` controls to match.
+- Antigravity (`agy`, alias `antigravity`) is a selectable engine again (#379). It takes the prompt as stream-json on stdin, reports its conversation ID in `init` and resumes with `--conversation`; isolated agents keep its login under `control/cli/agy`, auto-update is off, and the relay image pins `agy` 1.5.16 (linux-x64). Specific models come from the owner-curated `control/ai-models.json`. Mid-turn steering is not wired for `agy`; follow-up input queues.
+
 ## 0.80.0
 
 - Tell scheduled preflight checks when their tick began (#377). Each check of a scheduler tick now receives the tick's start as `EZ_PREFLIGHT_SINCE` (ISO 8601) in its command container; a manual `schedule trigger` passes its own request time. A plugin may let the checks of one tick share one provider observation made at or after that instant, never an older one. Core still reads and caches nothing; schedule receipts and the `changed` fingerprint are unchanged. With GitHub plugin `0.1.0-beta.9` the checks of one tick on the same Project read it once (container QA on the Stocks board: six checks went from six reads in 34.7 s to one in 7.5 s). Plugins that ignore the variable behave as before.
