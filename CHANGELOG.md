@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Plugin containers learn the workspace root (#390). A service that declares `workspace: true` gets `EZ_AGENT_WORKSPACE` set to the absolute path of its read-only workspace mount, in its Compose service environment, so every command container and long-running service of that service sees the variable exactly when it has the mount. A plugin that accepts a file path can resolve it and refuse anything outside that root. Services without the mount, and plugins that do not declare the key, are unchanged.
+
 ## 0.82.0
 
 - Old update backups are pruned again (#382). Each completed update already kept only the newest completed job's backup per target, but on a long-running agent every cleanup stopped at its first error: an early main update had copied the agent workspace into its backup, the agent had made some of those directories read-only, and removing them failed with `EACCES`, so no later backup was ever removed (one agent had kept about 90 GB of superseded plugin volume backups). Cleanup now restores owner write on a backup's own directories before removing it, and a backup it still cannot remove is reported per job in the update's `cleanup.failed` (and logged by the supervisor at start) instead of stopping the rest. A failed or rolled-back job newer than its target's newest completed job now keeps its backup; job records are never removed.

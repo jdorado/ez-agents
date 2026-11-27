@@ -363,6 +363,15 @@ test('Compose resources are namespaced, private, and restricted to owning worksp
  const c=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:p.deployment});
  assert.equal(c.version,'3.8');assert.equal(c.name,undefined);assert.equal(c.services.sample.ports,undefined);assert.equal(c.services.sample.privileged,undefined);assert.equal(c.services.sample.volumes[1].read_only,true);assert.deepEqual(c.services.sample.cap_drop,['ALL']);
 });
+test('a workspace-mounted service gets EZ_AGENT_WORKSPACE with the mount, and others do not',async t=>{
+ const f=await fixture(t),p=await snapshot(f.source);
+ const c=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:p.deployment});
+ const mount=c.services.sample.volumes.find(v=>v.type==='bind');
+ assert.equal(c.services.sample.environment.EZ_AGENT_WORKSPACE,f.workspace);assert.equal(mount.target,f.workspace);
+ const plain={...p.deployment,services:{sample:{...p.deployment.services.sample,workspace:undefined}}};
+ const d=await compose({workspace:f.workspace},{source:f.source,project:'ezp-synthetic',revision:p.revision,deployment:plain});
+ assert.equal(d.services.sample.environment,undefined);assert.equal(d.services.sample.volumes.some(v=>v.type==='bind'),false);
+});
 test('standalone Compose fallback emits a v1-compatible document and keeps project identity in argv',async t=>{
  const f=await fixture(t),p=await snapshot(f.source),previous=process.env.EZ_DOCKER_COMPOSE;
  process.env.EZ_DOCKER_COMPOSE='standalone';

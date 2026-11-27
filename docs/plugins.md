@@ -259,6 +259,9 @@ and monitoring subscriptions alone never grant task execution. See
   paths, and `workspace: true` for the owning mind mounted read-only.
   Broker stdin and command output are capped at 1 MiB each; a command that
   takes a larger file accepts its workspace path and reads it through this mount.
+  A service with the mount also gets `EZ_AGENT_WORKSPACE`, the mount's absolute root. A
+  plugin accepting a file path must resolve it (following symlinks) and refuse anything
+  outside that root.
 - `commands`: the same aliases as the plugin manifest; each names its `service`,
   executable `argv` and optional literal `suffix`. Dispatch is argv + manifest
   args + user args + suffix. No parsing or provider parameter translation.

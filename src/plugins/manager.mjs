@@ -370,6 +370,7 @@ export async function compose(config, record, secrets={}, home) {
       mounts.push({type:'volume',source:volume,target,...(workspaceUser?{volume:{nocopy:true}}:{})});
     }
     for (const folder of folders.filter(f => f.service === name)) mounts.push({type:'bind',source:folder.source,target:folder.target,read_only:folder.writable !== true,bind:{create_host_path:false}});
+    // The mount and EZ_AGENT_WORKSPACE (below) come from the same flag, so they always appear together.
     if(s.workspace) mounts.push({type:'bind',source:config.workspace,target:config.workspace,read_only:true});
     services[name]={...(s.image?{image:s.image}:{image:`${record.project}-${name}:${record.revision.slice(7,23)}`,build:{context:record.source,target:s.buildTarget}}),
       init:true,user:workspaceUser??s.user??'1000:1000',restart:'unless-stopped',cap_drop:['ALL'],security_opt:['no-new-privileges:true'],tmpfs:['/tmp'],volumes:mounts,
@@ -378,11 +379,11 @@ export async function compose(config, record, secrets={}, home) {
       ...(s.memoryMiB?{mem_limit:`${s.memoryMiB}m`}:{}),
       ...(s.cpus?{cpus:s.cpus}:{}),
       ...(serviceNetworks.get(name)?.length?{networks:serviceNetworks.get(name)}:{}),
-      ...(s.environment?{environment:Object.fromEntries(Object.entries(s.environment).map(([key,value])=>{
+      ...(s.environment||s.workspace?{environment:{...Object.fromEntries(Object.entries(s.environment||{}).map(([key,value])=>{
         if(typeof value==='string')return [key,value];
         if(!/^[a-f0-9]{64}$/.test(secrets[value.secret]||''))throw Error('Missing or invalid private deployment secret');
         return [key,(value.prefix||'')+secrets[value.secret]+(value.suffix||'')];
-      }))}:{}),...(s.command?{command:s.command}:{})};
+      })),...(s.workspace?{EZ_AGENT_WORKSPACE:config.workspace}:{})}}:{}),...(s.command?{command:s.command}:{})};
   }
   // Keep the persisted descriptor portable between the host supervisor's
   // Compose v2 and the isolated broker's bundled Compose v1. Project identity
