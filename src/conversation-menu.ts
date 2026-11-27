@@ -69,8 +69,7 @@ export const createConversationMenu = (control: ControlStore) => {
             await render(ctx, `${sessionTitle(session)}\n${error instanceof Error ? error.message : 'Unable to continue.'}`, keyboard)
             return true
           }
-          keyboard.inline_keyboard.unshift([{ text: 'Choose AI', callback_data: 'menu:ai' }])
-          await render(ctx, `Current conversation: ${sessionTitle(selected)}\nAI: ${selected.preset ? presetLabel(selected.preset) : 'Not saved; open Choose AI.'}\nSend a message to continue. To rename it, use /rename followed by a name.`, keyboard)
+          await render(ctx, `Current conversation: ${sessionTitle(selected)}\nAI: ${selected.preset ? presetLabel(selected.preset) : 'Not saved; ask me to choose one.'}\nSend a message to continue. To rename it, use /rename followed by a name.`, keyboard)
         }
       } catch (error) {
         await ctx.reply(error instanceof Error ? error.message : 'Conversation selection failed.')

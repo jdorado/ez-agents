@@ -12,6 +12,7 @@ export const mainCommands = [
   { command: 'new', description: 'New conversation' },
   { command: 'chats', description: 'Conversations' },
   { command: 'rename', description: 'Rename current conversation' },
+  { command: 'ai', description: 'Current AI' },
   { command: 'status', description: 'Work status' },
   { command: 'usage', description: 'Account limits and reset times' },
   { command: 'tasks', description: 'Scheduled tasks' },

@@ -268,6 +268,10 @@ test('conversation menu has no AI picker; the agent switches its own AI', async 
     await f.relay.bot.handleUpdate(message(1, '/menu'))
     assert.deepEqual(f.keyboards.at(-1)!.flat().map((b) => b.text),
       ['New conversation', 'Conversations', 'Work status', 'Scheduled tasks'])
+    const keyboards = f.keyboards.length
+    await f.relay.bot.handleUpdate(message(2, '/ai'))
+    assert.match(f.replies.at(-1)!, /^AI: .+\nTo change it, ask me/)
+    assert.equal(f.keyboards.length, keyboards)
     await f.relay.bot.handleUpdate(message(8, '/status'))
     assert.ok(!f.keyboards.at(-1)!.flat().some((button) => button.text === 'Scheduled tasks'))
     await f.relay.bot.handleUpdate(message(9, '/tasks'))

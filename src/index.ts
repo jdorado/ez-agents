@@ -1242,6 +1242,15 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       return
     }
 
+    // Read-only: the agent changes its own AI when asked.
+    if (text === '/ai') {
+      const ai = await control.aiState(aiMenu.initial)
+      const session = await control.getActiveSession()
+      const preset = session?.preset ?? ai.presets.find((p) => p.id === ai.selectedId)!
+      await ctx.reply(`AI: ${presetLabel(preset)}\nTo change it, ask me, for example "switch to Sonnet high".`)
+      return
+    }
+
     if (text === '/status') {
       await statusReply(ctx)
       return
