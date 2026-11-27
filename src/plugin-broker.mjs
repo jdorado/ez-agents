@@ -361,9 +361,10 @@ export async function servePluginBroker(binding, signal = new AbortController().
     const abort = new AbortController();
     socket.on('error', () => abort.abort());
     socket.on('close', () => abort.abort());
+    socket.setEncoding('utf8');
     socket.on('data', chunk => {
       if (handled) return;
-      buffer += chunk.toString();
+      buffer += chunk;
       if (Buffer.byteLength(buffer) > MAX_FRAME) { socket.destroy(new Error('Broker request exceeds frame limit')); return; }
       const end = buffer.indexOf('\n');
       if (end < 0) return;

@@ -336,7 +336,7 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
                 const next = [startup.summary(), ...(telemetry ? [telemetry.summary()] : [])].join('\n')
                 if (next !== summary) { summary = next; emit({stream:'stdout',text:summary+'\n'}) }
               })
-              job.child.stderr?.on('data',chunk=>emit({stream:'stderr',text:chunk.toString()}))
+              job.child.stderr?.setEncoding('utf8').on('data',(chunk:string)=>emit({stream:'stderr',text:chunk}))
               await writeWhole(base+'.process.json',JSON.stringify({pid:job.child.pid,started:job.child.pid ? await processStart(job.child.pid) : undefined,hostPid:process.pid,hostStarted,...(containerId ? {containerId} : {})}))
               let steering: Promise<void> | undefined
               cancellation=setInterval(()=>{void readFile(base+'.cancel').then(()=>terminateJob(job!.child)).catch(()=>{}); const now=new Date();void utimes(base+'.events',now,now).catch(()=>{})

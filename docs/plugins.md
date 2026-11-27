@@ -257,6 +257,8 @@ and monitoring subscriptions alone never grant task execution. See
   (Docker runs it every 10 seconds and starts a process each time, so keep it cheap);
   optional literal `command`, `volumes` mapping named private volumes to container
   paths, and `workspace: true` for the owning mind mounted read-only.
+  Broker stdin and command output are capped at 1 MiB each; a command that
+  takes a larger file accepts its workspace path and reads it through this mount.
 - `commands`: the same aliases as the plugin manifest; each names its `service`,
   executable `argv` and optional literal `suffix`. Dispatch is argv + manifest
   args + user args + suffix. No parsing or provider parameter translation.

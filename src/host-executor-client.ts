@@ -20,6 +20,7 @@ if (mode === '--attach') {
   }
 } else {
   let input = ''
+  process.stdin.setEncoding('utf8')
   for await (const chunk of process.stdin) input += chunk
   await writeFile(base+'.tmp', input, {mode:0o600, flag:'wx'})
   await rename(base+'.tmp', base+'.request.json')

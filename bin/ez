@@ -41,8 +41,9 @@ const request = (payload, signal = undefined) => new Promise((resolve, reject) =
   signal?.addEventListener('abort', cancel, { once: true });
   socket.on('error', error => finish(error));
   socket.on('close', () => finish(Error('plugin broker closed the connection')));
+  socket.setEncoding('utf8');
   socket.on('data', chunk => {
-    buffer += chunk.toString();
+    buffer += chunk;
     const end = buffer.indexOf('\n');
     if (end < 0) return;
     let value;
