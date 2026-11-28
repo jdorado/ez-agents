@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.85.0
 
 - The updater accepts Library 0.1.0-beta.24 (#394). Its only deployment change is the `workspace: true` read-only mount, which the additive-routes rule refused on every installation. A named reviewed migration, `library-workspace-mount-v1`, admits exactly beta.23 to beta.24 with that one difference; a workspace mount stays unaccepted for any other update.
 
