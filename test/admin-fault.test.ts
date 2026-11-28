@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { adminChannel, adminFaultReport, renderAdminFault, sendAdminFault } from '../src/admin-fault.js'
+import { adminChannel, adminFaultReport, renderAdminFault, reportAdminFault, sendAdminFault } from '../src/admin-fault.js'
 import { loadConfig } from '../src/config.js'
 import { createLedgerHandler } from '../src/delivery-socket.js'
 import { parseMessageArgs } from '../src/message-send.js'
@@ -39,6 +39,20 @@ test('the relay renders the admin message from a structured fault; failures are 
   await assert.rejects(sendAdminFault(adminChannel(env)!, { tool: 'x' }, 'r_1', refused), /HTTP 403/)
   const down = (async () => { throw new Error(`connect failed ${botToken}`) }) as unknown as typeof fetch
   await assert.rejects(sendAdminFault(adminChannel(env)!, { tool: 'x' }, 'r_1', down), (error: Error) => /unconfirmed/.test(error.message) && !error.message.includes(botToken))
+})
+
+test('every admin fault leaves one structured relay log line saying whether delivery was confirmed', async () => {
+  const channel = adminChannel(env)!
+  const lines: unknown[][] = []
+  const log = (message: string, fields: object) => { lines.push([message, fields]) }
+  const ok = (async () => ({ delivered: true as const })) as unknown as typeof sendAdminFault
+  assert.deepEqual(await reportAdminFault(channel, { tool: 'ezstocks', code: '3', error: 'HTTP 503' }, 'r_1', ok, log), { delivered: true })
+  const down = (async () => { throw new Error('Admin delivery unconfirmed: request failed or timed out') }) as unknown as typeof sendAdminFault
+  await assert.rejects(reportAdminFault(channel, { tool: 'ibkr' }, 'r 2', down, log), /unconfirmed/)
+  assert.deepEqual(lines, [
+    ['admin fault', { run_id: 'r_1', tool: 'ezstocks', code: '3', delivered: true }],
+    ['admin fault', { run_id: 'r2', tool: 'ibkr', delivered: false }],
+  ])
 })
 
 test('a long or arbitrary payload cannot reach the admin chat verbatim', () => {

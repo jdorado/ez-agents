@@ -53,3 +53,21 @@ export const sendAdminFault = async (channel: AdminChannel, fault: AdminFault, r
   if (!response.ok) throw new Error(`Admin delivery failed: Telegram HTTP ${response.status}`)
   return { delivered: true }
 }
+
+// The relay hook: sends the fault and writes one structured line to the relay's own log whatever the outcome, so the
+// record does not depend on Telegram. delivered is true only when Telegram answered ok; a failed or timed-out send is
+// false and the error is rethrown unchanged.
+export const reportAdminFault = async (
+  channel: AdminChannel, fault: AdminFault, runId: string,
+  send: typeof sendAdminFault = sendAdminFault, log: (message: string, fields: object) => void = console.info,
+) => {
+  const line = (delivered: boolean) => log('admin fault', { run_id: runId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64), tool: fault.tool, ...(fault.code === undefined ? {} : { code: fault.code }), delivered })
+  try {
+    const result = await send(channel, fault, runId)
+    line(true)
+    return result
+  } catch (error) {
+    line(false)
+    throw error
+  }
+}
