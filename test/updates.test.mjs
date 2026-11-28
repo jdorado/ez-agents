@@ -374,6 +374,26 @@ test('reviewed Library beta14 command migration is exact and fail-closed',()=>{
  assert.equal(reviewedPluginDeploymentMigration('library',old,next).id,'library-query-contract-v1');
  const unsafe=structuredClone(next);unsafe.deployment.services.library.cpus=4;assert.equal(reviewedPluginDeploymentMigration('library',old,unsafe),undefined);
 });
+test('reviewed Library workspace mount migration is exact and fail-closed',()=>{
+ const manifest=version=>({schemaVersion:1,id:'library',version,description:'library',commands:{library:{executable:'bin/ez-library.mjs',args:[]}},skills:['skills/library/SKILL.md']});
+ const deployment=workspace=>({schemaVersion:3,services:{library:{buildTarget:'runtime',volumes:{data:'/state'},...(workspace===undefined?{}:{workspace}),healthcheck:['node','/app/bin/ez-library.mjs','--version'],memoryMiB:4096,cpus:2}},commands:{library:{service:'library',argv:['node','/app/bin/ez-library.mjs']}},sharedServices:{}});
+ const old={manifest:manifest('0.1.0-beta.23'),deployment:deployment()},next={manifest:manifest('0.1.0-beta.24'),deployment:deployment(true)};
+ const migrate=(change,from=old)=>{const value=structuredClone(next);change?.(value);return reviewedPluginDeploymentMigration('library',from,value);};
+ assert.deepEqual(migrate(),{id:'library-workspace-mount-v1',files:['ez-plugin.json','ez-deployment.json'],changes:['mount the agent workspace read-only in the library service']});
+ assert.equal(reviewedPluginDeploymentMigration('other',old,next),undefined);
+ assert.equal(migrate(n=>{n.manifest.version='0.1.0-beta.25';}),undefined);
+ assert.equal(migrate(undefined,{...old,manifest:manifest('0.1.0-beta.22')}),undefined);
+ assert.equal(migrate(n=>{n.deployment.services.library.volumes.extra='/extra';}),undefined);
+ assert.equal(migrate(n=>{n.deployment.services.library.environment={EXTRA:'1'};}),undefined);
+ assert.equal(migrate(n=>{n.deployment.services.library.cpus=4;}),undefined);
+ assert.equal(migrate(n=>{n.deployment.services.other={buildTarget:'runtime',workspace:true};}),undefined);
+ assert.equal(migrate(n=>{n.deployment.commands.extra={service:'library',argv:['x']};}),undefined);
+ for(const workspace of [false,'true',1,{}])assert.equal(migrate(n=>{n.deployment.services.library.workspace=workspace;}),undefined);
+ assert.equal(migrate(n=>{delete n.deployment.services.library.workspace;}),undefined);
+ assert.equal(migrate(n=>{n.manifest.description='changed';}),undefined);
+ assert.equal(migrate(n=>{n.manifest.commands.extra={executable:'bin/ez-library.mjs',args:[]};}),undefined);
+ const mounted=structuredClone(old);mounted.deployment.services.library.workspace=true;assert.equal(migrate(undefined,mounted),undefined);
+});
 test('main transaction stages before stopping, pins rollback image, preserves state and rebinds root',async t=>{
  const f=await externalState(await fixture(t)),job=await queued(f),r=runtime(f);
  await fs.writeFile(path.join(f.agent.workspace,'memory.md'),'retain me');

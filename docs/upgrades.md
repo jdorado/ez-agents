@@ -290,6 +290,8 @@ field to remain unchanged. A completed main upgrade exits the active supervisor
 after publishing its receipt; the retained bootstrap is then restarted by the
 host service and loads the new package root.
 
+The updater also records the exact Library beta.23 to beta.24 migration `library-workspace-mount-v1`, which accepts only the new `workspace: true` read-only mount on the `library` service with every other manifest and deployment field unchanged; a workspace mount is never accepted otherwise, because it grants a plugin read access to the agent workspace.
+
 ## Contributor acceptance
 
 Every main/plugin release must declare `package.json.ezRelease`:
