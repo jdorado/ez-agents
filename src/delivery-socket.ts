@@ -14,6 +14,7 @@ import { Scheduler } from './scheduler.js'
 import {Tasks} from './tasks.js'
 import { runEvidence, type EvidenceOptions } from './run-evidence.js'
 import { runningWork } from './running-work.js'
+import { adminFaultReport, type AdminFault } from './admin-fault.js'
 
 // Stateless pipe transport. The relay owns the runs/outbox ledger in process
 // memory; engine children, plugin children and the host executor reach it
@@ -37,7 +38,7 @@ export type DeliverySocketOp =
   | { op: 'triggerSchedule'; payload: { scheduleId: string; revision: string; key: string; callerRunId?: string } }
   | { op: 'retryScheduleQuota'; payload: { runId?: string; callerRunId?: string } }
   | { op: 'enqueue'; payload: Record<string, unknown> }
-  | { op: 'adminFault'; payload: { runId: string; text: string } }
+  | { op: 'adminFault'; payload: { runId: string; tool: string; code?: string; error?: string } }
   | { op: 'wait'; payload: { id: string; timeoutMs?: number } }
   | { op: 'get'; payload: { runId: string } }
   | { op: 'list'; payload?: Record<string, never> }
@@ -214,7 +215,7 @@ export type LedgerHooks = {
   wake: () => void
   // Live relay surface for the status op (polling, transport, version).
   // Operator-configured admin destination; absent when none is configured.
-  adminFault?: (text: string) => Promise<unknown>
+  adminFault?: (fault: AdminFault, runId: string) => Promise<unknown>
   status: () => Promise<{ polling: boolean; applicationOnly: boolean; telegramConfigured: boolean; version: string }> | { polling: boolean; applicationOnly: boolean; telegramConfigured: boolean; version: string }
 }
 
@@ -335,13 +336,13 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         return { outbox_id: item.id, id: item.id, type: item.type }
       }
       case 'adminFault': {
-        const { runId, text } = (op.payload ?? {}) as { runId?: unknown; text?: unknown }
+        const { runId, ...report } = (op.payload ?? {}) as { runId?: unknown; tool?: unknown; code?: unknown; error?: unknown }
         if (typeof runId !== 'string' || !runId) throw new Error('Run ID is required')
-        if (!nonEmptyString(text)) throw new Error('Message content is required')
+        const fault = adminFaultReport(report)
         if (!hooks.adminFault) throw new Error('Admin fault channel is not configured for this agent')
         const run = await requireOwnerExecution(controlDir, runId)
         if (run.replyOnly) throw new Error('Admin fault reports require an owner-authorized run')
-        return hooks.adminFault(text)
+        return hooks.adminFault(fault, run.id)
       }
       case 'wait': {
         const { id, timeoutMs } = (op.payload ?? {}) as { id?: unknown; timeoutMs?: unknown }

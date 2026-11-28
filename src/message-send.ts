@@ -7,6 +7,9 @@ export type MessageCliArgs = {
   document?: string
   voice?: string
   admin?: boolean
+  tool?: string
+  code?: string
+  error?: string
 }
 
 export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
@@ -17,6 +20,9 @@ export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
   let document: string | undefined
   let voice: string | undefined
   let admin = false
+  let tool: string | undefined
+  let code: string | undefined
+  let error: string | undefined
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--text-file' && args[i + 1]) {
@@ -30,6 +36,12 @@ export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
       document = args[++i]
     } else if (args[i] === '--admin') {
       admin = true
+    } else if (args[i] === '--tool' && args[i + 1]) {
+      tool = args[++i]
+    } else if (args[i] === '--code' && args[i + 1]) {
+      code = args[++i]
+    } else if (args[i] === '--error' && args[i + 1]) {
+      error = args[++i]
     } else if (args[i] === '--voice' && args[i + 1]) {
       voice = args[++i]
     }
@@ -40,6 +52,9 @@ export const parseMessageArgs = (argv: string[]): MessageCliArgs => {
   if (document !== undefined) result.document = document
   if (voice !== undefined) result.voice = voice
   if (admin) result.admin = true
+  if (tool !== undefined) result.tool = tool
+  if (code !== undefined) result.code = code
+  if (error !== undefined) result.error = error
   return result
 }
 

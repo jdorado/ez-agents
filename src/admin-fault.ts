@@ -1,7 +1,7 @@
 // Operator-set admin destination for fault reports. The bot token, chat ID and
 // agent name come from the relay's private env file, never from the agent
-// workspace or the executor environment; the agent chooses text, never the
-// recipient.
+// workspace or the executor environment. The agent reports a bounded structured
+// fault and never the recipient or the message text: the relay renders it.
 export type AdminChannel = { botToken: string; chatId: number; name: string }
 
 export const adminChannel = (env: NodeJS.ProcessEnv = process.env): AdminChannel | undefined => {
@@ -15,20 +15,36 @@ export const adminChannel = (env: NodeJS.ProcessEnv = process.env): AdminChannel
   return { botToken, chatId: Number(chat), name }
 }
 
-const MAX_TEXT = 4000
 const PROVIDER_TIMEOUT_MS = 15_000
+const ERROR_MAX = 200
+
+// What a run may report: the failing tool or command, an exit code or error class, a short error string.
+// tool and code are validated tokens; the error string is reduced to printable ASCII and cut at ERROR_MAX.
+export type AdminFault = { tool: string; code?: string; error?: string }
+
+export const adminFaultReport = (input: { tool?: unknown; code?: unknown; error?: unknown }): AdminFault => {
+  const { tool, code, error } = input
+  if (typeof tool !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(tool)) throw new Error('Fault tool must be 1-64 letters, digits, dot, colon, dash or underscore')
+  if (code !== undefined && (typeof code !== 'string' || !/^[A-Za-z0-9_.-]{1,32}$/.test(code))) throw new Error('Fault code must be an exit code or error class of 1-32 letters, digits, dot, dash or underscore')
+  if (error !== undefined && typeof error !== 'string') throw new Error('Fault error must be text')
+  const short = (error ?? '').replace(/[^\x20-\x7e]+/g, ' ').replace(/ +/g, ' ').trim().slice(0, ERROR_MAX)
+  return { tool, ...(code === undefined ? {} : { code }), ...(short ? { error: short } : {}) }
+}
+
+// The relay's own message: nothing the caller sent appears outside these fields.
+export const renderAdminFault = (channel: AdminChannel, fault: AdminFault, runId: string) =>
+  `[ez ${channel.name}] fault: tool=${fault.tool}${fault.code === undefined ? '' : ` code=${fault.code}`} run=${runId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64)}` +
+  (fault.error ? `\nerror: ${fault.error}` : '')
 
 // Plain text (no parse mode, so nothing to escape), one Telegram message. A send
 // that fails or times out is reported as unconfirmed and never retried here.
-export const sendAdminFault = async (channel: AdminChannel, text: string, fetchImpl: typeof fetch = fetch): Promise<{ delivered: true }> => {
-  const prefix = `[ez ${channel.name}] fault: `
-  const body = (prefix + text.trim()).slice(0, MAX_TEXT)
+export const sendAdminFault = async (channel: AdminChannel, fault: AdminFault, runId: string, fetchImpl: typeof fetch = fetch): Promise<{ delivered: true }> => {
   let response: Response
   try {
     response = await fetchImpl(`https://api.telegram.org/bot${channel.botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: channel.chatId, text: body, disable_web_page_preview: true }),
+      body: JSON.stringify({ chat_id: channel.chatId, text: renderAdminFault(channel, fault, runId), disable_web_page_preview: true }),
       signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     })
   } catch {

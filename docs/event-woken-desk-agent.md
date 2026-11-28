@@ -35,11 +35,21 @@ channel below; it composes existing parts.
 ## Admin fault channel
 
 A run reports a tool or runtime fault to the operator with
-`ezenciel-agents-message --admin --text 'plugin X failed: <error>'` (or
-`--text-file`). It is separate from the owner chat: the message goes through the
-relay to a destination only the operator configures, prefixed
-`[ez <agent name>] fault: `. The agent supplies text and never the recipient;
-`--admin` carries no document, voice or reply-to.
+`ezenciel-agents-message --admin --tool <name> [--code <exit code or error class>] [--error <short text>]`.
+It is separate from the owner chat: the relay writes the message itself, from
+those fields and the run ID, and sends it to a destination only the operator
+configures:
+
+```text
+[ez <agent name>] fault: tool=<name> code=<code> run=<run id>
+error: <short text>
+```
+
+`--tool` and `--code` are single tokens (letters, digits, dot, dash, underscore;
+`--tool` also allows a colon), and a malformed one is refused. `--error` is reduced to
+printable ASCII on one line and cut at 200 characters. There is no free text,
+`--text`, `--text-file`, document, voice or reply-to: a run cannot send the admin
+chat anything but these fields, and never the recipient.
 
 Operator configuration: add three lines to the agent's `relay.env` (the private
 secret file named by `EZ_RELAY_ENV_FILE`, outside the workspace and control
@@ -54,7 +64,7 @@ EZ_ADMIN_AGENT_NAME=desk
 All three or none; a partial set stops the relay at start. The values load into
 the relay only and are not in the executor environment. When unset, `--admin`
 fails with "Admin fault channel is not configured for this agent" and nothing is
-sent anywhere else. Only an active owner-authorized run can use it. Text is sent
-as one plain-text Telegram message, cut at 4000 characters. A send that fails
+sent anywhere else. Only an active owner-authorized run can use it. The report is
+sent as one plain-text Telegram message. A send that fails
 reports an error (a network failure or timeout reads "unconfirmed") and core does
 not retry it.
