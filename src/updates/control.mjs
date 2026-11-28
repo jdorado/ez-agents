@@ -69,7 +69,18 @@ function normalizedLibraryDeployment(value) {
   if(result.commands?.['library-query'])result.commands['library-query'].argv=['node','/app/bin/ez-library.mjs','search'];
   return result;
 }
+// A workspace mount gives a plugin read access to the agent workspace, so it is never
+// accepted generally: only this exact, named review lets an automatic update grant it.
+function libraryWorkspaceMount(target,old,next) {
+  if(target!=='library'||old?.manifest?.id!=='library'||old.manifest.version!=='0.1.0-beta.23'||next?.manifest?.id!=='library'||next.manifest.version!=='0.1.0-beta.24')return undefined;
+  const library=next.deployment?.services?.library;
+  if(old.deployment?.services?.library?.workspace!==undefined||library?.workspace!==true)return undefined;
+  const {workspace,...rest}=library,without=structuredClone(next.deployment);without.services.library=rest;
+  if(!same(old.deployment,without)||!same({...old.manifest,version:0},{...next.manifest,version:0}))return undefined;
+  return {id:'library-workspace-mount-v1',files:['ez-plugin.json','ez-deployment.json'],changes:['mount the agent workspace read-only in the library service']};
+}
 export function reviewedPluginDeploymentMigration(target,old,next) {
+  const mount=libraryWorkspaceMount(target,old,next);if(mount)return mount;
   if(target!=='library'||old?.manifest?.id!=='library'||old.manifest.version!=='0.1.0-beta.13.qa.4'||next?.manifest?.id!=='library'||next.manifest.version!=='0.1.0-beta.14')return undefined;
   const oldQuery=old.deployment?.commands?.['library-query'],nextQuery=next.deployment?.commands?.['library-query'];
   const expected=['node','/app/bin/ez-library.mjs'];
