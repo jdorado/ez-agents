@@ -92,3 +92,11 @@ test('scheduled concurrency defaults to six and accepts only positive integers',
  for(const value of ['0','-1','1.5','bad','9007199254740992'])
   assert.throws(()=>loadConfig({...env,EZ_SCHEDULED_CONCURRENCY:value}),/EZ_SCHEDULED_CONCURRENCY must be a positive integer/)
 })
+
+test('refuses an admin bot token equal to the agent\'s own Telegram bot token', () => {
+  const token = '110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsY'
+  const admin = { EZ_ADMIN_TELEGRAM_CHAT_ID: '-100123', EZ_ADMIN_AGENT_NAME: 'desk' }
+  assert.throws(() => loadConfig({ TELEGRAM_BOT_TOKEN: token, EZ_ADMIN_TELEGRAM_BOT_TOKEN: token, ...admin }), /different bot/)
+  const config = loadConfig({ TELEGRAM_BOT_TOKEN: token, EZ_ADMIN_TELEGRAM_BOT_TOKEN: '220301543:BBHdqTcvCH1vGWJxfSeofSAs0K5PALDsY', ...admin })
+  assert.equal(config.admin?.name, 'desk')
+})

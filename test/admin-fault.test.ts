@@ -19,7 +19,7 @@ test('the admin destination is all-or-nothing operator configuration', () => {
   assert.deepEqual(adminChannel(env), { botToken, chatId: -1001234, name: 'trader' })
   for (const missing of Object.keys(env)) assert.throws(() => adminChannel({ ...env, [missing]: '' }))
   assert.throws(() => adminChannel({ ...env, EZ_ADMIN_TELEGRAM_CHAT_ID: 'owner' }), /chat ID/)
-  assert.equal(loadConfig({ TELEGRAM_BOT_TOKEN: botToken, ...env }).admin?.chatId, -1001234)
+  assert.equal(loadConfig({ TELEGRAM_BOT_TOKEN: '220301543:BBHdqTcvCH1vGWJxfSeofSAs0K5PALDsY', ...env }).admin?.chatId, -1001234)
   assert.equal(loadConfig({ TELEGRAM_BOT_TOKEN: botToken }).admin, undefined)
 })
 
