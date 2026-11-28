@@ -1,5 +1,6 @@
 import { parseWebLauncher, type WebLauncher } from './web-launcher.js'
 import { repairEnabled } from './repair-policy.js'
+import { adminChannel, type AdminChannel } from './admin-fault.js'
 import { isolationTransport, resolveIsolation, type IsolationClass } from './isolation.js'
 import path from 'node:path'
 import { homedir } from 'node:os'
@@ -15,6 +16,7 @@ export type Config = ControlConfig & {
   telegramEnabled?: boolean
   webLauncher?: WebLauncher
   telegramBotToken: string
+  admin?: AdminChannel
   workspace: string
   executorTimeoutMs: number
   isolation?: IsolationClass
@@ -80,6 +82,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
 
   if (env.EZ_CHANNEL_BACKEND_URL && !env.EZ_CHANNEL_BACKEND_TOKEN?.trim()) throw new Error('EZ_CHANNEL_BACKEND_TOKEN is required')
   if (env.EZ_APPLICATION_PORT && env.EZ_CHANNEL_BACKEND_URL) throw new Error('Application input requires the native Ez executor, not a channel backend')
+  const admin = adminChannel(env)
+  if (admin && admin.botToken === telegramBotToken) throw new Error('EZ_ADMIN_TELEGRAM_BOT_TOKEN must be a different bot from TELEGRAM_BOT_TOKEN')
   const isolation = resolveIsolation(env)
   const transport = env.EZ_EXECUTOR_TRANSPORT?.trim() || isolationTransport(isolation)
   const codexSandbox = env.EZ_CODEX_SANDBOX?.trim()
@@ -91,6 +95,7 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     telegramEnabled,
     webLauncher: parseWebLauncher(env.EZ_TELEGRAM_WEB_APP),
     telegramBotToken,
+    admin,
     repairEnabled: repairEnabled(env.EZ_REPAIR_ENABLED),
     workspace: path.resolve(env.EZ_AGENT_WORKSPACE?.trim() || './agent'),
     executorTimeoutMs: 0,

@@ -13,6 +13,7 @@ if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
   console.log(
     'Usage: ezenciel-agents-message [--text-file <path> | --text <text>] [--document <path>] [--voice <text>] [--reply-to <id>]',
   )
+  console.log('Admin fault: ezenciel-agents-message --admin --receipt <receipt ID> reports a failed plugin invocation to the operator-configured admin channel. The receipt ID is the relay\'s own record of the invocation (printed by ez on stderr as \'ez receipt: <id>\' when a plugin call fails); the relay writes the message from that record (tool, exit code, status, run ID). There is no free text, files, documents or reply-to, and a receipt that is missing, from another run or from a completed invocation is refused. The operator sets the recipient and the command fails when none is configured; it never falls back to the owner chat. One report per receipt: a repeat answers already-reported and sends nothing. Any failure exits non-zero with "NOT delivered"; nothing is recorded, so the same receipt can be sent again.')
   console.log('History: ezenciel-agents-message history [--limit 1..50] [--message-id ID] (read-only; current application binding and scope, or bound Telegram chat). --message-id is Telegram-only.')
   console.log('Authenticated run: sends use its bound channel (application inbox or paired Telegram chat). Delivery receipts confirm that destination; uncertain sends must not be retried without readback.')
   console.log('Text: --text decodes \\n as a newline and \\\\ as a literal backslash; --text-file preserves file content.')
@@ -53,6 +54,20 @@ if (!runId && !deliveryContext) {
 }
 
 let textContent = args.text?.trim()
+if (args.admin) {
+  try {
+    if (!runId) throw new Error('EZ_RUN_ID is required')
+    if (args.text !== undefined || args.textFile || args.document || args.voice || args.replyTo !== undefined) throw new Error('--admin takes only --receipt')
+    if (!args.receipt) throw new Error('--receipt is required')
+    const result = await callDeliverySocket(socketPath, { op: 'adminFault', payload: { runId, receipt: args.receipt } }, 30000)
+    const repeat = (result as { alreadyReported?: boolean } | undefined)?.alreadyReported
+    console.log(JSON.stringify({ ok: true, status: repeat ? 'already-reported' : 'delivered', run: runId, channel: 'admin', receipt: result }))
+  } catch (error) {
+    console.error(JSON.stringify({ ok: false, delivered: false, channel: 'admin', error: `Admin fault NOT delivered: ${error instanceof Error ? error.message : String(error)}` }))
+    process.exit(1)
+  }
+  process.exit(0)
+}
 if (args.textFile) {
   if(deliveryContext)throw new Error('Channel delivery requires inline text, not host file input')
   try {

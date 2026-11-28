@@ -6,6 +6,7 @@ import { taskRequests } from './task-rpc.js'
 import { executionBlockReason } from './execution-authority.js'
 import { serveDeliverySocket, createLedgerHandler, deliverySocketAlive, deliverySocketPath } from './delivery-socket.js'
 import { packageVersion } from './version.js'
+import { reportAdminFault, type AdminFault } from './admin-fault.js'
 import {authorizeDeliveryContext} from './delivery-context.mjs'
 import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
@@ -951,6 +952,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   let deliveryServer: { socketPath: string; stop: () => Promise<void> } | null = null
   const ledgerHandler = createLedgerHandler(config.controlDir, {
     wake: () => { void drainOutbox() },
+    ...(config.admin ? { adminFault: (fault: AdminFault, runId: string) => reportAdminFault(config.admin!, fault, runId) } : {}),
     status: () => ({
       polling: Boolean(bot?.isRunning()),
       applicationOnly: !telegramEnabled,
