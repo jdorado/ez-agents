@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.85.0
+
+- The updater accepts Library 0.1.0-beta.24 (#394). Its only deployment change is the `workspace: true` read-only mount, which the additive-routes rule refused on every installation. A named reviewed migration, `library-workspace-mount-v1`, admits exactly beta.23 to beta.24 with that one difference; a workspace mount stays unaccepted for any other update.
+
+## 0.84.0
+
+- Plugin containers learn the workspace root (#390). A service that declares `workspace: true` gets `EZ_AGENT_WORKSPACE` set to the absolute path of its read-only workspace mount, in its Compose service environment, so every command container and long-running service of that service sees the variable exactly when it has the mount. A plugin that accepts a file path can resolve it and refuse anything outside that root. Services without the mount, and plugins that do not declare the key, are unchanged.
+
 ## 0.83.0
 
 - Plugin output keeps multibyte characters intact (#386). Child output and broker frames were decoded one chunk at a time, so a character split between two pipe or socket chunks (an en dash, an accented letter, an emoji) came back as U+FFFD: in plugin command output, in plugin stdin sent through the isolated broker, and in the run request a host executor reads. Each stream is now decoded once; byte limits are unchanged.

@@ -66,6 +66,10 @@ the authorized broker reads only manifest-declared regular skill files, without
 copying them into the agent workspace. Skill reads reject symlinks and files over
 64 KiB. No AGENTS.md text or per-turn instruction is needed for this read contract.
 
+A service that declares `workspace: true` gets the agent workspace mounted read-only at
+its own absolute path, and `EZ_AGENT_WORKSPACE` names that root. A plugin that accepts a
+file path must resolve it (following symlinks) and refuse anything outside that root.
+
 Keep one canonical checkout; do not keep
 permanent packaged copies or a second registry. See the full
 [plugin contribution requirements](plugin-contributions.md) and the
