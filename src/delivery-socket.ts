@@ -14,7 +14,7 @@ import { Scheduler } from './scheduler.js'
 import {Tasks} from './tasks.js'
 import { runEvidence, type EvidenceOptions } from './run-evidence.js'
 import { runningWork } from './running-work.js'
-import { adminFaultReport, type AdminFault } from './admin-fault.js'
+import { adminFaultFromReceipt, type AdminFault } from './admin-fault.js'
 
 // Stateless pipe transport. The relay owns the runs/outbox ledger in process
 // memory; engine children, plugin children and the host executor reach it
@@ -38,7 +38,7 @@ export type DeliverySocketOp =
   | { op: 'triggerSchedule'; payload: { scheduleId: string; revision: string; key: string; callerRunId?: string } }
   | { op: 'retryScheduleQuota'; payload: { runId?: string; callerRunId?: string } }
   | { op: 'enqueue'; payload: Record<string, unknown> }
-  | { op: 'adminFault'; payload: { runId: string; tool: string; code?: string; error?: string } }
+  | { op: 'adminFault'; payload: { runId: string; receipt: string } }
   | { op: 'wait'; payload: { id: string; timeoutMs?: number } }
   | { op: 'get'; payload: { runId: string } }
   | { op: 'list'; payload?: Record<string, never> }
@@ -336,13 +336,12 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         return { outbox_id: item.id, id: item.id, type: item.type }
       }
       case 'adminFault': {
-        const { runId, ...report } = (op.payload ?? {}) as { runId?: unknown; tool?: unknown; code?: unknown; error?: unknown }
+        const { runId, receipt } = (op.payload ?? {}) as { runId?: unknown; receipt?: unknown }
         if (typeof runId !== 'string' || !runId) throw new Error('Run ID is required')
-        const fault = adminFaultReport(report)
         if (!hooks.adminFault) throw new Error('Admin fault channel is not configured for this agent')
         const run = await requireOwnerExecution(controlDir, runId)
         if (run.replyOnly) throw new Error('Admin fault reports require an owner-authorized run')
-        return hooks.adminFault(fault, run.id)
+        return hooks.adminFault(await adminFaultFromReceipt(controlDir, run.id, receipt), run.id)
       }
       case 'wait': {
         const { id, timeoutMs } = (op.payload ?? {}) as { id?: unknown; timeoutMs?: unknown }

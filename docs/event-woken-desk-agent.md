@@ -34,22 +34,21 @@ channel below; it composes existing parts.
 
 ## Admin fault channel
 
-A run reports a tool or runtime fault to the operator with
-`ezenciel-agents-message --admin --tool <name> [--code <exit code or error class>] [--error <short text>]`.
-It is separate from the owner chat: the relay writes the message itself, from
-those fields and the run ID, and sends it to a destination only the operator
-configures:
+A run reports a failed plugin invocation to the operator with
+`ezenciel-agents-message --admin --receipt <receipt ID>`. The ID is the relay's
+own record of that invocation (`receipt.receiptId` in the plugin result, stored
+under `control/plugin-receipts/<run id>/`). The channel is separate from the owner
+chat: the relay writes the message itself, from that record and the run ID, and
+sends it to a destination only the operator configures:
 
 ```text
-[ez <agent name>] fault: tool=<name> code=<code> run=<run id>
-error: <short text>
+[ez <agent name>] fault: tool=<plugin command> code=<exit code> class=<status> receipt=<id> run=<run id>
 ```
 
-`--tool` and `--code` are single tokens (letters, digits, dot, dash, underscore;
-`--tool` also allows a colon), and a malformed one is refused. `--error` is reduced to
-printable ASCII on one line and cut at 200 characters. There is no free text,
-`--text`, `--text-file`, document, voice or reply-to: a run cannot send the admin
-chat anything but these fields, and never the recipient.
+There is no caller text at all: no error string, `--text`, `--text-file`,
+document, voice or reply-to. A receipt that does not exist for this run, or
+records a completed invocation, is refused, so a run cannot send the admin chat
+anything the relay did not record, and never the recipient.
 
 Operator configuration: add three lines to the agent's `relay.env` (the private
 secret file named by `EZ_RELAY_ENV_FILE`, outside the workspace and control

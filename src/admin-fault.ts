@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+import { assertId } from './identity.js'
 // Operator-set admin destination for fault reports. The bot token, chat ID and
 // agent name come from the relay's private env file, never from the agent
 // workspace or the executor environment. The agent reports a bounded structured
@@ -16,25 +19,28 @@ export const adminChannel = (env: NodeJS.ProcessEnv = process.env): AdminChannel
 }
 
 const PROVIDER_TIMEOUT_MS = 15_000
-const ERROR_MAX = 200
 
-// What a run may report: the failing tool or command, an exit code or error class, a short error string.
-// tool and code are validated tokens; the error string is reduced to printable ASCII and cut at ERROR_MAX.
-export type AdminFault = { tool: string; code?: string; error?: string }
+// A fault is never caller text: it is rendered from the relay's own plugin-invocation receipt
+// (control/plugin-receipts/<run>/<receipt>.json, written by the broker after every invocation).
+// The run names the receipt; tool, exit code and status class come from the record. A receipt that
+// does not exist for this run, or records a completed invocation, is refused.
+export type AdminFault = { receipt: string; tool: string; code: string; class: string }
 
-export const adminFaultReport = (input: { tool?: unknown; code?: unknown; error?: unknown }): AdminFault => {
-  const { tool, code, error } = input
-  if (typeof tool !== 'string' || !/^[A-Za-z0-9_.:-]{1,64}$/.test(tool)) throw new Error('Fault tool must be 1-64 letters, digits, dot, colon, dash or underscore')
-  if (code !== undefined && (typeof code !== 'string' || !/^[A-Za-z0-9_.-]{1,32}$/.test(code))) throw new Error('Fault code must be an exit code or error class of 1-32 letters, digits, dot, dash or underscore')
-  if (error !== undefined && typeof error !== 'string') throw new Error('Fault error must be text')
-  const short = (error ?? '').replace(/[^\x20-\x7e]+/g, ' ').replace(/ +/g, ' ').trim().slice(0, ERROR_MAX)
-  return { tool, ...(code === undefined ? {} : { code }), ...(short ? { error: short } : {}) }
+export const adminFaultFromReceipt = async (controlDir: string, runId: string, receipt: unknown): Promise<AdminFault> => {
+  if (typeof receipt !== 'string' || !/^[a-f0-9-]{36}$/.test(receipt)) throw new Error('Fault receipt must be the relay receipt ID of a failed plugin invocation')
+  let record: { kind?: unknown; receiptId?: unknown; runId?: unknown; alias?: unknown; status?: unknown; exitCode?: unknown }
+  try { record = JSON.parse(await readFile(path.join(controlDir, 'plugin-receipts', assertId(runId), `${receipt}.json`), 'utf8')) }
+  catch { throw new Error('No relay receipt for this run and ID') }
+  const { alias, status, exitCode } = record
+  if (record.kind !== 'plugin-invocation' || record.receiptId !== receipt || record.runId !== runId || typeof alias !== 'string' || typeof status !== 'string' || !Number.isSafeInteger(exitCode))
+    throw new Error('No relay receipt for this run and ID')
+  if (status === 'completed') throw new Error('That invocation did not fail; there is no fault to report')
+  return { receipt, tool: alias.replace(/[^A-Za-z0-9_.:-]/g, '').slice(0, 64), code: String(exitCode), class: status.replace(/[^a-z-]/g, '').slice(0, 32) }
 }
 
-// The relay's own message: nothing the caller sent appears outside these fields.
+// The relay's own message: every field comes from the recorded receipt, none from the caller.
 export const renderAdminFault = (channel: AdminChannel, fault: AdminFault, runId: string) =>
-  `[ez ${channel.name}] fault: tool=${fault.tool}${fault.code === undefined ? '' : ` code=${fault.code}`} run=${runId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64)}` +
-  (fault.error ? `\nerror: ${fault.error}` : '')
+  `[ez ${channel.name}] fault: tool=${fault.tool} code=${fault.code} class=${fault.class} receipt=${fault.receipt} run=${runId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64)}`
 
 // Plain text (no parse mode, so nothing to escape), one Telegram message. A send
 // that fails or times out is reported as unconfirmed and never retried here.
@@ -61,7 +67,7 @@ export const reportAdminFault = async (
   channel: AdminChannel, fault: AdminFault, runId: string,
   send: typeof sendAdminFault = sendAdminFault, log: (message: string, fields: object) => void = console.info,
 ) => {
-  const line = (delivered: boolean) => log('admin fault', { run_id: runId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64), tool: fault.tool, ...(fault.code === undefined ? {} : { code: fault.code }), delivered })
+  const line = (delivered: boolean) => log('admin fault', { run_id: runId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64), tool: fault.tool, code: fault.code, class: fault.class, receipt: fault.receipt, delivered })
   try {
     const result = await send(channel, fault, runId)
     line(true)
