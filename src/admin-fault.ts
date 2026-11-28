@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { access, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { assertId } from './identity.js'
 // Operator-set admin destination for fault reports. The bot token, chat ID and
@@ -60,20 +60,43 @@ export const sendAdminFault = async (channel: AdminChannel, fault: AdminFault, r
   return { delivered: true }
 }
 
+type Log = (level: 'info' | 'error', fields: object) => void
+const logLine: Log = (level, fields) => console[level](JSON.stringify({ level, event: 'admin fault', ...fields }))
+
 // The relay hook: sends the fault and writes one structured line to the relay's own log whatever the outcome, so the
-// record does not depend on Telegram. delivered is true only when Telegram answered ok; a failed or timed-out send is
-// false and the error is rethrown unchanged.
+// record does not depend on Telegram. Delivered is an info line, only when Telegram answered ok; a failed or timed-out
+// send is one error line with the receipt id and the reason, and the error is rethrown unchanged.
 export const reportAdminFault = async (
   channel: AdminChannel, fault: AdminFault, runId: string,
-  send: typeof sendAdminFault = sendAdminFault, log: (message: string, fields: object) => void = console.info,
+  send: typeof sendAdminFault = sendAdminFault, log: Log = logLine,
 ) => {
-  const line = (delivered: boolean) => log('admin fault', { run_id: runId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64), tool: fault.tool, code: fault.code, class: fault.class, receipt: fault.receipt, delivered })
+  const fields = { run_id: runId.replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 64), tool: fault.tool, code: fault.code, class: fault.class, receipt: fault.receipt }
   try {
     const result = await send(channel, fault, runId)
-    line(true)
+    log('info', { ...fields, delivered: true })
     return result
   } catch (error) {
-    line(false)
+    log('error', { ...fields, delivered: false, reason: error instanceof Error ? error.message : String(error) })
     throw error
   }
+}
+
+// One admin message per receipt. The relay records a delivered report beside the receipt in its own control state
+// (never the agent workspace); a repeat is answered as already reported and sends nothing. Nothing is recorded
+// unless the send succeeded, so a failed one can be sent by a later call. Concurrent calls share one send.
+const inFlight = new Map<string, Promise<unknown>>()
+export const reportAdminFaultOnce = (controlDir: string, runId: string, fault: AdminFault, report: () => Promise<unknown>): Promise<unknown> => {
+  const marker = path.join(controlDir, 'plugin-receipts', assertId(runId), `${fault.receipt}.admin-reported`)
+  const pending = inFlight.get(marker)
+  if (pending) return pending
+  const work = (async () => {
+    if (await access(marker).then(() => true, () => false)) return { delivered: true, alreadyReported: true }
+    const result = await report()
+    // The message went out; a marker that cannot be stored is logged and must not read as a failed send.
+    await writeFile(marker, JSON.stringify({ receipt: fault.receipt, reportedAt: new Date().toISOString() }) + '\n', { mode: 0o600 })
+      .catch(error => logLine('error', { run_id: runId, receipt: fault.receipt, reason: `reported marker not stored: ${error instanceof Error ? error.message : String(error)}` }))
+    return result
+  })().finally(() => inFlight.delete(marker))
+  inFlight.set(marker, work)
+  return work
 }

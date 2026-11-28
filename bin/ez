@@ -81,7 +81,9 @@ const invoke = async (args, stdin) => {
   if (!resolved?.ok) throw Error(resolved?.error || 'Plugin alias resolution failed');
   const result = await request({ version: 1, id: randomUUID(), operation: 'invoke', runId, alias, revision: resolved.revision, capability: resolved.capability, args, ...(stdin ? { stdin } : {}) });
   // A failed invocation names the relay's receipt, the only fault the admin channel accepts.
-  const receipt = result?.receipt?.receiptId ? `ez receipt: ${result.receipt.receiptId}\n` : '';
+  // Only a stored receipt can be reported; an unstored or absent one says so, so no ID is passed that the relay cannot find.
+  const receipt = result?.receipt?.receiptId && !result.receiptError ? `ez receipt: ${result.receipt.receiptId}\n`
+    : `ez receipt: none (${result?.receiptError ? 'the relay could not store it' : 'the relay recorded none'}); the admin fault channel cannot report this failure\n`;
   if (!result?.ok) { process.stderr.write(receipt); throw Error(result?.error || 'Plugin invocation failed'); }
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);

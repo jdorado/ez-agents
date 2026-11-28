@@ -3,9 +3,13 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { adminChannel, adminFaultFromReceipt, renderAdminFault, reportAdminFault, sendAdminFault } from '../src/admin-fault.js'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { createServer } from 'node:net'
+import { access } from 'node:fs/promises'
+import { adminChannel, adminFaultFromReceipt, reportAdminFault, reportAdminFaultOnce, sendAdminFault } from '../src/admin-fault.js'
 import { loadConfig } from '../src/config.js'
-import { createLedgerHandler } from '../src/delivery-socket.js'
+import { createLedgerHandler, serveDeliverySocket } from '../src/delivery-socket.js'
 import { parseMessageArgs } from '../src/message-send.js'
 import { executorEnvironment } from '../src/executor.js'
 import { ownerRun } from './helpers/owner-run.js'
@@ -48,19 +52,46 @@ test('the relay renders the admin message from a recorded fault; failures are un
   await assert.rejects(sendAdminFault(adminChannel(env)!, fault, 'r_1', down), (error: Error) => /unconfirmed/.test(error.message) && !error.message.includes(botToken))
 })
 
-test('every admin fault leaves one structured relay log line saying whether delivery was confirmed', async () => {
+test('every admin fault leaves one structured relay log line; a failed send is one error line with the receipt and the reason', async () => {
   const channel = adminChannel(env)!
   const lines: unknown[][] = []
-  const log = (message: string, fields: object) => { lines.push([message, fields]) }
+  const log = (level: string, fields: object) => { lines.push([level, fields]) }
   const fault = { receipt: R1, tool: 'ezstocks', code: '3', class: 'plugin-failed' }
   const ok = (async () => ({ delivered: true as const })) as unknown as typeof sendAdminFault
   assert.deepEqual(await reportAdminFault(channel, fault, 'r_1', ok, log), { delivered: true })
   const down = (async () => { throw new Error('Admin delivery unconfirmed: request failed or timed out') }) as unknown as typeof sendAdminFault
   await assert.rejects(reportAdminFault(channel, fault, 'r 2', down, log), /unconfirmed/)
+  const base = { tool: 'ezstocks', code: '3', class: 'plugin-failed', receipt: R1 }
   assert.deepEqual(lines, [
-    ['admin fault', { run_id: 'r_1', tool: 'ezstocks', code: '3', class: 'plugin-failed', receipt: R1, delivered: true }],
-    ['admin fault', { run_id: 'r2', tool: 'ezstocks', code: '3', class: 'plugin-failed', receipt: R1, delivered: false }],
+    ['info', { run_id: 'r_1', ...base, delivered: true }],
+    ['error', { run_id: 'r2', ...base, delivered: false, reason: 'Admin delivery unconfirmed: request failed or timed out' }],
   ])
+  // The default sink is one JSON line at error level on stderr.
+  const errors: string[] = []
+  const original = console.error
+  console.error = (line: string) => { errors.push(line) }
+  try { await assert.rejects(reportAdminFault(channel, fault, 'r_1', down), /unconfirmed/) } finally { console.error = original }
+  assert.equal(errors.length, 1)
+  assert.deepEqual(JSON.parse(errors[0]!), { level: 'error', event: 'admin fault', run_id: 'r_1', ...base, delivered: false, reason: 'Admin delivery unconfirmed: request failed or timed out' })
+})
+
+test('one admin message per receipt: a repeat sends nothing, a failed send records nothing, concurrent calls share one send', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-admin-once-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await recordReceipt(dir, 'r_1', R1)
+  const fault = { receipt: R1, tool: 'ezstocks', code: '3', class: 'plugin-failed' }
+  let sends = 0
+  let fail = true
+  const report = async () => { sends++; await new Promise(resolve => setTimeout(resolve, 20)); if (fail) throw new Error('Admin delivery failed: Telegram HTTP 403'); return { delivered: true } }
+  await assert.rejects(reportAdminFaultOnce(dir, 'r_1', fault, report), /403/)
+  await assert.rejects(access(join(dir, 'plugin-receipts', 'r_1', `${R1}.admin-reported`)))
+  fail = false
+  const [a, b] = await Promise.all([reportAdminFaultOnce(dir, 'r_1', fault, report), reportAdminFaultOnce(dir, 'r_1', fault, report)])
+  assert.deepEqual([a, b], [{ delivered: true }, { delivered: true }])
+  assert.equal(sends, 2)
+  await access(join(dir, 'plugin-receipts', 'r_1', `${R1}.admin-reported`))
+  assert.deepEqual(await reportAdminFaultOnce(dir, 'r_1', fault, report), { delivered: true, alreadyReported: true })
+  assert.equal(sends, 2)
 })
 
 test('a fault is read only from the relay record of a failed invocation of this run, never from caller text', async t => {
@@ -94,6 +125,77 @@ test('the ledger delivers admin faults only for an active owner run and a record
   // Caller extras beside a valid receipt never reach the fault.
   assert.deepEqual(await handler({ op: 'adminFault', payload: { runId: run.id, receipt: R1, error: 'SECRET private note', tool: 'x' } as never }), { delivered: true })
   assert.deepEqual(sent, [[{ receipt: R1, tool: 'ibkr', code: '7', class: 'plugin-failed' }, run.id]])
+  // The same receipt again is answered as already reported and sends nothing.
+  assert.deepEqual(await handler({ op: 'adminFault', payload: { runId: run.id, receipt: R1 } }), { delivered: true, alreadyReported: true })
+  assert.equal(sent.length, 1)
+})
+
+test('message --admin exits non-zero saying the fault was NOT delivered, records nothing, and succeeds on a later call', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'ez-a-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const run = await ownerRun(dir, 'r_cli')
+  await recordReceipt(dir, run.id, R1)
+  let down = true
+  const sends: string[] = []
+  const handler = createLedgerHandler(dir, { wake: () => {}, status, adminFault: async fault => { sends.push(fault.receipt); if (down) throw new Error('Admin delivery unconfirmed: request failed or timed out'); return { delivered: true } } })
+  const server = await serveDeliverySocket(dir, handler)
+  t.after(() => server.stop())
+  const run_ = async () => {
+    const child = spawn(process.execPath, ['--import', 'tsx', new URL('../src/message.ts', import.meta.url).pathname, '--admin', '--receipt', R1], { env: { PATH: process.env.PATH, EZ_CONTROL_DIR: dir, EZ_RUN_ID: run.id, EZ_DELIVERY_SOCKET: server.socketPath } })
+    let out = '', err = ''
+    child.stdout.on('data', c => out += c); child.stderr.on('data', c => err += c)
+    const [code] = await once(child, 'close')
+    return { code, out, err }
+  }
+  const failed = await run_()
+  assert.equal(failed.code, 1)
+  assert.equal(JSON.parse(failed.err).delivered, false)
+  assert.match(JSON.parse(failed.err).error, /NOT delivered.*unconfirmed/)
+  down = false
+  const sent = await run_()
+  assert.equal(sent.code, 0)
+  assert.equal(JSON.parse(sent.out).status, 'delivered')
+  const repeat = await run_()
+  assert.equal(repeat.code, 0)
+  assert.equal(JSON.parse(repeat.out).status, 'already-reported')
+  assert.deepEqual(sends, [R1, R1])
+  const missing = spawn(process.execPath, ['--import', 'tsx', new URL('../src/message.ts', import.meta.url).pathname, '--admin'], { env: { PATH: process.env.PATH, EZ_CONTROL_DIR: dir, EZ_RUN_ID: run.id, EZ_DELIVERY_SOCKET: server.socketPath } })
+  assert.equal((await once(missing, 'close'))[0], 1)
+})
+
+test('ez prints a receipt ID only when the relay stored it; otherwise it says there is none', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ez-b-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const socket = join(root, 'b.sock')
+  let invoked: object = {}
+  const broker = createServer(connection => {
+    let buffer = ''
+    connection.on('data', chunk => {
+      buffer += chunk
+      if (!buffer.includes('\n')) return
+      const frame = JSON.parse(buffer)
+      connection.end(JSON.stringify(frame.operation === 'resolve' ? { ok: true, revision: 'a'.repeat(64), capability: 'c'.repeat(64) } : invoked) + '\n')
+    })
+  })
+  await new Promise<void>(resolve => broker.listen(socket, resolve))
+  t.after(() => broker.close())
+  const ez = async () => {
+    const child = spawn(process.execPath, [new URL('../bin/ez', import.meta.url).pathname, 'sample', 'read'], { env: { PATH: process.env.PATH, EZ_PLUGIN_BROKER_SOCKET: socket, EZ_RUN_ID: 'r_ez' }, stdio: ['ignore', 'ignore', 'pipe'] })
+    let err = ''
+    child.stderr.on('data', c => err += c)
+    const [code] = await once(child, 'close')
+    return { code, err }
+  }
+  const stored = { receipt: { receiptId: R1 } }
+  invoked = { ok: true, code: 3, stdout: '', stderr: 'boom', ...stored }
+  assert.match((await ez()).err, new RegExp(`ez receipt: ${R1}`))
+  invoked = { ok: true, code: 3, stdout: '', stderr: 'boom', ...stored, receiptError: 'disk full' }
+  const unstored = await ez()
+  assert.equal(unstored.code, 3)
+  assert.match(unstored.err, /ez receipt: none \(the relay could not store it\)/)
+  assert.ok(!unstored.err.includes(R1))
+  invoked = { ok: false, error: 'plugin unavailable' }
+  assert.match((await ez()).err, /ez receipt: none/)
 })
 
 test('--admin is a flag naming a recorded receipt, not a recipient or text', () => {

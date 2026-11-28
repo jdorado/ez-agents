@@ -37,7 +37,8 @@ channel below; it composes existing parts.
 A run reports a failed plugin invocation to the operator with
 `ezenciel-agents-message --admin --receipt <receipt ID>`. The ID is the relay's
 own record of that invocation (printed by `ez` on stderr as `ez receipt: <id>` when a plugin call fails, stored
-under `control/plugin-receipts/<run id>/`). The channel is separate from the owner
+under `control/plugin-receipts/<run id>/`). When the relay stored no receipt, `ez` prints `ez receipt: none (...)`
+instead and there is nothing to report. The channel is separate from the owner
 chat: the relay writes the message itself, from that record and the run ID, and
 sends it to a destination only the operator configures:
 
@@ -64,6 +65,9 @@ All three or none; a partial set stops the relay at start. The values load into
 the relay only and are not in the executor environment. When unset, `--admin`
 fails with "Admin fault channel is not configured for this agent" and nothing is
 sent anywhere else. Only an active owner-authorized run can use it. The report is
-sent as one plain-text Telegram message. A send that fails
-reports an error (a network failure or timeout reads "unconfirmed") and core does
-not retry it.
+sent as one plain-text Telegram message, once per receipt: the relay records a delivered report beside the
+receipt (`<id>.admin-reported`, in its own control state), and a repeat answers `already-reported` and sends
+nothing. A send that fails (a network failure or timeout reads "unconfirmed") exits non-zero with
+"Admin fault NOT delivered: <reason>", records nothing so the same receipt can be sent again, and leaves one
+error-level JSON line in the relay log with the receipt ID and the reason (a delivered report leaves an info
+line). Core does not retry it.

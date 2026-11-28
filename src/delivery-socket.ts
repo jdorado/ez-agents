@@ -14,7 +14,7 @@ import { Scheduler } from './scheduler.js'
 import {Tasks} from './tasks.js'
 import { runEvidence, type EvidenceOptions } from './run-evidence.js'
 import { runningWork } from './running-work.js'
-import { adminFaultFromReceipt, type AdminFault } from './admin-fault.js'
+import { adminFaultFromReceipt, reportAdminFaultOnce, type AdminFault } from './admin-fault.js'
 
 // Stateless pipe transport. The relay owns the runs/outbox ledger in process
 // memory; engine children, plugin children and the host executor reach it
@@ -341,7 +341,8 @@ export const createLedgerHandler = (controlDir: string, hooks: LedgerHooks): Del
         if (!hooks.adminFault) throw new Error('Admin fault channel is not configured for this agent')
         const run = await requireOwnerExecution(controlDir, runId)
         if (run.replyOnly) throw new Error('Admin fault reports require an owner-authorized run')
-        return hooks.adminFault(await adminFaultFromReceipt(controlDir, run.id, receipt), run.id)
+        const fault = await adminFaultFromReceipt(controlDir, run.id, receipt)
+        return reportAdminFaultOnce(controlDir, run.id, fault, () => hooks.adminFault!(fault, run.id))
       }
       case 'wait': {
         const { id, timeoutMs } = (op.payload ?? {}) as { id?: unknown; timeoutMs?: unknown }
