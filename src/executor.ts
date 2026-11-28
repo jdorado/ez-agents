@@ -100,7 +100,9 @@ export type ExecutorOptions = {
   script?: ScriptLaunch
 }
 
-export type ScriptLaunch = ScriptRunRef & { scheduleId: string; scheduleRevision: string; dueAt: string }
+// A schedule occurrence carries its schedule binding; a direct run (POST /v1/script-runs)
+// carries none and may carry the caller's opaque context text, which core never reads.
+export type ScriptLaunch = ScriptRunRef & { scheduleId?: string; scheduleRevision?: string; dueAt?: string; context?: string }
 
 export type CodexProviderBinding = {
   id: string
@@ -674,11 +676,13 @@ export const startScriptJob = async (
   options: ExecutorOptions & { script: ScriptLaunch },
 ): Promise<{ child: ChildProcess; cleanup: () => Promise<void>; stdout: string }> => {
   const { script } = options
-  for (const value of [options.runId, script.scheduleId, script.scheduleRevision]) if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error('Invalid script run binding')
-  if (!Number.isFinite(Date.parse(script.dueAt))) throw new Error('Invalid script due time')
+  const scheduled = script.scheduleId !== undefined
+  for (const value of [options.runId, ...(scheduled ? [script.scheduleId!, script.scheduleRevision!] : [])]) if (!/^[a-zA-Z0-9_-]+$/.test(value ?? '')) throw new Error('Invalid script run binding')
+  if (scheduled && !Number.isFinite(Date.parse(script.dueAt!))) throw new Error('Invalid script due time')
   const environment: NodeJS.ProcessEnv = {
     ...executorJobEnv(options),
-    EZ_SCHEDULE_ID: script.scheduleId, EZ_SCHEDULE_REVISION: script.scheduleRevision, EZ_DUE_AT: script.dueAt,
+    ...(scheduled ? { EZ_SCHEDULE_ID: script.scheduleId, EZ_SCHEDULE_REVISION: script.scheduleRevision, EZ_DUE_AT: script.dueAt } : {}),
+    ...(script.context === undefined ? {} : { EZ_SCRIPT_CONTEXT: script.context }),
     EZ_SCRIPT_ID: script.id, EZ_SCRIPT_REVISION: script.revision, ...(script.sha256 ? { EZ_SCRIPT_SHA256: script.sha256 } : {}),
   }
   const verified = await new Scripts(options.controlDir).verifiedInvocation(script, options.workspace, environment.PATH)

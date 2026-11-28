@@ -266,10 +266,10 @@ export const serveHostExecutor = async (installation: HostInstallation, signal: 
               const opts=request.options as ExecutorOptions
               // Script occurrences come from the authorized run record, never the request.
               if (run?.script) {
-                if (!run.scheduled) throw new Error('Script runs require a scheduled occurrence')
                 const options:ExecutorOptions={catalogTransport:containerId?'local':'host',workspace:agent.workspace,controlDir:agent.controlDir,binDir:agent.binDir,toolsHome:agent.toolsHome,sharedWorkspace,additionalWorkspaces:additionalWorkspaces.get(agent),
                   runId:path.basename(base),timeoutMs:0,repairEnabled:opts.repairEnabled,
-                  script:{...run.script,scheduleId:run.scheduled.id,scheduleRevision:run.scheduled.revision,dueAt:run.scheduled.dueAt}}
+                  script:{...run.script,...(run.scheduled ? {scheduleId:run.scheduled.id,scheduleRevision:run.scheduled.revision,dueAt:run.scheduled.dueAt} : {}),
+                    ...(run.scriptContext===undefined ? {} : {context:run.scriptContext})}}
                 job=await launch(request.texts,options)
               } else {
                 const cli = opts.cli || installation.cli

@@ -12,11 +12,17 @@ export type ScriptRegistration = {
   version: 1; id: string; revision: string; owner: Owner
   entry?: string; interpreter: string; args: string[]; sha256?: string; plugin?: string
   timeoutSeconds: number; registeredAt: string; updatedAt: string
+  // Concurrent direct runs (POST /v1/script-runs) allowed for this script; absent means one.
+  maxConcurrent?: number
 }
 // Captured on the run when an occurrence is queued; the launcher verifies it.
 export type ScriptRunRef = { id: string; revision?: string; sha256?: string; args: string[] }
 
+// An answer the application channel maps to its HTTP status.
+export class ScriptRunError extends Error { constructor(readonly status: 404 | 429 | 503, message: string) { super(message) } }
+
 export const DEFAULT_SCRIPT_TIMEOUT_SECONDS = 900
+export const MAX_SCRIPT_CONCURRENT = 64
 export const MAX_SCRIPT_TIMEOUT_SECONDS = 21600
 const SCRIPT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 const COMMAND = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/
@@ -54,6 +60,12 @@ export const assertInterpreter = (value: unknown): string => {
 export const assertTimeout = (value: unknown): number => {
   if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > MAX_SCRIPT_TIMEOUT_SECONDS)
     throw new Error(`Script timeout must be 1..${MAX_SCRIPT_TIMEOUT_SECONDS} seconds`)
+  return value as number
+}
+
+export const assertMaxConcurrent = (value: unknown): number => {
+  if (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > MAX_SCRIPT_CONCURRENT)
+    throw new Error(`Script max concurrent must be 1..${MAX_SCRIPT_CONCURRENT}`)
   return value as number
 }
 
@@ -116,6 +128,7 @@ export class Scripts {
     if (s.version !== 1 || s.id !== id || typeof s.revision !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(s.revision) || !validOwner(s.owner) ||
       !(file || plugin)) throw new Error('Invalid script registration')
     assertInterpreter(s.interpreter); assertScriptArgs(s.args); assertTimeout(s.timeoutSeconds)
+    if (s.maxConcurrent !== undefined) assertMaxConcurrent(s.maxConcurrent)
     return s
   }
 
@@ -144,14 +157,14 @@ export class Scripts {
 
   // Register or explicitly update: hashes the current entry-point bytes, or
   // records a plugin command (whose revision the plugin manager already pins).
-  async save(input: { id: string; owner: Owner; workspace: string; entry?: string; interpreter?: string; plugin?: string; args: string[]; timeoutSeconds: number; pathValue?: string }, create: boolean): Promise<ScriptRegistration> {
+  async save(input: { id: string; owner: Owner; workspace: string; entry?: string; interpreter?: string; plugin?: string; args: string[]; timeoutSeconds: number; maxConcurrent?: number; pathValue?: string }, create: boolean): Promise<ScriptRegistration> {
     assertScriptId(input.id)
     if (!validOwner(input.owner)) throw new Error('Script registration requires the paired owner')
     if ((input.plugin === undefined) === (input.entry === undefined)) throw new Error('Register either a workspace entry point (--file, --interpreter) or a plugin command (--plugin)')
     const previous = create ? undefined : await this.owned(input.id, input.owner)
     const now = new Date().toISOString()
     const common = { version: 1 as const, id: input.id, revision: randomUUID(), owner: input.owner, args: assertScriptArgs(input.args),
-      timeoutSeconds: assertTimeout(input.timeoutSeconds), registeredAt: previous?.registeredAt ?? now, updatedAt: now }
+      timeoutSeconds: assertTimeout(input.timeoutSeconds), ...(input.maxConcurrent === undefined ? {} : { maxConcurrent: assertMaxConcurrent(input.maxConcurrent) }), registeredAt: previous?.registeredAt ?? now, updatedAt: now }
     let s: ScriptRegistration
     if (input.plugin !== undefined) {
       const plugin = assertPluginCommand(input.plugin)

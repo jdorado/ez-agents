@@ -46,7 +46,7 @@ export function projectRunningWork(records: RunRecord[], outbox: StoredOutboxIte
     return {
       id: run.id, status: run.status,
       ...(run.status === 'queued' && run.quotaWait ? { quotaWait: { retryAt: timestamp(run.quotaWait.retryAt) } } : {}),
-      kind: run.script ? 'scheduled-script' : run.scheduled ? 'scheduled-agent' : run.sessionClose ? 'session-close' : run.application || run.telegramApplication ? 'application-foreground' : 'foreground',
+      kind: run.script ? (run.scheduled ? 'scheduled-script' : 'script-run') : run.scheduled ? 'scheduled-agent' : run.sessionClose ? 'session-close' : run.application || run.telegramApplication ? 'application-foreground' : 'foreground',
       schedule: run.scheduled ? { id: run.scheduled.id, revision: run.scheduled.revision,
         name: schedule ? label(schedule.name) : null, dueAt: timestamp(run.scheduled.dueAt) } : null,
       script: run.script ? { id: run.script.id, revision: run.script.revision ?? null } : null,

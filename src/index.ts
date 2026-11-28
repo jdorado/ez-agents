@@ -12,7 +12,7 @@ import { dispatchChannel } from './channel-backend.js'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { Scheduler } from './scheduler.js'
-import { Scripts } from './scripts.js'
+import { Scripts, ScriptRunError, type ScriptRegistration } from './scripts.js'
 import { redactFailure } from './failure.js'
 import { statusReport, type StatusView } from './status-report.js'
 import { ownedScheduledTasks, scheduledTaskDetailText, scheduledTasksText } from './scheduled-tasks.js'
@@ -68,6 +68,9 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
   const sources = new EventSources(config.controlDir)
   const scheduler = new Scheduler(config.controlDir)
   const background = new Map<string, ChildProcess>()
+  // Direct script runs (POST /v1/script-runs) hold neither the foreground slot nor a scheduled slot.
+  const scriptRuns = new Map<string, { script: string; child?: ChildProcess }>()
+  const scriptKeys = new Map<string, { run: string; at: number }>()
   const completions = new Set<Promise<void>>()
   const speechOptions = { geminiApiKey: config.geminiApiKey, openrouterApiKey: config.openrouterApiKey, speechProvider: config.speechProvider, speechModel: config.speechModel }
   const speechConfigured = config.speechProvider === 'openrouter' ? Boolean(config.openrouterApiKey) : Boolean(config.geminiApiKey)
@@ -140,6 +143,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
       voice: language === 'es' ? config.speechVoiceEs : config.speechVoiceEn,
       format: 'wav',
     }) : undefined,
+    runScript: (owner, input) => runScript(owner, input),
     wake: () => { void drainSources().catch(error => console.error('Application queue unavailable', safeError(error))) },
     closeSession: (session) => closeSession(session),
     createTelegramPairing: async (bindingId, owner) => {
@@ -326,6 +330,68 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     const base = join(config.controlDir, 'host-executor', id)
     const exists = (suffix: string) => stat(base + suffix).then(() => true, e => { if (e.code === 'ENOENT') return false; throw e })
     if (await exists('.request.json') || await exists('.running.json')) await writeFile(base + '.cancel', '', { mode: 0o600 })
+  }
+
+  // A repeat of a key for the same script inside this window answers with the first run.
+  const SCRIPT_KEY_WINDOW_MS = 10 * 60 * 1000
+  // Admission is the whole synchronous block below: the key and the concurrency slot are
+  // reserved before any await, so concurrent requests cannot both pass. The script is
+  // started after the answer, through the same launcher and verification as a schedule
+  // occurrence; a start failure is a failed run record, never a retry.
+  const runScript = async (owner: Owner, input: { script: string; key: string; context: string }) => {
+    if (shuttingDown) throw new ScriptRunError(503, 'Relay is shutting down')
+    let registration: ScriptRegistration
+    try { registration = await new Scripts(config.controlDir).owned(input.script, owner) }
+    catch { throw new ScriptRunError(404, `Script ${input.script} is not registered`) }
+    const now = Date.now(), keyId = JSON.stringify([input.script, input.key])
+    for (const [stale, seen] of scriptKeys) if (now - seen.at > SCRIPT_KEY_WINDOW_MS) scriptKeys.delete(stale)
+    const first = scriptKeys.get(keyId)
+    if (first) return { run: first.run, duplicate: true }
+    if ([...scriptRuns.values()].filter(active => active.script === input.script).length >= (registration.maxConcurrent ?? 1))
+      throw new ScriptRunError(429, `Script ${input.script} is at its limit of ${registration.maxConcurrent ?? 1} concurrent runs`)
+    const id = `r_script_${randomUUID().replaceAll('-', '')}`
+    scriptRuns.set(id, { script: input.script }); scriptKeys.set(keyId, { run: id, at: now })
+    let run: RunRecord
+    try {
+      run = await runs.create({ id, ownerId: ownerId(owner), ownerEpoch: ownerEpoch(owner), texts: [`[script ${input.script} key ${input.key}]`],
+        script: { id: input.script, args: [], revision: registration.revision, ...(registration.sha256 ? { sha256: registration.sha256 } : {}) },
+        scriptContext: input.context, started: true })
+    } catch (error) { scriptRuns.delete(id); scriptKeys.delete(keyId); throw error }
+    void watchScriptRun(run, registration).catch(error => console.error('Script run failed', run.id, safeError(error)))
+    return { run: id, duplicate: false }
+  }
+
+  const watchScriptRun = async (run: RunRecord, registration: ScriptRegistration): Promise<void> => {
+    let output = '', timedOut = false, timer: ReturnType<typeof setTimeout> | undefined, cleanup = async () => {}
+    const settle = async (code: number | null, failed: boolean, reason: string, error?: string) => {
+      await runs.patch(run.id, { status: failed ? 'failed' : 'completed', exitCode: code, endedAt: new Date().toISOString(),
+        output: redactFailure(safeError(output)), ...(timedOut ? { timedOut } : {}),
+        ...(failed ? { failureReason: reason, failure: await failureEvidence(config.controlDir, safeError(error ?? output)) } : {}) })
+    }
+    try {
+      const launched = await launch(run.texts, { workspace: config.workspace, timeoutMs: 0, repairEnabled: config.repairEnabled, runId: run.id,
+        controlDir: config.controlDir, binDir, script: { ...run.script!, ...(run.scriptContext === undefined ? {} : { context: run.scriptContext }) } })
+      const { child } = launched
+      cleanup = launched.cleanup
+      scriptRuns.get(run.id)!.child = child
+      // Attach before disk writes: a fast child can close while the pid is persisted.
+      const closed = new Promise<number | null>(resolve => child.exitCode !== null || child.signalCode !== null ? resolve(child.exitCode) : child.once('close', resolve))
+      for (const stream of [child.stdout, child.stderr]) stream?.setEncoding('utf8').on('data', (chunk: string) => { output = (output + chunk).slice(-16384) })
+      timer = setTimeout(() => { timedOut = true; void terminateJob(child) }, registration.timeoutSeconds * 1000)
+      if (shuttingDown) void terminateJob(child)
+      await runs.patch(run.id, { pid: child.pid })
+      console.info('script run started', { run_id: run.id, script: run.script!.id, pid: child.pid })
+      const code = await closed
+      await settle(code, code !== 0 || timedOut, timedOut ? 'script-timeout' : 'executor-exit',
+        timedOut ? `Script exceeded its ${registration.timeoutSeconds}s timeout and was terminated` : output || `Executor exited with ${code === null ? 'a signal' : `code ${code}`}`)
+      console.info('script run ended', { run_id: run.id, code })
+    } catch (error) {
+      await settle(null, true, 'executor-start', safeError(error))
+    } finally {
+      clearTimeout(timer)
+      await cleanup().catch(() => {})
+      scriptRuns.delete(run.id)
+    }
   }
 
   // First launches, adopted host sessions and fallback launches share one watcher.
@@ -699,6 +765,10 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
           if (run.delivery) await applicationChannel.bindings.authorize(run)
         } catch { ownerStopped.add(child); terminateJob(child); continue }
         if (await scheduler.cancelled(id)) terminateJob(child)
+      }
+      for (const [id, { child }] of scriptRuns) {
+        const run = await runs.get(id)
+        if (child && (!run || !ownsRun(owner, run))) { ownerStopped.add(child); void terminateJob(child) }
       }
       const pendingRelease=(await runs.list()).find(run=>run.external&&!run.externalReleased&&['completed','failed','cancelled'].includes(run.status))
       if(pendingRelease)await releaseExternal(pendingRelease)
@@ -1525,7 +1595,7 @@ export const createRelay = (config: Config, launch = startExecutorJob) => {
     await Promise.all([sourceWork, tickWork, intakeWork].map(work => work?.catch(() => {})))
     // Finish registering in-flight launches before taking the child snapshot.
     await withStartLock(async () => {
-      for (const child of [...(activeChild ? [activeChild] : []), ...background.values()]) if (!handedOff.has(child)) terminateJob(child)
+      for (const child of [...(activeChild ? [activeChild] : []), ...background.values(), ...[...scriptRuns.values()].flatMap(active => active.child ? [active.child] : [])]) if (!handedOff.has(child)) terminateJob(child)
       if (activeTypingTimer) clearInterval(activeTypingTimer)
     })
     await Promise.all(completions)

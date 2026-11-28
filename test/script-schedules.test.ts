@@ -295,12 +295,14 @@ test('script CLI registers, shows and updates plugin commands and keeps their ki
   await f.runs.patch(turn.id, { status: 'running' })
   const env = { ...process.env, PATH: `${f.fakeBin}:${process.env.PATH}`, EZ_CONTROL_DIR: f.dir, EZ_RUN_ID: turn.id, EZ_AGENT_WORKSPACE: f.workspace }
   const cli = async (...args: string[]) => JSON.parse((await exec(process.execPath, [bin, ...args], { env, cwd: f.workspace })).stdout)
-  const registered = await cli('script', 'register', 'book', '--plugin', 'ezstocks', '--arg=strategy', '--arg=account-cut', '--arg=sync')
-  assert.equal(registered.plugin, 'ezstocks'); assert.deepEqual(registered.args, ['strategy', 'account-cut', 'sync'])
+  const registered = await cli('script', 'register', 'book', '--plugin', 'ezstocks', '--arg=strategy', '--arg=account-cut', '--arg=sync', '--max-concurrent', '8')
+  assert.equal(registered.plugin, 'ezstocks'); assert.deepEqual(registered.args, ['strategy', 'account-cut', 'sync']); assert.equal(registered.maxConcurrent, 8)
   const shown = await cli('script', 'show', 'book')
   assert.equal(shown.plugin, 'ezstocks'); assert.equal(shown.matchesRegistration, undefined)
   const updated = await cli('script', 'update', 'book', '--timeout-seconds', '120')
-  assert.equal(updated.plugin, 'ezstocks'); assert.equal(updated.timeoutSeconds, 120); assert.deepEqual(updated.args, registered.args)
+  assert.equal(updated.plugin, 'ezstocks'); assert.equal(updated.timeoutSeconds, 120); assert.deepEqual(updated.args, registered.args); assert.equal(updated.maxConcurrent, 8)
+  assert.equal((await cli('script', 'update', 'book', '--max-concurrent', '2')).maxConcurrent, 2)
+  await assert.rejects(cli('script', 'update', 'book', '--max-concurrent', '0'), /max concurrent/)
   await assert.rejects(cli('script', 'register', 'mixed', '--plugin', 'ezstocks', '--file', 'scripts/guard.mjs', '--interpreter', 'node'), /either --plugin or --file/)
   await assert.rejects(cli('script', 'register', 'none'), /--plugin/)
   // Switching kinds is explicit.

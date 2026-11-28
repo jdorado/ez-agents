@@ -13,6 +13,13 @@ import { ApprovalStore } from './approval.js'
 import { Tasks } from './tasks.js'
 import { softwareStatus } from './software-status.js'
 import { SpeechCreditsDepletedError } from './audio.js'
+import { ScriptRunError, assertScriptId } from './scripts.js'
+
+// POST /v1/script-runs limits: the serialized context, and the whole body around it.
+export const MAX_SCRIPT_CONTEXT_BYTES = 4096
+const MAX_SCRIPT_RUN_BODY_BYTES = MAX_SCRIPT_CONTEXT_BYTES + 2048
+const SCRIPT_RUN_KEY = /^[A-Za-z0-9_.:-]{1,128}$/
+export type ScriptRunInput = { script: string; key: string; context: string }
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export const applicationScope = (bindingId: string, scope: string) => hash(JSON.stringify([bindingId, scope]))
@@ -102,6 +109,8 @@ export class ApplicationChannel {
     // Queues the replaced conversation's silent close turn (session-close.ts).
     closeSession?: (session: SessionState | null) => Promise<void>
     cancel: (id: string) => Promise<void>
+    // Starts an admitted run of a registered script now, outside the conversation slot (index.ts). The context text is opaque.
+    runScript?: (owner: Owner, input: ScriptRunInput) => Promise<{ run: string; duplicate: boolean }>
     speech?: (text: string, language: 'en' | 'es') => Promise<{ buffer: Buffer; mimeType: string }>
     createTelegramPairing?: (bindingId: string, owner: Owner) => Promise<{ connected: true } | { connected: false; url: string; expiresAt: string }>
     telegramAvailable?: () => boolean
@@ -411,6 +420,7 @@ export class ApplicationChannel {
         const run = await this.submit(binding.bindingId, input)
         send(202, await this.snapshot(binding.bindingId, run.id)); return
       }
+      if (request.method === 'POST' && path === '/v1/script-runs' && this.options.runScript) { await this.scriptRun(binding, request, send); return }
       const approvalMatch=path.match(/^\/v1\/approvals\/(task_[a-f0-9]{32})$/)
       if(approvalMatch && request.method==='POST') {
         const approval=await new ApprovalStore(this.options.controlDir).getDecision(approvalMatch[1])
@@ -489,6 +499,31 @@ export class ApplicationChannel {
         try { const existing = await this.runs.get(admissionId); admission = { admitted: !!existing, ...(existing ? { runId: existing.id } : {}) } } catch { /* Unreadable state is not proof of non-admission. */ }
       }
       send(message.includes('conflicts') ? 409 : message === 'Unknown application run' ? 404 : 400, { ...admission, error: /^(Invalid application|Application request|Application authority|Unknown application)/.test(message) ? message : 'Invalid application request' })
+    }
+  }
+  // Never waits for the script: 202 means admitted. Core does not read or interpret the context.
+  private async scriptRun(binding: Binding, request: IncomingMessage, send: (status: number, body: unknown) => void) {
+    const chunks: Buffer[] = []; let size = 0
+    for await (const chunk of request) {
+      size += chunk.length
+      if (size > MAX_SCRIPT_RUN_BODY_BYTES) { send(413, { error: 'Script run request too large' }); return }
+      chunks.push(chunk)
+    }
+    let body: { script?: unknown; key?: unknown; context?: unknown } | null
+    try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { body = null }
+    let script: string | undefined
+    try { script = assertScriptId(body?.script) } catch { /* shape error below */ }
+    const context = body?.context === undefined ? {} : body.context
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['script', 'key', 'context'].includes(key)) || !script ||
+      typeof body.key !== 'string' || !SCRIPT_RUN_KEY.test(body.key) || typeof context !== 'object' || context === null || Array.isArray(context)) {
+      send(422, { error: 'Script run needs {"script": ID, "key": 1-128 of A-Za-z0-9_.:-, "context": {...}}' }); return
+    }
+    const text = JSON.stringify(context)
+    if (Buffer.byteLength(text) > MAX_SCRIPT_CONTEXT_BYTES) { send(413, { error: 'Script run context exceeds 4 KiB' }); return }
+    try { send(202, await this.options.runScript!(binding.owner, { script, key: body.key, context: text })) }
+    catch (error) {
+      if (!(error instanceof ScriptRunError)) throw error
+      send(error.status, { error: error.message })
     }
   }
   async listen(port: number, host = '127.0.0.1') {

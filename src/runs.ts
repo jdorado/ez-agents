@@ -62,6 +62,8 @@ export type RunRecord = {
   delivery?: { bindingId: string; scope: string }
   // Registered script occurrence (no execution preset or native session).
   script?: ScriptRunRef
+  // Opaque caller context of a direct script run (POST /v1/script-runs); core never reads it.
+  scriptContext?: string
   // Bounded, redacted script stdout/stderr tail; diagnostic, never delivered.
   output?: string
   timedOut?: boolean
@@ -171,6 +173,9 @@ export const activeSetup = (run: Pick<RunRecord, 'attempts' | 'execution' | 'sch
   return saved.some(matches) ? preset : undefined
 }
 
+// Scheduled occurrences and direct script runs never occupy the conversation's foreground slot.
+const backgroundRun = (run: RunRecord): boolean => Boolean(run.scheduled || run.script)
+
 export const newRunId = (): string => `r_${Date.now().toString(36)}_${randomBytes(3).toString('hex')}`
 
 // The one exception to memory-only runs: a graceful relay stop hands its
@@ -240,6 +245,9 @@ export class RunStore {
     application?: ApplicationOrigin
     delivery?: { bindingId: string; scope: string }
     script?: ScriptRunRef
+    scriptContext?: string
+    // A direct script run starts at once: it never waits in the queue.
+    started?: true
     sessionClose?: true
   // Scheduled runs pass the task's limit of occurrences in flight (true means one).
   }, exclusiveSchedule: boolean | number = false): Promise<RunRecord> {
@@ -275,10 +283,12 @@ export class RunStore {
       delivery: input.delivery,
       scheduled: input.scheduled,
       ...(input.script ? { script: input.script } : {}),
+      ...(input.scriptContext === undefined ? {} : { scriptContext: input.scriptContext }),
       ...(input.sessionClose ? { sessionClose: true as const } : {}),
-      status: 'queued',
+      status: input.started ? 'running' : 'queued',
       createdAt: new Date().toISOString(),
     }
+    if (input.started) run.startedAt = run.createdAt
     store.set(run.id, run)
     pruneTerminals(this.controlDir)
     return run
@@ -342,7 +352,7 @@ export class RunStore {
   async running(background?: boolean): Promise<RunRecord | undefined> {
     let first: RunRecord | undefined
     for (const run of [...runsFor(this.controlDir).values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt))) {
-      if (run.status === 'running' && !run.steeredInto && (background === undefined || Boolean(run.scheduled) === background)) {
+      if (run.status === 'running' && !run.steeredInto && (background === undefined || backgroundRun(run) === background)) {
         first ??= run
       }
     }
@@ -350,7 +360,7 @@ export class RunStore {
   }
 
   async nextQueued(background?: boolean): Promise<RunRecord | undefined> {
-    const queued = [...runsFor(this.controlDir).values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).filter((run) => run.status === 'queued' && (background === undefined || Boolean(run.scheduled) === background))
+    const queued = [...runsFor(this.controlDir).values()].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)).filter((run) => run.status === 'queued' && (background === undefined || backgroundRun(run) === background))
     return queued.find(run => !run.taskId && !run.scheduled) ?? queued.find(run => !run.taskId) ?? queued[0]
   }
 
