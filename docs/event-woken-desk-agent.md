@@ -36,7 +36,7 @@ channel below; it composes existing parts.
 
 A run reports a failed plugin invocation to the operator with
 `ezenciel-agents-message --admin --receipt <receipt ID>`. The ID is the relay's
-own record of that invocation (`receipt.receiptId` in the plugin result, stored
+own record of that invocation (printed by `ez` on stderr as `ez receipt: <id>` when a plugin call fails, stored
 under `control/plugin-receipts/<run id>/`). The channel is separate from the owner
 chat: the relay writes the message itself, from that record and the run ID, and
 sends it to a destination only the operator configures:
