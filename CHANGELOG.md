@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.86.0
+
+- An admin fault channel for isolated agents (#392). `ezenciel-agents-message --admin --receipt <receipt ID>` reports a failed plugin invocation to an operator-configured Telegram chat (`EZ_ADMIN_TELEGRAM_BOT_TOKEN`, `EZ_ADMIN_TELEGRAM_CHAT_ID`, `EZ_ADMIN_AGENT_NAME`, all three or none, in the relay's private env file). The relay renders the message from its own receipt of the invocation, so the agent chooses neither the text nor the recipient; `ez` prints `ez receipt: <id>` when a plugin call fails, or `ez receipt: none (...)` when the relay stored none. One message per receipt; a failed send exits non-zero with "Admin fault NOT delivered" and can be sent again. Unset, the command fails and never falls back to the owner chat. New `docs/event-woken-desk-agent.md` describes an isolated, event-woken agent with a read-only plugin preflight.
+
 ## 0.85.0
 
 - The updater accepts Library 0.1.0-beta.24 (#394). Its only deployment change is the `workspace: true` read-only mount, which the additive-routes rule refused on every installation. A named reviewed migration, `library-workspace-mount-v1`, admits exactly beta.23 to beta.24 with that one difference; a workspace mount stays unaccepted for any other update.
