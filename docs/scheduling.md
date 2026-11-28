@@ -307,6 +307,18 @@ script must not read private databases, call providers directly or acquire
 credentials. A script run can read schedule and script state but cannot change
 registrations or schedules.
 
+### Direct runs
+
+An application on the agent's application listener can also start a registered
+script immediately with `POST /v1/script-runs` and an opaque JSON context in
+`EZ_SCRIPT_CONTEXT` ([contract](application-channel.md#start-a-registered-script-now)).
+Such a run is not bound to a schedule, ignores the one-occurrence rule, does not
+wait behind the conversation's foreground turn or take a scheduled-turn slot, and
+otherwise uses the same executor, identity, `ez` launcher, run record and timeout.
+`script register|update ... --max-concurrent N` (default 1, at most 64) bounds how
+many direct runs of that script are in flight; beyond it the request is refused
+with 429. Schedule occurrences are unaffected by this limit.
+
 A script runs with the agent's runtime identity and file access, but not inside
 a native engine's own sandbox (for example host Codex `workspace-write`); register
 only code the agent would be allowed to run itself. An interpreter inside the

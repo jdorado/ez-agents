@@ -203,6 +203,37 @@ prompt verbatim and POST `{"decision":"approved"}` or
 credential. Core binds the decision to the authenticated owner generation; the
 application must not infer or auto-submit consent.
 
+## Start a registered script now
+
+An application can start one of the agent's registered, model-free scripts at
+once (for a per-event check) with the same bearer credential:
+
+```
+POST /v1/script-runs
+{"script": "jev-gate", "key": "chk_123", "context": {"check": "chk_123"}}
+-> 202 {"run": "r_script_...", "duplicate": false}
+```
+
+`script` is a script ID registered by the agent
+([registered scripts](scheduling.md#registered-script-schedules)), `key` is 1-128
+characters of `A-Za-z0-9_.:-`, `context` is an optional JSON object of at most
+4 KiB serialized. 202 means admitted: the answer never waits for the script. The
+script runs exactly like a schedule occurrence (same executor, identity, `ez`
+launcher and plugin broker, run record and timeout) but has no schedule, does not
+wait for the conversation's foreground turn and takes no scheduled-turn slot.
+Core passes the serialized context as `EZ_SCRIPT_CONTEXT` and never reads it; the
+script receives `EZ_RUN_ID`, `EZ_SCRIPT_ID` and `EZ_SCRIPT_REVISION`
+(`EZ_SCRIPT_SHA256` for file registrations) but no `EZ_SCHEDULE_*` or `EZ_DUE_AT`.
+
+A repeat of the same `key` for the same script within 10 minutes answers 202 with
+the first run ID and `"duplicate": true` and starts nothing (relay memory: a
+relay restart forgets keys, like runs). Concurrency per script is the
+registration's `--max-concurrent N` (default 1); beyond it the answer is 429 and
+nothing is reserved, so retry later. Unregistered script (or one registered by
+another owner): 404. Body or context over the limit: 413. Bad shape: 422. A
+script that cannot start (changed entry point, missing interpreter) is a failed
+run record, not a retry. Inspect runs with `ezenciel-agents-schedule run RUN_ID`.
+
 ## Conversation continuity and migration
 
 Each application binding plus scope gets an existing core session. Its first run
